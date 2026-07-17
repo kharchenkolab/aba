@@ -121,7 +121,7 @@ export default function ComputeTab() {
         <div className="cmp-actions">
           {status?.self_service !== false && (
             <button className="cmp-btn cmp-btn--primary"
-              onClick={() => setConnecting(true)}>+ Add a machine</button>
+              onClick={() => setConnecting(true)}>+ Add remote compute</button>
           )}
           {advanced && (
             <button className="cmp-btn" title="Open weft-ui — every knob exposed"
@@ -288,8 +288,7 @@ function SiteDetail({ site, advanced, selfService, onChanged }: {
                           onChange={e => act('durable', () =>
                             computeApi.edit(s.name, { durable: e.target.checked }))} />
                         durable storage
-                        <span className="cmp-dim">— backed up / not auto-purged;
-                        results you keep on this machine stay here</span>
+                        <span className="cmp-dim">— results kept here survive</span>
                       </label>
                     )}
                     {!isLocal && s.config?.durable !== true && (
@@ -350,8 +349,8 @@ function SiteDetail({ site, advanced, selfService, onChanged }: {
       {!isLocal && (
         <div className="cmp-block">
           <div className="cmp-block__title">
-            Notes <span className="cmp-dim">— guidance for scheduling; the agent
-            sees this with every plan</span>
+            Guidance <span className="cmp-dim">— free-text guidance on machine
+            use; the agent sees it with every plan</span>
           </div>
           <textarea className="cmp-notes" rows={2} spellCheck={false}
             placeholder={'e.g. "use only on nights, EU time"'}

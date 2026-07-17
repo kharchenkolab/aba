@@ -92,3 +92,6 @@
 .cmp-form > label { font-size: 12px; color: var(--text-3); padding-top: 3px; }
 .cmp-form input, .cmp-form select { font-size: 12.5px; padding: 3px 6px; max-width: 320px; }
 .cmp-part { display: flex; align-items: center; gap: 8px; font-size: 12.5px; margin: 2px 0; }
+.cmp-part--oneline { white-space: nowrap; }
+/* keep the label column lean so the right-side controls get the width */
+.cmp-form > label { white-space: nowrap; }

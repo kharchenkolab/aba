@@ -121,7 +121,7 @@ export default function ConnectMachine({ knownNames, onDone, onCancel }: Props) 
   return (
     <div className="cmp-connect">
       <div className="cmp-connect__head">
-        <strong>Add a machine</strong>
+        <strong>Add remote compute</strong>
         <button className="mod-linkbtn" onClick={onCancel}>cancel</button>
       </div>
 
@@ -292,12 +292,11 @@ export default function ConnectMachine({ knownNames, onDone, onCancel }: Props) 
                 <input value={proposal.working.root} spellCheck={false} autoComplete="off"
                   onChange={e => patch({ working: { ...proposal.working, root: e.target.value } })} />
               )}
-              <label className="cmp-part">
+              <label className="cmp-part cmp-part--oneline">
                 <input type="checkbox" checked={!!proposal.durable}
                   onChange={e => patch({ durable: e.target.checked })} />
                 durable storage
-                <span className="cmp-dim">— backed up / not auto-purged; results
-                you keep on this machine stay here</span>
+                <span className="cmp-dim">— results kept here survive</span>
               </label>
               {!proposal.durable && (
                 proposal.durable_path == null ? (
@@ -328,12 +327,14 @@ export default function ConnectMachine({ knownNames, onDone, onCancel }: Props) 
               )}
             </div>
 
-            <label>Notes <span className="cmp-dim">(guidance for scheduling)</span></label>
+            <label>Guidance</label>
             <div>
               <textarea className="cmp-notes" rows={2} spellCheck={false}
-                placeholder={'e.g. "use only on nights, EU time" — the agent sees this with every plan'}
+                placeholder={'e.g. "use only on nights, EU time"'}
                 value={(proposal.notes ?? []).join('\n')}
                 onChange={e => patch({ notes: e.target.value.split('\n') })} />
+              <div className="cmp-dim">free-text guidance on machine use — the
+              agent sees it with every plan</div>
             </div>
 
             <label>Files</label>
