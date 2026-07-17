@@ -35,7 +35,7 @@ attach uniformly to all of them — **knowledge/bundle**, **verifiability/proven
 
 **Compute plane — doing the science**
 - [`compute-execution.md`](compute-execution.md) — the kernel pool (Python/R), `run_python`/`run_r`, path-agnostic artifact harvest, interactive-vs-background routing.
-- [`jobs-and-hpc.md`](jobs-and-hpc.md) — background jobs, the `BatchSubmitter` protocol (Local/Slurm/OOD), continuation, HPC discovery.
+- [`jobs-and-hpc.md`](jobs-and-hpc.md) — background jobs, the `BatchSubmitter` protocol, the weft lanes (local / shared-fs cluster / **detached** `site=` targeting), continuation, HPC discovery.
 - [`compute-sites.md`](compute-sites.md) — connecting external compute: the `WeftAdapter`/`SitePort` doorway, `weft-sites.yaml`, the science-first **Settings → Compute** tab (probe → propose → confirm), the Guide's connect tools, and the shared-controller weft-ui mount.
 - [`envs.md`](envs.md) — environments & provisioning: the base/overlay/isolated tiers, `ensure_capability`, ABI integrity, GPU/accelerator.
 

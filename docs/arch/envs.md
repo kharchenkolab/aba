@@ -67,6 +67,19 @@ rather than `name==version`). A full base freeze (`ensure_base_constraints` → 
 also metadata-based) or a shipped canonical lock (`$ABA_BASE_LOCK`) backs the legacy
 shared path.
 
+## Platform membership (multi-site envs — 2026-07)
+
+An env lock's **platform set is part of its identity** (weft: adding a
+platform yields a NEW EnvID solved for all members). aba's specs
+(`named_envs._spec_for`, pack specs) lock for the CONTROLLER's platform by
+default; the detached compute lane re-locks **lazily at first remote use**
+(`named_envs.ensure_platform`: recorded spec + the site's platform →
+`env_ensure(update=True)`, registry updated with `platforms`), triggered by
+weft's `env.platform_mismatch` at realize. Solve cost and
+platform-availability failures land on the remote attempt, never on local
+work — a package with no build for the site's platform fails THAT submission
+with a named cause. See misc/detached_compute.md + jobs-and-hpc.md.
+
 ## Integrity guards
 
 - **Read-only base + startup self-heal** (`self_heal_base`, `env_integrity.py:781`): `pip check`

@@ -222,8 +222,42 @@ routes by hard evidence (`params.weft_id` → `task_cancel`). Note the lane also
 long-standing default: `execution=None` on a non-slurm deployment used to resolve to
 `sbatch` (dead on personal installs); it now resolves to the local lane.
 
+## The detached transport (misc/detached_compute.md — 2026-07)
+
+`site=` on `submit_python_job`/`submit_r_job` (and the `run_python`/`run_r`
+tools) targets ANY declared weft site — the orthogonal *which-machine* axis;
+explicit `site` wins over `execution`. `WeftSubmitter` picks the transport by
+`site_contract()` (`weft_submitter.py`): shared-fs (host-less deployment-
+declared sites — the unchanged lane above) vs **detached** (host-bearing or
+ad-hoc sites — never guess shared-fs). Detached submit
+(`_build_detached_task`) ships code AS DATA: a payload dir
+{`detached_entry.py` — stdlib-only, language-agnostic harness that runs the
+user script as a subprocess and writes `result.json` — user script, spec +
+job-id **memo nonce**} → `data_register(ingest=True)` → staged task input;
+command `python3 payload/aba_entry.py` under the env's prefix when
+`env=EnvID` rides along (weft realizes the env at the site). A platform
+mismatch (weft surfaces it at REALIZE, async) triggers ONE lazy re-lock
+(`named_envs.ensure_platform`) + transparent resubmit at the poll side.
+`_poll_detached` reads `result.json` + small outputs over the data plane
+into the local run dir → the standard controller-side harvest; large
+outputs stay on the node (kept / `(run,rel)` / bring-back). Env-less runs
+stamp `env_grade: node-system` + runtime. **Walltime doctrine:** an explicit
+walltime is asked only for SIZED jobs (agent estimate given; timeout+300) —
+an ask inflated from the default timeout pends forever under
+`PartitionTimeLimit` (verified live); unsized jobs ride the partition
+default. Tests: `tests/test_detached_lane.py`, `test_detached_agent_inputs.py`,
+`test_detached_cluster.py` (opt-in docker e2e), `regtest/datasets/multinode.py`
+(live agent).
+
 ## Known gaps
 
+- **Body drift above the W2 section.** §"The model" and the implementation table still
+  describe the RETIRED sbatch `SlurmSubmitter` as live (W3.5 deleted that lane; the cluster
+  path is `WeftSubmitter(site=<slurm site>)`). The weft-era sections at the bottom are
+  current; the top half needs a consolidation pass.
+- **Shared-fs walltime hazard.** The shared-fs lane still asks `timeout+900` walltime
+  unconditionally — the same PartitionTimeLimit eternal-pend trap the detached lane fixed
+  (sized-only asks) applies on low-cap partitions; give it the same treatment.
 - **`runner.py` is a ~1300-line god-module** fusing five responsibilities: the local async
   worker, the submit API (`submit_*_job`), finalize+continuation dispatch, restart
   reconcile/reap, and the Slurm poll + inline watchdog loops. `LocalSubmitter` living here
