@@ -303,6 +303,45 @@ def test_sync_remote_runs_in_tool(monkeypatch):
     assert all("sync" not in (j.get("params") or {}) for j in _active_weft_jobs())
 
 
+def test_sync_remote_writes_exec_record_so_output_is_pinnable(monkeypatch):
+    """The live study found a sync-remote FIGURE couldn't be pinned to a
+    Result: no exec record → no artifact_id → nothing to pin (the agent
+    visibly flailed). The sync path must write an exec record and inject
+    `exec_id` (what pin_cell reads), carrying the placement block for
+    provenance."""
+    comp = _FakeComp()
+    monkeypatch.setattr(ws, "_adapter", lambda: comp)
+    # the node produced a figure; poll harvests it into plots
+    node_result = {"status": "ok", "returncode": 0, "stdout_tail": "made a plot",
+                   "outputs": ["fig.png"], "runtime": "Python 3.10"}
+
+    def _fread(target, rel, max_bytes=1 << 20):
+        if rel == "result.json":
+            data = json.dumps(node_result).encode()
+        elif rel == "fig.png":
+            data = b"\x89PNG\r\n\x1a\n" + b"0" * 64
+        else:
+            raise RuntimeError("no such file")
+        return {"bytes_b64": base64.b64encode(data).decode(), "truncated": False}
+    monkeypatch.setattr(retmod, "file_read", _fread)
+    monkeypatch.setattr(retmod, "file_stat", lambda t, rel: {"exists": True, "bytes": 72})
+    import core.exec.run as execrun
+    monkeypatch.setattr(execrun, "harvest_artifacts",
+                        lambda *a, **k: ([{"url": "/artifacts/single/fig.png",
+                                           "original_name": "fig.png"}], [], [], []))
+    from content.bio.tools.run_exec import _run_remote_sync
+    out = _run_remote_sync({"code": "plot()", "site": "far", "timeout_s": 60},
+                           {"thread_id": "t"}, "default", "t", "run_python")
+    assert out["status"] == "ok"
+    # the pin path (pin_cell) keys on result["exec_id"] — must be present
+    assert out.get("exec_id"), "no exec_id → figure not pinnable (the study bug)"
+    # and the exec record carries the placement block "ran on <site>"
+    from core.graph.exec_records import get as _get_exec
+    rec = _get_exec(out["exec_id"]) or {}
+    comp_block = rec.get("compute") or {}
+    assert comp_block  # placement provenance recorded
+
+
 def test_sync_substrate_cancel_not_reported_as_success(monkeypatch):
     """A task cancelled ON THE SUBSTRATE returns {status: cancelled} with no
     error/returncode — the sync loop must NOT read that as success (review
@@ -376,6 +415,7 @@ def _standalone() -> int:
               test_poll_relock_covers_default_env_via_base_pack,
               test_active_weft_jobs_seen_in_single_db_mode,
               test_sync_remote_runs_in_tool,
+              test_sync_remote_writes_exec_record_so_output_is_pinnable,
               test_sync_substrate_cancel_not_reported_as_success,
               test_sync_cancel_uses_fresh_row_with_weft_id,
               test_site_validation_names_real_sites):
