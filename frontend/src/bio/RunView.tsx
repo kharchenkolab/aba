@@ -50,9 +50,11 @@ export function pruneCleared(node: TreeNode): TreeNode {
     .filter(c => !(c.kind === 'file' && c.state === 'cleared'))
     .map(pruneCleared) }
 }
-export default function RunView({ run, entities, onFocus, onChange, onAsk, onChatResult, onBrowseFiles }: {
+export default function RunView({ run, entities, onFocus, onChange, onAsk, onPrefill, onChatResult, onBrowseFiles }: {
   run: Entity; entities: Entity[]; onFocus: (id: string) => void; onChange: () => void
   onAsk?: (t: string) => void
+  /** Seed the Guide composer without sending (reveals the chat peek). */
+  onPrefill?: (t: string) => void
   onChatResult?: (label: string, thumb?: string, annotation?: { image: string; note: string }) => void
   onBrowseFiles?: (path?: string) => void
 }) {
@@ -65,6 +67,21 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onCha
   const [title, setTitle] = useState(run.title)
   const [panel, setPanel] = useState<'command' | 'inputs' | 'log' | null>(
     status === 'failed' || status === 'running' ? 'log' : null)
+  // Re-run verbs live in a quiet ⋯ overflow — rarely used, they shouldn't
+  // compete with Discuss (the one primary action) for band space.
+  const [moreOpen, setMoreOpen] = useState(false)
+  const moreRef = useRef<HTMLSpanElement>(null)
+  useEffect(() => {
+    if (!moreOpen) return
+    const onDown = (e: MouseEvent) => {
+      if (!moreRef.current?.contains(e.target as Node)) setMoreOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [moreOpen])
+  // Discuss/re-run seed the composer (user confirms with Enter) rather than
+  // auto-sending; onAsk is the legacy fallback when no prefill hook is wired.
+  const seed = (text: string) => (onPrefill ? onPrefill(text) : onAsk?.(text))
 
   // The Run's full output directory, browsed with the shared FileBrowser —
   // nested folders (model/, figures/…) and every file type, with pin/discuss.
@@ -311,9 +328,24 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onCha
         {m.scheduler_job_id && <span className="runview__meta runview__meta--dim">job {m.scheduler_job_id}</span>}
         <span className="runview__spacer" />
         {active && <button className="runview__act runview__act--danger" onClick={cancel}>Cancel</button>}
-        {!active && onAsk && <button className="runview__act" onClick={() => onAsk(`Re-run "${run.title}" as-is.`)}>Re-run</button>}
-        {!active && onAsk && <button className="runview__act" onClick={() => onAsk(`Re-run "${run.title}" with a change: `)}>Re-run with changes…</button>}
-        {onAsk && <button className="runview__act" onClick={() => onAsk(`Where does the run "${run.title}" stand — what it did and what the outputs show?`)}>Discuss</button>}
+        {(onPrefill || onAsk) && (
+          <button className="runview__act runview__act--primary"
+            onClick={() => seed(`Let's look at the run "${run.title}" (entity_id="${run.id}") — what it did and what the outputs show. `)}>
+            Discuss
+          </button>
+        )}
+        {!active && (onPrefill || onAsk) && (
+          <span className="runview__more" ref={moreRef}>
+            <button className="runview__act" aria-label="More actions" title="More actions"
+              onClick={() => setMoreOpen(o => !o)}>⋯</button>
+            {moreOpen && (
+              <div className="runview__menu">
+                <button onClick={() => { setMoreOpen(false); seed(`Re-run "${run.title}" (entity_id="${run.id}") as-is.`) }}>Re-run as-is</button>
+                <button onClick={() => { setMoreOpen(false); seed(`Re-run "${run.title}" (entity_id="${run.id}") with this change: `) }}>Re-run with changes…</button>
+              </div>
+            )}
+          </span>
+        )}
       </div>
       <div className="runview__toggles">
         {m.command && <button className={panel === 'command' ? 'is-on' : ''} onClick={() => toggle('command')}>Command</button>}

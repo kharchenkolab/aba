@@ -57,6 +57,9 @@ export interface FocusViewProps {
   onChange: () => void
   compact?: boolean
   onAsk?: (text: string) => void
+  /** Seed the Guide composer WITHOUT sending (reveals the peek, focuses the
+   *  cursor) — Discuss-style affordances prefer this over onAsk. */
+  onPrefill?: (text: string) => void
   onChatResult?: (label: string, thumb?: string,
                   annotation?: { image: string; note: string },
                   action?: 'chat' | 'revision' | 'revision-supersede' | 'reproduce',
@@ -533,9 +536,9 @@ function FindingView({ entity, entities, onFocus, onChange }: FocusViewProps) {
 // into the args each component expects. Keeps the call-side of those
 // components unchanged.
 
-function RunViewAdapter({ entity, entities, onFocus, onChange, onAsk, onChatResult, onBrowseFiles }: FocusViewProps) {
+function RunViewAdapter({ entity, entities, onFocus, onChange, onAsk, onPrefill, onChatResult, onBrowseFiles }: FocusViewProps) {
   return <RunView run={entity} entities={entities} onFocus={onFocus} onChange={onChange}
-                  onAsk={onAsk} onChatResult={onChatResult} onBrowseFiles={onBrowseFiles} />
+                  onAsk={onAsk} onPrefill={onPrefill} onChatResult={onChatResult} onBrowseFiles={onBrowseFiles} />
 }
 
 function ResultViewAdapter({ entity, entities, onFocus, onChange, onAsk, onChatResult, onAnnotate, annotClear, highlighting, onHighlightingChange }: FocusViewProps) {

@@ -597,6 +597,16 @@ export default function App() {
     sendMessage(text)
   }
 
+  // Prefill the Guide composer WITHOUT sending: reveal the chat peek (a user
+  // gesture, so it clears the sticky collapse like pinning does), seed the
+  // text, focus the cursor. The generic hook behind Discuss-style affordances
+  // — the user hits Enter as-is or types their real question first.
+  const prefillGuide = (text: string) => {
+    userCollapsedRef.current = false; _setRightCollapsedRaw(false)
+    setPrefill(text)
+    setComposerFocus(n => n + 1)
+  }
+
   // "Chat" gesture on a run output: bring the plot into the Guide chat. We fetch
   // the (same-origin) image and attach it so the Guide can SEE it, then PREFILL
   // the composer (focused) — the user hits Enter as-is or types their actual
@@ -663,8 +673,9 @@ export default function App() {
       : annotation
         ? `Look at "${label}" and highlighting. `
         : `Let's look at "${label}". `
-    setPrefill(prefill)
-    setComposerFocus(n => n + 1)
+    // prefillGuide also reveals a collapsed right rail — Discuss on any
+    // surface must never focus an invisible composer.
+    prefillGuide(prefill)
   }
 
   // Pin a run output (used by the detached preview window, which carries the
@@ -868,6 +879,7 @@ export default function App() {
           annotClear={annotClear}
           compact={!primary}
           onAsk={askGuide}
+          onPrefill={prefillGuide}
           onChatResult={chatAboutResult}
           onBrowseFiles={(path?: string) => { openProjectSection('files'); setFilesTarget(t => ({ path: path ?? '', n: t.n + 1 })) }}
           projectId={url.pid ?? undefined}

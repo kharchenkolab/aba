@@ -38,6 +38,21 @@
 .runview__act:hover { background: var(--tree-active-bg); color: var(--text); }
 .runview__act--danger { color: #b91c1c; border-color: #fecaca; }
 .runview__act--danger:hover { background: #fee2e2; }
+.runview__act--primary { color: var(--accent); border-color: var(--accent); }
+
+/* ⋯ overflow for the rare re-run verbs */
+.runview__more { position: relative; display: inline-block; }
+.runview__menu {
+  position: absolute; top: calc(100% + 4px); right: 0; z-index: 30;
+  min-width: 180px; padding: 4px; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--bg); box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+  display: flex; flex-direction: column;
+}
+.runview__menu button {
+  border: none; background: none; text-align: left; font-size: 12.5px;
+  color: var(--text-2); padding: 6px 10px; border-radius: 6px; cursor: pointer;
+}
+.runview__menu button:hover { background: var(--tree-active-bg); color: var(--text); }
 
 /* Detail toggles */
 .runview__toggles { display: flex; gap: 4px; }
