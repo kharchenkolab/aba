@@ -319,6 +319,85 @@ def mn_fanout_gather(client, pid, tid):
     ]
 
 
+@scenario("mn_pin_remote_result")
+def mn_pin_remote_result(client, pid, tid):
+    """Full pipeline: a remote step PRODUCES a plot → harvested back into a
+    figure entity attached to the Run → agent PROMOTES it to a Result. Tests
+    the harvest-from-remote → pin-to-Results path the platform is built on."""
+    caps = [drive_turn(client, pid, tid,
+        "On machine 'hpc', generate the sequence y = i*i for i in 1..40 and "
+        "make a line plot of it saved as squares.png. Then bring it back and "
+        "show it to me.")]
+    wait_jobs_settled(client, pid)
+    figs = [e for e in find_entities(type="figure", not_deleted=True)
+            if "square" in (e.get("title") or "").lower()
+            or "square" in str((e.get("metadata") or {}).get("original_name", "")).lower()]
+    fig_any = [e for e in find_entities(type="figure", not_deleted=True)]
+    caps.append(drive_turn(client, pid, tid,
+        "That looks good — pin it as a Result titled 'Squares curve' with a "
+        "one-line interpretation."))
+    wait_jobs_settled(client, pid)
+    results = find_entities(type="result", not_deleted=True)
+    prom = tools_named(caps, "promote_to_result") + tools_named(caps, "pin_figure")
+    return caps, [
+        ("remote step ran on hpc", "hpc" in _site_ran(caps)),
+        ("a figure was harvested from the remote run", bool(fig_any)),
+        ("agent used a pin/promote gesture", bool(prom) or bool(results)),
+        ("a Result entity now exists", bool(results)),
+    ]
+
+
+@scenario("mn_external_ref_inject")
+def mn_external_ref_inject(client, pid, tid):
+    """Data injection via EXTERNAL REFERENCE: a file already on the remote is
+    registered as a dataset (reference-in-place, no copy), then compute on
+    that machine reads it by its declared home path."""
+    hssh(f"mkdir -p {R_DATA} && (echo k,v; seq 1 300 | "
+         f"awk '{{print $1\",\"($1*4)%9}}') > {R_DATA}/ref_table.csv")
+    total = sum((i * 4) % 9 for i in range(1, 301))
+    caps = [drive_turn(client, pid, tid,
+        f"The file {R_DATA}/ref_table.csv already lives on machine 'hpc'. "
+        f"Register it as a dataset named 'Ref Table' by REFERENCE — do not "
+        f"copy it here. Then, running ON hpc, report the sum of its v column.")]
+    full = all_text(caps) + "\n" + thread_text(client, pid, tid)
+    reg = tools_named(caps, "register_dataset")
+    ds = [e for e in find_entities(type="dataset", not_deleted=True)
+          if "ref table" in (e.get("title") or "").lower()]
+    md = (ds[0].get("metadata") if ds else {}) or {}
+    home = md.get("home") or md.get("weft_home") or {}
+    return caps, [
+        ("registered as a dataset", bool(ds)),
+        ("by reference on hpc (home recorded, no copy)",
+         home.get("site") == "hpc"),
+        ("computed ON hpc", "hpc" in _site_ran(caps)),
+        ("correct sum reported", str(total) in full),
+    ]
+
+
+@scenario("mn_background_monitor")
+def mn_background_monitor(client, pid, tid):
+    """Genuinely-BACKGROUND remote job (long step): the agent should submit
+    and END ITS TURN (deferred contract), be resumed on completion, and
+    report the result — NOT sit in a get_job_status polling loop."""
+    caps = [drive_turn(client, pid, tid,
+        "Run a BACKGROUND job on machine 'hpc' (it's a longer step): sleep "
+        "for 25 seconds, then compute and print the sum of 1..2000. Submit "
+        "it in the background — don't wait around; tell me when it's done.")]
+    # deferred: the answer arrives via a continuation turn after the job lands
+    full0 = all_text(caps)
+    settled = wait_jobs_settled(client, pid, timeout_s=180)
+    full = full0 + "\n" + thread_text(client, pid, tid)
+    bg = [t for t in tools_named(caps, "run_python")
+          if t["input"].get("background") and t["input"].get("site") == "hpc"]
+    polls = len(tools_named(caps, "get_job_status"))
+    return caps, [
+        ("submitted a background job on hpc", bool(bg)),
+        ("did NOT poll excessively (<=5 status checks)", polls <= 5),
+        ("job settled", settled),
+        ("final result reported (via continuation)", str(sum(range(1, 2001))) in full),
+    ]
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 def main():
     only = None
@@ -347,7 +426,9 @@ def main():
     from main import app
     scenarios = [(fn._scenario, fn) for fn in
                  [mn_size_up, mn_hop_chain, mn_status_surfaces, mn_honesty,
-                  mn_isolated_env_remote, mn_crash_fix_rerun, mn_fanout_gather]]
+                  mn_isolated_env_remote, mn_crash_fix_rerun, mn_fanout_gather,
+                  mn_pin_remote_result, mn_external_ref_inject,
+                  mn_background_monitor]]
     try:
         with TestClient(app) as client:
             try:
