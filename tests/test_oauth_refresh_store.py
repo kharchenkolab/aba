@@ -81,7 +81,7 @@ def test_failed_refresh_falls_through_to_cli_credential(monkeypatch, tmp_path):
     import subprocess as _sp
     monkeypatch.setattr(_sp, "run", fake_run)
     monkeypatch.setattr(llm.sys, "platform", "darwin")
-    monkeypatch.setattr(llm, "_CLI_KEYCHAIN_ENABLED", True)  # conftest disables
+    monkeypatch.setattr(llm, "_CLI_CRED_ENABLED", True)  # conftest disables the whole tier
 
     assert llm._oauth_bearer() == "cli-tok-123"
     assert "security" in calls["argv"][0]
@@ -92,3 +92,21 @@ def test_failed_refresh_falls_through_to_cli_credential(monkeypatch, tmp_path):
         "accessToken": "cli-tok-old",
         "expiresAt": int((_time.time() - 10) * 1000)}})
     assert llm._oauth_bearer() is None
+
+
+def test_cli_credential_tier_is_dark_in_tests(monkeypatch, tmp_path):
+    """Regression (the leak that started this): the tier-3 CLI credential is disabled
+    in tests (conftest sets _CLI_CRED_ENABLED=False + clears the cache), so the resolver
+    returns nothing even when a VALID credentials FILE is present — no developer token is
+    ever read or interpolated into an assertion. Proves the tier is genuinely dark."""
+    import time as _time
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / ".credentials.json").write_text(json.dumps(
+        {"claudeAiOauth": {"accessToken": "should-not-be-read",
+                           "expiresAt": int((_time.time() + 3600) * 1000)}}))
+    monkeypatch.setattr(llm.os.path, "expanduser",
+                        lambda p: str(tmp_path / ".claude" / ".credentials.json")
+                        if ".claude" in p else p)
+    llm._CLI_CRED_CACHE.update(tok=None, until=0.0)
+    assert llm._CLI_CRED_ENABLED is False          # conftest darkened the whole tier
+    assert llm._cli_credential() is None           # present file NOT read (tier dark)

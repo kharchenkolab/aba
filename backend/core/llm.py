@@ -369,19 +369,21 @@ def _oauth_bearer():
 
 
 _CLI_CRED_CACHE: dict = {"tok": None, "until": 0.0}
-# The CLI credential (both the ~/.claude/.credentials.json FILE and the macOS
-# Keychain) is real-machine state — tests disable BOTH globally (tests/conftest.py)
-# so credential tests stay deterministic on dev boxes AND never read (or leak in an
-# assertion) a developer's real token. A test that exercises the CLI-fallthrough
-# re-enables the leg it drives.
-_CLI_KEYCHAIN_ENABLED = True
-_CLI_FILE_ENABLED = True
+# The whole tier-3 CLI credential (the ~/.claude/.credentials.json FILE *and* the
+# macOS Keychain) is real developer-machine state. One switch gates the ENTIRE tier
+# so tests disable it on every platform (tests/conftest.py, which also clears the
+# cache) — credential tests stay deterministic AND never read or leak a developer's
+# token in an assertion diff. Production leaves it on: Linux personal installs depend
+# on the file leg. A test exercising CLI-fallthrough re-enables it.
+_CLI_CRED_ENABLED = True
 
 
 def _cli_credential():
     """Claude Code CLI's own OAuth access token, from its credentials file
     or (macOS) its Keychain entry. Cached briefly — the Keychain read is a
     subprocess. Expired tokens read as missing."""
+    if not _CLI_CRED_ENABLED:      # tier disabled (tests): never touch real-machine state
+        return None
     now = time.time()
     if now < _CLI_CRED_CACHE["until"]:
         return _CLI_CRED_CACHE["tok"]
@@ -396,12 +398,12 @@ def _cli_credential():
 
     tok = None
     cred = os.path.expanduser("~/.claude/.credentials.json")
-    if _CLI_FILE_ENABLED and os.path.exists(cred):
+    if os.path.exists(cred):
         try:
             tok = _from_blob(json.load(open(cred)))
         except Exception:  # noqa: BLE001
             tok = None
-    if tok is None and sys.platform == "darwin" and _CLI_KEYCHAIN_ENABLED:
+    if tok is None and sys.platform == "darwin":
         try:
             import subprocess
             r = subprocess.run(["security", "find-generic-password",
