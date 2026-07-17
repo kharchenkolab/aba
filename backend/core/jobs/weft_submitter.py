@@ -18,6 +18,7 @@ replace polling when the W3 sites land.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Optional
@@ -25,6 +26,18 @@ from typing import Optional
 from core.data.workspace import scratch_dir
 
 _TERMINAL = {"DONE", "FAILED", "CANCELLED"}
+# controller-side fetch cap for detached results — matches the harvest
+# per-file cap; bigger files stay on the node (kept, (run,rel)-addressable)
+_DETACHED_FETCH_BYTES = 50 * 1024 * 1024
+
+
+def _mismatch_platform(e) -> Optional[str]:
+    """The site's platform out of weft's env.platform_mismatch error
+    ('... but site X is linux-aarch64') — drives the lazy re-lock."""
+    if getattr(e, "code", "") != "env.platform_mismatch":
+        return None
+    m = re.search(r"is ([a-z0-9_]+-[a-z0-9_]+)\s*$", getattr(e, "detail", "") or "")
+    return m.group(1) if m else None
 
 
 def _adapter():
@@ -61,6 +74,51 @@ def weft_slurm_site() -> Optional[str]:
     return None
 
 
+def site_contract(site: str) -> str:
+    """'shared-fs' | 'detached' for a declared site — data-driven. The aba
+    sidecar's explicit `contract` wins; else a site with a `host` (remote
+    transport) is DETACHED from this controller (no shared FS, possibly a
+    different OS), while a host-less site (local transport on the submit
+    node — the deployment-declared cluster case) is shared-fs."""
+    if site == "local":
+        return "shared-fs"
+    try:
+        from core.compute.sites_config import aba_keys, list_declared_sites
+        c = (aba_keys(site) or {}).get("contract")
+        if c in ("shared-fs", "detached"):
+            return c
+        for e in list_declared_sites():
+            if e.get("name") == site:
+                return "detached" if (e.get("config") or {}).get("host") else "shared-fs"
+    except Exception:  # noqa: BLE001
+        pass
+    # not in the yaml (registered ad hoc, e.g. tests) → ask the substrate
+    try:
+        for s in _adapter().sync_call("sites_list"):
+            if s.get("name") == site:
+                cfg = s.get("config") or s
+                return "detached" if cfg.get("host") else "shared-fs"
+    except Exception:  # noqa: BLE001
+        pass
+    return "detached"
+
+
+def declared_compute_sites() -> list[dict]:
+    """[{name, kind, contract}] for every declared weft site — what
+    describe_compute shows the agent and what site= validation checks."""
+    out = []
+    try:
+        for s in _adapter().sync_call("sites_list"):
+            name = s.get("name")
+            if not name:
+                continue
+            out.append({"name": name, "kind": s.get("kind"),
+                        "contract": site_contract(name)})
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
 def _walltime(timeout_s: int) -> str:
     """Explicit walltime from the job's timeout ceiling (doctrine: size
     walltime explicitly — an unspecified ask hits site defaults, an over-cap
@@ -85,6 +143,13 @@ class WeftSubmitter:
 
     # ── submit ────────────────────────────────────────────────────────────
     def submit(self, job: dict) -> None:
+        # DETACHED sites (no shared FS with this controller — a personal remote
+        # machine, a foreign cluster): the code travels AS DATA (a CAS-staged
+        # payload) and runs under the NODE's python — never the controller's
+        # entry, which doesn't exist there. Shared-fs sites keep the fast path.
+        if self.site != "local" and site_contract(self.site) == "detached":
+            self._submit_detached(job)
+            return
         params = job.get("params") or {}
         pid = params.get("project_id") or "default"
         kind = job.get("kind") or "run_python"
@@ -172,6 +237,212 @@ class WeftSubmitter:
                                       "submitter": "weft", "weft_site": self.site},
                    project_id=str(pid))
 
+    # ── detached transport (misc/detached_compute.md) ─────────────────────
+    def _site_kind(self) -> Optional[str]:
+        for s in declared_compute_sites():
+            if s["name"] == self.site:
+                return s.get("kind")
+        return None
+
+    def _detached_env(self, params: dict, pid: str, lang: str):
+        """(env_id, env_name) for a detached job — same identity rules as the
+        shared lane. env_name is kept for the lazy platform re-lock (only
+        NAMED envs re-lock; the project default env has no per-project spec
+        handle here, so a platform mismatch on it advises an isolated env)."""
+        if params.get("env"):
+            from core.compute import named_envs
+            row = named_envs.resolve(str(pid), params["env"])
+            if row is None:
+                print(f"[jobs.weft] unknown isolated env {params['env']!r} — "
+                      f"detached job runs on the node's system runtime")
+                return None, None
+            return row["env_id"], params["env"]
+        try:
+            from core.compute import base_env, project_env
+            base_env.require(lang)
+            return project_env.snapshot(str(pid), lang), None
+        except Exception:  # noqa: BLE001 — env-less, honestly graded
+            return None, None
+
+    def _submit_detached(self, job: dict) -> None:
+        """Code travels AS DATA (misc/detached_compute.md): payload {harness,
+        user script, spec+nonce} → CAS ref → weft stages it into the task
+        workdir on the node. The harness runs the script under the env's
+        interpreter (weft realizes EnvID at the site) or the node system, and
+        writes result.json there; poll() reads it back over the data plane."""
+        import shutil as _shutil
+        from core.compute.errors import ComputeError
+        params = job.get("params") or {}
+        pid = params.get("project_id") or "default"
+        kind = job.get("kind") or "run_python"
+        lang = "r" if kind == "run_r" else "python"
+        run_dir = self._run_dir(job)
+        payload = run_dir / "payload"
+        payload.mkdir(parents=True, exist_ok=True)
+        script = "user_code.R" if lang == "r" else "user_code.py"
+        (payload / script).write_text(params.get("code", ""))
+        _shutil.copyfile(Path(__file__).with_name("detached_entry.py"),
+                         payload / "aba_entry.py")
+        (payload / "spec.json").write_text(json.dumps({
+            "interpreter": "Rscript" if lang == "r" else "python3",
+            "script": script,
+            # memo nonce: identical code must NOT collide into weft's task
+            # memo — "Re-run as-is" would silently return the cached result
+            "job_id": job["id"],
+        }))
+        comp = _adapter()
+        env_id, env_name = self._detached_env(params, pid, lang)
+        ref = comp.sync_call("data_register", str(payload), ingest=True)["ref"]
+        timeout_s = int(params.get("timeout_s") or 600)
+        est = params.get("estimate") or {}
+        resources = {"cpus": int(est.get("cores") or 1)}
+        if est.get("mem_gb"):
+            resources["mem_gb"] = int(est["mem_gb"])
+        if est.get("gpu"):
+            resources["gpus"] = 1
+        if self._site_kind() == "slurm":
+            resources["walltime"] = _walltime(timeout_s + 900)
+        task = {
+            # `python3` resolves from PATH — the activated env's prefix when
+            # env= rides along (weft mounts it first), else the node system.
+            # NO controller paths, NO ABA_* env — the node shares nothing.
+            "command": "python3 payload/aba_entry.py",
+            "site": self.site,
+            "inputs": [{"ref": ref, "mount_as": "payload"}],
+            "resources": resources,
+            "label": (job.get("title") or job["id"])[:200],
+        }
+        if env_id:
+            task["env"] = env_id
+        try:
+            r = comp.sync_call("task_submit", task)
+        except ComputeError as e:
+            plat = _mismatch_platform(e)
+            if plat and env_name:
+                # lazy re-lock (design §Environments): add the site's platform
+                # to the env's lock and retry ONCE
+                from core.compute import named_envs
+                relock = named_envs.ensure_platform(str(pid), env_name, plat)
+                task["env"] = env_id = relock["env_id"]
+                r = comp.sync_call("task_submit", task)
+            elif plat:
+                raise ComputeError(
+                    code="env.platform_mismatch",
+                    detail=f"the project env is locked for this machine only; "
+                           f"site {self.site} needs platform {plat}. Use an "
+                           f"isolated env (make_isolated_env) for remote jobs — "
+                           f"it re-locks automatically.") from e
+            else:
+                raise
+        from core.graph.jobs import update_job
+        env_note = ({"env_id": env_id} if env_id
+                    else {"env_grade": "node-system"})
+        update_job(job["id"], params={**params, "weft_id": r["job_id"],
+                                      "submitter": "weft",
+                                      "weft_site": self.site,
+                                      "detached": True, **env_note},
+                   project_id=str(pid))
+        # the one line that lights up retention + status UI for remote outputs:
+        # the Run's durable panel, keep-triage, (run,rel) addressing and
+        # bring-back are all target-based — give them the target
+        run_id = params.get("run_id")
+        if run_id:
+            try:
+                from core.graph.entities import get_entity, update_entity
+                ent = get_entity(run_id)
+                if ent:
+                    md = dict(ent.get("metadata") or {})
+                    tgts = list(md.get("weft_targets") or [])
+                    if r["job_id"] not in tgts:
+                        md["weft_targets"] = tgts + [r["job_id"]]
+                        update_entity(run_id, metadata=md)
+            except Exception:  # noqa: BLE001 — panel misses the target, job unaffected
+                pass
+
+    def _poll_detached(self, job: dict, params: dict, wid: str, state: str) -> dict:
+        """Terminal detached task → result-shaped dict for _finalize_job.
+        result.json + small produced files come back over the weft data
+        plane; harvest runs CONTROLLER-side so figures/tables enter the
+        standard pipeline. Large files stay on the node (kept per close-run
+        policy; (run,rel)-addressable; bring-back)."""
+        import base64
+        from core.compute import retention
+        if state == "CANCELLED":
+            res: dict = {"status": "cancelled",
+                         "note": "cancelled on the compute substrate"}
+            res.setdefault("compute", self._compute_block(wid, state))
+            return res
+
+        def _read(rel: str, cap: int = _DETACHED_FETCH_BYTES):
+            try:
+                out = retention.file_read(wid, rel, max_bytes=cap)
+                if out.get("truncated"):
+                    return None
+                return base64.b64decode(out.get("bytes_b64") or "")
+            except Exception:  # noqa: BLE001
+                return None
+        raw = _read("result.json", cap=1 << 20)
+        if raw is None:
+            res = {"error": f"weft task {state} with no readable result.json "
+                            f"(infra failure before the harness ran?)"}
+            if state == "FAILED":
+                try:
+                    rows = _adapter().sync_call("task_status", wid)
+                    from core.data.datasets import explain_data_error
+                    friendly = explain_data_error((rows[0] or {}).get("error"))
+                    if friendly:
+                        res["error"] = friendly
+                except Exception:  # noqa: BLE001
+                    pass
+            res.setdefault("compute", self._compute_block(wid, state))
+            return res
+        try:
+            node = json.loads(raw)
+        except Exception:  # noqa: BLE001
+            node = {"status": "error", "returncode": 1,
+                    "error": "result.json unreadable"}
+        run_dir = self._run_dir(job)
+        fetched = 0
+        for rel in (node.get("outputs") or [])[:200]:
+            try:
+                st = retention.file_stat(wid, rel)
+                if not st.get("exists") or (st.get("bytes") or 0) > _DETACHED_FETCH_BYTES:
+                    continue
+                data = _read(rel)
+                if data is None:
+                    continue
+                dest = run_dir / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(data)
+                fetched += 1
+            except Exception:  # noqa: BLE001 — a skipped file stays node-side, kept
+                continue
+        res = {"status": node.get("status") or "ok",
+               "returncode": node.get("returncode", 0),
+               "stdout": node.get("stdout_tail") or "",
+               "stderr": ""}
+        if node.get("status") == "error":
+            res["error"] = node.get("error") or "job failed on the node"
+        elif fetched:
+            try:
+                from core.exec.run import harvest_artifacts
+                plots, tables, files, warnings = harvest_artifacts(
+                    run_dir, since_ts=0.0,
+                    project_id=params.get("project_id"))
+                res.update({"plots": plots, "tables": tables,
+                            "files": files, "warnings": warnings})
+            except Exception:  # noqa: BLE001 — files still in run dir/Files panel
+                pass
+        comp = self._compute_block(wid, state)
+        if params.get("env_id"):
+            comp["env_id"] = params["env_id"]
+        else:
+            comp["env_grade"] = "node-system"
+            if node.get("runtime"):
+                comp["runtime"] = node["runtime"]
+        res.setdefault("compute", comp)
+        return res
+
     # ── cancel ───────────────────────────────────────────────────────────
     def cancel(self, job: dict) -> None:
         wid = (job.get("params") or {}).get("weft_id")
@@ -198,6 +469,10 @@ class WeftSubmitter:
         state = rows[0]["state"] if rows else None
         if state not in _TERMINAL:
             return None
+        if params.get("detached"):
+            # detached transport: results come back over the weft data plane,
+            # not a shared filesystem (misc/detached_compute.md)
+            return self._poll_detached(job, params, wid, state)
         result_path = self._run_dir(job) / "result.json"
         if result_path.exists():
             try:

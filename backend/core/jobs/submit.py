@@ -31,19 +31,40 @@ def _bg_submission(execution: str | None, estimate: dict | None) -> tuple[str, s
     return resolve_submission_target(execution.lower(), heaviest, aba_allocation_capacity())
 
 
+def _site_submitter(site: str):
+    """Explicit site targeting (misc/detached_compute.md): `site` is the
+    orthogonal WHICH-MACHINE axis and wins over `execution`. Validates
+    against the declared weft sites (unknown → error naming the real ones);
+    the WeftSubmitter itself picks the shared-fs vs detached transport."""
+    from core.jobs.weft_submitter import WeftSubmitter, declared_compute_sites
+    names = [s["name"] for s in declared_compute_sites()]
+    if site not in names:
+        raise ValueError(
+            f"unknown compute site {site!r} — declared sites: "
+            f"{', '.join(names) or '(none)'}. See describe_compute.")
+    return WeftSubmitter(site=site)
+
+
 def submit_python_job(code: str, title: str, focus_entity_id: str | None,
                       timeout_s: int = 300, project_id: str | None = None,
                       thread_id: str | None = None, run_id: str | None = None,
                       estimate: dict | None = None, env: str | None = None,
-                      execution: str | None = None) -> dict:
+                      execution: str | None = None,
+                      site: str | None = None) -> dict:
     """Create a queued job and enqueue it. Returns the job record. `project_id`
     is captured at submit time so the job runs in the right project's scratch
     workspace even if the active project changes before the worker picks it up.
     `thread_id` + `run_id` (the active Run at submit time) are captured so the
     job's outputs attach to the originating Run/thread instead of orphaning.
     `execution` 'local'/'auto' runs it in-place in ABA's own allocation (no sbatch)
-    when it fits; None/'slurm' sbatches (the default when ABA_BATCH_SUBMITTER=slurm)."""
-    submission, submission_reason = _bg_submission(execution, estimate)
+    when it fits; None/'slurm' sbatches (the default when ABA_BATCH_SUBMITTER=slurm).
+    `site` (detached lane) targets a declared weft site and WINS over
+    `execution`."""
+    if site:
+        submitter = _site_submitter(site)
+        submission, submission_reason = "site", f"user-targeted site {site}"
+    else:
+        submission, submission_reason = _bg_submission(execution, estimate)
     job_id = f"job_{uuid.uuid4().hex[:10]}"
     job = create_job(
         job_id=job_id,
@@ -52,10 +73,13 @@ def submit_python_job(code: str, title: str, focus_entity_id: str | None,
         focus_entity_id=focus_entity_id,
         params={"code": code, "timeout_s": timeout_s, "project_id": project_id,
                 "thread_id": thread_id, "run_id": run_id, "estimate": estimate or {},
-                "env": env, "execution": execution,
+                "env": env, "execution": execution, "site": site,
                 "submission": submission, "submission_reason": submission_reason},
         project_id=project_id,
     )
+    if site:
+        submitter.submit(job)
+        return job
     from core.jobs.submitter import get_submitter_for
     get_submitter_for(submission, kind="run_python").submit(job)
     return job
@@ -65,14 +89,19 @@ def submit_r_job(code: str, title: str, focus_entity_id: str | None,
                  timeout_s: int = 600, project_id: str | None = None,
                  thread_id: str | None = None, run_id: str | None = None,
                  estimate: dict | None = None, env: str | None = None,
-                 execution: str | None = None) -> dict:
+                 execution: str | None = None,
+                 site: str | None = None) -> dict:
     """Create a queued R job. Mirrors submit_python_job but with kind='run_r';
     the worker dispatches to run_r_code in core.exec.run, which invokes Rscript
     against the project's tools-env R + project library, captures stdout/stderr,
     and harvests artifacts. Used by run_r(background=True) — the proper path
     for long Seurat/DESeq2/etc. work that would otherwise force the agent to
     shell out via run_python(subprocess.run([\"Rscript\", ...]))."""
-    submission, submission_reason = _bg_submission(execution, estimate)
+    if site:
+        submitter = _site_submitter(site)
+        submission, submission_reason = "site", f"user-targeted site {site}"
+    else:
+        submission, submission_reason = _bg_submission(execution, estimate)
     job_id = f"job_{uuid.uuid4().hex[:10]}"
     job = create_job(
         job_id=job_id,
@@ -81,10 +110,13 @@ def submit_r_job(code: str, title: str, focus_entity_id: str | None,
         focus_entity_id=focus_entity_id,
         params={"code": code, "timeout_s": timeout_s, "project_id": project_id,
                 "thread_id": thread_id, "run_id": run_id, "estimate": estimate or {},
-                "env": env, "execution": execution,
+                "env": env, "execution": execution, "site": site,
                 "submission": submission, "submission_reason": submission_reason},
         project_id=project_id,
     )
+    if site:
+        submitter.submit(job)
+        return job
     from core.jobs.submitter import get_submitter_for
     get_submitter_for(submission, kind="run_r").submit(job)
     return job

@@ -645,6 +645,7 @@ def bg_submit_kwargs(input_: dict, project_id: str) -> dict:
         env = get_active(str(project_id), "python")
     env_name = None if _is_default_env(env) else str(env).strip()
     return {"estimate": est, "execution": input_.get("execution"),
+            "site": input_.get("site") or None,   # detached lane (misc/detached_compute.md)
             "env": env_name, "timeout_s": _background_timeout_s(input_, est_min)}
 
 

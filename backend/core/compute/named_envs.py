@@ -506,3 +506,37 @@ def verify_imports(project_id: str, name: str, imports: list[str]) -> tuple[bool
         f"importlib.import_module({m!r})" for m in imports)
     r = run_in(project_id, name, code, timeout_s=120)
     return bool(r["ok"]), (r["stderr"] or "").strip()[-800:]
+
+
+# ── platform-aware locking (misc/detached_compute.md) ────────────────────────
+
+def controller_platform() -> str:
+    """This controller's conda platform string (osx-arm64, linux-64, ...)."""
+    import platform as _pl
+    sysname = _pl.system().lower()
+    mach = _pl.machine().lower()
+    arch = {"x86_64": "64", "amd64": "64", "arm64": "arm64",
+            "aarch64": "aarch64"}.get(mach, mach)
+    if sysname == "darwin":
+        return f"osx-{'arm64' if arch in ('arm64', 'aarch64') else '64'}"
+    return f"linux-{arch}"
+
+
+def ensure_platform(project_id: str, name: str, platform_str: str) -> dict:
+    """Lazy re-lock at first remote use (detached lane): re-solve the named
+    env's recorded spec with the target site's platform added, so weft can
+    realize it THERE. Solve cost and platform-availability failures land on
+    the remote attempt — local work is never blocked by other platforms."""
+    row = resolve(project_id, name)
+    if row is None:
+        raise KeyError(f"no isolated env {name!r} in project {project_id}")
+    spec = _spec_for(project_id, name, row.get("language") or "python",
+                     list(row.get("packages") or []))
+    spec["platforms"] = sorted({controller_platform(), platform_str})
+    res = _sync(_adapter.get_compute().env_ensure(spec, update=True))
+    now = time.time()
+    _update(project_id, lambda data: data["envs"][name].update(
+        {"env_id": res["env_id"], "updated_at": now,
+         "platforms": spec["platforms"]}))
+    return {"env_id": res["env_id"], "platforms": spec["platforms"],
+            "status": res.get("status")}
