@@ -108,12 +108,26 @@ def test_detached_submit_ships_code_as_data(monkeypatch):
     assert p.get("env_grade") == "node-system"
 
 
-def test_detached_slurm_site_gets_walltime(monkeypatch):
+def test_detached_slurm_walltime_only_when_sized(monkeypatch):
+    """A SIZED job (agent gave an estimate) asks an explicit walltime; an
+    unsized one must NOT — an inflated default pends forever on sites whose
+    partition cap is below it (PartitionTimeLimit, verified live)."""
     comp = _FakeComp()
     monkeypatch.setattr(ws, "_adapter", lambda: comp)
     ws.WeftSubmitter(site="hpc").submit(_job("job_det_w", site="hpc"))
     task = [c for c in comp.calls if c[0] == "task_submit"][0][1][0]
-    assert "walltime" in task["resources"]
+    assert "walltime" not in task["resources"]          # unsized → site default
+    comp2 = _FakeComp()
+    monkeypatch.setattr(ws, "_adapter", lambda: comp2)
+    job = create_job(job_id="job_det_w2", kind="run_python", title="t",
+                     focus_entity_id=None, project_id="default",
+                     params={"code": "x=1", "timeout_s": 600,
+                             "project_id": "default",
+                             "estimate": {"cores": 1, "runtime_min": 5},
+                             "site": "hpc"})
+    ws.WeftSubmitter(site="hpc").submit(job)
+    task2 = [c for c in comp2.calls if c[0] == "task_submit"][0][1][0]
+    assert task2["resources"]["walltime"] == "00:15:00"   # 600s + 300 grace
 
 
 def test_platform_mismatch_relocks_once_and_retries(monkeypatch):
@@ -231,7 +245,7 @@ def _standalone() -> int:
 
     rc = 0
     for t in (test_detached_submit_ships_code_as_data,
-              test_detached_slurm_site_gets_walltime,
+              test_detached_slurm_walltime_only_when_sized,
               test_platform_mismatch_relocks_once_and_retries,
               test_detached_poll_fetches_results_over_data_plane,
               test_poll_side_platform_relock_resubmits,

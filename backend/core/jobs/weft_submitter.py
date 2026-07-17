@@ -311,8 +311,14 @@ class WeftSubmitter:
             resources["mem_gb"] = int(est["mem_gb"])
         if est.get("gpu"):
             resources["gpus"] = 1
-        if self._site_kind() == "slurm":
-            resources["walltime"] = _walltime(timeout_s + 900)
+        if self._site_kind() == "slurm" and float(est.get("runtime_min") or 0) > 0:
+            # Explicit walltime ONLY for a job the agent actually SIZED. An
+            # unsized ask inflated from the default timeout pends FOREVER on
+            # sites whose partition cap is below it (PartitionTimeLimit —
+            # verified live on the 1h-cap fixture); omitting lets the
+            # partition default apply, which runs. Weft doesn't refuse the
+            # over-cap ask upfront (noted as a weft follow-up).
+            resources["walltime"] = _walltime(timeout_s + 300)
         task = {
             # `python3` resolves from PATH — the activated env's prefix when
             # env= rides along (weft mounts it first), else the node system.
