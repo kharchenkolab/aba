@@ -55,6 +55,20 @@ def aba_keys(name: str) -> dict:
     return {}
 
 
+def self_service() -> bool:
+    """May users add/remove/reconfigure compute sites from the UI/agent?
+    Shared installs (e.g. an OOD deployment whose slurm sites the admin
+    declared in this file) set a top-level `self_service: false` — the
+    Compute tab then shows the deployment's machines read-only, and the
+    add/disconnect/edit surfaces disappear entirely. Defaults to True
+    (personal installs). Admin-owned: it lives in the file the deployment
+    already writes, not in a new env var."""
+    try:
+        return bool(read_sites_config().get("self_service", True))
+    except Exception:  # noqa: BLE001 — unreadable file must not lock the UI
+        return True
+
+
 def _atomic_write(path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")

@@ -122,9 +122,22 @@ class GcRequest(BaseModel):
 
 @router.get("/api/compute/status")
 def compute_status() -> dict:
-    """Substrate health for the tab's offline banner."""
+    """Substrate health for the tab's offline banner, plus whether users may
+    manage sites themselves (shared installs declare their sites in
+    weft-sites.yaml and set self_service: false — the tab goes read-only)."""
+    from core.compute import sites_config
     from core.compute.adapter import status
-    return status()
+    return {**status(), "self_service": sites_config.self_service()}
+
+
+def _require_self_service() -> None:
+    from core.compute import sites_config
+    if not sites_config.self_service():
+        raise HTTPException(403, {
+            "error": "self_service_disabled",
+            "detail": "compute sites on this installation are managed by "
+                      "the deployment — ask your administrator to change "
+                      "machines or storage declarations"})
 
 
 @router.get("/api/compute/advanced")
@@ -233,6 +246,7 @@ async def site_footprint(name: str) -> dict:
 
 @router.post("/api/compute/preflight")
 async def preflight(t: Target) -> dict:
+    _require_self_service()
     """Fast reachability + classified cause; on first contact carries the
     host key fingerprint for the §5.2 confirm card."""
     from core.compute import preflight as pf
@@ -244,6 +258,7 @@ async def preflight(t: Target) -> dict:
 
 @router.post("/api/compute/hostkey")
 async def accept_hostkey(k: HostKey) -> dict:
+    _require_self_service()
     """Record a USER-CONFIRMED host key in aba's TOFU store (never the
     user's own ~/.ssh/known_hosts)."""
     from core.compute import preflight as pf
@@ -253,6 +268,7 @@ async def accept_hostkey(k: HostKey) -> dict:
 
 @router.post("/api/compute/keysetup")
 async def keysetup(t: Target) -> dict:
+    _require_self_service()
     """Dedicated-key setup: generates ~/.ssh/aba_ed25519 if needed and
     returns the exact `ssh-copy-id` line for the user's OWN terminal.
     aba never sees or transports the password."""
@@ -265,6 +281,7 @@ async def keysetup(t: Target) -> dict:
 
 @router.post("/api/compute/probe")
 async def probe(t: Target) -> dict:
+    _require_self_service()
     """The §5.3 moment: one preliminary facts call (scheduler kind, shared-fs
     canary, accounts), then weft's own probe via register_site(probe_only)
     — nothing persisted — and the pure §5.4 proposal over the result."""
@@ -300,6 +317,7 @@ async def probe(t: Target) -> dict:
 
 @router.post("/api/compute/sites")
 async def connect(req: ConnectRequest) -> dict:
+    _require_self_service()
     """§5.5: register with weft (narrated via the event relay), mirror to
     weft-sites.yaml with the aba keys, kick background queue verification.
     Returns as soon as the site is registered — verification never blocks."""
@@ -388,6 +406,7 @@ async def reprobe(name: str) -> dict:
 
 @router.patch("/api/compute/sites/{name}")
 async def edit_site(name: str, edit: SiteEdit) -> dict:
+    _require_self_service()
     """Edit the aba-side keys (use_for, long-term storage, notes). The weft
     config is re-upserted so policy storage roles follow; name and
     connection details are fixed (disconnect + reconnect to change those)."""
@@ -431,6 +450,7 @@ async def edit_site(name: str, edit: SiteEdit) -> dict:
 
 @router.delete("/api/compute/sites/{name}")
 async def disconnect(name: str) -> dict:
+    _require_self_service()
     """Forget the site (weft refuses while jobs/kernels/services are live —
     surfaced as 409 with the busy lists). Nothing on the machine is
     deleted; the YAML entry is dropped so it stays forgotten across boots."""
@@ -450,6 +470,7 @@ async def disconnect(name: str) -> dict:
 
 @router.post("/api/compute/sites/{name}/gc")
 async def free_up(name: str, req: GcRequest) -> dict:
+    _require_self_service()
     """'Free up space': plan (confirm=false) → sweep (confirm=true). The
     full per-env footprint surface stays in weft-ui; this is the one-number
     one-button scientist path (§6)."""

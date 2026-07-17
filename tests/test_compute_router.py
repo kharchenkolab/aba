@@ -362,3 +362,36 @@ def test_templates_empty_then_declared(client, monkeypatch, tmp_path):
         "    note: the lab's main cluster\n")
     out = client.get("/api/compute/templates").json()
     assert out["templates"][0]["name"] == "VBC cluster"
+
+
+# ── shared installs: self_service off → read-only tab ────────────────────────
+
+def test_self_service_disabled_locks_management(client, fake, monkeypatch, tmp_path):
+    monkeypatch.setenv("ABA_HOME", str(tmp_path / "h3"))
+    from core.compute.adapter import sites_config_path
+    sites_config_path().parent.mkdir(parents=True, exist_ok=True)
+    sites_config_path().write_text(
+        "self_service: false\n"
+        "sites:\n  - name: hpc\n    kind: slurm\n    config: {root: /r}\n")
+    assert client.get("/api/compute/status").json()["self_service"] is False
+    # reads stay open
+    assert client.get("/api/compute/sites").status_code == 200
+    # every management surface refuses with the actionable payload
+    for method, path, body in [
+        ("post", "/api/compute/preflight", {"dest": "me@x"}),
+        ("post", "/api/compute/keysetup", {"dest": "me@x"}),
+        ("post", "/api/compute/probe", {"dest": "me@x"}),
+        ("post", "/api/compute/sites",
+         {"dest": "me@x", "proposal": {"name": "n", "kind": "ssh",
+                                       "use_for": [], "working": {"root": "/w"}}}),
+        ("patch", "/api/compute/sites/hpc", {"notes": ["x"]}),
+        ("delete", "/api/compute/sites/hpc", None),
+        ("post", "/api/compute/sites/hpc/gc", {"confirm": False}),
+    ]:
+        r = getattr(client, method)(path, **({"json": body} if body is not None else {}))
+        assert r.status_code == 403, (method, path, r.status_code)
+        assert r.json()["detail"]["error"] == "self_service_disabled"
+
+
+def test_self_service_defaults_on(client, fake):
+    assert client.get("/api/compute/status").json()["self_service"] is True

@@ -71,7 +71,7 @@ function healthChip(s: ComputeSite): { text: string; cls: string } {
 
 export default function ComputeTab() {
   const [sites, setSites] = useState<ComputeSite[] | null>(null)
-  const [status, setStatus] = useState<{ ok: boolean; detail: string } | null>(null)
+  const [status, setStatus] = useState<{ ok: boolean; detail: string; self_service?: boolean } | null>(null)
   const [sel, setSel] = useState<string | null>(null)
   const [connecting, setConnecting] = useState(false)
   const [advanced, setAdvanced] = useState(false)
@@ -119,8 +119,10 @@ export default function ComputeTab() {
       <div className="cmp-head">
         <h3 className="settings__section-title">Compute</h3>
         <div className="cmp-actions">
-          <button className="cmp-btn cmp-btn--primary"
-            onClick={() => setConnecting(true)}>+ Add a machine</button>
+          {status?.self_service !== false && (
+            <button className="cmp-btn cmp-btn--primary"
+              onClick={() => setConnecting(true)}>+ Add a machine</button>
+          )}
           {advanced && (
             <button className="cmp-btn" title="Open weft-ui — every knob exposed"
               onClick={() => openAdvanced()}>Advanced ↗</button>
@@ -128,8 +130,9 @@ export default function ComputeTab() {
         </div>
       </div>
       <p className="settings__hint">
-        Where your analyses run. Add your lab’s cluster or a workstation and
-        aba can run large jobs, GPU work, and overnight tasks there.
+        {status?.self_service === false
+          ? 'Where your analyses run — set up by this installation’s administrators.'
+          : 'Where your analyses run. Add your lab’s cluster or a workstation and aba can run large jobs, GPU work, and overnight tasks there.'}
       </p>
 
       {connecting && (
@@ -142,6 +145,7 @@ export default function ComputeTab() {
       <ul className="mod-list">
         {sites.map(s => (
           <SiteCard key={s.name} site={s} open={sel === s.name} advanced={advanced}
+            selfService={status?.self_service !== false}
             onToggle={() => setSel(sel === s.name ? null : s.name)}
             onChanged={load} />
         ))}
@@ -159,8 +163,8 @@ export default function ComputeTab() {
 
 // ── one machine: card + expandable manage detail (§6) ────────────────────────
 
-function SiteCard({ site, open, advanced, onToggle, onChanged }: {
-  site: ComputeSite; open: boolean; advanced: boolean
+function SiteCard({ site, open, advanced, selfService, onToggle, onChanged }: {
+  site: ComputeSite; open: boolean; advanced: boolean; selfService: boolean
   onToggle: () => void; onChanged: () => void
 }) {
   const s = site
@@ -195,7 +199,7 @@ function SiteCard({ site, open, advanced, onToggle, onChanged }: {
           )}
         </p>
       )}
-      {open && <SiteDetail site={s} advanced={advanced} onChanged={onChanged} />}
+      {open && <SiteDetail site={s} advanced={advanced} selfService={selfService} onChanged={onChanged} />}
     </li>
   )
 }
@@ -206,8 +210,8 @@ const USE_FOR_ALL: { key: string; label: string }[] = [
   { key: 'gpu', label: 'GPU work' },
 ]
 
-function SiteDetail({ site, advanced, onChanged }: {
-  site: ComputeSite; advanced: boolean; onChanged: () => void
+function SiteDetail({ site, advanced, selfService, onChanged }: {
+  site: ComputeSite; advanced: boolean; selfService: boolean; onChanged: () => void
 }) {
   const s = site
   const isLocal = s.name === 'local'
@@ -272,14 +276,14 @@ function SiteDetail({ site, advanced, onChanged }: {
                 {editingRoot === null ? (
                   <>
                     {s.config.root}{' '}
-                    {!isLocal && (
+                    {!isLocal && selfService && (
                       <button className="mod-linkbtn" disabled={busy !== null}
                         onClick={() => setEditingRoot(s.config?.root ?? '')}>change…</button>
                     )}
                     {!isLocal && (
                       <label className="cmp-part">
                         <input type="checkbox" checked={!!s.aba?.durable}
-                          disabled={busy !== null}
+                          disabled={busy !== null || !selfService}
                           onChange={e => act('durable', () =>
                             computeApi.edit(s.name, { durable: e.target.checked }))} />
                         durable storage
@@ -327,7 +331,7 @@ function SiteDetail({ site, advanced, onChanged }: {
             placeholder={'e.g. "use only on nights, EU time"'}
             value={notesText}
             onChange={e => setNotesText(e.target.value)} />
-          {notesText !== (s.config?.policy?.notes ?? []).join('\n') && (
+          {selfService && notesText !== (s.config?.policy?.notes ?? []).join('\n') && (
             <button className="cmp-btn" disabled={busy !== null}
               onClick={() => act('notes', () =>
                 computeApi.edit(s.name, { notes: notesText.split('\n') }),
@@ -341,7 +345,7 @@ function SiteDetail({ site, advanced, onChanged }: {
           <div className="cmp-block__title">Disk</div>
           <span>aba is using {fmtGB(footprint)} on this machine</span>{' '}
           {reclaim == null ? (
-            <button className="mod-linkbtn" disabled={busy !== null}
+            <button className="mod-linkbtn" disabled={busy !== null || !selfService}
               onClick={() => act('gc', async () => {
                 const r = await computeApi.gc(s.name, false)
                 setReclaim(r.reclaimable_bytes ?? 0)
@@ -369,7 +373,7 @@ function SiteDetail({ site, advanced, onChanged }: {
             onClick={() => act('verify', () => computeApi.verify(s.name),
               'running a small test job on each queue…')}>Verify queues</button>
         )}
-        {!isLocal && !confirmDisconnect && (
+        {!isLocal && selfService && !confirmDisconnect && (
           <button className="cmp-btn cmp-btn--danger" disabled={busy !== null}
             onClick={() => setConfirmDisconnect(true)}>Disconnect…</button>
         )}
