@@ -62,11 +62,12 @@ def record_weft_target(run_id: Optional[str], target: Optional[str]) -> None:
             return
         targets = list((ent.get("metadata") or {}).get("weft_targets") or [])
         if target in targets:
-            return
-        # patch ONLY this key — a whole-blob write here raced the manifest/
-        # cancel writers and could drop their keys (and vice versa)
-        from core.graph.entities import patch_metadata
-        patch_metadata(run_id, {"weft_targets": targets + [target]})
+            return                    # best-effort dedup; readers dedupe too
+        # atomic list APPEND — the read-then-set shape lost one of two
+        # concurrent appends (both readers saw the same list); '[#]' insert
+        # closes the window, and duplicate-under-race is read-side deduped
+        from core.graph.entities import append_metadata_list
+        append_metadata_list(run_id, "weft_targets", target)
     except Exception:  # noqa: BLE001 — retention bookkeeping must never break a run
         pass
 
@@ -282,13 +283,15 @@ def note_run_site(run_id: Optional[str], site: Optional[str]) -> None:
         ent = get_entity(run_id)
         if not ent:
             return
-        run_meta = dict((ent.get("metadata") or {}).get("run") or {})
-        sites = list(run_meta.get("sites") or [])
+        sites = list(((ent.get("metadata") or {}).get("run") or {})
+                     .get("sites") or [])
         if site in sites:
-            return
-        run_meta["sites"] = sites + [site]
-        from core.graph.entities import patch_metadata
-        patch_metadata(run_id, {"run": run_meta})
+            return                     # best-effort dedup; readers dedupe too
+        # atomic nested APPEND — whole-`run` RMW here raced the manifest
+        # writer on the same key and either could silently drop the other
+        # (recheck-confirmed); '[#]' insert has no read-modify-write window
+        from core.graph.entities import append_metadata_list
+        append_metadata_list(run_id, "run.sites", site)
     except Exception:  # noqa: BLE001 — placement note must never break a run
         pass
 
@@ -1639,17 +1642,14 @@ def refresh_output_manifest(run_id: str, *, plot_urls_by_name: Optional[dict] = 
         figs = [o for o in outputs if o["kind"] == "figure"]
         rest = [o for o in outputs if o["kind"] != "figure"]
         outputs = (figs + rest)[:_MANIFEST_CAP]
-    run_meta = dict((ent.get("metadata") or {}).get("run") or {})
-    run_meta["outputs"] = outputs
-    if bulk:
-        run_meta["bulk"] = bulk
-    else:
-        run_meta.pop("bulk", None)
-    # patch ONLY `run` — this writer runs from the poll loop, turn-end AND a
-    # threadpool route concurrently; the whole-blob write dropped keys other
-    # writers (weft_targets, retention_alert) had just written
+    # patch ONLY the fields THIS writer owns (run.outputs / run.bulk) at their
+    # nested paths — the previous whole-`run` write still read-modify-wrote
+    # the shared object, so this poll-loop/turn-end/threadpool writer could
+    # silently revert a concurrent cancel status or placement stamp on the
+    # SAME key (recheck-confirmed residue of the top-level-only patch)
     from core.graph.entities import patch_metadata
-    patch_metadata(run_id, {"run": run_meta})
+    patch_metadata(run_id, {"run.outputs": outputs,
+                            "run.bulk": bulk if bulk else None})
 
 
 def append_run_code(run_id: str, code: str) -> None:

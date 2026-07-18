@@ -48,14 +48,14 @@ def runs_refresh_manifest(rid: str, _pid: str = Depends(require_project)):
 
 @router.post("/api/runs/{rid}/cancel")
 def run_cancel(rid: str, _pid: str = Depends(require_project)):
-    e = _run_or_404(rid)
-    run = dict((e.get("metadata") or {}).get("run") or {})
-    run["status"] = "cancelled"
-    run["finished_at"] = _now()
-    # single-key patch: this threadpool route raced the poll loop's
-    # weft_targets append when it wrote the whole metadata blob back
+    _run_or_404(rid)
+    # nested-path patch: writing the whole `run` object read-modify-wrote the
+    # SAME key the manifest writer holds — a concurrent refresh could silently
+    # revert this cancellation (recheck-confirmed). Set only the two fields
+    # this route owns, atomically.
     from core.graph.entities import patch_metadata
-    return patch_metadata(rid, {"run": run})
+    return patch_metadata(rid, {"run.status": "cancelled",
+                                "run.finished_at": _now()})
 
 
 class PinOutputRequest(BaseModel):

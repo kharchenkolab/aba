@@ -97,3 +97,72 @@ if __name__ == "__main__":
             print(f"  [FAIL] {t.__name__}: {e}")
             rc = 1
     raise SystemExit(rc)
+
+
+def test_nested_paths_share_a_parent_without_clobbering():
+    """Dotted keys land at nested paths: manifest (run.outputs), cancel
+    (run.status), placement (run.sites) all live under `run` — each writer
+    touches ONLY its field, so the same-key RMW race (recheck-confirmed:
+    a manifest refresh could revert a cancellation) is structurally gone."""
+    eid = create_entity(entity_type="analysis", title="nested run",
+                        metadata={"run": {"status": "running", "outputs": [1]}})
+    patch_metadata(eid, {"run.status": "cancelled", "run.finished_at": "t1"})
+    md = get_entity(eid)["metadata"]
+    assert md["run"]["status"] == "cancelled"
+    assert md["run"]["outputs"] == [1]          # sibling untouched
+    assert md["run"]["finished_at"] == "t1"
+    # parent auto-created when absent
+    patch_metadata(eid, {"deep.new.leaf": 7})
+    assert get_entity(eid)["metadata"]["deep"]["new"]["leaf"] == 7
+    # None removes at the nested path only
+    patch_metadata(eid, {"run.finished_at": None})
+    md = get_entity(eid)["metadata"]
+    assert "finished_at" not in md["run"] and md["run"]["status"] == "cancelled"
+
+
+def test_append_metadata_list_is_atomic_append():
+    from core.graph.entities import append_metadata_list
+    eid = create_entity(entity_type="analysis", title="append run",
+                        metadata={})
+    append_metadata_list(eid, "run.sites", "siteA")
+    append_metadata_list(eid, "run.sites", "siteB")
+    assert get_entity(eid)["metadata"]["run"]["sites"] == ["siteA", "siteB"]
+    append_metadata_list(eid, "weft_targets", "t1")
+    assert get_entity(eid)["metadata"]["weft_targets"] == ["t1"]
+
+
+def test_truly_concurrent_writers_lose_nothing():
+    """GENUINELY concurrent (the prior 'interleaved' test was sequential —
+    recheck finding): two threads hammer the SAME top-level object, one
+    appending to run.sites, one rewriting run.outputs. Every append must
+    survive and the last outputs write must be intact — with any
+    read-modify-write in the chain, appends vanish under this load."""
+    import threading
+    from core.graph.entities import append_metadata_list
+    eid = create_entity(entity_type="analysis", title="conc run",
+                        metadata={"run": {"status": "running"}})
+    N = 40
+    errs: list = []
+
+    def _appender():
+        try:
+            for i in range(N):
+                append_metadata_list(eid, "run.sites", f"s{i}")
+        except Exception as e:  # noqa: BLE001
+            errs.append(f"append: {e}")
+
+    def _setter():
+        try:
+            for i in range(N):
+                patch_metadata(eid, {"run.outputs": [{"n": i}]})
+        except Exception as e:  # noqa: BLE001
+            errs.append(f"set: {e}")
+
+    ts = [threading.Thread(target=_appender), threading.Thread(target=_setter)]
+    [t.start() for t in ts]
+    [t.join(timeout=60) for t in ts]
+    assert not errs, errs
+    md = get_entity(eid)["metadata"]
+    assert md["run"]["status"] == "running"                 # untouched field intact
+    assert [s for s in md["run"]["sites"]] == [f"s{i}" for i in range(N)]
+    assert md["run"]["outputs"] == [{"n": N - 1}]

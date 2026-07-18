@@ -401,9 +401,19 @@ function SiteDetail({ site, advanced, selfService, onChanged }: {
       )}
 
       {((footprint != null && footprint > 0)
-        || (holdings != null && (holdings.kept_runs > 0 || holdings.dataset_homes.length > 0))) && (
+        || (holdings != null && (holdings.kept_runs > 0 || holdings.dataset_homes.length > 0
+                                 || holdings.unknown))) && (
         <div className="cmp-block">
           <div className="cmp-block__title">Disk</div>
+          {/* outage honesty: unknown holdings must not render as "holds
+              nothing" — the confirm dialogs already say this; the passive
+              summary was the missed sibling surface (recheck finding) */}
+          {holdings?.unknown && (
+            <div className="cmp-part">
+              ⚠ {holdings.note
+                 || 'compute substrate unreachable — what this machine holds cannot be assessed right now'}
+            </div>
+          )}
           {/* §6: every byte aba touches is one of three kinds, each with its own
               action; classes render only when nonzero. */}
           {holdings != null && holdings.kept_runs > 0 && (

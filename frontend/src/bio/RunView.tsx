@@ -72,7 +72,9 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onPre
   // Placement: metadata.run.sites is the live signal (stamped at each remote
   // step's completion); the executor marker covers imported/legacy runs. A
   // run with neither ran locally — which the verdict says explicitly.
-  const remoteSites = (m.sites ?? []).filter(s => s && s !== 'local')
+  // Set-dedupe: the backend's atomic list append tolerates a rare racing
+  // duplicate (lost updates are the worse failure) — dedup at render
+  const remoteSites = Array.from(new Set((m.sites ?? []).filter(s => s && s !== 'local')))
   const hpc = remoteSites.length > 0 || m.executor === 'remote-hpc'
   const active = status === 'running' || status === 'queued'
   const [editing, setEditing] = useState(false)
@@ -562,6 +564,14 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onPre
                 <span className="dura-chip dura-chip--retained">{duraSummary.retained} kept ✓</span>}
               {(duraSummary.saving ?? 0) > 0 &&
                 <span className="dura-chip dura-chip--saving">{duraSummary.saving} keeping…</span>}
+              {/* outage honesty: an unreachable substrate must never render as
+                  calm/empty — unknown is a first-class state here, like the
+                  files tree and the confirm dialogs (recheck-found gap) */}
+              {(duraSummary.unknown ?? 0) > 0 &&
+                <span className="dura-chip dura-chip--unknown"
+                      title="The compute substrate is unreachable — whether these files are protected cannot be assessed right now">
+                  {duraSummary.unknown} unknown — retention unreachable
+                </span>}
               {!runOpen && ((duraSummary.at_risk ?? 0) + (duraSummary.in_sandbox ?? 0) + (duraSummary.in_store ?? 0)) > 0 && (
                 <span className="dura-chip dura-chip--temp"
                       title="Not kept — housekeeping will discard these eventually">

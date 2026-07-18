@@ -33,6 +33,7 @@
 .dura-chip--cleared  { color: var(--text-4); background: var(--surface-3); border-color: var(--border); cursor: pointer; }
 .dura-chip--cleared:hover { color: var(--text-2); }
 .dura-chip--temp     { color: #6b7280; background: var(--surface-3); border-color: var(--border); }
+.dura-chip--unknown  { color: #92400e; background: #fef3c7; border-color: #fcd34d; }
 .runview__whereabouts { font-size: 12px; color: var(--text-3); margin: 4px 0; }
 .runview__meta { font-size: 12.5px; color: var(--text-2); font-family: var(--mono); }
 .runview__meta--dim { color: var(--text-4); font-size: 11.5px; }
