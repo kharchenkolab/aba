@@ -313,6 +313,11 @@ class WeftSubmitter:
         }))
         ref = _adapter().sync_call("data_register", str(payload),
                                    ingest=True)["ref"]
+        # The CAS copy (ingest=True) is the payload of record — remove the
+        # staging dir so it never surfaces as a Run output: it lives inside
+        # the run dir, which the harvest sweep (*.json) and the Files panel
+        # both read, and spec.json is internal (job-id memo nonce).
+        _shutil.rmtree(payload, ignore_errors=True)
         est = params.get("estimate") or {}
         resources = {"cpus": int(est.get("cores") or 1)}
         if est.get("mem_gb"):

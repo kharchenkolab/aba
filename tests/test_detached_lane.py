@@ -47,12 +47,17 @@ class _FakeComp:
     def __init__(self, fail_platform_once: bool = False):
         self.calls = []
         self._fail = fail_platform_once
+        self.registered: dict[str, str] = {}
 
     def sync_call(self, name, *a, **kw):
         self.calls.append((name, a, kw))
         if name == "sites_list":
             return _SITES
         if name == "data_register":
+            # snapshot at register time — the submitter deletes the staging
+            # dir right after (it must never linger as a Run "output")
+            self.registered = {p.name: p.read_text()
+                               for p in Path(a[0]).iterdir()}
             return {"ref": "dref:payload123"}
         if name == "task_submit":
             if self._fail:
@@ -96,14 +101,18 @@ def test_detached_submit_ships_code_as_data(monkeypatch):
     assert task["inputs"] == [{"ref": "dref:payload123", "mount_as": "payload"}]
     assert task["resources"]["cpus"] == 2
     assert "walltime" not in task["resources"]             # ssh site: no scheduler ask
-    # payload on disk: harness + code + nonce
-    sub = ws.WeftSubmitter(site="far")
-    payload = sub._run_dir(job) / "payload"
-    assert (payload / "aba_entry.py").exists()
-    assert (payload / "user_code.py").read_text() == "print('x')"
-    spec = json.loads((payload / "spec.json").read_text())
+    # payload traveled AS DATA (snapshotted by the fake at register time):
+    # harness + code + nonce + timeout ceiling
+    assert "aba_entry.py" in comp.registered
+    assert comp.registered["user_code.py"] == "print('x')"
+    spec = json.loads(comp.registered["spec.json"])
     assert spec["job_id"] == "job_det_a" and spec["interpreter"] == "python3"
     assert spec["timeout_s"] == 60      # enforced by the harness on the node
+    # …and the staging dir is GONE: it lives inside the run dir, which the
+    # harvest sweep (*.json) and the Files panel read — spec.json leaked as a
+    # spurious Run output when it lingered (review D1)
+    sub = ws.WeftSubmitter(site="far")
+    assert not (sub._run_dir(job) / "payload").exists()
     # params updated: detached + honest env grade (no env resolvable here)
     row = get_job("job_det_a", project_id="default")
     p = row["params"]
