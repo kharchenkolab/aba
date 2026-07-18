@@ -418,6 +418,108 @@ def ui_remote_run_badges(page, api, pid, tid):
             ("bring-back POSITIVE: flat row serves local bytes", brought_bytes)]
 
 
+@ui_scenario("ui_settings_compute_connect")
+def ui_settings_compute_connect(page, api, pid, tid):
+    """Settings→Compute ONBOARDING journey, end-to-end in the browser against
+    a REAL detached machine (mendel): open Settings, add the machine by the
+    same thing you'd type after `ssh`, ride preflight→probe→proposal, pin the
+    working space to a disposable path, confirm, verify the card + its edit
+    affordances, test the connection, then disconnect. This is the whole
+    first-contact path a new user walks before any analysis exists
+    (release_test_plan: 'Compute-sites — connect/probe/propose')."""
+    from multinode import mssh
+    if mssh("echo ok").stdout.strip() != "ok":
+        return [("mendel available (scenario skipped otherwise)", False)]
+    ui_root = "/home/pkharchenko/aba-uistudy-weft"
+    checks = []
+    try:
+        page.locator(".rail__user").click()
+        page.locator(".settings__tab", has_text="Compute").click()
+        page.wait_for_timeout(800)
+        shot(page, "settings_compute_initial")
+        body = page.locator(".settings__body")
+        checks.append(("Compute tab renders with an add affordance",
+                       body.get_by_text("+ Add remote compute").count() > 0))
+        body.get_by_text("+ Add remote compute").click()
+        page.locator('input[name="cmp-ssh-dest"]').fill("mendel")
+        shot(page, "connect_entry")
+        page.get_by_role("button", name="Continue").click()
+        # preflight → probe → proposal; bootstrap on a real machine takes time
+        add_btn = page.get_by_role("button", name="Add", exact=True)
+        prop_ok = True
+        try:
+            add_btn.wait_for(state="visible", timeout=240_000)
+        except Exception:  # noqa: BLE001
+            prop_ok = False
+        shot(page, "connect_proposal")
+        checks.append(("probe reached a proposal (detached machine)", prop_ok))
+        if not prop_ok:
+            return checks
+        text = body.inner_text()
+        checks.append(("proposal names the machine", "mendel" in text.lower()))
+        # detached wording must be honest — the flow SUPPORTS detached now
+        checks.append(("no stale 'not yet supported' copy",
+                       "not yet supported" not in text))
+        # working space → a disposable path (never the machine's default root)
+        ws = page.locator(".cmp-form select").first
+        try:
+            ws.select_option("__custom__")
+            sec = ws.locator("xpath=..")
+            sec.locator("input:not([type='checkbox'])").first.fill(ui_root)
+            root_ok = True
+        except Exception:  # noqa: BLE001
+            root_ok = False
+        checks.append(("working space can be pointed at a custom path",
+                       root_ok))
+        shot(page, "connect_proposal_custom_root")
+        add_btn.click()
+        # the card appears once registration lands (bootstrap narration runs)
+        card = page.locator("[role='button'][aria-expanded]",
+                            has_text="mendel").first
+        card_ok = True
+        try:
+            card.wait_for(state="visible", timeout=240_000)
+        except Exception:  # noqa: BLE001
+            card_ok = False
+        checks.append(("machine card appears after Add", card_ok))
+        shot(page, "compute_card_added")
+        if card_ok:
+            card.click()
+            page.wait_for_timeout(600)
+            shot(page, "compute_card_expanded")
+            expanded = body.inner_text()
+            for aff in ("change…", "Test connection", "Disconnect…"):
+                checks.append((f"edit affordance present: {aff}",
+                               aff in expanded))
+            body.get_by_role("button", name="Test connection").click()
+            conn_ok = True
+            try:
+                body.get_by_text("connection ok").wait_for(timeout=90_000)
+            except Exception:  # noqa: BLE001
+                conn_ok = False
+            checks.append(("Test connection round-trips ok", conn_ok))
+            shot(page, "compute_test_connection")
+            body.get_by_role("button", name="Disconnect…").click()
+            page.wait_for_timeout(1000)
+            shot(page, "compute_disconnect_confirm")
+            confirm = page.locator(".cmp-confirm")
+            checks.append(("disconnect confirm previews consequences",
+                           confirm.count() > 0 and
+                           "forget this machine" in confirm.inner_text()))
+            confirm.get_by_role("button", name="Disconnect",
+                                exact=True).click()
+            gone = True
+            try:
+                card.wait_for(state="detached", timeout=60_000)
+            except Exception:  # noqa: BLE001
+                gone = ("mendel" not in body.inner_text().lower())
+            checks.append(("card gone after disconnect", gone))
+            shot(page, "compute_after_disconnect")
+    finally:
+        mssh(f"rm -rf {ui_root}")
+    return checks
+
+
 def _register_hpc() -> None:
     """Best-effort: the dockerized slurm fixture (multinode's), for the
     remote-truth UI scenarios. Skipped cleanly when absent."""

@@ -341,7 +341,7 @@ export default function ConnectMachine({ knownNames, onDone, onCancel }: Props) 
             <div className="cmp-dim">
               {proposal.contract === 'shared-fs'
                 ? `aba sees your files directly (shared filesystem${proposal.contract_evidence?.length ? `: ${proposal.contract_evidence[0]}` : ''})`
-                : 'no shared files seen from here — aba will ship work over (not yet supported; connect is limited to shared-storage machines for now)'}
+                : 'no shared filesystem from here — aba ships each step over ssh and brings results back (data stays on the machine unless you keep or bring something back)'}
             </div>
 
             {proposal.partitions.length > 0 && <>
