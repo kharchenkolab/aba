@@ -109,7 +109,12 @@ def submit_python_job(code: str, title: str, focus_entity_id: str | None,
             raise
         return job
     from core.jobs.submitter import get_submitter_for
-    get_submitter_for(submission, kind="run_python").submit(job)
+    try:
+        # the default lane rides weft too (W2) — same orphan-row hazard
+        get_submitter_for(submission, kind="run_python").submit(job)
+    except Exception as e:
+        _mark_submit_failed(job_id, project_id, e)
+        raise
     return job
 
 
@@ -152,7 +157,11 @@ def submit_r_job(code: str, title: str, focus_entity_id: str | None,
             raise
         return job
     from core.jobs.submitter import get_submitter_for
-    get_submitter_for(submission, kind="run_r").submit(job)
+    try:
+        get_submitter_for(submission, kind="run_r").submit(job)
+    except Exception as e:
+        _mark_submit_failed(job_id, project_id, e)
+        raise
     return job
 
 
@@ -307,7 +316,11 @@ def submit_nextflow_job(pipeline: str, title: str, focus_entity_id: str | None,
         project_id=project_id,
     )
     from core.jobs.submitter import get_submitter_for
-    get_submitter_for(submission, kind="run_nextflow").submit(job)
+    try:
+        get_submitter_for(submission, kind="run_nextflow").submit(job)
+    except Exception as e:
+        _mark_submit_failed(job_id, project_id, e)
+        raise
     return job
 
 
@@ -339,6 +352,10 @@ def submit_import_run_job(source_dir: str, title: str, run_id: str,
         project_id=project_id,
     )
     from core.jobs.submitter import get_submitter_for
-    get_submitter_for("inline").submit(job)
+    try:
+        get_submitter_for("inline").submit(job)
+    except Exception as e:
+        _mark_submit_failed(job_id, project_id, e)
+        raise
     return job
 

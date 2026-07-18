@@ -979,16 +979,26 @@ async def stream_response(
                     # I/O; in pack mode a session snapshot+realize for the
                     # job's frozen env — W3.4).
                     import functools as _ft
-                    job = await asyncio.get_running_loop().run_in_executor(
-                        None, _ft.partial(
-                            submit_python_job,
-                            code=tool_input.get("code", ""),
-                            title=tool_input.get("title") or "Background analysis",
-                            focus_entity_id=focus_entity_id,
-                            project_id=str(_pid),
-                            thread_id=str(store_tid),
-                            run_id=_arid_ctx.get("active_run_id"),
-                            **bg_submit_kwargs(tool_input, _pid)))
+                    try:
+                        job = await asyncio.get_running_loop().run_in_executor(
+                            None, _ft.partial(
+                                submit_python_job,
+                                code=tool_input.get("code", ""),
+                                title=tool_input.get("title") or "Background analysis",
+                                focus_entity_id=focus_entity_id,
+                                project_id=str(_pid),
+                                thread_id=str(store_tid),
+                                run_id=_arid_ctx.get("active_run_id"),
+                                **bg_submit_kwargs(tool_input, _pid)))
+                    except Exception as e:  # noqa: BLE001
+                        # same hardening as run_exec's own background branch:
+                        # an unknown site / substrate error must come back as
+                        # a TOOL result the agent can act on, not crash the
+                        # turn (the row, if created, is marked failed by
+                        # submit.py's _mark_submit_failed)
+                        return {"status": "error",
+                                "note": f"background submit failed: "
+                                        f"{getattr(e, 'detail', None) or e}"}
                     return {
                         "job_id": job["id"],
                         "status": "queued",

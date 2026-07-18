@@ -513,6 +513,32 @@ def test_failed_site_submit_marks_row_failed(monkeypatch):
     assert "refused" in (row["error"] or "")
 
 
+def test_default_lane_submit_failure_marks_row_failed(monkeypatch):
+    """The DEFAULT background lane (no site=) rides weft on W2 deployments —
+    a substrate error there must ALSO mark the row failed (the guard first
+    landed only on the site= branch): a queued row with no submitter marker
+    is re-enqueued by restart reconcile onto the LOCAL worker, silently
+    re-running code the agent was told failed to submit."""
+    import core.jobs.submitter as subr
+    seen = {}
+
+    class _Dead:
+        def submit(self, job):
+            seen["id"] = job["id"]
+            raise ComputeError("substrate.unreachable", "task_submit refused")
+    monkeypatch.setattr(subr, "get_submitter_for", lambda *a, **k: _Dead())
+    from core.jobs.submit import submit_python_job
+    try:
+        submit_python_job("x=1", title="t", focus_entity_id=None,
+                          project_id="default")
+        raise AssertionError("expected the submit error to propagate")
+    except ComputeError:
+        pass
+    row = get_job(seen["id"], project_id="default")
+    assert row["status"] == "failed"
+    assert "refused" in (row["error"] or "")
+
+
 def test_offline_substrate_named_as_outage(monkeypatch):
     """With the substrate DOWN, declared sites come back empty — the error
     must say the substrate is offline, not misattribute the outage to an
@@ -567,6 +593,7 @@ def _standalone() -> int:
               test_sync_cancel_uses_fresh_row_with_weft_id,
               test_sync_row_born_sync_before_substrate_submit,
               test_failed_site_submit_marks_row_failed,
+              test_default_lane_submit_failure_marks_row_failed,
               test_offline_substrate_named_as_outage,
               test_site_validation_names_real_sites):
         mp = _MP()
