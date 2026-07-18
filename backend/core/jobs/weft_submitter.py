@@ -566,6 +566,19 @@ class WeftSubmitter:
                             "files": files, "warnings": warnings})
             except Exception:  # noqa: BLE001 — files still in run dir/Files panel
                 pass
+        if node.get("status") != "error":
+            # REMOTE-ONLY outputs (too large to come home) still enter
+            # PROVENANCE: a produced row with no url, so the exec record /
+            # outputs manifest / durable view can render "kept ✓ · on <site>"
+            # — a kept 60 MB file was otherwise INVISIBLE on the Run card
+            # (browser-study finding: the card showed no files at all).
+            have = {a.get("original_name")
+                    for g in ("plots", "tables", "files")
+                    for a in (res.get(g) or [])}
+            for rel in (node.get("outputs") or []):
+                if rel not in have:
+                    res.setdefault("files", []).append(
+                        {"original_name": rel, "url": None, "kind": "file"})
         comp = self._compute_block(wid, state)
         if params.get("env_id"):
             comp["env_id"] = params["env_id"]

@@ -249,7 +249,8 @@ def test_detached_poll_fetches_results_over_data_plane(monkeypatch):
     comp = _FakeComp()
     monkeypatch.setattr(ws, "_adapter", lambda: comp)
     node_result = {"status": "ok", "returncode": 0, "stdout_tail": "final 42",
-                   "outputs": ["out/answer.csv"], "runtime": "Python 3.11"}
+                   "outputs": ["out/answer.csv", "big/blob.bin"],
+                   "runtime": "Python 3.11"}
 
     def _fread(target, rel, max_bytes=1 << 20):
         if rel == "result.json":
@@ -261,7 +262,9 @@ def test_detached_poll_fetches_results_over_data_plane(monkeypatch):
         return {"bytes_b64": base64.b64encode(data).decode(), "truncated": False}
     monkeypatch.setattr(retmod, "file_read", _fread)
     monkeypatch.setattr(retmod, "file_stat",
-                        lambda t, rel: {"exists": True, "bytes": 14})
+                        lambda t, rel: {"exists": True,
+                                        "bytes": 200 << 20 if "blob" in rel
+                                        else 14})
     import core.exec.run as execrun
     monkeypatch.setattr(execrun, "harvest_artifacts",
                         lambda *a, **k: ([], [{"name": "answer.csv"}], [], []))
@@ -277,6 +280,12 @@ def test_detached_poll_fetches_results_over_data_plane(monkeypatch):
     assert local.read_bytes() == b"k,v\nanswer,42\n"
     assert res["compute"]["env_grade"] == "node-system"
     assert res["compute"]["runtime"] == "Python 3.11"
+    # REMOTE-ONLY outputs (never fetched) still enter provenance as url-less
+    # produced rows — without one, a kept large file is INVISIBLE on the card
+    rels = [f.get("original_name") for f in res.get("files", [])]
+    assert "big/blob.bin" in rels
+    blob = next(f for f in res["files"] if f.get("original_name") == "big/blob.bin")
+    assert blob["url"] is None and blob["kind"] == "file"
 
 
 def test_poll_side_platform_relock_resubmits(monkeypatch):

@@ -252,10 +252,13 @@ def ui_run_card_lifecycle(page, api, pid, tid):
     got_title = wait_text(page, "Curve study", 30)
     got_file = wait_text(page, "curve.csv", 30)
     shot(page, "run_card")
-    kept = page.get_by_text("kept", exact=False).count() > 0
+    # §8c: while the run is open/settling the state reads "keeping…"; after
+    # settlement "kept ✓" — both are keep-state truth
+    import re as _re
+    kept = page.get_by_text(_re.compile(r"keep|kept")).count() > 0
     return [("run created", True), ("card shows the run", got_title),
             ("outputs listed on the card", got_file),
-            ("keep state visible", kept)]
+            ("keep state visible (keeping…/kept)", kept)]
 
 
 @ui_scenario("ui_pin_flow")
