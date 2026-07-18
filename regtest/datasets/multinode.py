@@ -1253,7 +1253,11 @@ def mn_cbe_gpu(client, pid, tid):
     """GPU ROUTING on the real cluster: a GPU-flagged step must carry the
     gpu resource so weft lands it on the g partition (1 node). Routing is
     the claim — the job may legitimately PEND if the node is busy, so
-    scheduler truth accepts running/completed/pending ON PARTITION g."""
+    scheduler truth accepts running/completed/pending ON PARTITION g.
+
+    EXPECTED RED until misc/bug4_weft_gpu_partition.md lands in weft: the
+    submit carries --gres but no --partition, so the default (GPU-less)
+    partition swallows the job — the canary for real-cluster GPU work."""
     if not CBE_OK:
         return [], [("cbe.next available (scenario skipped otherwise)", False)]
 
