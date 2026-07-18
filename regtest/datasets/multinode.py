@@ -32,6 +32,8 @@ R_DATA = "/home/physicist/aba-mn-data/readings"   # ON the hpc fixture
 M_DATA = "/home/pkharchenko/aba-mn2-data"         # ON mendel (real remote ssh)
 M_ROOT = "/home/pkharchenko/aba-mn2-weft"
 MENDEL_OK = False                                 # set in main() if reachable+registered
+C_ROOT = "/users/peter.kharchenko/aba-mn-cbe-weft"  # ON cbe.next (real slurm)
+CBE_OK = False                                    # set in main() if reachable+registered
 
 
 def mssh(cmd: str):
@@ -39,6 +41,15 @@ def mssh(cmd: str):
     import subprocess
     return subprocess.run(["ssh", "-o", "BatchMode=yes", "mendel", cmd],
                           capture_output=True, text=True, timeout=120)
+
+
+def cssh(cmd: str):
+    """Run a command ON cbe.next (the real slurm cluster; ProxyJump via
+    ~/.ssh/config, so latency is jump-host-shaped — keep calls few)."""
+    import subprocess
+    return subprocess.run(["ssh", "-o", "BatchMode=yes",
+                           "-o", "ConnectTimeout=20", "cbe.next", cmd],
+                          capture_output=True, text=True, timeout=180)
 
 
 def _cluster_conn():
@@ -1206,6 +1217,56 @@ def mn_first_use(client, pid, tid):
     ]
 
 
+@scenario("mn_cbe_smoke")
+def mn_cbe_smoke(client, pid, tid):
+    """REAL-cluster smoke (cbe.next, slurm 26.05, real slurmdbd): one
+    background job through the genuine scheduler — submit → sbatch → poll →
+    result → honesty — with sacct as ground truth (unlike the fixture, sacct
+    is populated here). The step is told to use the node's own python
+    (env 'system'): first live exercise of the P2 lever, and it keeps the
+    smoke from realizing a full pack through the jump host."""
+    if not CBE_OK:
+        return [], [("cbe.next available (scenario skipped otherwise)", False)]
+
+    def _sacct_ids():
+        out = cssh("sacct -u peter.kharchenko -S now-2hours --noheader "
+                   "-o JobID,State -X 2>/dev/null")
+        rows = {}
+        for ln in (out.stdout or "").splitlines():
+            parts = ln.split()
+            if len(parts) >= 2:
+                rows[parts[0]] = parts[1]
+        return rows
+
+    pre = set(_sacct_ids())
+    answer = str(sum((i * i) % 97 for i in range(1, 200001)))
+    caps = [drive_turn(client, pid, tid,
+        "On machine 'cbe', run a BACKGROUND job: compute the sum of "
+        "(i*i) mod 97 for i from 1 to 200000 and print exactly "
+        "CBETOTAL=<result>. Estimate it honestly as about 2 minutes on "
+        "1 core. Use the node's own system python (env 'system') — do NOT "
+        "build or ship an environment for this. Tell me when it's done.",
+        timeout_s=900)]
+    wait_jobs_settled(client, pid, timeout_s=900)
+    full = _denum(all_text(caps)) + "\n" + wait_for_text(
+        client, pid, tid, answer, timeout_s=600)
+    bg = [t for t in tools_named(caps, "run_python")
+          if t["input"].get("background") and t["input"].get("site") == "cbe"]
+    sys_env = any(str(t["input"].get("env") or "").lower()
+                  in ("system", "none") for t in bg)
+    post = _sacct_ids()
+    new_done = [j for j, st in post.items()
+                if j not in pre and st.startswith("COMPLETED")]
+    return caps, [
+        ("submitted a background job on cbe", bool(bg)),
+        ("step used the node's system python (P2 lever, no pack realize)",
+         sys_env),
+        ("correct total reported (via continuation)", answer in full),
+        ("REAL scheduler ground truth: a new sacct job COMPLETED",
+         bool(new_done)),
+    ]
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 def main():
     only = None
@@ -1245,6 +1306,24 @@ def main():
     else:
         print("[mn] mendel unreachable — cross-site scenarios skip")
 
+    # optional THIRD site: cbe.next, a REAL slurm cluster (jump-host ssh).
+    # Only probed when the smoke is actually selected — the probe costs ~5s
+    # of jump-host latency every run otherwise.
+    global CBE_OK
+    if (only is None or "mn_cbe_smoke" in only):
+        if cssh("echo ok").stdout.strip() == "ok":
+            try:
+                r = c.sync_call("register_site", "cbe", "slurm",
+                                {"root": C_ROOT, "host": "cbe.next",
+                                 "durable": True})
+                CBE_OK = r.get("site") == "cbe"
+                print("[mn] cbe.next (REAL slurm) registered" if CBE_OK
+                      else f"[mn] cbe registration returned {r}")
+            except Exception as e:  # noqa: BLE001
+                print("[mn] cbe registration failed — smoke skips:", e)
+        else:
+            print("[mn] cbe.next unreachable — smoke skips")
+
     from fastapi.testclient import TestClient
     from main import app
     scenarios = [(fn._scenario, fn) for fn in
@@ -1260,7 +1339,8 @@ def main():
                   mn_rerun_asis_recomputes,
                   mn_data_gravity_recall, mn_conflicting_gravity,
                   mn_cross_thread_separation, mn_mid_chain_steering,
-                  mn_repeat_sync, mn_interrupt_sync, mn_first_use]]
+                  mn_repeat_sync, mn_interrupt_sync, mn_first_use,
+                  mn_cbe_smoke]]
     # --only must NAME REAL scenarios: an unmatched filter ran ZERO scenarios
     # and printed ALL PASS vacuously (the exact bug class this study hunts)
     if only:
@@ -1276,7 +1356,7 @@ def main():
                         continue
                     run_scenario(client, name, fn)
             finally:
-                for site in ("hpc", "mendel"):
+                for site in ("hpc", "mendel", "cbe"):
                     try:
                         ad.get_compute().sync_call("site_unregister", site)
                     except Exception:  # noqa: BLE001
@@ -1289,6 +1369,9 @@ def main():
         if MENDEL_OK:
             mout = mssh(f"rm -rf {M_ROOT} {M_DATA} && echo cleaned")
             print("[cleanup] mendel dirs:", mout.stdout.strip() or mout.stderr[-120:])
+        if CBE_OK:
+            cout = cssh(f"rm -rf {C_ROOT} && echo cleaned")
+            print("[cleanup] cbe dirs:", cout.stdout.strip() or cout.stderr[-120:])
     if not RESULTS:
         sys.exit("[mn] ZERO scenarios ran — refusing to report ALL PASS")
     print("\nMULTINODE:", "ALL PASS" if all(ok for _, ok in RESULTS)
