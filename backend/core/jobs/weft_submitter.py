@@ -300,6 +300,11 @@ class WeftSubmitter:
         shared lane. env_name is kept for the lazy platform re-lock (only
         NAMED envs re-lock; the project default env has no per-project spec
         handle here, so a platform mismatch on it advises an isolated env)."""
+        if str(params.get("env") or "").lower() in ("system", "none"):
+            # explicit lever (misc/bug1.md P2): the node's own interpreter, no
+            # pack realization — right for pure download/transfer steps that a
+            # 1.5 GB scientific env would serve nothing
+            return None, None
         if params.get("env"):
             from core.compute import named_envs
             row = named_envs.resolve(str(pid), params["env"])

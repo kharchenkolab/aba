@@ -61,12 +61,14 @@ _D_EXECUTION = (
     "from the estimate.")
 _D_SITE = (
     "Run this step ON a declared remote machine (names from describe_compute); overrides "
-    "`execution`. WITHOUT background: synchronous — behaves like a normal call, just executed "
-    "THERE in a fresh process (no kernel state; read paths valid on that machine; write to "
-    "the working directory — outputs come back automatically). WITH background=True: a "
-    "deferred job for LONG steps — you're resumed when it finishes; do NOT poll. Prefer the "
-    "machine that already holds the inputs over transferring data. Isolated envs travel: "
-    "realized on the site, re-locked for its platform automatically.")
+    "`execution`. WITHOUT background: synchronous, in a PERSISTENT session on that machine — "
+    "variables and loaded objects survive between your site= calls (multi-step work needs no "
+    "reload-from-disk each step; pass fresh=true for a clean one-shot process). Read paths "
+    "valid on that machine; small outputs come back automatically, large ones stay there "
+    "kept-addressable. WITH background=True: a deferred job for LONG steps — you're resumed "
+    "when it finishes; do NOT poll. Prefer the machine that already holds the inputs over "
+    "transferring data. Isolated envs travel: realized on the site, re-locked for its "
+    "platform automatically.")
 
 
 def register_run_exec_tools(mcp: FastMCP) -> None:
@@ -116,8 +118,9 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
           when it fits (good for a quick background job); `'auto'` decides from the estimate.
           `site` runs the step ON a declared remote machine (data gravity:
           prefer the machine holding the inputs); it overrides `execution`.
-          A short step: `site` alone — synchronous, like a local call, executed
-          there in a fresh process. A long step: `site` + `background=True` —
+          A short step: `site` alone — synchronous, in a PERSISTENT session
+          there (state survives between site= calls; fresh=true for a clean
+          one-shot). A long step: `site` + `background=True` —
           deferred; you're resumed when it finishes (don't poll). Never claim
           work ran on a machine unless the job actually executed there — the
           result names where it ran.
@@ -127,7 +130,10 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
         environment you created with `make_isolated_env(name='name')` —
         used when a package conflicts with the base. `env` combines with
         `background=True`: a long job runs IN that env (its own python),
-        as a Slurm job on a compute node when on a cluster.
+        as a Slurm job on a compute node when on a cluster. On a REMOTE
+        step (`site=`), `env='system'` runs on the node's own interpreter
+        with NO environment realization — right for pure download/transfer
+        steps (stdlib only); don't ship a full scientific env to run curl.
 
         INSTALLING PACKAGES: to use a library that isn't already in the
         sandbox, call `ensure_capability(name)` FIRST — NEVER `pip install`,

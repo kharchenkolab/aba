@@ -649,6 +649,160 @@ def bg_submit_kwargs(input_: dict, project_id: str) -> dict:
             "env": env_name, "timeout_s": _background_timeout_s(input_, est_min)}
 
 
+def _kernel_sandbox_inventory(kernel_id: str) -> dict:
+    """{relpath: mtime} of the kernel's LIVE sandbox on its site — kernel ids
+    are first-class weft inventory targets, whatever machine holds them."""
+    try:
+        from core.compute.adapter import get_compute
+        inv = get_compute().sync_call("run_inventory", kernel_id, live=True)
+        return {e["path"]: (e.get("mtime") or 0) for e in (inv.get("entries") or [])}
+    except Exception:  # noqa: BLE001 — no inventory just means no fetch this call
+        return {}
+
+
+# run_file_read is a preview channel hard-capped at 8 MB — bigger outputs stay
+# on the site (kept-addressable via the recorded kernel target; bring-back for
+# a local copy), exactly like the detached job lane.
+_REMOTE_KERNEL_FETCH_BYTES = 8 * 1024 * 1024
+
+
+def _fetch_new_kernel_files(kernel_id: str, inv0: dict, project_id: str,
+                            thread_id: str) -> tuple:
+    """Diff the kernel sandbox against the pre-exec inventory and fetch new /
+    changed SMALL files over the data plane into a fresh local dir under the
+    thread scratch (the standard harvester then runs over the copies).
+    Returns (fetch_dir | None, remote_only_names). Protocol files (blocks/,
+    kernel.*) are the kernel's own machinery — never outputs."""
+    import base64
+    import os
+    import time as _time
+    from core.compute.adapter import get_compute
+    from core.data.workspace import scratch_dir
+    inv1 = _kernel_sandbox_inventory(kernel_id)
+    new = [(rel, mt) for rel, mt in inv1.items()
+           if not (rel.startswith("blocks/") or rel.startswith("kernel."))
+           and (rel not in inv0 or mt > inv0.get(rel, 0))]
+    if not new:
+        return None, []
+    dest = None
+    remote_only: list[str] = []
+    comp = get_compute()
+    for rel, _mt in new[:200]:
+        try:
+            st = comp.sync_call("run_file_stat", kernel_id, rel)
+            if (st.get("bytes") or 0) > _REMOTE_KERNEL_FETCH_BYTES:
+                remote_only.append(rel)
+                continue
+            out = comp.sync_call("run_file_read", kernel_id, rel,
+                                 max_bytes=_REMOTE_KERNEL_FETCH_BYTES)
+            if out.get("truncated"):
+                remote_only.append(rel)
+                continue
+            data = base64.b64decode(out.get("bytes_b64") or "")
+        except Exception:  # noqa: BLE001 — a single unfetchable file stays remote
+            remote_only.append(rel)
+            continue
+        if dest is None:
+            dest = str(scratch_dir(project_id, f"thread-{thread_id}")
+                       / f"remote-kernel-{int(_time.time())}")
+            os.makedirs(dest, exist_ok=True)
+        target = os.path.join(dest, rel)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(target, "wb") as fh:
+            fh.write(data)
+    return dest, remote_only
+
+
+def _run_remote_kernel(input_: dict, ctx: dict | None, project_id: str,
+                       thread_id: str, site: str):
+    """Persistent interactive session ON a remote site (P1, misc/bug1.md): the
+    same kernel-pool contract as the local lane — variables persist between
+    calls — with outputs fetched over the weft data plane. Returns None when
+    no remote kernel can be established (caller falls back to the one-shot
+    sync lane); once a session EXISTS, results and errors are returned from
+    it — its state is the point."""
+    import time as _time
+    from datetime import datetime as _dt, timezone as _tz
+    from pathlib import Path
+    from core.data.workspace import scratch_dir
+    from core.exec.run import harvest_artifacts
+    from core.exec.kernels import get_pool, KernelCapacityError
+    from core.exec.output_cap import snip_middle
+
+    code = input_.get("code", "")
+    timeout_s = max(5, min(int(input_.get("timeout_s") or 300), 1800))
+    cancel_token = (ctx or {}).get("cancel_token")
+    env = input_.get("env")
+    if env is None:
+        from core.compute.named_envs import get_active
+        env = get_active(project_id, "python")
+    env_name = None if _is_default_env(env) else str(env).strip()
+    if env_name:
+        from core.compute.named_envs import resolve as _env_resolve
+        if _env_resolve(project_id, env_name) is None:
+            return {"status": "error", "env": env_name,
+                    "note": f"No isolated env '{env_name}'. Create it with "
+                            f"make_isolated_env(name='{env_name}')."}
+    scope_key = f"{thread_id}@{site}" + (f"::env::{env_name}" if env_name else "")
+    start_ts = _time.time()
+    started_iso = _dt.now(_tz.utc).isoformat()
+    try:
+        sess = get_pool().get_or_start(
+            scope_key, "python",
+            cwd=str(scratch_dir(project_id, f"thread-{thread_id}")),
+            env_name=env_name, site=site)
+    except KernelCapacityError as cap:
+        return {"error": str(cap), "at_capacity": True}
+    except Exception as e:  # noqa: BLE001 — no session on the site → one-shot lane
+        print(f"[run_python] remote kernel unavailable on {site} "
+              f"({type(e).__name__}: {e}); falling back to one-shot", flush=True)
+        return None
+    from content.bio.lifecycle.runs import record_weft_target, active_run_id
+    record_weft_target(active_run_id(str(thread_id)), getattr(sess, "kernel_id", None))
+    inv0 = _kernel_sandbox_inventory(sess.kernel_id)
+    res = sess.execute(code, cancel_token=cancel_token, timeout_s=timeout_s)
+    if res.timed_out:
+        return {"error": f"Code execution timed out ({timeout_s}s limit)"}
+    if res.cancelled:
+        return {"status": "cancelled",
+                "note": f"Run was cancelled by the user "
+                        f"({getattr(cancel_token, 'reason', '')}). No further work happened."}
+    fetch_dir, remote_only = _fetch_new_kernel_files(
+        sess.kernel_id, inv0, project_id, str(thread_id))
+    plots, tables, files, warns = (harvest_artifacts(Path(fetch_dir), since_ts=0)
+                                   if fetch_dir else ([], [], [], []))
+    note = (f"ran on {site} in a persistent session there — variables persist "
+            f"for your next run_python(site={site!r}) call")
+    if remote_only:
+        note += (f". {len(remote_only)} larger output(s) stayed on {site} "
+                 f"(kept-addressable): " + ", ".join(remote_only[:5])
+                 + ("…" if len(remote_only) > 5 else ""))
+    out = {"stdout": snip_middle(res.stdout or ""),
+           "stderr": snip_middle(res.stderr or ""),
+           "returncode": res.returncode, "plots": plots, "tables": tables,
+           "files": files, "execution_mode": "remote-session",
+           "compute": {"substrate": "weft", "kernel_id": sess.kernel_id,
+                       "site": site},
+           "note": note}
+    if env_name:
+        out["env"] = env_name
+    _eid = _write_exec_record(
+        lang="python", ctx=ctx, code=code,
+        cwd=f"{site}:{sess.kernel_id}", sess=sess,
+        started_iso=started_iso, started_ts=start_ts, res=res,
+        plots=plots, tables=tables, files=files,
+    )
+    if _eid:
+        out["exec_id"] = _eid
+    if warns:
+        out["figure_warnings"] = warns
+    if res.returncode == 0:
+        ns = _kernel_namespace_preview(sess, "python")
+        if ns:
+            out["namespace"] = ns
+    return out
+
+
 def _run_remote_sync(input_: dict, ctx: dict | None, project_id: str,
                      thread_id: str, kind: str) -> dict:
     """Synchronous remote run (misc/detached_compute.md): placement is
@@ -680,7 +834,9 @@ def _run_remote_sync(input_: dict, ctx: dict | None, project_id: str,
         from core.compute.named_envs import get_active
         env = get_active(project_id, "python")
     env_name = None if _is_default_env(env) else str(env).strip()
-    if env_name:
+    if env_name and env_name.lower() in ("system", "none"):
+        env_name = "system"   # P2 lever: node interpreter, no pack realization
+    elif env_name:
         from core.compute.named_envs import resolve as _env_resolve
         if _env_resolve(project_id, env_name) is None:
             return {"status": "error", "env": env_name,
@@ -798,8 +954,20 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
     # the kernels-off fallback would run the code HERE while the agent believes
     # it ran remotely. run_r routes the same way.
     if input_.get("site") and not input_.get("background"):
-        # SYNC remote run: like a local call, executed THERE (fresh process).
-        # Long steps go background=True — deferred + continuation.
+        # SYNC remote run. Prefer the PERSISTENT session on the site (P1:
+        # variables survive between calls — multi-step remote work stops
+        # reloading state from disk every step); a kernel that can't start
+        # falls back to the one-shot fresh-process lane, never to local.
+        site = str(input_["site"]).strip()
+        if (site and site != "local" and KERNEL_ENABLED
+                and not input_.get("fresh") and not input_.get("_kernel_fallback")
+                # env='system' = transfer-step lever: one-shot on the node's
+                # interpreter, no env realization — a kernel serves nothing
+                and str(input_.get("env") or "").lower() not in ("system", "none")):
+            out = _run_remote_kernel(input_, ctx, str(project_id),
+                                     str(thread_id), site)
+            if out is not None:
+                return out
         return _run_remote_sync(input_, ctx, str(project_id), str(thread_id),
                                 "run_python")
 

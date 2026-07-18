@@ -53,7 +53,7 @@ _STATUS_INTERVAL_S = 1.0
 _CANCEL_GRACE_S = config.settings.kernel_cancel_grace_s.get()
 
 
-def _weft_setup_code(lang: str) -> str:
+def _weft_setup_code(lang: str, remote: bool = False) -> str:
     """The kernel's first-block setup: DATA_DIR + harvest helpers, WORK_DIR bound
     to the kernel's OWN cwd (its sandbox), and NO chdir.
 
@@ -61,26 +61,68 @@ def _weft_setup_code(lang: str) -> str:
     `blocks/NNNN.*` and `kernel.stop` RELATIVE to cwd, so chdir'ing away orphans the
     protocol and the kernel dies. So the sandbox IS the work dir; aba harvests from
     there. WORK_DIR is set from `getcwd()` at runtime (the kernel knows its own
-    sandbox; the controller doesn't know the id until kernel_start returns)."""
+    sandbox; the controller doesn't know the id until kernel_start returns).
+
+    `remote=True`: the controller's project data dir does not exist on the
+    kernel's machine — bind DATA_DIR to the sandbox too, so writes stay
+    (run,rel)-addressable there instead of failing on a foreign path."""
     from core.exec.kernels import jupyter as _j
-    data_dir, _ = _j._project_data_artifacts()
     if lang == "r":
         from core.exec.r import cran_repo, _ppm_ua_expr
         repoline = f'options(repos=c(CRAN={cran_repo()!r})); {_ppm_ua_expr()}\n'
-        return (f"{repoline}DATA_DIR <- {str(data_dir)!r}\nWORK_DIR <- getwd()\n"
+        data_line = ("DATA_DIR <- getwd()\n" if remote else
+                     f"DATA_DIR <- {str(_j._project_data_artifacts()[0])!r}\n")
+        return (f"{repoline}{data_line}WORK_DIR <- getwd()\n"
                 + _j._harvest_helpers_r())
+    data_line = ("DATA_DIR = _os.getcwd()\n" if remote else
+                 f"DATA_DIR = {str(_j._project_data_artifacts()[0])!r}\n")
     return ("import os as _os\n_os.environ.setdefault('MPLBACKEND', 'Agg')\n"
-            f"DATA_DIR = {str(data_dir)!r}\nWORK_DIR = _os.getcwd()\n"
+            f"{data_line}WORK_DIR = _os.getcwd()\n"
             + _j._harvest_helpers_py())
 
 
-def for_pool(scope_key: str, lang: str, *, cwd: str, env_name: str | None):
+def for_pool(scope_key: str, lang: str, *, cwd: str, env_name: str | None,
+             site: str = _LOCAL_SITE):
     """Build a WeftKernelSession for the pool, or return None to fall back to the
     jupyter transport. W-K1a handles the ISOLATED-env lane (a frozen named EnvID);
     the default lane (env_name=None → a live project session) is W-K1b and returns
-    None for now. The env is realized by the caller before the pool lock."""
+    None for now. The env is realized by the caller before the pool lock.
+
+    `site` != local (P1, misc/bug1.md): a persistent interpreter ON that
+    machine, held by weft — same peek-streamed execute path. The kernel
+    attaches a FROZEN env id (a live local session can't follow it to
+    another machine): a named env's env_id, else the project snapshot —
+    the same identity a detached job would run under. A platform-mismatch
+    at start re-locks a NAMED env once (job-lane parity)."""
     from core import projects
     pid = str(projects.current() or "_none")
+    if site and site != _LOCAL_SITE:
+        from core.compute.errors import ComputeError
+        if env_name:
+            from core.compute import named_envs
+            row = named_envs.resolve(pid, env_name)
+            if row is None:
+                return None            # unknown env — caller surfaces the error
+            env_id = row["env_id"]
+        else:
+            from core.compute import base_env, project_env
+            base_env.require(lang)
+            env_id = project_env.snapshot(pid, lang)
+        setup = _weft_setup_code(lang, remote=True)
+        try:
+            return WeftKernelSession(scope_key, lang, env_id=env_id, site=site,
+                                     setup_code=setup, label=f"aba:{scope_key}")
+        except ComputeError as e:
+            from core.jobs.weft_submitter import _mismatch_platform
+            plat = _mismatch_platform(e)
+            if plat and env_name:      # named env: re-lock for the site, retry once
+                from core.compute import named_envs
+                relock = named_envs.ensure_platform(pid, env_name, plat)
+                return WeftKernelSession(scope_key, lang,
+                                         env_id=relock["env_id"], site=site,
+                                         setup_code=setup,
+                                         label=f"aba:{scope_key}")
+            raise
     if not env_name:
         # Default lane (W-K1b): attach to the project's LIVE session so an
         # ensure_capability (session_install) is visible to the running kernel with
