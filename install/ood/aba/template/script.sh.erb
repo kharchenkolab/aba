@@ -11,6 +11,21 @@ set -x
 
 ABA=/home/pkharchenko/aba/aba
 VENV=/home/pkharchenko/aba/aba_runtime/.venv
+# Versioned-release resolution for the NON-SIF lane (misc/slim_sif_deploy.md):
+# when the share carries a promoted release (releases/<id> or `current`), the
+# session code comes FROM the release payload — pin-on-launch and atomic swap
+# hold in the dev/bare lane exactly as in the SIF lane. The hardcoded repo
+# above remains the fallback for shares without a release tree.
+if [ -z "${ABA_SIF:-}" ]; then
+  _share="${ABA_SHARE:-/cluster/aba}"
+  _rel="${ABA_RELEASE_ID:+${_share}/releases/${ABA_RELEASE_ID}}"
+  [ -n "${_rel}" ] && [ ! -e "${_rel}" ] && _rel=""
+  _rel="${_rel:-${_share}/current}"
+  if [ -e "${_rel}/repo/backend" ]; then
+    ABA="$(readlink -f "${_rel}/repo")"
+    echo "ABA: session code from release $(basename "$(readlink -f "${_rel}")") at ${ABA}"
+  fi
+fi
 
 export HOME="${ABA_RUNTIME_DIR}/.home"; mkdir -p "$HOME"
 # NB: do NOT hardcode a model here — that would override the bundle default
