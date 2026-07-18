@@ -4,6 +4,7 @@
  * behavior unchanged.
  */
 import { useCallback, useEffect, useState } from 'react'
+import { apiGet, apiPost } from '../lib/api'
 
 interface EnvProfile {
   run_python: boolean; run_r: boolean; run_nextflow: boolean
@@ -35,8 +36,7 @@ export default function EnvironmentTab() {
 
   const loadEnv = useCallback(async () => {
     try {
-      const r = await fetch('/api/settings/environment')
-      if (r.ok) setEnv(await r.json())
+      setEnv(await apiGet<EnvState>('/api/settings/environment'))
     } catch { /* ignore */ }
   }, [])
 
@@ -47,11 +47,9 @@ export default function EnvironmentTab() {
     if (envSaving || !env || value === cur) return
     setEnvSaving(true)
     try {
-      const r = await fetch('/api/settings/environment', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ env_gate: value === 'auto' ? '' : value }),
-      })
-      if (r.ok) loadEnv()
+      await apiPost('/api/settings/environment',
+                    { env_gate: value === 'auto' ? '' : value })
+      loadEnv()
     } catch { /* ignore */ } finally { setEnvSaving(false) }
   }
 

@@ -6,6 +6,7 @@
  * installing. This is also where staged-install completion ("Setting up…") surfaces.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { apiGet, apiPost } from '../lib/api'
 
 type Mode = 'on' | 'first_use' | 'off'
 interface Module {
@@ -45,8 +46,8 @@ export default function ModulesTab() {
 
   const load = useCallback(async () => {
     try {
-      const r = await fetch('/api/modules')
-      if (r.ok && !stop.current) setMods((await r.json()).modules)
+      const d = await apiGet<{ modules: Module[] }>('/api/modules')
+      if (!stop.current) setMods(d.modules)
     } catch { /* ignore */ }
   }, [])
 
@@ -68,8 +69,8 @@ export default function ModulesTab() {
   async function act(id: string, path: string) {
     setBusy(id)
     try {
-      const r = await fetch(`/api/modules/${encodeURIComponent(id)}/${path}`, { method: 'POST' })
-      if (r.ok) { const v: Module = await r.json(); setMods(ms => ms?.map(m => m.id === id ? v : m) ?? ms) }
+      const v = await apiPost<Module>(`/api/modules/${encodeURIComponent(id)}/${path}`)
+      setMods(ms => ms?.map(m => m.id === id ? v : m) ?? ms)
     } catch { /* ignore */ } finally { setBusy(null); load() }
   }
   const setMode = (id: string, mode: Mode) => act(id, `mode?mode=${mode}`)

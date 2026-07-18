@@ -1,6 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
+import { apiGet } from '../lib/api'
 
 const SKIP_KEY = 'aba:skip-provider-setup'
+
+// localStorage can be absent (node's experimental global without a backing
+// file — the mount smoke test) or throw on access (storage-blocked browser
+// modes); the gate must degrade to "not skipped", never crash the App mount.
+function skipRemembered(): boolean {
+  try { return globalThis.localStorage?.getItem(SKIP_KEY) === '1' } catch { return false }
+}
+function rememberSkip(): void {
+  try { globalThis.localStorage?.setItem(SKIP_KEY, '1') } catch { /* storage blocked */ }
+}
 
 /**
  * First-run gate (lazy_env_init.md Phase C): the backend serves CREDENTIAL-LESS —
@@ -19,10 +30,9 @@ export default function FirstRunGate(
   const wasOpen = useRef(false)
 
   function recheck() {
-    if (localStorage.getItem(SKIP_KEY) === '1') { setShow(false); return }
-    fetch('/api/settings/credential/any')
-      .then(r => (r.ok ? r.json() : null))
-      .then(d => { if (d) setShow(d.configured === false) })
+    if (skipRemembered()) { setShow(false); return }
+    apiGet<{ configured: boolean }>('/api/settings/credential/any')
+      .then(d => setShow(d.configured === false))
       .catch(() => { /* backend not ready / offline — leave as-is */ })
   }
 
@@ -62,7 +72,7 @@ export default function FirstRunGate(
           Connect a provider
         </button>
         <button
-          onClick={() => { localStorage.setItem(SKIP_KEY, '1'); setShow(false) }}
+          onClick={() => { rememberSkip(); setShow(false) }}
           style={{
             padding: '4px 12px', borderRadius: 6, cursor: 'pointer',
             background: 'transparent', color: '#d1d5db', border: '1px solid #4b5563',

@@ -10,6 +10,15 @@
  *    editor with Cancel at the TOP and a Subscription | API-key TOGGLE (one at a time).
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { ApiError, apiGet, apiPost } from '../lib/api'
+
+/** detail from a structured error body ({"detail": …}), if the failure had one. */
+function errDetail(e: unknown): string | undefined {
+  if (e instanceof ApiError && e.body) {
+    try { return (JSON.parse(e.body) as { detail?: string }).detail } catch { /* not json */ }
+  }
+  return undefined
+}
 
 type Provider = 'anthropic' | 'openai'
 const PROVIDERS: { id: Provider; label: string }[] = [
@@ -128,28 +137,25 @@ export default function AgentTab() {
     if (!model) { setPing({ state: 'idle' }); return }
     setPing({ state: 'checking' })
     try {
-      const r = await fetch('/api/settings/llm/ping', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model }),
-      })
-      const d = await r.json().catch(() => ({ ok: false }))
+      const d = await apiPost<{ ok: boolean; detail?: string }>('/api/settings/llm/ping', { model })
       if (seq !== pingSeq.current) return
       setPing(d.ok ? { state: 'ok' } : { state: 'bad', detail: d.detail || 'This model may not work with your credential.' })
-    } catch {
-      if (seq === pingSeq.current) setPing({ state: 'idle' })
+    } catch (e) {
+      if (seq !== pingSeq.current) return
+      // a structured non-2xx is a real "can't run this model"; a network error is not a verdict
+      if (e instanceof ApiError) {
+        setPing({ state: 'bad', detail: errDetail(e) || 'This model may not work with your credential.' })
+      } else setPing({ state: 'idle' })
     }
   }, [])
 
   const loadCred = useCallback(async (p: Provider) => {
     try {
-      const r = await fetch(`/api/settings/credential?provider=${p}`)
-      if (r.ok) {
-        const d = (await r.json()) as CredStatus
-        setCred(d)
-        if (!d.valid) setCredMethod(defaultMethod(d))
-        setEditing(!d.valid)   // a broken/absent credential opens the editor
-        return d
-      }
+      const d = await apiGet<CredStatus>(`/api/settings/credential?provider=${p}`)
+      setCred(d)
+      if (!d.valid) setCredMethod(defaultMethod(d))
+      setEditing(!d.valid)   // a broken/absent credential opens the editor
+      return d
     } catch { /* ignore */ }
     return null
   }, [])
@@ -160,7 +166,7 @@ export default function AgentTab() {
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      const l = await fetch('/api/settings/llm').then(r => (r.ok ? r.json() : null)).catch(() => null)
+      const l = await apiGet<LlmState>('/api/settings/llm').catch(() => null)
       if (cancelled) return
       setLlm(l); setLlmLoaded(true)
       // Provider/credential is GLOBAL, not project-scoped. `/api/settings/llm` needs an
@@ -199,16 +205,10 @@ export default function AgentTab() {
     if (saving || !llm || model === llm.current.model) return
     setSaving(true); setErr(null)
     try {
-      const r = await fetch('/api/settings/llm', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model }),
-      })
-      if (r.ok) {
-        const d = await r.json()
-        setLlm(s => (s ? { ...s, current: d.current } : s))
-        flashSaved()
-        pingModel(model)
-      } else setErr('Could not change the model.')
+      const d = await apiPost<{ current: LlmCurrent }>('/api/settings/llm', { model })
+      setLlm(s => (s ? { ...s, current: d.current } : s))
+      flashSaved()
+      pingModel(model)
     } catch { setErr('Could not change the model.') } finally { setSaving(false) }
   }
 
@@ -217,19 +217,11 @@ export default function AgentTab() {
     if (!credential || credBusy) return
     setCredBusy(true); setCredMsg(null)
     try {
-      const r = await fetch('/api/settings/credential', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ credential, provider }),
-      })
-      if (r.ok) {
-        setCred(await r.json()); setCredInput(''); setEditing(false)
-        setCredMsg({ ok: true, text: 'Verified and saved.' })
-        if (llm?.current.provider === provider) pingModel(llm.current.model)
-      } else {
-        const d = await r.json().catch(() => ({} as { detail?: string }))
-        setCredMsg({ ok: false, text: d.detail || 'Could not save the credential.' })
-      }
-    } catch { setCredMsg({ ok: false, text: 'Could not save the credential.' }) }
+      const d = await apiPost<CredStatus>('/api/settings/credential', { credential, provider })
+      setCred(d); setCredInput(''); setEditing(false)
+      setCredMsg({ ok: true, text: 'Verified and saved.' })
+      if (llm?.current.provider === provider) pingModel(llm.current.model)
+    } catch (e) { setCredMsg({ ok: false, text: errDetail(e) || 'Could not save the credential.' }) }
     finally { setCredBusy(false) }
   }
 
@@ -239,21 +231,23 @@ export default function AgentTab() {
     if (subBusy) return
     setSubBusy(true); setCredMsg(null)
     try {
-      const r = await fetch(`/api/settings/credential/oauth/start?provider=${provider}`, { method: 'POST' })
-      if (!r.ok) {
-        const d = await r.json().catch(() => ({} as { detail?: string }))
-        setCredMsg({ ok: false, text: d.detail || 'Sign-in is unavailable right now.' })
+      let flow: { authorize_url: string; flow_id: string; mode: string }
+      try {
+        flow = await apiPost(`/api/settings/credential/oauth/start?provider=${provider}`)
+      } catch (e) {
+        setCredMsg({ ok: false, text: errDetail(e) || 'Sign-in is unavailable right now.' })
         return
       }
-      const { authorize_url, flow_id, mode } = await r.json()
+      const { authorize_url, flow_id, mode } = flow
       window.open(authorize_url, '_blank', 'noopener')
       if (mode === 'callback') {
         setSubWaiting(true)
         for (let i = 0; i < 150; i++) {
           await new Promise(res => setTimeout(res, 2000))
-          const pr = await fetch(`/api/settings/credential/oauth/poll?flow_id=${flow_id}`)
-          if (!pr.ok) continue
-          const st = await pr.json()
+          let st: { state: string; credential: CredStatus; detail?: string }
+          try {
+            st = await apiGet(`/api/settings/credential/oauth/poll?flow_id=${flow_id}`)
+          } catch { continue }
           if (st.state === 'done') {
             setCred(st.credential); setEditing(false); setSubWaiting(false)
             setCredMsg({ ok: true, text: 'Signed in.' })
@@ -277,19 +271,12 @@ export default function AgentTab() {
     if (!code || !subFlow || subBusy) return
     setSubBusy(true); setCredMsg(null)
     try {
-      const r = await fetch('/api/settings/credential/oauth/submit', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ flow_id: subFlow, code }),
-      })
-      if (r.ok) {
-        setCred(await r.json()); setEditing(false); setSubFlow(null); setSubCode('')
-        setCredMsg({ ok: true, text: 'Signed in.' })
-        if (llm?.current.provider === provider) pingModel(llm.current.model)
-      } else {
-        const d = await r.json().catch(() => ({} as { detail?: string }))
-        setCredMsg({ ok: false, text: d.detail || 'Sign-in failed.' })
-      }
-    } catch { setCredMsg({ ok: false, text: 'Sign-in failed.' }) }
+      const d = await apiPost<CredStatus>('/api/settings/credential/oauth/submit',
+                                          { flow_id: subFlow, code })
+      setCred(d); setEditing(false); setSubFlow(null); setSubCode('')
+      setCredMsg({ ok: true, text: 'Signed in.' })
+      if (llm?.current.provider === provider) pingModel(llm.current.model)
+    } catch (e) { setCredMsg({ ok: false, text: errDetail(e) || 'Sign-in failed.' }) }
     finally { setSubBusy(false) }
   }
 
