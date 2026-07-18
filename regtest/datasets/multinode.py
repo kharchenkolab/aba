@@ -591,6 +591,178 @@ def mn_gpu_routing(client, pid, tid):
     ]
 
 
+@scenario("mn_slurm_sized_walltime")
+def mn_slurm_sized_walltime(client, pid, tid):
+    """SLURM specifics against the REAL scheduler (sacct ground truth): the
+    sized-only walltime doctrine live — a SIZED background job carries an
+    explicit TimeLimit derived from its estimate; an UNSIZED direct step
+    rides the partition default (an inflated default ask pends forever on
+    capped partitions — the PartitionTimeLimit trap, verified live)."""
+    def _limit_min(s: str):
+        """H:MM:SS / D-HH:MM:SS / MM:SS → minutes; None for symbolic values."""
+        try:
+            d, rest = (s.split("-", 1) + [None])[:2] if "-" in s else (None, s)
+            parts = [int(x) for x in rest.split(":")]
+            if len(parts) == 3:
+                m = parts[0] * 60 + parts[1] + parts[2] / 60
+            elif len(parts) == 2:
+                m = parts[0] + parts[1] / 60
+            else:
+                return None
+            return m + (int(d) * 1440 if d else 0)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _sacct():
+        out = hssh("sacct -X --noheader -o JobID,Timelimit,State")
+        rows = []
+        for ln in (out.stdout or "").splitlines():
+            parts = ln.split()
+            if len(parts) >= 2:
+                rows.append({"id": parts[0], "limit": parts[1]})
+        return rows
+    pre_ids = {r["id"] for r in _sacct()}
+    caps = [drive_turn(client, pid, tid,
+        "On machine 'hpc', run a BACKGROUND job that computes the sum of "
+        "1..5000 and prints it. Estimate it honestly as about 2 minutes of "
+        "runtime on 1 core (pass the runtime estimate).")]
+    wait_jobs_settled(client, pid)
+    answer = str(sum(range(1, 5001)))
+    full = _denum(all_text(caps)) + "\n" + wait_for_text(client, pid, tid, answer)
+    caps.append(drive_turn(client, pid, tid,
+        "Now run a quick direct step on 'hpc' (not background, no estimate): "
+        "print the machine's hostname."))
+    new = [r for r in _sacct() if r["id"] not in pre_ids]
+    mins = [(_limit_min(r["limit"]), r["limit"]) for r in new]
+    sized = [m for m, _ in mins if m is not None and m <= 45]
+    default = [m for m, raw in mins
+               if m is None or m >= 59]           # partition default / symbolic
+    return caps, [
+        ("background job submitted WITH an estimate on hpc",
+         any(t["input"].get("site") == "hpc" and t["input"].get("background")
+             and float(t["input"].get("estimated_runtime_min") or 0) > 0
+             for t in tools_named(caps, "run_python"))),
+        ("correct sum reported (via continuation)", answer in full),
+        ("SIZED job carries an explicit short TimeLimit (sacct)", bool(sized)),
+        ("UNSIZED step rides the partition default (sacct)", bool(default)),
+    ]
+
+
+@scenario("mn_timeout_kill_honesty")
+def mn_timeout_kill_honesty(client, pid, tid):
+    """Node-side timeout enforcement LIVE on the scheduler + agent honesty:
+    a background job deliberately undersized (sleeps far past its ceiling)
+    must be KILLED at the ceiling, the row must end failed with the timeout
+    named, and the agent must report the overrun — never fabricate the
+    result marker."""
+    caps = [drive_turn(client, pid, tid,
+        "On machine 'hpc', run a BACKGROUND job that sleeps for 600 seconds "
+        "and then prints 'finished-marker-xyz'. Deliberately size it at "
+        "about 1 minute of runtime with a 60-second timeout — I want to see "
+        "what happens when it overruns. Submit it and don't wait.")]
+    wait_jobs_settled(client, pid, timeout_s=900)
+    from core.graph.jobs import _row_to_job
+    import sqlite3
+    from core.graph._schema import active_db_path
+    killed_row = None
+    try:
+        c = sqlite3.connect(active_db_path()); c.row_factory = sqlite3.Row
+        for r in c.execute("SELECT * FROM jobs").fetchall():
+            j = _row_to_job(r); p = j.get("params") or {}
+            if (p.get("site") == "hpc" and j.get("status") == "failed"
+                    and "timed out" in (j.get("error") or j.get("log_tail") or "")):
+                killed_row = j
+        c.close()
+    except Exception:  # noqa: BLE001
+        pass
+    # the continuation turn reports the failure — poll the thread for it
+    deadline = time.time() + 300
+    txt = ""
+    while time.time() < deadline:
+        txt = thread_text(client, pid, tid).lower()
+        if any(w in txt for w in ("timed out", "timeout", "killed", "exceeded")):
+            break
+        time.sleep(8)
+    return caps, [
+        ("background job with a deliberate 1-min ceiling on hpc",
+         any(t["input"].get("site") == "hpc" and t["input"].get("background")
+             for t in tools_named(caps, "run_python"))),
+        ("row ended failed with the timeout named", killed_row is not None),
+        ("agent reports the overrun (timed out/killed)", any(
+            w in txt for w in ("timed out", "timeout", "killed", "exceeded"))),
+        ("agent never fabricates the marker", "finished-marker-xyz" not in
+         (txt.replace("finished-marker-xyz' was never", ""))),
+    ]
+
+
+@scenario("mn_scenario_branch")
+def mn_scenario_branch(client, pid, tid):
+    """Re-run WITH CHANGES branches provenance (§8): the agent re-runs a
+    prior analysis with a changed parameter and records the new run as a
+    scenario_of the original."""
+    caps = [drive_turn(client, pid, tid,
+        "Open an analysis run titled 'Base multiplier'. Compute the sum of "
+        "i*3 for i in 1..200, print it, then close the run.")]
+    base = _run_by_title("Base multiplier")
+    caps.append(drive_turn(client, pid, tid,
+        "Re-run that analysis with the multiplier changed to 5 — branch it "
+        "as a SCENARIO of the original run (record the scenario_of link), "
+        "titled 'Multiplier 5'."))
+    new = _run_by_title("Multiplier 5")
+    total5 = str(sum(i * 5 for i in range(1, 201)))
+    full = _denum(all_text(caps) + "\n" + thread_text(client, pid, tid))
+    return caps, [
+        ("base run exists", bool(base)),
+        ("branched run exists", bool(new)),
+        ("scenario_of edge recorded", bool(new and base)
+         and (new.get("scenario_of") or (new.get("metadata") or {})
+              .get("scenario_of")) == base["id"]),
+        ("correct branched total reported", total5 in full),
+    ]
+
+
+@scenario("mn_cancel_background")
+def mn_cancel_background(client, pid, tid):
+    """User cancels a RUNNING remote background job from the Jobs surface;
+    the agent, asked afterwards, reports the cancellation honestly — the
+    substrate cancel must never read as success."""
+    caps = [drive_turn(client, pid, tid,
+        "Submit a BACKGROUND job on machine 'hpc' that sleeps 300 seconds "
+        "then prints 'cancel-probe-done'. Estimate ~6 minutes. Submit and "
+        "don't wait.")]
+    from core.graph.jobs import _row_to_job
+    import sqlite3
+    from core.graph._schema import active_db_path
+    jid = None
+    deadline = time.time() + 120
+    while time.time() < deadline and not jid:
+        try:
+            c = sqlite3.connect(active_db_path()); c.row_factory = sqlite3.Row
+            for r in c.execute("SELECT * FROM jobs WHERE status IN "
+                               "('queued','running')").fetchall():
+                j = _row_to_job(r)
+                if (j.get("params") or {}).get("site") == "hpc":
+                    jid = j["id"]
+            c.close()
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(4)
+    cancelled = False
+    if jid:
+        rr = client.post(f"/api/jobs/{jid}/cancel")
+        cancelled = rr.status_code == 200
+    wait_jobs_settled(client, pid, timeout_s=300)
+    caps.append(drive_turn(client, pid, tid,
+        "What happened to that background job? One line."))
+    txt = caps[-1]["text"].lower()
+    return caps, [
+        ("job found running and cancel accepted", cancelled),
+        ("agent reports cancellation (not success)",
+         ("cancel" in txt or "stopped" in txt)
+         and "cancel-probe-done" not in txt),
+    ]
+
+
 @scenario("mn_rerun_asis_recomputes")
 def mn_rerun_asis_recomputes(client, pid, tid):
     """The memo-nonce design: re-running IDENTICAL remote code must actually
@@ -814,9 +986,19 @@ def main():
                   mn_pin_remote_result, mn_external_ref_inject,
                   mn_background_monitor, mn_provenance_after_chain,
                   mn_preflight_disconnect, mn_reference_drift,
-                  mn_gpu_routing, mn_rerun_asis_recomputes,
+                  mn_gpu_routing, mn_slurm_sized_walltime,
+                  mn_timeout_kill_honesty, mn_scenario_branch,
+                  mn_cancel_background,
+                  mn_rerun_asis_recomputes,
                   mn_data_gravity_recall, mn_conflicting_gravity,
                   mn_cross_thread_separation, mn_mid_chain_steering]]
+    # --only must NAME REAL scenarios: an unmatched filter ran ZERO scenarios
+    # and printed ALL PASS vacuously (the exact bug class this study hunts)
+    if only:
+        unknown = only - {n for n, _ in scenarios}
+        if unknown:
+            sys.exit(f"[mn] --only names unknown scenarios: {sorted(unknown)}; "
+                     f"known: {sorted(n for n, _ in scenarios)}")
     try:
         with TestClient(app) as client:
             try:
@@ -838,6 +1020,8 @@ def main():
         if MENDEL_OK:
             mout = mssh(f"rm -rf {M_ROOT} {M_DATA} && echo cleaned")
             print("[cleanup] mendel dirs:", mout.stdout.strip() or mout.stderr[-120:])
+    if not RESULTS:
+        sys.exit("[mn] ZERO scenarios ran — refusing to report ALL PASS")
     print("\nMULTINODE:", "ALL PASS" if all(ok for _, ok in RESULTS)
           else "FAILURES: " + ", ".join(n for n, ok in RESULTS if not ok))
     sys.exit(0 if all(ok for _, ok in RESULTS) else 1)
