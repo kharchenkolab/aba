@@ -293,13 +293,15 @@ def _run_realize_task(env_id: str, ad, timeout_s: int, language: str,
                                 "label": f"realize {env_id[:16]}"}, force=True))
     job_id = sub["job_id"]
     deadline = time.time() + timeout_s
-    state = "PENDING"
+    state, task_err = "PENDING", None
     while time.time() < deadline:
-        state = _sync(ad.task_status(job_id))[0]["state"]
+        row = _sync(ad.task_status(job_id))[0]
+        state = row["state"]
         if state in ("DONE", "FAILED", "CANCELLED"):
+            task_err = row.get("error")
             break
         time.sleep(1.0)
-    return state
+    return state, task_err
 
 
 def ensure_tool_env(specs: list[str], *, name: str, probe: str,
@@ -355,9 +357,20 @@ def ensure_ready(env_id: str, *, timeout_s: int = 900,
     if _realization_ready(env_id, site=site):
         return
     ad = _adapter.get_compute()
-    state = _run_realize_task(env_id, ad, timeout_s, language, probe=probe,
-                              site=site)
+    state, task_err = _run_realize_task(env_id, ad, timeout_s, language,
+                                        probe=probe, site=site)
     if not _realization_ready(env_id, site=site):
+        # surface the realize TASK's own typed error (code + hints) when it
+        # has one — a platform mismatch must arrive as env.platform_mismatch
+        # so callers can lazy re-lock (job-lane parity; the generic
+        # realize_failed wrapper used to swallow it and the kernel lane's
+        # retry never fired — found live on the aarch64 slurm fixture)
+        if isinstance(task_err, dict) and task_err.get("error"):
+            raise ComputeError(
+                str(task_err["error"]),
+                f"{task_err.get('detail') or 'realize task failed'} "
+                f"(realizing {env_id} on {site!r})",
+                stage="realize", hints=task_err.get("hints") or {})
         raise ComputeError(
             "env.realize_failed",
             f"{env_id} could not be realized on {site!r} "
@@ -387,7 +400,8 @@ def ensure_realized(env_id: str, *, timeout_s: int = 900,
     if prefix is not None:
         return prefix
     ad = _adapter.get_compute()
-    state = _run_realize_task(env_id, ad, timeout_s, language, probe=probe)
+    state, _terr = _run_realize_task(env_id, ad, timeout_s, language,
+                                     probe=probe)
     prefix = _ready_prefix(env_id)
     if prefix is None:
         if _realization_ready(env_id):

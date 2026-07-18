@@ -234,6 +234,46 @@ def test_system_env_skips_kernel_and_realization():
           sent.get("hit") is True and (r or {}).get("status") == "ok", str(r))
 
 
+def test_snapshot_platform_mismatch_relocks_base_pack():
+    """Cross-platform site + DEFAULT (snapshot) env: ensure_ready's realize
+    task fails env.platform_mismatch → the kernel lane must re-lock the BASE
+    pack for the site's platform and start the session with the re-locked
+    env (job-lane parity; found live on the aarch64 slurm fixture where the
+    one-shot lane re-locked but the session lane fell back)."""
+    import core.compute.named_envs as ne
+    from core.compute.errors import ComputeError
+    calls = []
+    orig_ready = ne.ensure_ready
+    orig_plat = getattr(base_env, "ensure_platform", None)
+
+    def fake_ready(eid, **k):
+        calls.append(eid)
+        if eid == "env_snapshot_1":
+            raise ComputeError(
+                "env.platform_mismatch",
+                "env is locked for ['linux-64', 'osx-arm64'] but site hpc "
+                "is linux-aarch64", stage="realize",
+                hints={"site_platform": "linux-aarch64"})
+
+    ne.ensure_ready = fake_ready
+    base_env.ensure_platform = lambda lang, plat: {"env_id": f"env_relock_{plat}"}
+    try:
+        pool = poolm.KernelPool()
+        s = pool.get_or_start("thr_relock@hpc", "python", cwd=_TMP,
+                              env_name=None, site="hpc")
+        check("re-locked env attached after platform mismatch",
+              FAKE.kernel_starts[-1].get("env_id")
+              == "env_relock_linux-aarch64", str(FAKE.kernel_starts[-1]))
+        check("ensure_ready ran again on the re-locked env",
+              calls == ["env_snapshot_1", "env_relock_linux-aarch64"],
+              str(calls))
+        s.shutdown()
+    finally:
+        ne.ensure_ready = orig_ready
+        if orig_plat is not None:
+            base_env.ensure_platform = orig_plat
+
+
 def _run():
     import traceback
     fails = 0

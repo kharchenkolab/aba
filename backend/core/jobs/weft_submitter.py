@@ -40,7 +40,10 @@ def _mismatch_platform(e) -> Optional[str]:
     ('... but site X is linux-aarch64') — drives the lazy re-lock."""
     if getattr(e, "code", "") != "env.platform_mismatch":
         return None
-    m = re.search(r"is ([a-z0-9_]+-[a-z0-9_]+)\s*$", getattr(e, "detail", "") or "")
+    hint = (getattr(e, "hints", None) or {}).get("site_platform")
+    if hint:
+        return str(hint)
+    m = re.search(r"is ([a-z0-9_]+-[a-z0-9_]+)", getattr(e, "detail", "") or "")
     return m.group(1) if m else None
 
 

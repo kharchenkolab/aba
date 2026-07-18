@@ -111,22 +111,34 @@ def for_pool(scope_key: str, lang: str, *, cwd: str, env_name: str | None,
         # kernel_start REFUSES an env not realized on its site (task realize
         # builds implicitly; kernels don't — found by the mendel repro):
         # pre-realize there, first use pays the build like a first job would
-        named_envs.ensure_ready(env_id, language=lang, site=site)
         setup = _weft_setup_code(lang, remote=True)
-        try:
-            return WeftKernelSession(scope_key, lang, env_id=env_id, site=site,
+
+        def _start(eid: str):
+            named_envs.ensure_ready(eid, language=lang, site=site)
+            return WeftKernelSession(scope_key, lang, env_id=eid, site=site,
                                      setup_code=setup, label=f"aba:{scope_key}")
+
+        try:
+            return _start(env_id)
         except ComputeError as e:
+            # lazy platform re-lock, JOB-LANE PARITY: the mismatch surfaces
+            # from ensure_ready's realize task (typed, with hints) or from
+            # kernel_start. NAMED envs re-solve their recorded spec; the
+            # DEFAULT env re-locks the BASE pack (session-installed extras
+            # don't travel — same trade the one-shot lane makes). Without
+            # this the kernel lane silently lost every cross-platform site
+            # (found live: aarch64 slurm fixture — one-shot re-locked and
+            # ran while the session lane failed and fell back).
             from core.jobs.weft_submitter import _mismatch_platform
             plat = _mismatch_platform(e)
-            if plat and env_name:      # named env: re-lock for the site, retry once
-                from core.compute import named_envs
+            if not plat:
+                raise
+            if env_name:
                 relock = named_envs.ensure_platform(pid, env_name, plat)
-                return WeftKernelSession(scope_key, lang,
-                                         env_id=relock["env_id"], site=site,
-                                         setup_code=setup,
-                                         label=f"aba:{scope_key}")
-            raise
+            else:
+                from core.compute import base_env
+                relock = base_env.ensure_platform(lang, plat)
+            return _start(relock["env_id"])
     if not env_name:
         # Default lane (W-K1b): attach to the project's LIVE session so an
         # ensure_capability (session_install) is visible to the running kernel with
