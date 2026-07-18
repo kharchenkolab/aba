@@ -54,6 +54,19 @@ describe('LedgerStrip', () => {
     expect(screen.queryByText(/site/i)).toBeNull()
   })
 
+  it('REFETCHES when the fingerprint changes (stale-quiet regression)', async () => {
+    // a mid-session registration flipped the DATA non-quiet, but the strip
+    // fetched once on mount and stayed silently stale until a full reload
+    mockLedger(quietLedger)
+    let rr: ReturnType<typeof render>
+    await act(async () => { rr = render(<LedgerStrip projectId="p1" fingerprint="1:a" />) })
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1)
+    mockLedger(noisyLedger)   // fresh mock — the refetch is its 1st call
+    await act(async () => { rr!.rerender(<LedgerStrip projectId="p1" fingerprint="2:b" />) })
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1)
+    expect(screen.getByText(/at risk/)).toBeTruthy()
+  })
+
   it('DEGRADED is never quiet: an outage renders the warning, not silence', async () => {
     // quiet means "all safe" — during a substrate outage the kept rows are
     // MISSING from the ledger, so silence would claim safety we can't assess

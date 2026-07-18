@@ -36,6 +36,25 @@ def _durable_map() -> dict:
             out[e.get("name") or cfg.get("name")] = cfg.get("durable")
     except Exception as e:  # noqa: BLE001 — no sites file → local-only deployment
         _log.debug("ledger: no sites config (%s)", e)
+    # Runtime-REGISTERED sites (weft's own store) carry the authoritative
+    # durable declaration — the deployment yaml is only the installer's copy,
+    # and a machine connected at runtime is invisible to it: its keeps and
+    # dataset homes rendered at_risk despite a durable:True registration
+    # (browser-study finding). Yaml wins where both name a site.
+    try:
+        from core.compute import adapter as _ad
+        comp = _ad.get_compute()
+        for s in comp.sync_call("sites_list"):
+            name = s.get("name")
+            if not name or name in out:
+                continue
+            try:
+                desc = comp.sync_call("sites_describe", name)
+                out[name] = (desc.get("storage") or {}).get("durable")
+            except Exception:  # noqa: BLE001
+                pass
+    except Exception:  # noqa: BLE001 — substrate offline → yaml-only view
+        pass
     return out
 
 

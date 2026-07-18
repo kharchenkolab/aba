@@ -536,7 +536,9 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
               {/* §1 safety ledger — self-quieting: renders nothing when every
                   item is safe and local (the local-only snapshot contract). */}
               {(activeSection === 'data' || activeSection === 'results') && (
-                <LedgerStrip projectId={projectId} onFocus={onFocus} />
+                <LedgerStrip projectId={projectId} onFocus={onFocus}
+                  fingerprint={`${entities.length}:${entities.reduce(
+                    (m, e) => (e.updated_at > m ? e.updated_at : m), '')}`} />
               )}
               {/* State-filter pills removed (see Threads section above). */}
               {searchEligible && (

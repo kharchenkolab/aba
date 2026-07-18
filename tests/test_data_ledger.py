@@ -57,6 +57,39 @@ def test_outage_is_degraded_never_quietly_safe(monkeypatch):
     assert "unknown" not in lg.site_holdings("far")
 
 
+def test_durable_map_sees_runtime_registered_sites(monkeypatch):
+    """A machine CONNECTED AT RUNTIME (weft register_site, durable:True) is
+    invisible to the deployment yaml — its keeps/homes rendered at_risk
+    despite the durable declaration (browser-study finding). The map unions
+    weft's own site store; yaml wins where both name a site."""
+    import core.compute.adapter as admod
+    monkeypatch.setattr(scfg, "list_declared_sites", lambda: [
+        {"name": "siteY", "kind": "ssh", "config": {"durable": False}}])
+
+    class _Comp:
+        def sync_call(self, name, *a, **kw):
+            if name == "sites_list":
+                return [{"name": "runtime-box"}, {"name": "siteY"}]
+            if name == "sites_describe":
+                assert a[0] == "runtime-box"     # yaml-named siteY not re-asked
+                return {"storage": {"durable": True, "source": "declared"}}
+            raise AssertionError(f"unexpected call {name}")
+    monkeypatch.setattr(admod, "get_compute", lambda: _Comp())
+    d = lg._durable_map()
+    assert d["runtime-box"] is True
+    assert d["siteY"] is False               # yaml wins for its own sites
+    # a dataset homed on the runtime box is SAFE, not at_risk
+    monkeypatch.setattr(retmod, "retained", lambda **kw: [])
+    ds = _ds("runtime-homed", home={"site": "runtime-box", "path": "/d/x"})
+    try:
+        st = {i["entity_id"]: i["state"] for i in lg.data_ledger()["items"]}
+        assert st[ds] == "safe"
+    finally:
+        from core.graph.entities import archive_entity
+        archive_entity(ds)      # the ledger scans globally — don't leak into
+                                # the quiet/totals tests below
+
+
 def test_local_only_project_is_quiet(monkeypatch):
     """The §-quiet contract at the DATA layer: all-local & safe → nothing to
     render (multi_site False, zero non-safe). The UI snapshot test rides this."""

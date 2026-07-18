@@ -31,9 +31,13 @@ const STATE_WORD: Record<string, string> = {
   at_risk: 'at risk', changed: 'source changed', unknown: 'unknown',
 }
 
-export default function LedgerStrip({ projectId, onFocus }: {
+export default function LedgerStrip({ projectId, onFocus, fingerprint }: {
   projectId?: string
   onFocus?: (id: string) => void
+  /** cheap change signal from the entity list — the strip must REFETCH when
+   *  the world changes (a mid-session registration left it stale-quiet:
+   *  browser-study finding), not only on mount. */
+  fingerprint?: string
 }) {
   const [led, setLed] = useState<Ledger | null>(null)
   const [open, setOpen] = useState(false)
@@ -44,7 +48,7 @@ export default function LedgerStrip({ projectId, onFocus }: {
       .then(d => { if (!dead) setLed(d) })
       .catch(() => { /* no ledger → render nothing */ })
     return () => { dead = true }
-  }, [projectId])
+  }, [projectId, fingerprint])
 
   if (!led) return null
   const t = led.totals
