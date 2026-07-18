@@ -420,6 +420,72 @@ def test_sync_cancel_uses_fresh_row_with_weft_id(monkeypatch):
     assert cancels and cancels[0][1][0] == "wj_1"
 
 
+def test_sync_row_born_sync_before_substrate_submit(monkeypatch):
+    """The `sync` flag must be in params BEFORE task_submit reaches the
+    substrate: it used to be set only AFTER submit returned, and in that
+    window the background poll loop could adopt a fast-finishing sync job
+    and double-finalize it (double continuation + double exec record)."""
+    seen = {}
+
+    class _Probe(_FakeComp):
+        def sync_call(self, name, *a, **kw):
+            if name == "task_submit":
+                jid = json.loads(self.registered["spec.json"])["job_id"]
+                row = get_job(jid, project_id="default") or {}
+                seen["sync_at_submit"] = (row.get("params") or {}).get("sync")
+            return super().sync_call(name, *a, **kw)
+    comp = _Probe()
+    monkeypatch.setattr(ws, "_adapter", lambda: comp)
+    from core.jobs.submit import submit_python_job
+    job = submit_python_job("x=1", title="t", focus_entity_id=None,
+                            project_id="default", site="far", sync=True)
+    assert seen["sync_at_submit"] is True
+    row = get_job(job["id"], project_id="default")
+    assert (row["params"] or {}).get("sync") is True
+
+
+def test_failed_site_submit_marks_row_failed(monkeypatch):
+    """A substrate submit that DIES must not leave the row 'queued': restart
+    reconcile sees no submitter marker on it and re-enqueues remote-targeted
+    code onto the LOCAL worker (wrong machine, silently). The row must go
+    'failed' with the substrate error."""
+    class _DeadComp(_FakeComp):
+        def sync_call(self, name, *a, **kw):
+            if name == "task_submit":
+                self.calls.append((name, a, kw))
+                raise ComputeError("substrate.unreachable",
+                                   "ssh: connection refused")
+            return super().sync_call(name, *a, **kw)
+    comp = _DeadComp()
+    monkeypatch.setattr(ws, "_adapter", lambda: comp)
+    from core.jobs.submit import submit_python_job
+    try:
+        submit_python_job("x=1", title="t", focus_entity_id=None,
+                          project_id="default", site="far")
+        raise AssertionError("expected the submit error to propagate")
+    except ComputeError:
+        pass
+    jid = json.loads(comp.registered["spec.json"])["job_id"]
+    row = get_job(jid, project_id="default")
+    assert row["status"] == "failed"
+    assert "refused" in (row["error"] or "")
+
+
+def test_offline_substrate_named_as_outage(monkeypatch):
+    """With the substrate DOWN, declared sites come back empty — the error
+    must say the substrate is offline, not misattribute the outage to an
+    unknown site name."""
+    monkeypatch.setattr(ws, "declared_compute_sites", lambda: [])
+    monkeypatch.setattr(ws, "weft_available", lambda: False)
+    from core.jobs.submit import submit_python_job
+    try:
+        submit_python_job("x=1", title="t", focus_entity_id=None,
+                          project_id="default", site="far")
+        raise AssertionError("expected ValueError")
+    except ValueError as e:
+        assert "offline" in str(e) and "unknown" not in str(e)
+
+
 def test_site_validation_names_real_sites(monkeypatch):
     comp = _FakeComp()
     monkeypatch.setattr(ws, "_adapter", lambda: comp)
@@ -456,6 +522,9 @@ def _standalone() -> int:
               test_sync_remote_writes_exec_record_so_output_is_pinnable,
               test_sync_substrate_cancel_not_reported_as_success,
               test_sync_cancel_uses_fresh_row_with_weft_id,
+              test_sync_row_born_sync_before_substrate_submit,
+              test_failed_site_submit_marks_row_failed,
+              test_offline_substrate_named_as_outage,
               test_site_validation_names_real_sites):
         mp = _MP()
         try:

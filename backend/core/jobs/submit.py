@@ -34,15 +34,36 @@ def _bg_submission(execution: str | None, estimate: dict | None) -> tuple[str, s
 def _site_submitter(site: str):
     """Explicit site targeting (misc/detached_compute.md): `site` is the
     orthogonal WHICH-MACHINE axis and wins over `execution`. Validates
-    against the declared weft sites (unknown → error naming the real ones);
+    against the declared weft sites (unknown → error naming the real ones;
+    an EMPTY list with the substrate down is an OUTAGE, not an unknown site);
     the WeftSubmitter itself picks the shared-fs vs detached transport."""
-    from core.jobs.weft_submitter import WeftSubmitter, declared_compute_sites
+    from core.jobs.weft_submitter import (WeftSubmitter, declared_compute_sites,
+                                          weft_available)
     names = [s["name"] for s in declared_compute_sites()]
     if site not in names:
+        if not names and not weft_available():
+            raise ValueError(
+                f"cannot reach site {site!r}: the compute substrate is "
+                f"offline, so remote sites are unavailable right now — "
+                f"retry later or run the step locally.")
         raise ValueError(
             f"unknown compute site {site!r} — declared sites: "
             f"{', '.join(names) or '(none)'}. See describe_compute.")
     return WeftSubmitter(site=site)
+
+
+def _mark_submit_failed(job_id: str, project_id: str | None, err: Exception) -> None:
+    """A row whose substrate submit DIED must not stay 'queued': restart
+    reconcile would see no submitter marker on it and re-enqueue the
+    remote-targeted code onto the LOCAL worker (wrong machine, silently)."""
+    from datetime import datetime, timezone
+    from core.graph.jobs import update_job
+    try:
+        update_job(job_id, project_id=project_id, status="failed",
+                   error=(getattr(err, "detail", None) or str(err))[:2000],
+                   finished_at=datetime.now(timezone.utc).isoformat())
+    except Exception:  # noqa: BLE001 — marking is best-effort
+        pass
 
 
 def submit_python_job(code: str, title: str, focus_entity_id: str | None,
@@ -50,7 +71,7 @@ def submit_python_job(code: str, title: str, focus_entity_id: str | None,
                       thread_id: str | None = None, run_id: str | None = None,
                       estimate: dict | None = None, env: str | None = None,
                       execution: str | None = None,
-                      site: str | None = None) -> dict:
+                      site: str | None = None, sync: bool = False) -> dict:
     """Create a queued job and enqueue it. Returns the job record. `project_id`
     is captured at submit time so the job runs in the right project's scratch
     workspace even if the active project changes before the worker picks it up.
@@ -59,7 +80,9 @@ def submit_python_job(code: str, title: str, focus_entity_id: str | None,
     `execution` 'local'/'auto' runs it in-place in ABA's own allocation (no sbatch)
     when it fits; None/'slurm' sbatches (the default when ABA_BATCH_SUBMITTER=slurm).
     `site` (detached lane) targets a declared weft site and WINS over
-    `execution`."""
+    `execution`. `sync` marks the row as owned by an IN-TOOL wait loop — it
+    must be in params BEFORE the substrate submit, or the background poll
+    loop can adopt a fast-finishing job in the gap and double-finalize it."""
     if site:
         submitter = _site_submitter(site)
         submission, submission_reason = "site", f"user-targeted site {site}"
@@ -74,11 +97,16 @@ def submit_python_job(code: str, title: str, focus_entity_id: str | None,
         params={"code": code, "timeout_s": timeout_s, "project_id": project_id,
                 "thread_id": thread_id, "run_id": run_id, "estimate": estimate or {},
                 "env": env, "execution": execution, "site": site,
-                "submission": submission, "submission_reason": submission_reason},
+                "submission": submission, "submission_reason": submission_reason,
+                **({"sync": True} if sync else {})},
         project_id=project_id,
     )
     if site:
-        submitter.submit(job)
+        try:
+            submitter.submit(job)
+        except Exception as e:
+            _mark_submit_failed(job_id, project_id, e)
+            raise
         return job
     from core.jobs.submitter import get_submitter_for
     get_submitter_for(submission, kind="run_python").submit(job)
@@ -90,13 +118,14 @@ def submit_r_job(code: str, title: str, focus_entity_id: str | None,
                  thread_id: str | None = None, run_id: str | None = None,
                  estimate: dict | None = None, env: str | None = None,
                  execution: str | None = None,
-                 site: str | None = None) -> dict:
+                 site: str | None = None, sync: bool = False) -> dict:
     """Create a queued R job. Mirrors submit_python_job but with kind='run_r';
     the worker dispatches to run_r_code in core.exec.run, which invokes Rscript
     against the project's tools-env R + project library, captures stdout/stderr,
     and harvests artifacts. Used by run_r(background=True) — the proper path
     for long Seurat/DESeq2/etc. work that would otherwise force the agent to
-    shell out via run_python(subprocess.run([\"Rscript\", ...]))."""
+    shell out via run_python(subprocess.run([\"Rscript\", ...])). `sync` and
+    the failure marking mirror submit_python_job."""
     if site:
         submitter = _site_submitter(site)
         submission, submission_reason = "site", f"user-targeted site {site}"
@@ -111,11 +140,16 @@ def submit_r_job(code: str, title: str, focus_entity_id: str | None,
         params={"code": code, "timeout_s": timeout_s, "project_id": project_id,
                 "thread_id": thread_id, "run_id": run_id, "estimate": estimate or {},
                 "env": env, "execution": execution, "site": site,
-                "submission": submission, "submission_reason": submission_reason},
+                "submission": submission, "submission_reason": submission_reason,
+                **({"sync": True} if sync else {})},
         project_id=project_id,
     )
     if site:
-        submitter.submit(job)
+        try:
+            submitter.submit(job)
+        except Exception as e:
+            _mark_submit_failed(job_id, project_id, e)
+            raise
         return job
     from core.jobs.submitter import get_submitter_for
     get_submitter_for(submission, kind="run_r").submit(job)

@@ -662,6 +662,7 @@ def _run_remote_sync(input_: dict, ctx: dict | None, project_id: str,
     completion here returns a NORMAL tool result, and the standard post-tool
     registration attaches figures/tables to the Run like any local call."""
     import time as _time
+    from core.compute.errors import ComputeError
     from core.jobs.submit import submit_python_job, submit_r_job
     from core.jobs.weft_submitter import WeftSubmitter
     from core.graph.jobs import get_job, update_job
@@ -695,15 +696,15 @@ def _run_remote_sync(input_: dict, ctx: dict | None, project_id: str,
                                "cores": input_.get("est_cores"),
                                "mem_gb": input_.get("est_mem_gb"),
                                "gpu": input_.get("est_gpu")},
-                     env=env_name, site=site, timeout_s=timeout_s)
-    except ValueError as e:          # unknown site — names the real ones
+                     env=env_name, site=site, timeout_s=timeout_s,
+                     sync=True)  # BORN sync — before the substrate submit,
+                                 # so the poll loop never adopts this row
+    except ValueError as e:          # unknown site / substrate offline
         return {"status": "error", "note": str(e)}
-    # re-read: _submit_detached wrote weft_id/detached onto the row via its own
-    # update_job, so merge `sync` onto the FRESH params (not the stale submit
-    # return, which would wipe weft_id and make poll() spin forever)
-    fresh = get_job(job["id"], project_id=project_id) or job
-    update_job(job["id"], project_id=project_id,
-               params={**(fresh.get("params") or {}), "sync": True})
+    except ComputeError as e:        # substrate submit died; row marked failed
+        return {"status": "error",
+                "note": f"could not submit to {site}: "
+                        f"{e.detail or e.code}"}
     sub = WeftSubmitter(site=site)
     cancel_token = (ctx or {}).get("cancel_token")
 
@@ -852,6 +853,7 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
     from core.exec.router import decide
     choice = decide(env=compute_env(), estimate=est, override=override)
     if choice.location == "background":
+        from core.compute.errors import ComputeError
         from core.jobs.runner import submit_python_job
         from content.bio.lifecycle.runs import active_run_id
         # Carry the agent's estimate + execution + isolated env + estimate-sized
@@ -864,8 +866,11 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
                                     project_id=str(project_id), thread_id=str(thread_id),
                                     run_id=active_run_id(str(thread_id)),
                                     **bg_submit_kwargs(input_, project_id))
-        except ValueError as e:      # unknown site= — names the real ones
+        except ValueError as e:      # unknown site= / substrate offline
             return {"status": "error", "note": str(e)}
+        except ComputeError as e:    # substrate submit died; row marked failed
+            return {"status": "error",
+                    "note": f"background submit failed: {e.detail or e.code}"}
         return {
             "deferred": True, "deferred_id": job["id"], "job_id": job["id"],
             "status": "submitted",
@@ -1056,6 +1061,7 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
     from core.exec.router import decide
     choice = decide(env=compute_env(), estimate=est, override=override)
     if choice.location == "background":
+        from core.compute.errors import ComputeError
         from core.jobs.runner import submit_r_job
         from content.bio.lifecycle.runs import active_run_id
         # Background jobs get a timeout sized from the estimate, NOT the interactive
@@ -1071,8 +1077,11 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
                                thread_id=str(thread_id), run_id=active_run_id(str(thread_id)),
                                estimate=est, env=env_name, execution=input_.get("execution"),
                                site=input_.get("site") or None)
-        except ValueError as e:      # unknown site= — names the real ones
+        except ValueError as e:      # unknown site= / substrate offline
             return {"status": "error", "note": str(e)}
+        except ComputeError as e:    # substrate submit died; row marked failed
+            return {"status": "error",
+                    "note": f"background submit failed: {e.detail or e.code}"}
         return {
             "deferred": True, "deferred_id": job["id"], "job_id": job["id"],
             "status": "submitted",
