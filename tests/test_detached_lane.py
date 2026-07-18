@@ -345,10 +345,14 @@ def test_active_weft_jobs_seen_in_single_db_mode():
     task as 'queued' forever) because only PROJECTS_DIR/*.db was scanned."""
     create_job(job_id="job_single_scan", kind="run_python", title="t",
                focus_entity_id=None, project_id="default",
-               params={"code": "", "submitter": "weft", "weft_id": "wj_s"})
+               params={"code": "", "submitter": "weft", "weft_id": "wj_s",
+                       "project_id": "prj_scan"})
     from core.jobs.runner import _active_weft_jobs
-    jobs = {j["id"] for j in _active_weft_jobs()}
+    jobs = {j["id"]: j for j in _active_weft_jobs()}
     assert "job_single_scan" in jobs
+    # the job keeps its REAL project label (single mode routes any label to
+    # the one DB) — None mislabeled finalize/run-log paths as "default"
+    assert jobs["job_single_scan"]["project_id"] == "prj_scan"
 
 
 def test_sync_remote_runs_in_tool(monkeypatch):

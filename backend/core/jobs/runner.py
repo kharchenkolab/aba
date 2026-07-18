@@ -927,7 +927,10 @@ def _active_weft_jobs() -> list[dict]:
                 job = _row_to_job(r)
                 p_ = job.get("params") or {}
                 if p_.get("submitter") == "weft" and not p_.get("sync"):
-                    job["project_id"] = None      # main-DB routing
+                    # single mode routes every project_id to the ONE DB, so
+                    # keep the job's REAL project label — None mislabeled
+                    # finalize/run-log paths as "default"
+                    job["project_id"] = p_.get("project_id")
                     out.append(job)
             c.close()
         except Exception:  # noqa: BLE001

@@ -78,6 +78,21 @@ def test_context_line(monkeypatch):
     assert "local" in l2 and "background=True only" in l2 and "partitions" not in l2
 
 
+def test_context_line_names_remote_machines(monkeypatch):
+    """The per-turn cue names declared remote sites with the site= usage hint
+    (this ambient mention is what makes the agent CONSIDER remote placement
+    without a tool call) — and stays quiet when none are declared."""
+    import core.exec.compute_env as ce
+    base = {"mode": "local", "node_cores": 4, "node_mem_gb": 16, "node_gpus": 0}
+    monkeypatch.setattr(ce, "compute_env",
+                        lambda *a, **k: {**base, "remote_sites": ["hpc", "mendel"]})
+    line = ce.context_line()
+    assert "Remote machines available: hpc, mendel" in line
+    assert "site=<name>" in line and "machine holding the inputs" in line
+    monkeypatch.setattr(ce, "compute_env", lambda *a, **k: dict(base))
+    assert "Remote machines" not in ce.context_line()   # quiescent when none
+
+
 def test_context_line_gpu_usable(monkeypatch):
     """The per-turn cue tells the agent whether a GPU step will actually accelerate."""
     import core.exec.compute_env as ce

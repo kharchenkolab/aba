@@ -363,7 +363,7 @@ function DatasetView({ entity, onFocus, onChange, onChatResult, onPrefill, proje
  *  entity carries a recorded drift/missing flag (set by /recheck or at use) —
  *  the affected entity only, never ambient chrome. Relink accepts on a content
  *  match; a mismatch demotes to the new-version flow (via the Guide). */
-function DriftBanner({ entity, onChange, onPrefill }: {
+export function DriftBanner({ entity, onChange, onPrefill }: {   // exported for test
   entity: Entity; onChange: () => void; onPrefill?: (t: string) => void
 }) {
   const md = (entity.metadata ?? {}) as {
