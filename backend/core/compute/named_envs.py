@@ -177,9 +177,14 @@ def create(project_id: str, name: str, *, language: str = "python",
     spec = _spec_for(project_id, name, language, packages or [], python_version)
     res = _sync(_adapter.get_compute().env_ensure(spec))     # slow — OUTSIDE the lock
     now = time.time()
+    # base_spec/python_version/layers persist HOW the env was built — the
+    # platform re-lock (ensure_platform) re-solves from these; reconstructing
+    # from the flat package list silently dropped a python pin (3.10 → the
+    # 3.12 default) and flattened extend() layering.
     _update(project_id, lambda data: data["envs"].__setitem__(name, {
         "env_id": res["env_id"], "language": language,
         "packages": list(packages or []), "history": [],
+        "python_version": python_version, "base_spec": spec, "layers": [],
         "created_at": now, "updated_at": now,
     }))
     return {"env_id": res["env_id"], "status": res.get("status"),
@@ -207,6 +212,7 @@ def extend(project_id: str, name: str, packages: list[str]) -> dict:
         r.setdefault("history", []).append(r["env_id"])
         r["env_id"] = res["env_id"]
         r["packages"] = list(dict.fromkeys([*r.get("packages", []), *packages]))
+        r.setdefault("layers", []).append(list(packages))   # for re-lock replay
         r["updated_at"] = time.time()
     _update(project_id, _apply)
     return {"env_id": res["env_id"], "status": res.get("status"),
@@ -524,19 +530,34 @@ def controller_platform() -> str:
 
 def ensure_platform(project_id: str, name: str, platform_str: str) -> dict:
     """Lazy re-lock at first remote use (detached lane): re-solve the named
-    env's recorded spec with the target site's platform added, so weft can
-    realize it THERE. Solve cost and platform-availability failures land on
-    the remote attempt — local work is never blocked by other platforms."""
+    env for the target site's platform so weft can realize it THERE — from
+    the row's PERSISTED base spec (python_version pin and all; reconstruction
+    from the flat package list silently re-locked a 3.10-pinned env to the
+    3.12 default), then re-apply each extend() layer as an extends_env link,
+    mirroring how the env was actually built. Solve cost and platform-
+    availability failures land on the remote attempt — local work is never
+    blocked by other platforms."""
     row = resolve(project_id, name)
     if row is None:
         raise KeyError(f"no isolated env {name!r} in project {project_id}")
-    spec = _spec_for(project_id, name, row.get("language") or "python",
-                     list(row.get("packages") or []))
-    spec["platforms"] = sorted({controller_platform(), platform_str})
-    res = _sync(_adapter.get_compute().env_ensure(spec, update=True))
+    language = row.get("language") or "python"
+    plats = sorted({controller_platform(), platform_str,
+                    *(row.get("platforms") or [])})
+    # legacy rows (pre-persistence) still reconstruct — flat, but keeping any
+    # recorded python pin
+    base = dict(row.get("base_spec") or _spec_for(
+        project_id, name, language, list(row.get("packages") or []),
+        row.get("python_version")))
+    base["platforms"] = plats
+    res = _sync(_adapter.get_compute().env_ensure(base, update=True))
+    env_id = res["env_id"]
+    eco = "cran" if language == "r" else "pypi"
+    for layer in row.get("layers") or []:
+        lspec = {"name": f"aba-{project_id}-{name}", "extends_env": env_id,
+                 "deps": {eco: list(layer)}, "platforms": plats}
+        res = _sync(_adapter.get_compute().env_ensure(lspec))
+        env_id = res["env_id"]
     now = time.time()
     _update(project_id, lambda data: data["envs"][name].update(
-        {"env_id": res["env_id"], "updated_at": now,
-         "platforms": spec["platforms"]}))
-    return {"env_id": res["env_id"], "platforms": spec["platforms"],
-            "status": res.get("status")}
+        {"env_id": env_id, "updated_at": now, "platforms": plats}))
+    return {"env_id": env_id, "platforms": plats, "status": res.get("status")}

@@ -52,6 +52,10 @@ def stubbed(tmp_path, monkeypatch):
     (prefix / "bin" / "python").symlink_to(sys.executable)
     monkeypatch.setattr(named_envs, "ensure_realized",
                         lambda env_id, **kw: prefix)
+    # run_in went strategy-blind (ensure_ready + _ready_prefix, no raw-prefix
+    # demand) — plant the same prefix on that path or it realize-probes the stub
+    monkeypatch.setattr(named_envs, "ensure_ready", lambda env_id, **kw: None)
+    monkeypatch.setattr(named_envs, "_ready_prefix", lambda env_id: prefix)
     from core import projects
     monkeypatch.setattr(projects, "current", lambda: "prjT", raising=False)
     return stub
@@ -116,6 +120,30 @@ def test_second_make_layers_via_extends_env(stubbed):
     assert row["env_id"] == r2["env_id"]
     assert r1["env_id"] in row["history"]                            # provenance kept
     assert set(row["packages"]) == {"six", "attrs"}
+
+
+def test_ensure_platform_keeps_python_pin_and_layers(stubbed):
+    """Remote re-lock must re-solve the env AS BUILT: from the persisted base
+    spec — reconstruction from the flat package list silently re-locked a
+    3.10-pinned env to the 3.12 default (different interpreter remotely than
+    locally) — then each extend() layer as an extends_env link, all locked
+    for the union of platforms."""
+    from core.compute import named_envs
+    named_envs.create("prjT", "pinned", language="python",
+                      packages=["tabulate"], python_version="3.10")
+    named_envs.extend("prjT", "pinned", ["colorama"])
+    stubbed.ensured.clear()
+    out = named_envs.ensure_platform("prjT", "pinned", "linux-aarch64")
+    base, layer = stubbed.ensured
+    assert "python =3.10" in base["deps"]["conda"]        # the pin travels
+    assert "linux-aarch64" in base["platforms"]
+    assert named_envs.controller_platform() in base["platforms"]
+    assert layer["extends_env"]                            # layered, not flat
+    assert layer["deps"]["pypi"] == ["colorama"]
+    assert layer["platforms"] == base["platforms"]
+    row = named_envs.resolve("prjT", "pinned")
+    assert row["env_id"] == out["env_id"]                  # tip of the chain
+    assert row["platforms"] == out["platforms"]
 
 
 def test_run_in_missing_env_is_helpful(stubbed):
