@@ -266,6 +266,11 @@ class WeftSubmitter:
         update_job(job["id"], params={**params, "weft_id": r["job_id"],
                                       "submitter": "weft", "weft_site": self.site},
                    project_id=str(pid))
+        # Same bookkeeping as the detached path: the Run's weft_targets is
+        # what keep-triage / run_keep / bring-back retain FROM — without it a
+        # Run fed only by shared-fs background jobs 400s on late keeps and
+        # plan-end retention no-ops (found by the two-copy drift review).
+        self._record_run_target(params, r["job_id"])
 
     # ── detached transport (misc/detached_compute.md) ─────────────────────
     def _site_kind(self, site: Optional[str] = None) -> Optional[str]:

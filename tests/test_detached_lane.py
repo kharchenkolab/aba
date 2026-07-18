@@ -207,6 +207,25 @@ def test_sharedfs_walltime_only_when_sized(monkeypatch):
     assert task3["resources"]["walltime"] == "02:05:00"     # head keeps its ask
 
 
+def test_sharedfs_submit_records_run_target(monkeypatch):
+    """The SHARED-FS lane must record the weft task on the Run's weft_targets
+    exactly like the detached lane: retention (run_keep, plan-end keeps,
+    bring-back) is target-based, and a Run fed only by shared-fs background
+    jobs 400'd on late keeps with 'no weft target' (two-copy drift review)."""
+    from core.graph.entities import create_entity, get_entity
+    comp = _FakeComp()
+    monkeypatch.setattr(ws, "_adapter", lambda: comp)
+    rid = create_entity(entity_type="analysis", title="sfs target run")
+    job = create_job(job_id="job_sfs_tgt", kind="run_python", title="t",
+                     focus_entity_id=None, project_id="default",
+                     params={"code": "x=1", "timeout_s": 60, "env": "x",
+                             "project_id": "default", "run_id": rid,
+                             "estimate": {"cores": 1}})
+    ws.WeftSubmitter(site="cluster").submit(job)
+    ent = get_entity(rid)
+    assert (ent.get("metadata") or {}).get("weft_targets") == ["wj_1"]
+
+
 def test_platform_mismatch_relocks_once_and_retries(monkeypatch):
     comp = _FakeComp(fail_platform_once=True)
     monkeypatch.setattr(ws, "_adapter", lambda: comp)
@@ -582,6 +601,7 @@ def _standalone() -> int:
               test_harness_enforces_timeout,
               test_detached_slurm_walltime_only_when_sized,
               test_sharedfs_walltime_only_when_sized,
+              test_sharedfs_submit_records_run_target,
               test_platform_mismatch_relocks_once_and_retries,
               test_detached_poll_fetches_results_over_data_plane,
               test_poll_side_platform_relock_resubmits,
