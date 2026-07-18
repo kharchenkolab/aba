@@ -111,8 +111,27 @@ queue, sweeps every project DB: local `running` rows are **zombies** (their work
 the process) → marked `failed`; `queued` rows are re-enqueued in global `created_at` FIFO.
 The pivot is `_is_slurm_params`: a **Slurm** job keeps running on the cluster across the
 restart, so reconcile must **not** reap or re-enqueue it — the poll loop re-adopts it via the
-sentinel. (Two watchdogs run alongside: `_slurm_poll_loop` for external jobs and
-`_inline_watchdog_loop` (`runner.py:1229`) for wedged inline pipeline heads.)
+sentinel. **Sync weft rows** (owned in-tool by `_run_remote_sync`'s wait loop, which the
+background poll loop deliberately skips) lose their only finalizer with the process:
+reconcile **adopts** substrate-accepted ones into the poll loop (`sync` flipped off,
+`sync_orphaned` stamped) and reaps ones that never reached the substrate. (Two watchdogs run
+alongside: `_slurm_poll_loop` for external jobs and `_inline_watchdog_loop` (`runner.py:1229`)
+for wedged inline pipeline heads.)
+
+**Finalize ownership — one writer, one verdict.** Three invariants close the
+false-"infra failure" class (a task the substrate finished cleanly being recorded failed —
+misc/bug1.md): (1) **the jobs-plane lease** (`_acquire_jobs_lease`): an exclusive flock on
+`<runtime>/jobs.lease` lets only the FIRST instance run worker/reconcile/poll loops — a
+second instance (e.g. a stale installed backend the tray briefly boots) serves its API but
+logs a loud refusal instead of finalizing rows it doesn't understand. (2) **transport truth
+at poll**: `WeftSubmitter.poll()` re-reads the persisted row and, absent the `detached`
+stamp, derives the branch from the site's declared contract — no caller's stale dict can
+route a detached task into the controller-local `result.json` check; a terminal-DONE task
+whose result isn't readable yet gets bounded grace retries, then an honest verdict that says
+the entry ran. (3) **single-verdict finalize**: `_finalize_job` ignores (with a WARNING) any
+row already terminal, and a success verdict clears `error` — the contradictory
+`done`+stale-error row cannot be minted. Every failure verdict, branch decision, and
+second-finalize attempt is logged.
 
 ## Placement: the submitter seam
 

@@ -64,11 +64,23 @@ run_python/run_r ─► LocalRouter.decide() ─► "local"  ─► KernelPool.g
   line of inquiry) — or a sub-agent/scenario run id, or `thread::env::<name>` for
   an isolated-env kernel. State is shared within one investigation, isolated
   across them.
-- **`KernelSession`** — the transport-agnostic interface; today's only impl is
+- **`KernelSession`** — the transport-agnostic interface with two impls:
   **`JupyterKernelSession`** (`core/exec/kernels/jupyter.py:405`), an
-  out-of-process IPython/IRkernel driven over `jupyter_client`. State persists
-  across `execute` calls; `interrupt` maps to SIGINT (state survives); a crash is
-  isolated from the backend.
+  out-of-process IPython/IRkernel driven over `jupyter_client`, and
+  **`WeftKernelSession`** (`core/exec/kernels/weft.py`), weft's file-block
+  kernel protocol behind the same interface — local or **on a remote site**
+  (`run_python(site=…)` without `background` holds a persistent interpreter
+  THERE: `get_or_start(..., site=)` → `for_pool(site=)` → `kernel_start(site,
+  lang, env_id=…)`, scope key `thread@site`). A remote kernel attaches a
+  FROZEN env id (named env, re-locked once on platform mismatch; else the
+  project snapshot — the same identity a detached job runs under); its
+  sandbox is a first-class weft inventory target, so new small outputs are
+  fetched over the data plane post-exec for the standard harvest while big
+  ones stay kept-addressable on the site. A remote site NEVER falls back to
+  the jupyter transport (that would silently run "remote" code locally) —
+  kernel-start failure degrades to the one-shot remote sync lane. State
+  persists across `execute` calls; `interrupt` maps to SIGINT (state
+  survives); a crash is isolated from the backend.
 - **The stateless one-shot** — `run_python_code`/`run_r_code`
   (`core/exec/run.py:22`) write a self-contained `script.py`/`script.R` and run
   it via `MaterializingExecutor` (base venv + tools-env PATH, killpg
