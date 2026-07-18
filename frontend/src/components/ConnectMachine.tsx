@@ -42,6 +42,17 @@ export default function ConnectMachine({ knownNames, onDone, onCancel }: Props) 
     computeApi.templates().then(r => setTemplates(r.templates)).catch(() => {})
   }, [])
 
+  // Close as soon as the machine we're adding shows up in the site list —
+  // the card (with its own status badge) takes over the narration. Without
+  // this the pane sits on "Adding the machine…" until the connect POST
+  // returns, even while the card below already reads Ready: two competing
+  // progress surfaces at the exact moment of first onboarding (F2,
+  // misc/ux_findings.md; knownNames live-refreshes via aba:compute events).
+  useEffect(() => {
+    if (step === 'connecting' && proposalName.current
+        && knownNames.includes(proposalName.current)) onDone()
+  }, [knownNames, step, onDone])
+
   // registration narration: weft bootstrap.step events relayed onto the bus
   useEffect(() => {
     const onEv = (e: Event) => {

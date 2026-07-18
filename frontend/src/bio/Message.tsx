@@ -1063,7 +1063,10 @@ function msgKey(s: string): string {
 export default function Message({ message, isStreaming, collapseTools, onAnnotate, highlighting, anyDrawing, onDrawingChange, onHighlightDone, onRetry, entities, onPin, onArtifactPinned, pinnedFigureIds, keptKeys, onKeepMessage, planActive, onPlanGo, onPlanAdjust, fileMap, currentRunId }: Props) {
   const isUser = message.role === 'user'
   const [showSteps, setShowSteps] = useState(false)
-  const visibleBlocks = message.blocks
+  // a cancelled/interrupted turn can checkpoint a message with NO blocks —
+  // rendering must degrade to an empty message, not throw into the
+  // ErrorBoundary's "couldn't be displayed" banner (F4, misc/ux_findings.md)
+  const visibleBlocks = message.blocks ?? []
 
   // On past messages we collapse the tool/step indicators to keep the thread
   // tidy, but offer an eye toggle to bring them back per message.
@@ -1078,7 +1081,7 @@ export default function Message({ message, isStreaming, collapseTools, onAnnotat
   const rendered = renderBlocks(visibleBlocks, hideSteps, onRetry, entities, isUser ? undefined : onPin, isUser, planActive, onPlanGo, onPlanAdjust, isStreaming, pinnedFigureIds, fileMap, currentRunId, isUser ? undefined : onArtifactPinned)
   if (rendered.length === 0 && !isStreaming) return null
 
-  const msgText = message.blocks.filter(b => b.type === 'text').map(b => (b as { text: string }).text).join('\n').trim()
+  const msgText = visibleBlocks.filter(b => b.type === 'text').map(b => (b as { text: string }).text).join('\n').trim()
   // Phase C — auto-continuation marker. A user-role message that starts
   // with "[continuation:" was synthesized by the runner when a background
   // job finished; render it with a distinct cog avatar + soft styling so
@@ -1086,7 +1089,7 @@ export default function Message({ message, isStreaming, collapseTools, onAnnotat
   // marker into a proper messages-row metadata column; pattern-matching is
   // the MVP.
   const isContinuation = isUser && msgText.startsWith('[continuation:')
-  const imageUrls = message.blocks.filter(b => b.type === 'image').map(b => (b as { url: string }).url)
+  const imageUrls = visibleBlocks.filter(b => b.type === 'image').map(b => (b as { url: string }).url)
 
   // Figures are pinned individually in their own headers (a cell can hold
   // several). The toolbar pin handles the no-figure case: keep a text message

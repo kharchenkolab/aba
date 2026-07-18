@@ -418,6 +418,93 @@ def ui_remote_run_badges(page, api, pid, tid):
             ("bring-back POSITIVE: flat row serves local bytes", brought_bytes)]
 
 
+@ui_scenario("ui_cancel_midrun")
+def ui_cancel_midrun(page, api, pid, tid):
+    """Mid-run interruption FROM THE UI (release_test_plan: 'Mid-run cancel
+    from the UI'): send a slow direct step, hit Stop while it runs. The turn
+    must end promptly (not ride out the sleep), the step's completion marker
+    must NEVER be claimed, and the thread must not be wedged — a follow-up
+    turn works. Marker is COMPUTED (50+50) so it cannot appear in the user
+    bubble and rig the absence check."""
+    box = page.locator("textarea").first
+    box.wait_for(state="visible", timeout=15_000)
+    box.fill("Run a quick local python step that sleeps 90 seconds and then "
+             "prints SLOWMARK- immediately followed by the sum of 50+50. "
+             "Run it directly, not in the background.")
+    box.press("Enter")
+    stop = page.locator(".composer__stop")
+    try:
+        stop.wait_for(state="visible", timeout=30_000)
+    except Exception:  # noqa: BLE001
+        return [("Stop affordance appears while a turn runs", False)]
+    time.sleep(12)                       # let the tool actually start
+    shot(page, "cancel_midrun_before_stop")
+    stop.click()
+    ended = False
+    t0 = time.time()
+    while time.time() - t0 < 60:         # 90s sleep → must end well before
+        if page.locator(".composer__stop").count() == 0:
+            ended = True
+            break
+        time.sleep(2)
+    shot(page, "cancel_midrun_after_stop")
+    time.sleep(8)                        # let any dishonest late text land
+    fabricated = page.get_by_text("SLOWMARK-100", exact=False).count() > 0
+    # F4 guard: the cancelled turn must RENDER (possibly empty/partial) —
+    # never the ErrorBoundary's failure banner
+    render_ok = page.get_by_text("couldn’t be displayed").count() == 0 and \
+        page.get_by_text("couldn't be displayed").count() == 0
+    followup_ok = True
+    try:
+        ui_turn(page, "Just tell me: what is 6*7? Answer with the number.",
+                timeout_s=120)
+        followup_ok = wait_text(page, "42", timeout_s=30)
+    except Exception:  # noqa: BLE001
+        followup_ok = False
+    shot(page, "cancel_midrun_followup")
+    return [("Stop ends the turn promptly (not riding out the sleep)", ended),
+            ("no fabricated completion after cancel", not fabricated),
+            ("cancelled turn renders (no ErrorBoundary banner — F4)",
+             render_ok),
+            ("thread usable after cancel (follow-up turn works)", followup_ok)]
+
+
+@ui_scenario("ui_reload_reconnect")
+def ui_reload_reconnect(page, api, pid, tid):
+    """Resume-after-reload (release_test_plan: 'Resume after reload'): the
+    user reloads the tab mid-turn. The reloaded UI must reconnect to the
+    still-running durable turn and render its completion — work survives the
+    reload. Marker computed (40+2) so the needle can only come from the
+    step's real output."""
+    box = page.locator("textarea").first
+    box.wait_for(state="visible", timeout=15_000)
+    box.fill("Run a quick local python step that sleeps 35 seconds and then "
+             "prints RELOADMARK- immediately followed by the sum of 40+2. "
+             "Run it directly, not in the background, then tell me the "
+             "printed value.")
+    box.press("Enter")
+    stop = page.locator(".composer__stop")
+    try:
+        stop.wait_for(state="visible", timeout=30_000)
+    except Exception:  # noqa: BLE001
+        return [("turn started (Stop visible)", False)]
+    time.sleep(8)
+    shot(page, "reload_midrun")
+    page.reload(wait_until="domcontentloaded")
+    shot(page, "reload_just_after")
+    reconnected = False
+    try:
+        page.locator(".composer__stop").wait_for(state="visible",
+                                                 timeout=20_000)
+        reconnected = True
+    except Exception:  # noqa: BLE001 — turn may have finished already
+        pass
+    ok = wait_text(page, "RELOADMARK-42", timeout_s=180)
+    shot(page, "reload_result")
+    return [("UI reconnects to the in-flight turn after reload", reconnected),
+            ("the step's true output renders after the reload", ok)]
+
+
 @ui_scenario("ui_settings_compute_connect")
 def ui_settings_compute_connect(page, api, pid, tid):
     """Settings→Compute ONBOARDING journey, end-to-end in the browser against
@@ -456,7 +543,9 @@ def ui_settings_compute_connect(page, api, pid, tid):
         if not prop_ok:
             return checks
         text = body.inner_text()
-        checks.append(("proposal names the machine", "mendel" in text.lower()))
+        # the proposed name lives in an input VALUE — inner_text misses it
+        pname = page.locator('input[name="cmp-site-name"]').input_value()
+        checks.append(("proposal names the machine", "mendel" in pname.lower()))
         # detached wording must be honest — the flow SUPPORTS detached now
         checks.append(("no stale 'not yet supported' copy",
                        "not yet supported" not in text))
@@ -484,6 +573,22 @@ def ui_settings_compute_connect(page, api, pid, tid):
         checks.append(("machine card appears after Add", card_ok))
         shot(page, "compute_card_added")
         if card_ok:
+            # F2 guard: once the card exists, the connect pane must hand over
+            # to it — no lingering "Adding the machine…" beside a live card
+            pane_gone = True
+            try:
+                body.get_by_text("Adding the machine").wait_for(
+                    state="detached", timeout=30_000)
+            except Exception:  # noqa: BLE001
+                pane_gone = body.get_by_text("Adding the machine").count() == 0
+            checks.append(("connect pane closes once the card exists (F2)",
+                           pane_gone))
+            # bootstrap continues after the card appears; the full edit
+            # affordances (working-space change…) render once Ready
+            try:
+                card.get_by_text("Ready").wait_for(timeout=240_000)
+            except Exception:  # noqa: BLE001
+                pass
             card.click()
             page.wait_for_timeout(600)
             shot(page, "compute_card_expanded")
