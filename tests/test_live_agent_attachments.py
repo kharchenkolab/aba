@@ -132,4 +132,7 @@ async def main():
     return 1 if _failures else 0
 
 
-raise SystemExit(asyncio.run(main()))
+if __name__ == "__main__":                 # script-style: run via `python tests/…`.
+    raise SystemExit(asyncio.run(main()))  # guarded so a pytest IMPORT (which hits the
+                                           # module-level opt-in skip above) never executes
+                                           # main(), and run_tests.sh's script path has an anchor.
