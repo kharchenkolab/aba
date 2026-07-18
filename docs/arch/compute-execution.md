@@ -72,8 +72,13 @@ run_python/run_r ─► LocalRouter.decide() ─► "local"  ─► KernelPool.g
   (`run_python(site=…)` without `background` holds a persistent interpreter
   THERE: `get_or_start(..., site=)` → `for_pool(site=)` → `kernel_start(site,
   lang, env_id=…)`, scope key `thread@site`). A remote kernel attaches a
-  FROZEN env id (named env, re-locked once on platform mismatch; else the
-  project snapshot — the same identity a detached job runs under); its
+  FROZEN env id (a named env's id, else the project snapshot — the same
+  identity a detached job runs under), pre-realized on the site via
+  `ensure_ready(site=…)`; a platform mismatch there re-locks once and
+  retries — the named env re-solves its spec, the DEFAULT env re-locks the
+  BASE pack (session extras don't travel), exactly the one-shot lane's
+  trade (`ensure_ready` surfaces the realize task's typed
+  `env.platform_mismatch` so the retry can see it); its
   sandbox is a first-class weft inventory target, so new small outputs are
   fetched over the data plane post-exec for the standard harvest while big
   ones stay kept-addressable on the site. A remote site NEVER falls back to

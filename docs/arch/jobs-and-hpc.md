@@ -107,14 +107,23 @@ whole Seurat run's artifacts.
 
 **Restart survival.** Because ABA is a single process, a restart must reconcile state.
 `reconcile_jobs` (`runner.py:862`), run once at startup **before** the worker drains the
-queue, sweeps every project DB: local `running` rows are **zombies** (their worker died with
-the process) → marked `failed`; `queued` rows are re-enqueued in global `created_at` FIFO.
-The pivot is `_is_slurm_params`: a **Slurm** job keeps running on the cluster across the
+queue, sweeps every DB that can hold job rows — each project DB, or in SINGLE mode
+(`ABA_DB_PATH`) the one flat workspace DB (the walk alone sees zero projects there and
+recovery would silently not run — found live by `regtest/datasets/restart_study.py`).
+Local `running` rows are **zombies** (their worker died with the process) → marked
+`failed`; `queued` rows are re-enqueued in global `created_at` FIFO. The pivot is
+`_is_slurm_params`: a **Slurm** job keeps running on the cluster across the
 restart, so reconcile must **not** reap or re-enqueue it — the poll loop re-adopts it via the
 sentinel. **Sync weft rows** (owned in-tool by `_run_remote_sync`'s wait loop, which the
 background poll loop deliberately skips) lose their only finalizer with the process:
 reconcile **adopts** substrate-accepted ones into the poll loop (`sync` flipped off,
-`sync_orphaned` stamped) and reaps ones that never reached the substrate. (Two watchdogs run
+`sync_orphaned` stamped) and reaps ones that never reached the substrate. **Local-lane weft
+rows** are a third species: the substrate task's supervisor lived in-process (so weft's
+state row can freeze non-terminal — misc/bug3), but the task PROCESS survives the kill and
+its entry still writes `result.json`. Reconcile only **stamps** them (`local_orphan_at` —
+never kills: the task may be mid-run); the poll loop then finalizes a stamped row from
+`result.json` disk truth even while weft's state is frozen, and past walltime+grace issues
+an honest orphan verdict (with a best-effort `task_cancel`). (Two watchdogs run
 alongside: `_slurm_poll_loop` for external jobs and `_inline_watchdog_loop` (`runner.py:1229`)
 for wedged inline pipeline heads.)
 
@@ -285,6 +294,10 @@ are sized by design (their timeout IS the chosen head walltime). Tests:
 
 ## Known gaps
 
+- **weft-side local-orphan liveness (misc/bug3_weft_local_orphan.md).** A local-lane task
+  whose controller dies stays RUNNING in weft's own `state.db` forever (disk truth —
+  `exit_code`, log — is never re-checked). aba's stamp+finalize mitigation keeps aba's rows
+  honest, but weft-level surfaces show phantom RUNNING tasks until the weft fix lands.
 - **Body drift above the W2 section.** §"The model" and the implementation table still
   describe the RETIRED sbatch `SlurmSubmitter` as live (W3.5 deleted that lane; the cluster
   path is `WeftSubmitter(site=<slurm site>)`). The weft-era sections at the bottom are
