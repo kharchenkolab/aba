@@ -411,6 +411,10 @@ def test_poll_flags_infra_death(monkeypatch, tmp_path):
     sub = WeftSubmitter(site="cluster")
     monkeypatch.setattr(sub, "_run_dir", lambda job: tmp_path)        # no result.json here
     monkeypatch.setattr(sub, "_compute_block", lambda wid, state: {"substrate": "weft"})
+    # this scenario IS the shared-fs lane: declare the site's contract (an
+    # undeclared non-local site now falls back to the detached branch at poll
+    # — the safe default for the transport-honesty fix)
+    monkeypatch.setattr(WM, "site_contract", lambda s: "shared-fs")
 
     class _Fake:
         def sync_call(self, name, *a, **k):

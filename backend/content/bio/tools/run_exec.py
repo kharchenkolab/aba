@@ -734,6 +734,8 @@ def _run_remote_sync(input_: dict, ctx: dict | None, project_id: str,
             ok = "error" not in res and res.get("returncode", 0) == 0
             update_job(job["id"], project_id=project_id,
                        status="done" if ok else "failed",
+                       # success must never leave a stale failure string behind
+                       **({"error": None} if ok else {}),
                        log_tail=(res.get("stdout") or res.get("error") or "")[-1500:])
             if not ok:
                 return {"status": "error",

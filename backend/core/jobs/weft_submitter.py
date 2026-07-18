@@ -26,6 +26,10 @@ from typing import Optional
 from core.data.workspace import scratch_dir
 
 _TERMINAL = {"DONE", "FAILED", "CANCELLED"}
+
+# grace polls for a terminal task whose result payload isn't readable yet
+# (shared-fs write lag / data-plane hiccup) before a failure verdict
+_RESULT_READ_RETRIES = 5
 # controller-side fetch cap for detached results — matches the harvest
 # per-file cap; bigger files stay on the node (kept, (run,rel)-addressable)
 _DETACHED_FETCH_BYTES = 50 * 1024 * 1024
@@ -167,6 +171,17 @@ class WeftSubmitter:
 
     def __init__(self, site: str = "local"):
         self.site = site
+        # per-task count of "terminal but result not yet readable" polls —
+        # distinguishes a transient read/staging lag from a genuinely absent
+        # result (in-memory: a restart just restarts the grace window)
+        self._result_misses: dict[str, int] = {}
+
+    def _result_miss(self, wid: str) -> bool:
+        """Record one terminal-but-result-unreadable observation; True while
+        the caller should keep polling instead of declaring failure."""
+        n = self._result_misses.get(wid, 0) + 1
+        self._result_misses[wid] = n
+        return n <= _RESULT_READ_RETRIES
 
     def _run_dir(self, job: dict) -> Path:
         pid = (job.get("params") or {}).get("project_id") or "default"
@@ -457,6 +472,33 @@ class WeftSubmitter:
             except Exception:  # noqa: BLE001
                 return None
         raw = _read("result.json", cap=1 << 20)
+        if raw is None and state == "DONE":
+            # Terminal SUCCESS but the data-plane read failed: that is
+            # "result not yet fetchable" (staging lag, transient data-plane
+            # hiccup), not proof the entry never ran — grace-retry before any
+            # verdict, then fail HONESTLY: exit 0 + logs contradict "infra
+            # failure before the entry ran".
+            if self._result_miss(wid):
+                print(f"[jobs.weft] WARNING task {wid} DONE but result.json "
+                      "not readable over the data plane yet — retrying",
+                      flush=True)
+                return None
+            comp = self._compute_block(wid, state)
+            res = {"error": (
+                "task completed on the compute substrate (state DONE) but its "
+                f"result payload could not be read after "
+                f"{_RESULT_READ_RETRIES} attempts — treating as failed; the "
+                "entry DID run and its outputs may be intact on the site "
+                "(check the run's files before re-running)")}
+            try:  # _compute_block omits tails for DONE; this verdict needs one
+                man = _adapter().sync_call("task_result", wid)
+                tail = (man.get("logs") or {}).get("tail")
+                if tail:
+                    res["error"] += f"\n--- node log tail ---\n{tail[-400:]}"
+            except Exception:  # noqa: BLE001
+                pass
+            res.setdefault("compute", comp)
+            return res
         if raw is None:
             task_err = None
             if state == "FAILED":
@@ -620,7 +662,37 @@ class WeftSubmitter:
         state = rows[0]["state"] if rows else None
         if state not in _TERMINAL:
             return None
-        if params.get("detached"):
+        # Finalization decisions come from the PERSISTED row, never the
+        # caller's snapshot: a stale dict (taken before _submit_detached
+        # stamped the row, or carried across a restart by a dead in-tool
+        # waiter) lacks `detached` and would send a detached job down the
+        # shared-fs branch — which then fabricates "no result.json (infra
+        # failure)" for a task that ran fine (live incident: sync detached
+        # run + mid-wait restart).
+        try:
+            from core.graph.jobs import get_job as _get_job
+            fresh = _get_job(job["id"], project_id=job.get("project_id")
+                             or params.get("project_id"))
+            if fresh and (fresh.get("params") or {}).get("weft_id") == wid:
+                job = {**job, **fresh}
+                params = fresh.get("params") or params
+        except Exception:  # noqa: BLE001 — fall back to the caller's dict
+            pass
+        detached = bool(params.get("detached"))
+        if not detached:
+            # transport is a property of the SITE, not of who asks: a
+            # detached-contract site can never satisfy a controller-local
+            # result.json check, whatever the row happens to say
+            site = params.get("weft_site") or params.get("site") or self.site
+            try:
+                detached = bool(site) and site != "local" \
+                    and site_contract(str(site)) == "detached"
+            except Exception:  # noqa: BLE001
+                detached = False
+        print(f"[jobs.weft] finalize-poll job={job.get('id')} wid={wid} "
+              f"state={state} branch={'detached' if detached else 'shared-fs'} "
+              f"sync={bool(params.get('sync'))}", flush=True)
+        if detached:
             # detached transport: results come back over the weft data plane,
             # not a shared filesystem (misc/detached_compute.md)
             return self._poll_detached(job, params, wid, state)
@@ -632,6 +704,22 @@ class WeftSubmitter:
                 res = {"error": f"result.json unreadable for weft job {wid}"}
         elif state == "CANCELLED":
             res = {"status": "cancelled", "note": "cancelled on the compute substrate"}
+        elif state == "DONE":
+            # Terminal SUCCESS with no result file yet: shared-fs writes can
+            # lag (close-to-open consistency). "Terminal, result not yet
+            # readable" is NOT "infra failure" — grace-retry first, and when
+            # it stays missing say what is actually known instead of claiming
+            # the entry never ran.
+            if self._result_miss(wid):
+                print(f"[jobs.weft] WARNING task {wid} DONE but result.json "
+                      f"not present at {result_path} yet — retrying", flush=True)
+                return None
+            res = {"error": (
+                "task completed on the compute substrate (state DONE) but no "
+                f"result.json appeared at {result_path} after "
+                f"{_RESULT_READ_RETRIES} checks — the run dir may have been "
+                "cleaned or the shared mount is stale; outputs may still be "
+                "intact on the site (see the run's files and log tail)")}
         else:
             res = {"error": f"weft task {state} with no result.json "
                             f"(infra failure before the entry ran?)"}

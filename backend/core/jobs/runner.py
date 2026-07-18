@@ -429,11 +429,35 @@ async def _finalize_job(job: dict, result_obj: dict, lookup_pid: str | None,
     kind = job.get("kind") or "run_python"
     focus_entity_id = job.get("focus_entity_id")
 
+    # Single-verdict finalize: a job can be observed terminal by more than one
+    # actor (in-tool sync waiter, poll loop, restart reconcile). The FIRST
+    # verdict wins — its hooks + continuation already fired; a second pass must
+    # not flip status or graft a contradictory error onto the row (live
+    # incident: status=done carrying a stale "no result.json" error).
+    try:
+        cur = get_job(job_id, project_id=lookup_pid)
+        if cur and (cur.get("status") or "") in ("done", "failed", "cancelled"):
+            print(f"[jobs] WARNING second finalize of terminal job {job_id} "
+                  f"(status={cur['status']}, new verdict "
+                  f"{'error' if 'error' in result_obj else result_obj.get('status', 'ok')}) "
+                  f"— ignored", flush=True)
+            return
+    except Exception:  # noqa: BLE001 — guard is best-effort, never blocks finalize
+        pass
+
     if job_id in _CANCELLED or result_obj.get("status") == "cancelled":
         update_job(job_id, project_id=lookup_pid, status="cancelled", finished_at=_utcnow())
         _settle_job_deferred(job_id, lookup_pid)
         return
     if "error" in result_obj:
+        # every failure verdict is loggable evidence for an operator — today
+        # only worker exceptions were logged, so a fabricated/real infra
+        # failure needed DB spelunking to even notice
+        print(f"[jobs] WARNING job {job_id} FAILED verdict "
+              f"(site={params.get('weft_site') or params.get('site') or 'local'}, "
+              f"detached={bool(params.get('detached'))}, "
+              f"sync={bool(params.get('sync'))}, kind={kind}): "
+              f"{str(result_obj['error'])[:300]}", flush=True)
         update_job(job_id, project_id=lookup_pid, status="failed",
                    error=result_obj["error"][:1000],
                    log_tail=result_obj["error"][:1500], finished_at=_utcnow())
@@ -448,6 +472,8 @@ async def _finalize_job(job: dict, result_obj: dict, lookup_pid: str | None,
     except Exception:  # noqa: BLE001
         pass
     if result_obj.get("returncode") != 0:
+        print(f"[jobs] WARNING job {job_id} FAILED verdict (nonzero exit "
+              f"{result_obj.get('returncode')}, kind={kind})", flush=True)
         update_job(job_id, project_id=lookup_pid, status="failed",
                    error=stderr[-1000:] or f"exit code {result_obj.get('returncode')}",
                    log_tail=log_tail, finished_at=_utcnow())
@@ -476,8 +502,10 @@ async def _finalize_job(job: dict, result_obj: dict, lookup_pid: str | None,
             "job_id": job_id,
             "new_entities": [],
         })
-    update_job(job_id, project_id=lookup_pid, status="done", log_tail=log_tail,
-               finished_at=_utcnow())
+    # error=None: a success verdict must never leave a stale failure string on
+    # the row (the double-finalize incident's contradictory done+error state)
+    update_job(job_id, project_id=lookup_pid, status="done", error=None,
+               log_tail=log_tail, finished_at=_utcnow())
     # Auto-retention: cap the visible terminal jobs per project so the list can't grow
     # unbounded (archives, doesn't delete — provenance kept). Best-effort.
     try:
@@ -655,6 +683,7 @@ def reconcile_jobs() -> dict:
     import sqlite3
 
     reaped = 0
+    adopted_sync = 0                            # orphaned sync weft rows → poll loop
     requeued: list[tuple[str, str, str]] = []   # (created_at, job_id, project_id)
     resumed: list[tuple[str, str]] = []         # (job_id, project_id) — inline pipelines to -resume
     reaped_targets: list[tuple[str, str]] = []  # (job_id, project_id) — settle their deferred turns
@@ -733,6 +762,44 @@ def reconcile_jobs() -> dict:
                 if _is_slurm_params(r["params"]):
                     continue
                 requeued.append((r["created_at"], r["id"], pid))
+            # 3. Orphaned SYNC weft rows: their only finalizer was an in-tool
+            #    waiter that died with the process. The poll loop deliberately
+            #    skips sync rows (must not race a LIVE waiter) — but at boot
+            #    there is no waiter to race, so an untouched sync row would sit
+            #    queued/running forever, or worse, get finalized later by some
+            #    caller holding a stale dict (→ wrong transport branch, a
+            #    fabricated infra failure). Hand rows the substrate accepted to
+            #    the poll loop — it finalizes from the substrate's durable
+            #    state via the transport-correct branch, and the continuation
+            #    tells the agent honestly. Rows that never reached the
+            #    substrate (no task id) have nothing to adopt — reap.
+            for r in c.execute("SELECT id, status, params FROM jobs "
+                               "WHERE status IN ('queued','running')").fetchall():
+                try:
+                    rp = json.loads(r["params"] or "{}")
+                except Exception:  # noqa: BLE001
+                    continue
+                if rp.get("submitter") != "weft" or not rp.get("sync"):
+                    continue
+                if rp.get("weft_id"):
+                    rp["sync"] = False
+                    rp["sync_orphaned"] = True   # provenance: adopted at restart
+                    c.execute("UPDATE jobs SET params=? WHERE id=?",
+                              (json.dumps(rp), r["id"]))
+                    adopted_sync += 1
+                    print(f"[jobs.reconcile] adopted orphaned sync weft job "
+                          f"{r['id']} ({r['status']}) → poll loop finalizes "
+                          f"task {rp['weft_id']}", flush=True)
+                else:
+                    c.execute("UPDATE jobs SET status='failed', "
+                              "error=COALESCE(error,'') || ?, finished_at=? "
+                              "WHERE id=?",
+                              (reap_note + " (sync remote step; never reached "
+                               "the substrate)", now, r["id"]))
+                    reaped += 1
+                    reaped_targets.append((r["id"], pid))
+                    print(f"[jobs.reconcile] reaped orphaned sync weft job "
+                          f"{r['id']} — no substrate task to adopt", flush=True)
             c.commit()
             c.close()
         except sqlite3.Error as e:
@@ -766,6 +833,7 @@ def reconcile_jobs() -> dict:
         "reaped_running": reaped,
         "resumed_inline": len(resumed),
         "requeued_queued": len(requeued) - len(resumed),
+        "adopted_sync_weft": adopted_sync,
         "projects_scanned": n_projects,
         "killed_orphan_procs": killed,
     }
