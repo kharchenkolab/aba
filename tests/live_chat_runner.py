@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from tests.scenarios import Scenario
+from scenarios import Scenario
 
 
 BASE = os.environ.get("ABA_BASE", "http://127.0.0.1:8000")

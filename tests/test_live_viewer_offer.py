@@ -29,8 +29,13 @@ def check(label, cond, detail=""):
 
 
 def _skip(msg):
+    # dual-use gate: a clean exit for script runs, a real SKIP under pytest
+    # (SystemExit at import is an INTERNALERROR that silently kills a whole
+    # `pytest tests/` sweep — and printing the PASSED marker on a skip is a lie)
     print(f"[SKIP] {msg}")
-    print("ALL LIVE-VIEWER-OFFER CHECKS PASSED")
+    if "pytest" in sys.modules:
+        import pytest
+        pytest.skip(msg, allow_module_level=True)
     raise SystemExit(0)
 
 
