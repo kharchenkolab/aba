@@ -49,12 +49,13 @@ def runs_refresh_manifest(rid: str, _pid: str = Depends(require_project)):
 @router.post("/api/runs/{rid}/cancel")
 def run_cancel(rid: str, _pid: str = Depends(require_project)):
     e = _run_or_404(rid)
-    meta = dict(e.get("metadata") or {})
-    run = dict(meta.get("run") or {})
+    run = dict((e.get("metadata") or {}).get("run") or {})
     run["status"] = "cancelled"
     run["finished_at"] = _now()
-    meta["run"] = run
-    return update_entity(rid, metadata=meta)
+    # single-key patch: this threadpool route raced the poll loop's
+    # weft_targets append when it wrote the whole metadata blob back
+    from core.graph.entities import patch_metadata
+    return patch_metadata(rid, {"run": run})
 
 
 class PinOutputRequest(BaseModel):

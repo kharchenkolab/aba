@@ -385,6 +385,44 @@ def update_entity(entity_id: str, **fields) -> Optional[dict]:
     return row
 
 
+def patch_metadata(entity_id: str, updates: dict) -> Optional[dict]:
+    """Atomically set the given TOP-LEVEL metadata keys in one SQL UPDATE
+    (json_set per key), leaving every other key untouched.
+
+    This is the remedy for the metadata lost-update race: the prevalent
+    get_entity → mutate dict → update_entity(metadata=whole_blob) pattern
+    REPLACES the blob, so two concurrent writers to different keys drop each
+    other's write (a poll-loop `weft_targets` append vs a threadpool route's
+    `run` manifest write — either can silently erase the other, aiming
+    retention at nothing). Writers that touch ONE key must use this.
+
+    Values replace the key wholly (json_set — no deep merge, so a rewritten
+    object does not inherit stale subkeys); None REMOVES the key. Returns the
+    fresh row (None if the entity does not exist)."""
+    expr = "COALESCE(metadata, '{}')"
+    args: list = []
+    for k, v in updates.items():
+        if v is None:
+            expr = f"json_remove({expr}, ?)"
+            args.append(f'$."{k}"')
+        else:
+            expr = f"json_set({expr}, ?, json(?))"
+            args += [f'$."{k}"', json.dumps(v)]
+    if not args:
+        return get_entity(entity_id)
+    with _conn() as c:
+        cur = c.execute(
+            f"UPDATE entities SET metadata = {expr}, updated_at = ? WHERE id = ?",
+            [*args, _utcnow(), entity_id])
+        c.commit()
+        if cur.rowcount == 0:
+            return None
+    row = get_entity(entity_id)
+    if row:
+        _emit_upsert(entity_id, row)
+    return row
+
+
 def archive_entity(entity_id: str) -> Optional[dict]:
     """Soft-delete: mark as archived and record deleted_at."""
     # WU-2: hard-reject if 'archived' isn't a declared state for this

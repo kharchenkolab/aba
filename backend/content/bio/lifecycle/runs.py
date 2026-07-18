@@ -60,13 +60,13 @@ def record_weft_target(run_id: Optional[str], target: Optional[str]) -> None:
         ent = get_entity(run_id)
         if not ent:
             return
-        md = dict(ent.get("metadata") or {})
-        targets = list(md.get("weft_targets") or [])
+        targets = list((ent.get("metadata") or {}).get("weft_targets") or [])
         if target in targets:
             return
-        targets.append(target)
-        md["weft_targets"] = targets
-        update_entity(run_id, metadata=md)
+        # patch ONLY this key — a whole-blob write here raced the manifest/
+        # cancel writers and could drop their keys (and vice versa)
+        from core.graph.entities import patch_metadata
+        patch_metadata(run_id, {"weft_targets": targets + [target]})
     except Exception:  # noqa: BLE001 — retention bookkeeping must never break a run
         pass
 
@@ -264,8 +264,8 @@ def close_run(thread_id: str) -> Optional[str]:
     # deferred pin on the live session kernel, settled at the kernel's own stop
     # (we do NOT stop the shared kernel; misc/output_durability.md §6.3).
     _retain_run_outputs(rid, md)
-    md["run_state"] = "closed"
-    update_entity(rid, metadata=md)
+    from core.graph.entities import patch_metadata
+    patch_metadata(rid, {"run_state": "closed"})   # single-key: no blob race
     return rid
 
 
@@ -551,15 +551,10 @@ def _note_retention_alert(run_id: str, run_metadata: dict, msg) -> None:
     if not changed:
         return
     try:
-        ent = get_entity(run_id)
-        if not ent:
+        if not get_entity(run_id):
             return
-        md = dict(ent.get("metadata") or {})
-        if msg:
-            md["retention_alert"] = msg
-        else:
-            md.pop("retention_alert", None)
-        update_entity(run_id, metadata=md)
+        from core.graph.entities import patch_metadata
+        patch_metadata(run_id, {"retention_alert": msg or None})  # None removes
     except Exception:  # noqa: BLE001 — the alert is best-effort bookkeeping
         pass
 
@@ -597,7 +592,8 @@ def set_keep_decision(run_id: str, keep=None, drop=None) -> dict:
     dec["include"] = sorted(set(dec.get("include") or []) | {s.strip() for s in (keep or []) if s and s.strip()})
     dec["exclude"] = sorted(set(dec.get("exclude") or []) | {s.strip() for s in (drop or []) if s and s.strip()})
     md["keep_decision"] = dec
-    update_entity(run_id, metadata=md)
+    from core.graph.entities import patch_metadata
+    patch_metadata(run_id, {"keep_decision": dec})   # single-key: no blob race
     _retain_run_outputs(run_id, md)     # apply now, honoring the merged decision
     try:
         summary = run_durable_view(run_id).get("summary")
@@ -1369,9 +1365,12 @@ def materialize_run_from_ambient(thread_id: str, title: str) -> Optional[str]:
         return None
     md = dict(ent.get("metadata") or {})
     # Whether ambient or already-named, we update the title; the meaningful
-    # state change is removing the `ambient` flag.
-    was_ambient = bool(md.pop("ambient", False))
-    update_entity(rid, title=(title or "Analysis run").strip()[:120], metadata=md)
+    # state change is removing the `ambient` flag (patched as a single key —
+    # a whole-blob write here raced the poll loop's weft_targets append).
+    was_ambient = bool(md.get("ambient", False))
+    update_entity(rid, title=(title or "Analysis run").strip()[:120])
+    from core.graph.entities import patch_metadata
+    patch_metadata(rid, {"ambient": None})
     if was_ambient:
         _log.info("materialize_run_from_ambient: promoted ambient %s for thread %s",
                   rid, thread_id)
@@ -1570,15 +1569,17 @@ def refresh_output_manifest(run_id: str, *, plot_urls_by_name: Optional[dict] = 
         figs = [o for o in outputs if o["kind"] == "figure"]
         rest = [o for o in outputs if o["kind"] != "figure"]
         outputs = (figs + rest)[:_MANIFEST_CAP]
-    meta = dict(ent.get("metadata") or {})
-    run_meta = dict(meta.get("run") or {})
+    run_meta = dict((ent.get("metadata") or {}).get("run") or {})
     run_meta["outputs"] = outputs
     if bulk:
         run_meta["bulk"] = bulk
     else:
         run_meta.pop("bulk", None)
-    meta["run"] = run_meta
-    update_entity(run_id, metadata=meta)
+    # patch ONLY `run` — this writer runs from the poll loop, turn-end AND a
+    # threadpool route concurrently; the whole-blob write dropped keys other
+    # writers (weft_targets, retention_alert) had just written
+    from core.graph.entities import patch_metadata
+    patch_metadata(run_id, {"run": run_meta})
 
 
 def append_run_code(run_id: str, code: str) -> None:

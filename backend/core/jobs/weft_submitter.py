@@ -421,15 +421,16 @@ class WeftSubmitter:
         if not run_id:
             return
         try:
-            from core.graph.entities import get_entity, update_entity
+            from core.graph.entities import get_entity, patch_metadata
             ent = get_entity(run_id)
             if not ent:
                 return
             md = dict(ent.get("metadata") or {})
             tgts = [t for t in (md.get("weft_targets") or []) if t != replace]
             if new_wid not in tgts:
-                md["weft_targets"] = tgts + [new_wid]
-                update_entity(run_id, metadata=md)
+                # single-key patch — the whole-blob write raced the manifest/
+                # cancel writers on the same Run (documented lost-update)
+                patch_metadata(run_id, {"weft_targets": tgts + [new_wid]})
         except Exception:  # noqa: BLE001 — panel misses the target, job unaffected
             pass
 
