@@ -81,6 +81,42 @@ def _weft_setup_code(lang: str, remote: bool = False) -> str:
             + _j._harvest_helpers_py())
 
 
+def _slurm_time_s(t: str) -> int | None:
+    """'H:MM:SS' / 'D-HH:MM:SS' / 'MM:SS' → seconds; None if unparseable."""
+    try:
+        d, rest = t.split("-", 1) if "-" in t else (None, t)
+        seg = [int(x) for x in rest.split(":")]
+        sec = (seg[0] * 3600 + seg[1] * 60 + seg[2] if len(seg) == 3
+               else seg[0] * 60 + seg[1] if len(seg) == 2 else seg[0] * 60)
+        return sec + (int(d) * 86400 if d else 0)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _fit_walltime(e) -> str | None:
+    """A walltime that fits the site's partitions, out of a
+    site.capability_violation's hints — the PartitionTimeLimit fence for
+    interactive kernels (a capped partition refuses the default 8h hold).
+    Returns the ROOMIEST partition cap as H:MM:SS, or None when walltime
+    was not the problem (nothing to clamp) or no cap would help."""
+    if getattr(e, "code", "") != "site.capability_violation":
+        return None
+    hints = getattr(e, "hints", None) or {}
+    pinfo = hints.get("partitions") or {}
+    parts = pinfo.get("available") or []
+    caps = [s for s in (_slurm_time_s(str(p.get("max_walltime") or ""))
+                        for p in parts) if s]
+    if not caps:
+        return None
+    best = max(caps)
+    asked = _slurm_time_s(str((pinfo.get("asked") or {}).get("walltime")
+                              or ""))
+    if asked is not None and asked <= best:
+        return None      # walltime already fits — the violation is elsewhere
+    h, rem = divmod(best, 3600)
+    return f"{h:02d}:{rem // 60:02d}:{rem % 60:02d}"
+
+
 def for_pool(scope_key: str, lang: str, *, cwd: str, env_name: str | None,
              site: str = _LOCAL_SITE):
     """Build a WeftKernelSession for the pool, or return None to fall back to the
@@ -131,14 +167,29 @@ def for_pool(scope_key: str, lang: str, *, cwd: str, env_name: str | None,
             # ran while the session lane failed and fell back).
             from core.jobs.weft_submitter import _mismatch_platform
             plat = _mismatch_platform(e)
-            if not plat:
-                raise
-            if env_name:
-                relock = named_envs.ensure_platform(pid, env_name, plat)
-            else:
-                from core.compute import base_env
-                relock = base_env.ensure_platform(lang, plat)
-            return _start(relock["env_id"])
+            if plat:
+                if env_name:
+                    relock = named_envs.ensure_platform(pid, env_name, plat)
+                else:
+                    from core.compute import base_env
+                    relock = base_env.ensure_platform(lang, plat)
+                env_id = relock["env_id"]
+                try:
+                    return _start(env_id)
+                except ComputeError as e2:
+                    e = e2             # may now hit the walltime fence below
+            # PartitionTimeLimit fence: the default 8h interactive walltime
+            # exceeds a capped partition's max (weft refuses rather than
+            # queue forever). Clamp to the roomiest partition cap and retry
+            # once — weft's own suggestion (short walltimes + restart).
+            wall = _fit_walltime(e)
+            if wall:
+                named_envs.ensure_ready(env_id, language=lang, site=site)
+                return WeftKernelSession(scope_key, lang, env_id=env_id,
+                                         site=site, setup_code=setup,
+                                         walltime=wall,
+                                         label=f"aba:{scope_key}")
+            raise
     if not env_name:
         # Default lane (W-K1b): attach to the project's LIVE session so an
         # ensure_capability (session_install) is visible to the running kernel with

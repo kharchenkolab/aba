@@ -54,6 +54,7 @@ class FakeWeft:
         self.sandbox: dict[str, bytes] = {}     # rel -> content
         self._mtime = 100.0
         self.fail_start = False
+        self.walltime_cap = None      # slurm-style cap, e.g. "1:00:00"
         self._block = 0
         self._block_out: dict[int, str] = {}
 
@@ -61,6 +62,22 @@ class FakeWeft:
         if name == "kernel_start":
             if self.fail_start:
                 raise RuntimeError("site unreachable")
+            if self.walltime_cap is not None:
+                from core.compute.errors import ComputeError
+                asked = kw.get("walltime") or ""
+                import core.exec.kernels.weft as _wk
+                if (_wk._slurm_time_s(asked) or 0) > \
+                        _wk._slurm_time_s(self.walltime_cap):
+                    raise ComputeError(
+                        "site.capability_violation",
+                        "kernel ask exceeds what hpc offers "
+                        "(it would queue forever)", stage="submit",
+                        hints={"partitions": {
+                            "asked": {"walltime": asked},
+                            "available": [
+                                {"name": "standard",
+                                 "max_walltime": self.walltime_cap},
+                                {"name": "short", "max_walltime": "1:00"}]}})
             self.kernel_starts.append({"site": a[0], "lang": a[1], **kw})
             return {"kernel_id": "krn_test1"}
         if name == "kernel_exec":
@@ -114,7 +131,8 @@ class _FakeCompute:
     def env_status(self, env_id):
         # remote pre-realization check (kernel_start refuses an env not
         # realized on its site): report ready-on-site so no realize task runs
-        return {"realizations": [{"site": "mendel", "state": "ready"}]}
+        return {"realizations": [{"site": "mendel", "state": "ready"},
+                                 {"site": "hpc", "state": "ready"}]}
 
 
 # patch the compute port at its sources (call-time imports)
@@ -272,6 +290,26 @@ def test_snapshot_platform_mismatch_relocks_base_pack():
         ne.ensure_ready = orig_ready
         if orig_plat is not None:
             base_env.ensure_platform = orig_plat
+
+
+def test_walltime_clamped_to_partition_cap():
+    """Capped partitions (PartitionTimeLimit fence): kernel_start refusing
+    the default 8h ask must trigger ONE retry clamped to the roomiest
+    partition cap — an interactive session on a capped cluster starts
+    instead of falling back to one-shot (found live: 1h-capped fixture)."""
+    FAKE.walltime_cap = "1:00:00"
+    try:
+        pool = poolm.KernelPool()
+        s = pool.get_or_start("thr_wall@hpc", "python", cwd=_TMP,
+                              env_name=None, site="hpc")
+        check("session started after walltime clamp",
+              type(s).__name__ == "WeftKernelSession", type(s).__name__)
+        check("clamped walltime equals the partition cap",
+              FAKE.kernel_starts[-1].get("walltime") == "01:00:00",
+              str(FAKE.kernel_starts[-1]))
+        s.shutdown()
+    finally:
+        FAKE.walltime_cap = None
 
 
 def _run():
