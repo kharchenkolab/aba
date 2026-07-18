@@ -72,7 +72,7 @@ def test_tools_registered():
     register_compute_sites_tools(mcp)
     names = {t.name for t in asyncio.run(mcp.list_tools())}
     assert names == {"list_compute_sites", "probe_compute_site",
-                     "connect_compute_site"}
+                     "connect_compute_site", "data_safety_summary"}
 
 
 def test_list_merges_aba_keys(tools):

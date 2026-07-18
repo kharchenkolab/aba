@@ -58,6 +58,20 @@ def test_set_keep_decision_persists_and_applies(monkeypatch):
     monkeypatch.setattr(runsmod, "get_entity", lambda rid: store.get(rid))
     monkeypatch.setattr(runsmod, "update_entity",
                         lambda rid, **kw: store[rid].update(kw) or store[rid])
+    # set_keep_decision now writes via the atomic single-key patch_metadata
+    # (imported fresh from core.graph.entities each call), so the fake store
+    # must honor that path — mirror its per-key semantics (None removes a key).
+    import core.graph.entities as entmod
+
+    def _fake_patch_metadata(rid, updates):
+        md = store[rid].setdefault("metadata", {})
+        for k, v in updates.items():
+            if v is None:
+                md.pop(k, None)
+            else:
+                md[k] = v
+        return store[rid]
+    monkeypatch.setattr(entmod, "patch_metadata", _fake_patch_metadata)
     monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [
         {"original_name": "umap.png"},
         {"original_name": "big.h5ad"},
