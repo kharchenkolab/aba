@@ -136,11 +136,26 @@ def declared_compute_sites() -> list[dict]:
 
 
 def _walltime(timeout_s: int) -> str:
-    """Explicit walltime from the job's timeout ceiling (doctrine: size
-    walltime explicitly — an unspecified ask hits site defaults, an over-cap
-    ask is REFUSED upfront by weft instead of pending forever)."""
+    """HH:MM:SS from a seconds ceiling — a FORMATTER only; the policy for
+    when to ask lives in _sized_walltime (one rule, every transport)."""
     t = max(60, int(timeout_s))
     return f"{t // 3600:02d}:{(t % 3600) // 60:02d}:{t % 60:02d}"
+
+
+def _sized_walltime(kind: str, est: Optional[dict], timeout_s: int) -> Optional[str]:
+    """The ONE walltime policy for every transport (shared-fs and detached):
+    ask an explicit walltime only for a job the agent actually SIZED
+    (estimate given) — its timeout ceiling + 300s staging grace. An unsized
+    ask inflated from a DEFAULT timeout pends forever on sites whose
+    partition cap is below it (PartitionTimeLimit — verified live on a
+    1h-cap fixture; weft ACCEPTS the over-cap ask at submit instead of
+    refusing, a recorded weft follow-up), so unsized jobs take the partition
+    default, which runs. A nextflow HEAD is sized BY DESIGN — its timeout_s
+    IS the chosen head walltime (an overrun is a Slurm kill → auto-resume) —
+    so it always asks."""
+    if kind == "run_nextflow" or float((est or {}).get("runtime_min") or 0) > 0:
+        return _walltime(timeout_s + 300)
+    return None
 
 
 class WeftSubmitter:
@@ -225,10 +240,9 @@ class WeftSubmitter:
         if est.get("gpu"):
             resources["gpus"] = 1
         if self.site != "local":
-            # Scheduler sites get an explicit walltime (timeout ceiling + grace
-            # for staging); weft refuses an over-cap ask upfront and its
-            # placement picks the partition from the resource shape.
-            resources["walltime"] = _walltime(timeout_s + 900)
+            wt = _sized_walltime(kind, est, timeout_s)
+            if wt:
+                resources["walltime"] = wt
         task = {
             # The command bootstraps with the ABA controller python (`sys.executable`,
             # an absolute path valid on every node via the deployment's shared FS) so
@@ -325,14 +339,10 @@ class WeftSubmitter:
         if est.get("gpu"):
             resources["gpus"] = 1
         site = site or self.site
-        if self._site_kind(site) == "slurm" and float(est.get("runtime_min") or 0) > 0:
-            # Explicit walltime ONLY for a job the agent actually SIZED. An
-            # unsized ask inflated from the default timeout pends FOREVER on
-            # sites whose partition cap is below it (PartitionTimeLimit —
-            # verified live on the 1h-cap fixture); omitting lets the
-            # partition default apply, which runs. Weft doesn't refuse the
-            # over-cap ask upfront (noted as a weft follow-up).
-            resources["walltime"] = _walltime(timeout_s + 300)
+        if self._site_kind(site) == "slurm":
+            wt = _sized_walltime(kind, est, timeout_s)
+            if wt:
+                resources["walltime"] = wt
         task = {
             # `python3` resolves from PATH — the activated env's prefix when
             # env= rides along (weft mounts it first), else the node system.

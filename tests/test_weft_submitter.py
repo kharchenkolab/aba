@@ -104,9 +104,10 @@ def test_reconcile_leaves_weft_jobs_alone():
 @pytest.mark.skipif(not weft_ok, reason="weft substrate unavailable")
 def test_slurm_site_maps_estimate_to_weft_resources(monkeypatch):
     """The weft SLURM lane maps a job estimate → the weft task's `resources`
-    (cpus/mem_gb/gpus, plus a walltime CEILING for scheduler sites — weft's
-    placement then picks the partition). This is the coverage that replaces
-    SlurmSubmitter's sbatch resource directives, so it's pinned here."""
+    (cpus/mem_gb/gpus, plus a walltime ceiling for a SIZED job — the
+    sized-only rule; weft's placement then picks the partition). This is the
+    coverage that replaces SlurmSubmitter's sbatch resource directives, so
+    it's pinned here."""
     import core.jobs.weft_submitter as ws
     import core.graph.jobs as gjobs
     pid = projects.create_project("wslurmres")["id"]
@@ -119,17 +120,21 @@ def test_slurm_site_maps_estimate_to_weft_resources(monkeypatch):
             return {"job_id": "jb_res"}
     monkeypatch.setattr(ws, "_adapter", lambda: _Cap())
     monkeypatch.setattr(gjobs, "update_job", lambda *a, **k: None)
+    # this test pins the SHARED-FS lane's mapping; 'hpc' is not in the test
+    # deployment's yaml, and an undeclared site now routes DETACHED
+    monkeypatch.setattr(ws, "site_contract", lambda s: "shared-fs")
 
     job = {"id": "job_res1", "kind": "run_python", "title": "res map",
            "params": {"code": "print(1)", "env": "x",   # env set → skip default-env resolution
                       "run_id": "run_res1", "project_id": pid,
-                      "estimate": {"cores": 4, "mem_gb": 16, "gpu": True},
+                      "estimate": {"cores": 4, "mem_gb": 16, "gpu": True,
+                                   "runtime_min": 30},   # SIZED → asks walltime
                       "timeout_s": 3600}}
-    # scheduler site → cpus/mem/gpus + a walltime ceiling
+    # scheduler site → cpus/mem/gpus + the sized job's walltime ceiling
     ws.WeftSubmitter(site="hpc").submit(job)
     r = captured["task"]["resources"]
     assert r["cpus"] == 4 and r["mem_gb"] == 16 and r["gpus"] == 1, r
-    assert "walltime" in r and r["walltime"], r
+    assert r.get("walltime") == "01:05:00", r          # 3600s + 300 grace
     assert captured["task"]["site"] == "hpc"
     # local site → same cpu/mem/gpu but NO walltime (no scheduler to bound it)
     captured.clear()

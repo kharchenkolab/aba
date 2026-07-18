@@ -40,7 +40,9 @@ from core.compute.errors import ComputeError  # noqa: E402
 
 _SITES = [{"name": "far", "kind": "ssh", "config": {"host": "far.example"}},
           {"name": "hpc", "kind": "slurm",
-           "config": {"host": "127.0.0.1", "port": 22}}]
+           "config": {"host": "127.0.0.1", "port": 22}},
+          # host-less declared slurm site ⇒ SHARED-FS contract (fast path)
+          {"name": "cluster", "kind": "slurm", "config": {}}]
 
 
 class _FakeComp:
@@ -167,6 +169,42 @@ def test_detached_slurm_walltime_only_when_sized(monkeypatch):
     ws.WeftSubmitter(site="hpc").submit(job)
     task2 = [c for c in comp2.calls if c[0] == "task_submit"][0][1][0]
     assert task2["resources"]["walltime"] == "00:15:00"   # 600s + 300 grace
+
+
+def test_sharedfs_walltime_only_when_sized(monkeypatch):
+    """The sized-only walltime rule is ONE policy across BOTH transports: the
+    shared-fs lane's unconditional timeout+900 ask reproduced the exact
+    PartitionTimeLimit eternal pend the detached lane fixed. Nextflow heads
+    stay sized BY DESIGN — their timeout IS the chosen head walltime (a
+    walltime kill auto-resumes)."""
+    comp = _FakeComp()
+    monkeypatch.setattr(ws, "_adapter", lambda: comp)
+    job = create_job(job_id="job_sfs_w", kind="run_python", title="t",
+                     focus_entity_id=None, project_id="default",
+                     params={"code": "x=1", "timeout_s": 3600,
+                             "project_id": "default", "estimate": {"cores": 1}})
+    ws.WeftSubmitter(site="cluster").submit(job)
+    task = [c for c in comp.calls if c[0] == "task_submit"][0][1][0]
+    assert "walltime" not in task["resources"]      # unsized → partition default
+    comp2 = _FakeComp()
+    monkeypatch.setattr(ws, "_adapter", lambda: comp2)
+    job2 = create_job(job_id="job_sfs_w2", kind="run_python", title="t",
+                      focus_entity_id=None, project_id="default",
+                      params={"code": "x=1", "timeout_s": 600,
+                              "project_id": "default",
+                              "estimate": {"cores": 1, "runtime_min": 5}})
+    ws.WeftSubmitter(site="cluster").submit(job2)
+    task2 = [c for c in comp2.calls if c[0] == "task_submit"][0][1][0]
+    assert task2["resources"]["walltime"] == "00:15:00"     # 600s + 300 grace
+    comp3 = _FakeComp()
+    monkeypatch.setattr(ws, "_adapter", lambda: comp3)
+    job3 = create_job(job_id="job_sfs_w3", kind="run_nextflow", title="t",
+                      focus_entity_id=None, project_id="default",
+                      params={"code": "nextflow run demo", "timeout_s": 7200,
+                              "project_id": "default", "estimate": {}})
+    ws.WeftSubmitter(site="cluster").submit(job3)
+    task3 = [c for c in comp3.calls if c[0] == "task_submit"][0][1][0]
+    assert task3["resources"]["walltime"] == "02:05:00"     # head keeps its ask
 
 
 def test_platform_mismatch_relocks_once_and_retries(monkeypatch):
@@ -513,6 +551,7 @@ def _standalone() -> int:
     for t in (test_detached_submit_ships_code_as_data,
               test_harness_enforces_timeout,
               test_detached_slurm_walltime_only_when_sized,
+              test_sharedfs_walltime_only_when_sized,
               test_platform_mismatch_relocks_once_and_retries,
               test_detached_poll_fetches_results_over_data_plane,
               test_poll_side_platform_relock_resubmits,

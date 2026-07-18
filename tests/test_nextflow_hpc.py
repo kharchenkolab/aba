@@ -267,7 +267,7 @@ def test_describe_pipeline(monkeypatch):
 
 
 # ── provenance: the kind:workflow exec record ─────────────────────────────────
-def test_workflow_exec_record_written():
+def test_workflow_exec_record_written(tmp_path):
     from core import projects
     from core.jobs.runner import _write_workflow_exec_record_for_job
     projects.init()
@@ -275,7 +275,9 @@ def test_workflow_exec_record_written():
     job = {"id": "job_w", "kind": "run_nextflow", "focus_entity_id": None,
            "params": {"thread_id": "t1", "run_id": "run_w", "code": "nextflow run X"}}
     result_obj = {
-        "returncode": 0, "stdout": "ok", "stderr": "", "cwd": "/scratch/x",
+        # cwd must be WRITABLE — the record sidecar lands under it (a fake
+        # /scratch/x silently failed the best-effort writer on macOS)
+        "returncode": 0, "stdout": "ok", "stderr": "", "cwd": str(tmp_path),
         "plots": [{"url": "/a/u.png", "original_name": "umap.png"}],
         "tables": [], "files": [],
         "workflow": {"engine": {"name": "nextflow", "version": "24.10.6"},
