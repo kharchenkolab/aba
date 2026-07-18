@@ -286,6 +286,10 @@ def test_detached_poll_fetches_results_over_data_plane(monkeypatch):
     assert "big/blob.bin" in rels
     blob = next(f for f in res["files"] if f.get("original_name") == "big/blob.bin")
     assert blob["url"] is None and blob["kind"] == "file"
+    # cwd rides the result — _write_exec_record_for_job returns early
+    # WITHOUT it, so a background detached job got NO exec record at all
+    # (and the durable view rendered an empty card for a kept remote file)
+    assert res["cwd"]
 
 
 def test_poll_side_platform_relock_resubmits(monkeypatch):

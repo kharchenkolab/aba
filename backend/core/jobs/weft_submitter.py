@@ -587,6 +587,11 @@ class WeftSubmitter:
             if node.get("runtime"):
                 comp["runtime"] = node["runtime"]
         res.setdefault("compute", comp)
+        # cwd is what _write_exec_record_for_job KEYS ON (no cwd → silent
+        # early return → no exec record → no produced rows → the durable view
+        # renders NOTHING for a detached background job, kept files included;
+        # the sync path fixed this, the background sibling didn't)
+        res["cwd"] = str(run_dir)
         return res
 
     # ── cancel ───────────────────────────────────────────────────────────
