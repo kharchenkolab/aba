@@ -156,8 +156,20 @@ def register_jobs_tools(mcp: FastMCP) -> None:
                     f"{s['name']} ({s.get('kind')}"
                     + (f", {s['cpus']} cores" if s.get("cpus") else "")
                     + ")" for s in remotes)
-        except Exception:  # noqa: BLE001 — no substrate → no remote section
-            pass
+        except Exception:  # noqa: BLE001
+            # substrate CONFIGURED but unreachable → say so; silence would
+            # read as "no remote machines exist" (outage-honesty review). A
+            # weft-less deployment stays quiet — nothing is being hidden.
+            try:
+                from core.compute import adapter as _ad
+                if _ad.status().get("ok"):
+                    e["remote_sites_note"] = (
+                        "compute substrate unreachable — remote machines are "
+                        "temporarily unavailable (do not conclude none exist)")
+                    e["summary"] += " NOTE: remote machines temporarily " \
+                                    "unavailable (substrate unreachable)."
+            except Exception:  # noqa: BLE001
+                pass
         if e.get("partitions"):
             e["summary"] += f" Slurm partitions ({e.get('partitions_source')}): " + "; ".join(
                 f"{p['partition']} (≤{p.get('cpus_per_node', '?')} cores/node"
