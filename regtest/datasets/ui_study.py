@@ -398,11 +398,17 @@ def ui_remote_run_badges(page, api, pid, tid):
                 break
         shot(page, "run_card_after_bringback")
         # POSITIVE evidence, not just disappearance (recheck finding: the line
-        # also vanishes if the card unmounts/errors): the flat view's row now
-        # serves local bytes (a url), instead of the url-less remote-only row
-        dv = api.get(f"/api/runs/{rid}/durable?flat=1").json()
-        brought_bytes = any(f.get("url") and "big.bin" in (f.get("name") or f.get("path") or "")
-                            for f in dv.get("files", []))
+        # also vanishes if the card unmounts/errors): the brought-back BYTES
+        # exist on this machine's disk. (The flat row's `url` is only minted
+        # for small artifact-store copies — a 60 MB file never gets one, so
+        # disk truth is the honest probe; first live round tripped on that.)
+        import glob as _glob
+        import os as _os
+        roots = [str(getattr(study, "_tmp", "") or "")]
+        brought_bytes = any(
+            _os.path.getsize(p) >= 50 * 1024 * 1024
+            for r in roots if r
+            for p in _glob.glob(r + "/**/big.bin", recursive=True))
     return [("run created", True),
             ("durable view records the kept remote file", kept_remote),
             ("NODE-level truth: kept bytes exist on hpc (ssh stat)", node_truth),
