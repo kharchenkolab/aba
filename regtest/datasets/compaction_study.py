@@ -16,12 +16,13 @@ import os
 import sys
 from pathlib import Path
 
-# MUST precede the backend import chain — core.config freezes these at import.
-# Shrink ONLY the Tier-2 trigger: the K-windows stay at defaults so a short
+# Shrink ONLY the Tier-2 trigger; K-windows stay at defaults so a short
 # thread's history is NOT pruned first (shrunken K left the pruned history
 # under any threshold and Tier-2 could never fire — first-run finding, caught
-# by the vacuity guard). Tier-2 also requires len(messages) > TAIL_KEEP+2
-# (=22), hence the filler-turn count below.
+# by the vacuity guard). NOTE: the global env knob is INERT for the primary
+# agent — grounded_guide.yaml pins summary_budget_chars: 100000 and the spec
+# wins (second-run finding; logged in the ledger as a doc/priority wart) —
+# so main() also shrinks the LOADED spec in-process below.
 os.environ.setdefault("ABA_HISTORY_SUMMARY_THRESHOLD_CHARS", "6000")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -62,6 +63,8 @@ def compaction_survival(client, pid, tid):
         c.close()
     except sqlite3.Error:
         n_sum = 0
+    from core.summarize.budget_summary import tier2_diag
+    print(f"    [tier2 diag] {tier2_diag()}")
     return caps, [
         ("Tier-2 compaction actually FIRED (thread_summaries row exists)",
          n_sum > 0),
@@ -99,6 +102,18 @@ def main() -> None:
     from core.compute import adapter as ad
     st = ad.configure()
     assert st["ok"], st["detail"]
+    # the primary spec's summary_budget_chars OVERRIDES the global env knob —
+    # shrink the loaded spec itself so Tier-2 fires within this short study
+    from core.runtime.agent import get_agent_spec, resolve_primary_spec_name
+    sp = get_agent_spec(resolve_primary_spec_name())
+    if sp is not None:
+        try:
+            sp.summary_budget_chars = 6000
+            sp.summary_tail_keep = 10
+        except Exception:  # noqa: BLE001 — frozen dataclass
+            object.__setattr__(sp, "summary_budget_chars", 6000)
+            object.__setattr__(sp, "summary_tail_keep", 10)
+        print("[compact] primary spec summary budget shrunk to 6000 chars")
     from fastapi.testclient import TestClient
     from main import app
     with TestClient(app) as client:
