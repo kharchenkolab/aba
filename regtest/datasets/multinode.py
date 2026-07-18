@@ -1217,6 +1217,77 @@ def mn_first_use(client, pid, tid):
     ]
 
 
+@scenario("mn_cbe_kernel")
+def mn_cbe_kernel(client, pid, tid):
+    """Interactive SESSION on the real cluster: two sequential direct steps
+    on cbe sharing in-memory state through the persistent remote kernel —
+    against real partition caps (the walltime clamp's target environment)
+    and the honest first-use cost (the env realizes on the cluster once).
+    The state hand-off is the point: step 2 must NOT recompute."""
+    if not CBE_OK:
+        return [], [("cbe.next available (scenario skipped otherwise)", False)]
+    expected = str(sum((i * 13) % 7 for i in range(1, 50001)))
+    caps = [drive_turn(client, pid, tid,
+        "On machine 'cbe', run two quick steps IN SEQUENCE, each directly "
+        "(not background): (1) compute x = the sum of (i*13) mod 7 for i "
+        "from 1 to 50000, keep x in memory, and print STEP1-OK; "
+        "(2) WITHOUT recomputing anything — reuse x from step 1's memory — "
+        "print exactly CBEKR=<x>. Then tell me the value.",
+        timeout_s=1800)]
+    steps = [t for t in tools_named(caps, "run_python")
+             if t["input"].get("site") == "cbe"]
+    session_used = any((t.get("result") or {}).get("execution_mode")
+                       == "remote-session" for t in steps)
+    txt = _denum(all_text(caps) + "\n" + agent_text(client, pid, tid))
+    return caps, [
+        ("two direct steps ran on cbe", len(steps) >= 2),
+        ("persistent session actually used on the REAL cluster",
+         session_used),
+        ("true value handed across steps", f"CBEKR={expected}" in
+         txt.replace(" ", "") or _denum(expected) in txt),
+    ]
+
+
+@scenario("mn_cbe_gpu")
+def mn_cbe_gpu(client, pid, tid):
+    """GPU ROUTING on the real cluster: a GPU-flagged step must carry the
+    gpu resource so weft lands it on the g partition (1 node). Routing is
+    the claim — the job may legitimately PEND if the node is busy, so
+    scheduler truth accepts running/completed/pending ON PARTITION g."""
+    if not CBE_OK:
+        return [], [("cbe.next available (scenario skipped otherwise)", False)]
+
+    def _jobs_on_g():
+        out = cssh("squeue -u peter.kharchenko -h -o '%i %P'; "
+                   "sacct -u peter.kharchenko -S now-1hours --noheader "
+                   "-X -o JobID,Partition 2>/dev/null")
+        return [ln for ln in (out.stdout or "").splitlines()
+                if ln.strip().endswith(" g") or ln.strip().endswith("\tg")
+                or (len(ln.split()) == 2 and ln.split()[1] == "g")]
+    pre = set(_jobs_on_g())
+    caps = [drive_turn(client, pid, tid,
+        "On machine 'cbe', run a BACKGROUND job that needs ONE GPU (flag it "
+        "as a GPU workload, estimate ~2 minutes): it should just print the "
+        "node's hostname. Use the node's own system python (env 'system'). "
+        "Tell me once it's submitted — no need to wait for the result.",
+        timeout_s=900)]
+    bg = [t for t in tools_named(caps, "run_python")
+          if t["input"].get("site") == "cbe" and t["input"].get("background")]
+    gpu_asked = any(int(t["input"].get("est_gpu") or 0) >= 1 for t in bg)
+    routed = False
+    t0 = time.time()
+    while time.time() - t0 < 120 and not routed:
+        routed = len(set(_jobs_on_g()) - pre) > 0
+        if not routed:
+            time.sleep(10)
+    wait_jobs_settled(client, pid, timeout_s=300)   # let it finish/cancel
+    return caps, [
+        ("background job submitted on cbe", bool(bg)),
+        ("the step was flagged as a GPU workload (est_gpu)", gpu_asked),
+        ("REAL scheduler truth: a new job on partition g", routed),
+    ]
+
+
 @scenario("mn_missing_then_recover")
 def mn_missing_then_recover(client, pid, tid):
     """BAD-INPUTS on a remote (release_test_plan): the user's path has a typo
@@ -1385,7 +1456,8 @@ def main():
     # Only probed when the smoke is actually selected — the probe costs ~5s
     # of jump-host latency every run otherwise.
     global CBE_OK
-    if (only is None or "mn_cbe_smoke" in only):
+    if (only is None or only & {"mn_cbe_smoke", "mn_cbe_kernel",
+                                "mn_cbe_gpu"}):
         if cssh("echo ok").stdout.strip() == "ok":
             try:
                 r = c.sync_call("register_site", "cbe", "slurm",
@@ -1416,7 +1488,7 @@ def main():
                   mn_cross_thread_separation, mn_mid_chain_steering,
                   mn_repeat_sync, mn_interrupt_sync, mn_first_use,
                   mn_cbe_smoke, mn_missing_then_recover,
-                  mn_bundle_header_drift]]
+                  mn_bundle_header_drift, mn_cbe_kernel, mn_cbe_gpu]]
     # --only must NAME REAL scenarios: an unmatched filter ran ZERO scenarios
     # and printed ALL PASS vacuously (the exact bug class this study hunts)
     if only:
