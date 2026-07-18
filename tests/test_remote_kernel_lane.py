@@ -121,6 +121,7 @@ class _FakeCompute:
 import core.compute.adapter as adapter  # noqa: E402
 
 adapter.get_compute = lambda: _FakeCompute()
+adapter.run_sync = lambda v: v          # fake port methods return plain values
 
 # frozen-env identity for the remote lane: avoid real pack machinery
 import core.compute.base_env as base_env  # noqa: E402
