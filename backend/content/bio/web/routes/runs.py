@@ -187,6 +187,16 @@ def run_archive(rid: str):
     view = run_durable_view(rid)
     if not view["files"]:
         raise HTTPException(404, "run has no recorded output files")
+    # the zip is assembled IN MEMORY — refuse past the fetch guardrail rather
+    # than OOM the controller (the sibling read routes are capped; this
+    # aggregate route wasn't — limits-parity review)
+    from core.data.datasets import FETCH_GUARDRAIL_BYTES
+    total = sum(f.get("bytes") or 0 for f in view["files"]
+                if f.get("state") != "cleared")
+    if total > FETCH_GUARDRAIL_BYTES:
+        raise HTTPException(413, f"outputs total {total / 1e9:.1f} GB — too "
+                                 f"large for a single archive; download files "
+                                 f"selectively instead")
     buf = io.BytesIO()
     skipped: list[str] = []
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -252,12 +262,13 @@ def run_keep(rid: str, body: _KeepBody):
 
 
 @router.post("/api/runs/{rid}/bring-back")
-def run_bring_back(rid: str):
+def run_bring_back(rid: str, force: bool = False):
     """§8e.4: ship this Run's kept files to the workspace (managed local copy).
-    Location axis only — keeps stay kept where they live."""
+    Location axis only — keeps stay kept where they live. `force=true` waives
+    the size guardrail (never a silent multi-GB transfer otherwise)."""
     _run_or_404(rid)
     from content.bio.lifecycle.runs import bring_back_run
-    out = bring_back_run(rid)
+    out = bring_back_run(rid, force=force)
     if out.get("error"):
         raise HTTPException(400, out["error"])
     return out

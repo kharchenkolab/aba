@@ -627,7 +627,7 @@ def set_keep_decision(run_id: str, keep=None, drop=None) -> dict:
     return {"run_id": run_id, "decision": dec, "summary": summary}
 
 
-def bring_back_run(run_id: str) -> dict:
+def bring_back_run(run_id: str, force: bool = False) -> dict:
     """§8e.4 (more_weft_ui.md) bring-back: ship the Run's KEPT files to the
     workspace — a managed local copy. This moves the LOCATION axis only; the
     in-place keeps stay kept where they are (the promise is untouched), weft
@@ -654,6 +654,34 @@ def bring_back_run(run_id: str) -> dict:
             except Exception:  # noqa: BLE001
                 rels = set()
         per_target[t] |= rels
+    # SAME size gate as the ship-home policy (one doctrine: never a silent
+    # multi-GB transfer) — bring-back bypassed it, so one click could pull a
+    # multi-hundred-GB kept store onto the controller (limits-parity review).
+    # `force=True` is the explicit "ship it anyway" lever.
+    from core.compute.adapter import get_compute
+    from core.data.datasets import FETCH_GUARDRAIL_BYTES
+    if not force:
+        total = 0
+        sized = True
+        for t, rels in per_target.items():
+            if not rels:
+                continue
+            try:
+                inv = get_compute().sync_call("run_inventory", t)
+                names = set(rels)
+                total += sum(e.get("bytes", 0)
+                             for e in (inv.get("entries") or inv.get("files") or [])
+                             if isinstance(e, dict)
+                             and (e.get("path") in names
+                                  or (e.get("path") or "").rsplit("/", 1)[-1] in names))
+            except Exception:  # noqa: BLE001 — unknown size reads as "big"
+                sized = False
+        if not sized or total > FETCH_GUARDRAIL_BYTES:
+            size = f"{total / 1e9:.1f} GB" if sized else "an unknown total size"
+            return {"error": f"bring-back is {size} — larger than the "
+                             f"{FETCH_GUARDRAIL_BYTES / 1e9:.0f} GB guardrail. "
+                             f"Bring files back selectively, or pass force=true "
+                             f"to ship everything anyway."}
     requested = 0
     errors: list = []
     for t, rels in per_target.items():

@@ -33,6 +33,16 @@ def _mk(**md) -> str:
     return out if isinstance(out, str) else out["id"]
 
 
+def _inv_adapter(monkeypatch, entries):
+    import core.compute.adapter as admod
+
+    class _Comp:
+        def sync_call(self, name, *a, **kw):
+            assert name == "run_inventory"
+            return {"entries": entries}
+    monkeypatch.setattr(admod, "get_compute", lambda: _Comp())
+
+
 def test_bring_back_ships_kept_selection_to_workspace(monkeypatch):
     rid = _mk(weft_targets=["krn_bb"])
     calls = []
@@ -43,12 +53,36 @@ def test_bring_back_ships_kept_selection_to_workspace(monkeypatch):
     }])
     monkeypatch.setattr(retmod, "retain",
                         lambda t, **kw: calls.append((t, kw)) or {"state": "queued"})
+    _inv_adapter(monkeypatch, [{"path": "out/model.bin", "bytes": 1000},
+                               {"path": "out/table.csv", "bytes": 2000}])
     out = runsmod.bring_back_run(rid)
     assert out["ok"] is True and out["requested"] == 2
     (t, kw), = calls
     assert t == "krn_bb" and kw["dest"] == "@workspace"
     assert sorted(kw["include"]) == ["out/model.bin", "out/table.csv"]
     assert kw["label"] == rid
+
+
+def test_bring_back_refuses_over_guardrail_unless_forced(monkeypatch):
+    """SAME doctrine as ship-home: never a silent multi-GB transfer — one
+    click must not pull a huge kept store onto the controller. force=True is
+    the explicit lever; unknown size reads as big."""
+    from core.data.datasets import FETCH_GUARDRAIL_BYTES
+    rid = _mk(weft_targets=["krn_big"])
+    calls = []
+    monkeypatch.setattr(retmod, "retained", lambda **kw: [{
+        "target": "krn_big", "state": "done", "site": "siteB", "in_place": 1,
+        "location": "/remote/only/runs/y",
+        "selection": json.dumps({"include": ["huge.store"]}),
+    }])
+    monkeypatch.setattr(retmod, "retain",
+                        lambda t, **kw: calls.append((t, kw)) or {"state": "queued"})
+    _inv_adapter(monkeypatch, [{"path": "huge.store",
+                                "bytes": FETCH_GUARDRAIL_BYTES + 1}])
+    out = runsmod.bring_back_run(rid)
+    assert "guardrail" in (out.get("error") or "") and not calls
+    out = runsmod.bring_back_run(rid, force=True)      # explicit override
+    assert out["ok"] is True and calls
 
 
 def test_bring_back_with_nothing_kept_errors(monkeypatch):
