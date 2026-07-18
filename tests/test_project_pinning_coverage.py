@@ -91,6 +91,30 @@ EXEMPT_ENDPOINTS: dict[tuple[str, str], str] = {
     ("/api/run-probe", "POST"): "diagnostic probe — no project ctx",
     ("/api/feedback/client-context", "POST"): "stashes a transient global browser snapshot for bug reports — no project ctx",
     ("/pagoda3-api/agent/stream", "POST"): "co-hosted pagoda3 copilot proxy — uses ABA's global Anthropic credential, not project-scoped",
+    # Compute-site (remote cluster) management — a site is a deployment-wide
+    # connection SHARED across every project, never owned by one, so there is
+    # no project to pin. All mutate the global site registry / SSH trust.
+    ("/api/compute/preflight", "POST"): "site connectivity preflight — global cluster op",
+    ("/api/compute/hostkey", "POST"): "accept a cluster SSH host key — global trust store",
+    ("/api/compute/keysetup", "POST"): "install the cluster access key — global",
+    ("/api/compute/probe", "POST"): "probe a prospective site — global cluster op",
+    ("/api/compute/sites", "POST"): "connect/register a site — global site registry",
+    ("/api/compute/sites/{name}/verify", "POST"): "re-verify a registered site — global",
+    ("/api/compute/sites/{name}/reprobe", "POST"): "re-probe a site's capabilities — global",
+    ("/api/compute/sites/{name}", "PATCH"): "edit a site's connection config — global",
+    ("/api/compute/sites/{name}", "DELETE"): "disconnect a site — global site registry",
+    ("/api/compute/sites/{name}/gc", "POST"): "reclaim a site's disk — global cluster op",
+    # Module (capability pack) lifecycle — deployment-wide, not project-scoped.
+    ("/api/modules/{module_id}/mode", "POST"): "set a module's mode — global module registry",
+    ("/api/modules/{module_id}/enable", "POST"): "enable a module — global",
+    ("/api/modules/{module_id}/disable", "POST"): "disable a module — global",
+    ("/api/modules/{module_id}/retry", "POST"): "retry a module install — global",
+    # Server-wide LLM config + credential setup — not project-scoped
+    # (sibling /api/settings/credential is already exempt above).
+    ("/api/settings/llm", "POST"): "server-wide LLM model config — not project-scoped",
+    ("/api/settings/llm/ping", "POST"): "probe the server LLM credential — not project-scoped",
+    ("/api/settings/credential/oauth/start", "POST"): "begin server OAuth — global credential",
+    ("/api/settings/credential/oauth/submit", "POST"): "complete server OAuth — global credential",
     # Body-sourced pid (handler calls _require_project_context(req.project_id) internally).
     # These don't carry the Depends signature but DO pin — call out one-by-one.
     ("/api/chat", "POST"): "body-sourced pid via _require_project_context(req.project_id)",

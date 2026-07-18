@@ -44,7 +44,7 @@ def _dataset_bytes_and_count(bundle: Path) -> tuple[int, int]:
 
 
 @router.post("/api/datasets/{did}/recheck")
-def dataset_recheck(did: str):
+def dataset_recheck(did: str, _pid: str = Depends(require_project)):
     """§5 drift banner [Re-check]: revalidate the durable home now and record
     the outcome on the entity (source_changed / source_missing + checked_at),
     so the banner and the ledger render from RECORDED state (freshness
@@ -74,7 +74,7 @@ class _RelinkBody(BaseModel):
 
 
 @router.post("/api/datasets/{did}/relink")
-def dataset_relink(did: str, body: _RelinkBody):
+def dataset_relink(did: str, body: _RelinkBody, _pid: str = Depends(require_project)):
     """§5 verified relink ("it moved"): accept ONLY on a content match
     (names+sizes, mtimes excluded — see core.data.datasets.relink). On match:
     the home repoints, the fingerprint refreshes, the move is noted on the

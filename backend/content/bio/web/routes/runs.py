@@ -240,7 +240,7 @@ class _KeepBody(BaseModel):
 
 
 @router.post("/api/runs/{rid}/keep")
-def run_keep(rid: str, body: _KeepBody):
+def run_keep(rid: str, body: _KeepBody, _pid: str = Depends(require_project)):
     """User late-pin (output_durability.md §6.2): durably retain one of the Run's files on
     demand. Recorded as a level-2 keep decision (`metadata.keep_decision.include`) and
     applied through the CUMULATIVE retain (P1) — a bare retain(include=[rel]) would
@@ -262,7 +262,7 @@ def run_keep(rid: str, body: _KeepBody):
 
 
 @router.post("/api/runs/{rid}/bring-back")
-def run_bring_back(rid: str, force: bool = False):
+def run_bring_back(rid: str, force: bool = False, _pid: str = Depends(require_project)):
     """§8e.4: ship this Run's kept files to the workspace (managed local copy).
     Location axis only — keeps stay kept where they live. `force=true` waives
     the size guardrail (never a silent multi-GB transfer otherwise)."""
