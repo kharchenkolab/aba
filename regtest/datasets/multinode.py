@@ -1518,7 +1518,10 @@ def main():
             mout = mssh(f"rm -rf {M_ROOT} {M_DATA} && echo cleaned")
             print("[cleanup] mendel dirs:", mout.stdout.strip() or mout.stderr[-120:])
         if CBE_OK:
-            cout = cssh(f"rm -rf {C_ROOT} && echo cleaned")
+            # a realized env is multi-GB of small files on NFS — a foreground
+            # rm blows the ssh timeout (seen live); detach it on the far side
+            cout = cssh(f"nohup rm -rf {C_ROOT} >/dev/null 2>&1 & "
+                        f"echo cleaning-detached")
             print("[cleanup] cbe dirs:", cout.stdout.strip() or cout.stderr[-120:])
     if not RESULTS:
         sys.exit("[mn] ZERO scenarios ran — refusing to report ALL PASS")
