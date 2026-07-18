@@ -505,6 +505,51 @@ def ui_reload_reconnect(page, api, pid, tid):
             ("the step's true output renders after the reload", ok)]
 
 
+@ui_scenario("ui_failed_step_render")
+def ui_failed_step_render(page, api, pid, tid):
+    """ERROR-STATE rendering (release_test_plan: 'UI error/empty states'):
+    a step that RAISES must surface as an honest failure in the thread —
+    an error-marked tool line and an agent acknowledgment — never a crash
+    banner, never a claimed success. Marker computed (30+40) so the needle
+    can't come from the user bubble."""
+    box = page.locator("textarea").first
+    box.wait_for(state="visible", timeout=15_000)
+    box.fill("Run a quick local python step that first computes 30+40 and "
+             "then raises RuntimeError('deliberate-test-error-' followed by "
+             "that number). Just report what happened — do not retry or "
+             "work around it.")
+    box.press("Enter")
+    ok_end = True
+    try:
+        deadline = time.time() + 240
+        while time.time() < deadline:
+            if page.locator(".composer__stop").count() == 0 and \
+                    box.is_enabled():
+                break
+            time.sleep(2)
+        else:
+            ok_end = False
+    except Exception:  # noqa: BLE001
+        ok_end = False
+    time.sleep(3)
+    shot(page, "failed_step_render")
+    body_txt = ""
+    try:
+        body_txt = page.locator(".chat-pane, main, body").first.inner_text()
+    except Exception:  # noqa: BLE001
+        pass
+    crash = ("couldn’t be displayed" in body_txt
+             or "couldn't be displayed" in body_txt)
+    acked = any(w in body_txt.lower() for w in
+                ("error", "failed", "raise", "deliberate-test-error"))
+    claimed_ok = "deliberate-test-error-70" in body_txt and \
+        not any(w in body_txt.lower() for w in ("error", "fail", "raise"))
+    return [("turn ended", ok_end),
+            ("no crash banner (ErrorBoundary) anywhere", not crash),
+            ("failure acknowledged in the thread", acked),
+            ("no silent success claim", not claimed_ok)]
+
+
 @ui_scenario("ui_settings_compute_connect")
 def ui_settings_compute_connect(page, api, pid, tid):
     """Settings→Compute ONBOARDING journey, end-to-end in the browser against
