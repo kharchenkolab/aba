@@ -1033,8 +1033,12 @@ def _active_weft_jobs() -> list[dict]:
     from core import projects as _projects
     if _projects.SINGLE:
         try:
-            from core.graph._schema import _conn
-            c = _conn()
+            # own read-only connection to the flat DB (same pattern as
+            # reconcile_jobs) — core/graph's _conn() is store-internal and
+            # off-limits outside core/graph (store-port invariant)
+            from core.config import settings as _settings
+            c = sqlite3.connect(str(_settings.db_path.get()))
+            c.row_factory = sqlite3.Row
             for r in c.execute("SELECT * FROM jobs WHERE status IN "
                                "('queued','running')").fetchall():
                 job = _row_to_job(r)
