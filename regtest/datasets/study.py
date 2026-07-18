@@ -133,38 +133,65 @@ URL = f"http://127.0.0.1:{srv.server_address[1]}/table.csv"
 
 
 # ── 3. drive one turn, capture tools + text ──────────────────────────────────
+def _consume_stream(cap, r):
+    """Shared SSE consumption for /api/chat AND /api/turns/…/resume."""
+    for line in r.iter_lines():
+        if not line or not line.startswith("data: "):
+            continue
+        try:
+            ev = json.loads(line[6:])
+        except Exception:  # noqa: BLE001
+            continue
+        t = ev.get("type")
+        if t == "delta":
+            cap["text"].append(ev.get("text") or ev.get("delta") or "")
+        elif t == "manifest":
+            cap["run_id"] = ev.get("run_id")     # the resume handle
+        elif t == "plan":
+            cap["plan"] = {"entity_id": ev.get("entity_id"),
+                           "title": ev.get("title")}
+        elif t == "tool_start":
+            cap["tools"].append({"name": ev.get("name") or ev.get("tool"),
+                                 "input": ev.get("input") or {},
+                                 "tool_use_id": ev.get("tool_use_id")})
+        elif t == "tool_result":
+            # pair the envelope back onto its call — assertions can then
+            # distinguish "was invoked" from "succeeded"
+            for tc in reversed(cap["tools"]):
+                if tc.get("tool_use_id") == ev.get("tool_use_id"):
+                    tc["result"] = (ev.get("result")
+                                    if isinstance(ev.get("result"), dict) else {})
+                    break
+        elif t in ("error", "notice"):
+            cap.setdefault("errors", []).append(
+                {"type": t, "text": ev.get("text"),
+                 "detail": ev.get("detail")})
+            print(f"    [turn {t}] {ev.get('text')!r} {ev.get('detail')!r}"[:200])
+
+
 def drive_turn(client, pid, tid, text, timeout_s=900):
     cap = {"prompt": text, "tools": [], "text": []}
     with client.stream("POST", "/api/chat",
                        json={"text": text, "project_id": pid,
                              "thread_id": tid}) as r:
-        for line in r.iter_lines():
-            if not line or not line.startswith("data: "):
-                continue
-            try:
-                ev = json.loads(line[6:])
-            except Exception:  # noqa: BLE001
-                continue
-            t = ev.get("type")
-            if t == "delta":
-                cap["text"].append(ev.get("text") or ev.get("delta") or "")
-            elif t == "tool_start":
-                cap["tools"].append({"name": ev.get("name") or ev.get("tool"),
-                                     "input": ev.get("input") or {},
-                                     "tool_use_id": ev.get("tool_use_id")})
-            elif t == "tool_result":
-                # pair the envelope back onto its call — assertions can then
-                # distinguish "was invoked" from "succeeded"
-                for tc in reversed(cap["tools"]):
-                    if tc.get("tool_use_id") == ev.get("tool_use_id"):
-                        tc["result"] = (ev.get("result")
-                                        if isinstance(ev.get("result"), dict) else {})
-                        break
-            elif t in ("error", "notice"):
-                cap.setdefault("errors", []).append(
-                    {"type": t, "text": ev.get("text"),
-                     "detail": ev.get("detail")})
-                print(f"    [turn {t}] {ev.get('text')!r} {ev.get('detail')!r}"[:200])
+        _consume_stream(cap, r)
+    cap["text"] = "".join(cap["text"]).strip()
+    return cap
+
+
+def resume_turn(client, pid, cap_or_run_id, text="", action=None):
+    """Drive the REAL approval path: resume an awaiting_user turn (plan
+    Go/Adjust, approval gates) via /api/turns/{run_id}/resume — the same
+    endpoint the UI's Go button posts to."""
+    rid = (cap_or_run_id.get("run_id")
+           if isinstance(cap_or_run_id, dict) else cap_or_run_id)
+    cap = {"prompt": f"[resume] {text or action or 'go'}",
+           "tools": [], "text": []}
+    body = {"user_text": text, "project_id": pid}
+    if action:
+        body["action"] = action
+    with client.stream("POST", f"/api/turns/{rid}/resume", json=body) as r:
+        _consume_stream(cap, r)
     cap["text"] = "".join(cap["text"]).strip()
     return cap
 

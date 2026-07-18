@@ -23,7 +23,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import study  # noqa: E402 — throwaway home, oauth bridge, portal, drive_turn, harness
 
 from study import (  # noqa: E402
-    drive_turn, tools_named, all_text, run_scenario, scenario, RESULTS,
+    drive_turn, resume_turn, tools_named, all_text, run_scenario, scenario,
+    RESULTS,
 )
 from core.graph.entities import find_entities, get_entity  # noqa: E402
 
@@ -658,6 +659,40 @@ def mn_slurm_sized_walltime(client, pid, tid):
     ]
 
 
+@scenario("mn_plan_approval_remote")
+def mn_plan_approval_remote(client, pid, tid):
+    """Planning → approval → execute WITH a remote step (the documented
+    follow-up): the agent presents a plan and HALTS; the harness approves
+    through the real resume endpoint (the UI's Go button path); execution
+    then routes the data-heavy step to the machine holding the inputs."""
+    hssh(f"mkdir -p {R_DATA} && (echo t,v; seq 1 250 | "
+         f"awk '{{print $1\",\"($1*9)%11}}') > {R_DATA}/plan_data.csv")
+    total = sum((i * 9) % 11 for i in range(1, 251))
+    cap1 = drive_turn(client, pid, tid,
+        f"I want a small two-step analysis of {R_DATA}/plan_data.csv (it "
+        f"lives on machine 'hpc'): first sum the v column, then report that "
+        f"sum doubled. PRESENT A PLAN first and wait for my approval before "
+        f"executing anything.")
+    planned = bool(cap1.get("plan")) or bool(tools_named([cap1], "present_plan"))
+    caps = [cap1]
+    resumed = False
+    if cap1.get("run_id"):
+        try:
+            caps.append(resume_turn(client, pid, cap1,
+                                    text="Go ahead — approved."))
+            resumed = True
+        except Exception as e:  # noqa: BLE001 — 409 = the turn didn't halt
+            print(f"    [resume] failed: {e}")
+    wait_jobs_settled(client, pid)
+    full = _denum(all_text(caps) + "\n" + thread_text(client, pid, tid))
+    return caps, [
+        ("agent presented a plan and halted", planned),
+        ("approval drove execution via the resume endpoint", resumed),
+        ("the heavy step ran on hpc", "hpc" in _site_ran(caps)),
+        ("correct doubled total reported", str(total * 2) in full),
+    ]
+
+
 @scenario("mn_timeout_kill_honesty")
 def mn_timeout_kill_honesty(client, pid, tid):
     """Node-side timeout enforcement LIVE on the scheduler + agent honesty:
@@ -997,6 +1032,7 @@ def main():
                   mn_background_monitor, mn_provenance_after_chain,
                   mn_preflight_disconnect, mn_reference_drift,
                   mn_gpu_routing, mn_slurm_sized_walltime,
+                  mn_plan_approval_remote,
                   mn_timeout_kill_honesty, mn_scenario_branch,
                   mn_cancel_background,
                   mn_rerun_asis_recomputes,
