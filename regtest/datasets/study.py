@@ -191,6 +191,12 @@ def resume_turn(client, pid, cap_or_run_id, text="", action=None):
     if action:
         body["action"] = action
     with client.stream("POST", f"/api/turns/{rid}/resume", json=body) as r:
+        # a 409 (nothing awaiting resume) is returned as a NORMAL response —
+        # without this check the caller's "approval drove execution" assertion
+        # passes with the resume path never exercised (recheck finding)
+        if r.status_code >= 400:
+            raise RuntimeError(f"resume of {rid} → HTTP {r.status_code} "
+                               f"(no turn awaiting resume?)")
         _consume_stream(cap, r)
     cap["text"] = "".join(cap["text"]).strip()
     return cap
@@ -223,6 +229,70 @@ def scenario(name):
     return deco
 
 
+_TRUTH_SEEN: set = set()
+
+
+def verify_jobs_truth() -> list:
+    """Global invariant, swept after EVERY scenario: each weft job row must
+    agree with the substrate. A task the substrate finished cleanly may never
+    read failed (the false-'infra failure' class, misc/bug1.md P0), and no row
+    may sit done-with-error (double-finalize residue). Runs across all project
+    DBs, so it catches false verdicts from ANY scenario — including ones whose
+    own assertions never look at jobs. Dedupes across sweeps."""
+    import sqlite3
+    from core.config import PROJECTS_DIR
+    from core.compute import adapter as ad
+    out = []
+    try:
+        comp = ad.get_compute()
+    except Exception:  # noqa: BLE001 — substrate gone: nothing to compare against
+        return out
+    if not PROJECTS_DIR.exists():
+        return out
+    for proj in sorted(PROJECTS_DIR.iterdir()):
+        db = proj / "project.db"
+        if not proj.is_dir() or not db.exists():
+            continue
+        try:
+            c = sqlite3.connect(db); c.row_factory = sqlite3.Row
+            if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                             "AND name='jobs'").fetchone():
+                c.close(); continue
+            rows = c.execute("SELECT id,status,error,params FROM jobs").fetchall()
+            c.close()
+        except sqlite3.Error:
+            continue
+        for r in rows:
+            try:
+                p = json.loads(r["params"] or "{}")
+            except Exception:  # noqa: BLE001
+                continue
+            wid = p.get("weft_id")
+            if p.get("submitter") != "weft" or not wid:
+                continue
+            if r["status"] == "done" and (r["error"] or "").strip():
+                out.append(f"{r['id']}: done row carries an error "
+                           f"(double-finalize residue): {r['error'][:100]}")
+            try:
+                st = comp.sync_call("task_status", wid)
+                state = st[0]["state"] if st else None
+            except Exception:  # noqa: BLE001
+                continue
+            if state == "DONE" and r["status"] == "failed":
+                exit0 = True
+                try:
+                    exit0 = (comp.sync_call("task_result", wid)
+                             .get("exit_code") in (0, None))
+                except Exception:  # noqa: BLE001
+                    pass
+                if exit0:
+                    out.append(f"{r['id']}: substrate DONE/exit 0 but row "
+                               f"FAILED: {(r['error'] or '')[:100]}")
+    fresh = [v for v in out if v not in _TRUTH_SEEN]
+    _TRUTH_SEEN.update(out)
+    return fresh
+
+
 def run_scenario(client, name, fn):
     pid = client.post("/api/projects", json={"name": f"ds-{name}"}).json()["id"]
     client.post(f"/api/projects/{pid}/open")
@@ -231,6 +301,13 @@ def run_scenario(client, name, fn):
     t0 = time.time()
     try:
         caps, checks = fn(client, pid, tid)
+        checks = list(checks)
+        # append the global truth sweep to EVERY scenario's verdict
+        violations = verify_jobs_truth()
+        if violations:
+            checks += [(f"truth-sweep: {v}", False) for v in violations]
+        else:
+            checks.append(("jobs-vs-substrate truth sweep clean", True))
         ok = all(v for _, v in checks)
     except Exception as e:  # noqa: BLE001
         import traceback
@@ -509,6 +586,12 @@ def main():
     scenarios = [(fn._scenario, fn) for fn in
                  [s_url, s_reuse, s_remote, s_drift, s_produced,
                   s_keep_reuse, s_keep_triage, s_alert_loop]]
+    if only:
+        known = {name for name, _ in scenarios}
+        unknown = only - known
+        if unknown:
+            sys.exit(f"[study] unknown scenario(s): {', '.join(sorted(unknown))}"
+                     f" — known: {', '.join(sorted(known))}")
     try:
         with TestClient(app) as client:
             try:
@@ -528,6 +611,8 @@ def main():
                   "/home/pkharchenko/aba-dstest-data2 && echo cleaned")
         print("[cleanup] mendel dirs:", out.stdout.strip() or out.stderr[-120:])
         srv.shutdown()
+    if not RESULTS:
+        sys.exit("[study] zero scenarios ran — refusing a vacuous ALL PASS")
     print("\nSTUDY:", "ALL PASS" if all(ok for _, ok in RESULTS)
           else "FAILURES: " + ", ".join(n for n, ok in RESULTS if not ok))
     sys.exit(0 if all(ok for _, ok in RESULTS) else 1)

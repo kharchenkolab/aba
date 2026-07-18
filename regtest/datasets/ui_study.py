@@ -111,18 +111,22 @@ def ui_scenario(name):
     return deco
 
 
-def _open_data_panel(page) -> None:
+def _open_data_panel(page) -> bool:
     """Open the project tree at the Data section — the rail button TOGGLES,
-    so only click while the panel is closed (marker: the section header)."""
+    so only click while the panel is closed (marker: the section header).
+    Returns whether the panel is verifiably OPEN: absence-based assertions
+    (e.g. "no ledger chrome") are vacuous against a never-opened panel."""
     for _ in range(3):
         try:
             if (page.get_by_text("ACTIVE DATASETS", exact=False).count()
                     or page.locator(".ledger").count()):
-                return
+                return True
             page.get_by_text("Data", exact=True).first.click()
         except Exception:  # noqa: BLE001 — mid-render
             pass
         time.sleep(2)
+    return bool(page.get_by_text("ACTIVE DATASETS", exact=False).count()
+                or page.locator(".ledger").count())
 
 
 def _enter_project(page) -> None:
@@ -156,7 +160,16 @@ def run_ui_scenario(page, api, name, fn):
     try:
         page.goto(BASE["url"], wait_until="domcontentloaded")   # fresh mount
         _enter_project(page)
-        checks = fn(page, api, pid, tid)
+        checks = list(fn(page, api, pid, tid))
+        # global invariant: no scenario may leave a job row contradicting the
+        # substrate (false failures / double-finalize residue) — same sweep
+        # the API-level runners append
+        from study import verify_jobs_truth
+        violations = verify_jobs_truth()
+        if violations:
+            checks += [(f"truth-sweep: {v}", False) for v in violations]
+        else:
+            checks.append(("jobs-vs-substrate truth sweep clean", True))
         ok = all(v for _, v in checks)
     except Exception:  # noqa: BLE001
         import traceback
@@ -211,8 +224,10 @@ def ui_ledger_quiet_then_remote(page, api, pid, tid):
     """LedgerStrip contract in the project TREE panel (left rail → Data):
     an all-local, all-safe project renders ZERO ledger chrome (absence is
     the default); once a remote-homed dataset exists the strip appears."""
-    _open_data_panel(page)
-    quiet = page.locator(".ledger").count() == 0
+    opened = _open_data_panel(page)
+    # absence claim requires the panel to be verifiably open — otherwise a
+    # never-mounted panel "has no ledger" vacuously (recheck finding)
+    quiet = opened and page.locator(".ledger").count() == 0
     shot(page, "tree_panel_quiet")
     if not HPC["ok"]:
         return [("quiet when local-only", quiet),
@@ -253,12 +268,14 @@ def ui_run_card_lifecycle(page, api, pid, tid):
     got_file = wait_text(page, "curve.csv", 30)
     shot(page, "run_card")
     # §8c: while the run is open/settling the state reads "keeping…"; after
-    # settlement "kept ✓" — both are keep-state truth
+    # settlement "kept ✓" — both are keep-state truth. Match the exact badge
+    # vocabulary: a bare `keep|kept` regex was satisfiable by "not kept", any
+    # Keep button, etc. (recheck finding — an assertion failure states can pass)
     import re as _re
-    kept = page.get_by_text(_re.compile(r"keep|kept")).count() > 0
+    kept = page.get_by_text(_re.compile(r"keeping…|keeping\.\.\.|kept ✓")).count() > 0
     return [("run created", True), ("card shows the run", got_title),
             ("outputs listed on the card", got_file),
-            ("keep state visible (keeping…/kept)", kept)]
+            ("keep state visible (keeping…/kept ✓)", kept)]
 
 
 @ui_scenario("ui_pin_flow")
@@ -357,7 +374,19 @@ def ui_remote_run_badges(page, api, pid, tid):
         dv = api.get(f"/api/runs/{rid}/durable?flat=1").json()   # gave up — resample so
         kept_remote = any(f.get("state") == "retained" and f.get("site") == "hpc"
                           for f in dv.get("files", []))   # ordering can't fail us
+    # INDEPENDENT ground truth (recheck finding: the durable endpoint is the
+    # same server-side source the card renders from): stat the bytes on the
+    # NODE itself — a >50MB big.bin under the fixture's weft tree.
+    node_truth = False
+    try:
+        from multinode import hssh
+        out = hssh("find /home/physicist/.weft -name big.bin -size +50M "
+                   "2>/dev/null | head -1")
+        node_truth = bool((out.stdout or "").strip())
+    except Exception as e:  # noqa: BLE001
+        print(f"    [probe] node stat unavailable: {e}")
     brought = False
+    brought_bytes = False
     bb = card.get_by_text("bring the rest back", exact=False)
     if bb.count():
         bb.first.click()
@@ -368,11 +397,19 @@ def ui_remote_run_badges(page, api, pid, tid):
                 brought = True
                 break
         shot(page, "run_card_after_bringback")
+        # POSITIVE evidence, not just disappearance (recheck finding: the line
+        # also vanishes if the card unmounts/errors): the flat view's row now
+        # serves local bytes (a url), instead of the url-less remote-only row
+        dv = api.get(f"/api/runs/{rid}/durable?flat=1").json()
+        brought_bytes = any(f.get("url") and "big.bin" in (f.get("name") or f.get("path") or "")
+                            for f in dv.get("files", []))
     return [("run created", True),
             ("durable view records the kept remote file", kept_remote),
+            ("NODE-level truth: kept bytes exist on hpc (ssh stat)", node_truth),
             ("verdict says ran on hpc (placement fix)", verdict_remote),
             ("CARD badge reads kept ✓ · on hpc", badge_remote),
-            ("bring-back lands local bytes (whereabouts clears)", brought)]
+            ("bring-back lands local bytes (whereabouts clears)", brought),
+            ("bring-back POSITIVE: flat row serves local bytes", brought_bytes)]
 
 
 def _register_hpc() -> None:
@@ -404,6 +441,12 @@ def main() -> None:
     only = None
     if "--only" in sys.argv:
         only = set(sys.argv[sys.argv.index("--only") + 1].split(","))
+    if only:
+        known = {name for name, _ in UI_SCENARIOS}
+        unknown = only - known
+        if unknown:
+            sys.exit(f"[ui] unknown scenario(s): {', '.join(sorted(unknown))}"
+                     f" — known: {', '.join(sorted(known))}")
     base = _start_server()
     BASE["url"] = base
     _register_hpc()
@@ -411,16 +454,29 @@ def main() -> None:
 
     import httpx
     from playwright.sync_api import sync_playwright
-    with httpx.Client(base_url=base, timeout=60) as api, sync_playwright() as pw:
-        browser = pw.chromium.launch()
-        page = browser.new_page(viewport={"width": 1440, "height": 900})
-        page.goto(base, wait_until="domcontentloaded")
-        for name, fn in UI_SCENARIOS:
-            if only and name not in only:
-                continue
-            run_ui_scenario(page, api, name, fn)
-        browser.close()
+    try:
+        with httpx.Client(base_url=base, timeout=60) as api, sync_playwright() as pw:
+            browser = pw.chromium.launch()
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            page.goto(base, wait_until="domcontentloaded")
+            for name, fn in UI_SCENARIOS:
+                if only and name not in only:
+                    continue
+                run_ui_scenario(page, api, name, fn)
+            browser.close()
+    finally:
+        # leave no fixture residue for the next runner (the sibling runners
+        # clean up in finally; this one didn't — recheck finding)
+        if HPC["ok"]:
+            try:
+                from core.compute import adapter as ad
+                ad.get_compute().sync_call("site_unregister", "hpc")
+                print("[cleanup] hpc site unregistered")
+            except Exception as e:  # noqa: BLE001
+                print(f"[cleanup] unregister: {e}")
 
+    if not RESULTS:
+        sys.exit("[ui] zero scenarios ran — refusing a vacuous ALL PASS")
     print("\nUI STUDY:", "ALL PASS" if all(ok for _, ok in RESULTS)
           else "FAILURES: " + ", ".join(n for n, ok in RESULTS if not ok))
     sys.exit(0 if all(ok for _, ok in RESULTS) else 1)
