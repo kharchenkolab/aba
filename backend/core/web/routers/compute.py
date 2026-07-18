@@ -198,6 +198,10 @@ async def list_sites() -> dict:
             desc = await comp.sites_describe(name)
             entry["capabilities"] = desc.get("capabilities")
             entry["probed_at"] = desc.get("probed_at")
+            # the card's manage affordances (working root, durable, notes) key
+            # on config — sites_list rows stopped carrying it upstream, so
+            # forward it from describe like capabilities
+            entry["config"] = desc.get("config")
         except ComputeError:
             entry["capabilities"] = None
         entry["aba"] = sites_config.aba_keys(name) or (

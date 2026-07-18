@@ -52,7 +52,10 @@ class FakeSitePort:
 
     async def sites_list(self):
         self.calls.append(("sites_list",))
-        return [dict(v) for v in self.sites.values()]
+        # like real weft: summary rows carry NO config — the route must
+        # forward it from describe (the card's manage affordances key on it)
+        return [{k: v for k, v in row.items() if k != "config"}
+                for row in self.sites.values()]
 
     async def sites_describe(self, name):
         self.calls.append(("sites_describe", name))
@@ -132,6 +135,15 @@ def test_list_merges_aba_keys(client, fake):
     by = {s["name"]: s for s in r["sites"]}
     assert by["vbc"]["aba"]["use_for"] == ["gpu"]
     assert by["local"]["aba"]["contract"] == "shared-fs"   # implicit default
+
+
+def test_list_forwards_config_from_describe(client, fake):
+    """Summary rows carry no config (weft dropped it upstream); the route must
+    forward describe's config or the card loses every manage affordance
+    (working root, durable, notes) — the regression this pins down."""
+    r = client.get("/api/compute/sites").json()
+    by = {s["name"]: s for s in r["sites"]}
+    assert by["local"]["config"] == {"root": "/x"}
 
 
 def test_detail_and_unknown(client):
