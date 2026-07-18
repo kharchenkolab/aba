@@ -245,15 +245,26 @@ def s_url(client, pid, tid):
 
 @scenario("url_reuse")
 def s_reuse(client, pid, tid):
-    cap = drive_turn(client, pid, tid,
-                     f"Register {URL} as a dataset named 'Portal Table Again'.")
-    caps = [cap]
-    n = len([r for r in find_entities(type="dataset", not_deleted=True)
-             if ((get_entity(r["id"]) or {}).get("metadata") or {})
-             .get("source_key") == URL])
-    txt = all_text(caps).lower()
+    """Dedup on re-register. SELF-CONTAINED (vacuity review): the old global
+    count-==-1 could never fail standalone (the single registration trivially
+    yields 1) and rode url_register's leftovers otherwise — now the scenario
+    lays its own baseline and asserts the RE-register minted nothing."""
+    def _n():
+        return len([r for r in find_entities(type="dataset", not_deleted=True)
+                    if ((get_entity(r["id"]) or {}).get("metadata") or {})
+                    .get("source_key") == URL])
+    caps = []
+    if _n() == 0:          # standalone: create the baseline registration first
+        caps.append(drive_turn(client, pid, tid,
+                    f"Register {URL} as a dataset named 'Portal Table'."))
+    n_before = _n()
+    caps.append(drive_turn(client, pid, tid,
+                f"Register {URL} as a dataset named 'Portal Table Again'."))
+    n_after = _n()
+    txt = caps[-1]["text"].lower()      # judge the REUSE turn only
     return caps, [
-        ("only ONE dataset for this url exists", n == 1),
+        ("baseline registration exists", n_before >= 1),
+        ("the re-register did NOT mint a new dataset", n_after == n_before),
         ("agent says it's already registered",
          "already" in txt or "existing" in txt or "reus" in txt),
     ]

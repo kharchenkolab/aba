@@ -56,7 +56,9 @@ class _FakeCompute:
             return {"ok": True}
         if name == "list_envs":
             return {"envs": self._envs}
-        return {"ok": True}
+        # default-raise: a catch-all {"ok": True} serves truthy success to any
+        # NEW call the code under test grows, silently mis-testing it
+        raise AssertionError(f"unexpected compute call {name!r}")
 
 
 def test_pack_env_id_resolves_local_env(monkeypatch):

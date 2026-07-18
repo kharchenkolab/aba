@@ -197,7 +197,9 @@ def run_in_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
     if not name or not code:
         return {"status": "error", "note": "run_in_isolated_env needs `name` and `code`."}
     is_r = (input_.get("language") or "python").strip().lower() in ("r", "rlang")
-    ts = int(input_.get("timeout_s") or 600)
+    # same ceiling as every other exec lane (run_python/run_r/remote-sync) —
+    # this tool alone accepted an unbounded ask (limits-parity review)
+    ts = max(5, min(int(input_.get("timeout_s") or 600), 1800))
     pid = str(projects.current() or "default")
     if named_envs.resolve(pid, name) is None:
         return {"status": "error", "name": name,
