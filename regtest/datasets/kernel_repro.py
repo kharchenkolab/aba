@@ -33,25 +33,47 @@ from core.exec.kernels import weft as wk  # noqa: E402
 failures = []
 sess = None
 try:
+    import time as _t
     sess = wk.for_pool("repro@mendel", "python", cwd="/tmp", env_name=None,
                        site="mendel")
     print(f"[repro] kernel {sess.kernel_id} up on mendel")
+    kid = sess.kernel_id
+    comp = ad.get_compute()
     for i in range(1, 11):
-        res = sess.execute(f"print('blk-{i} ok', {i}*7)", timeout_s=180)
-        out = (res.stdout or "").strip()
-        ok = res.returncode == 0 and f"blk-{i} ok {i * 7}" in out
-        print(f"[repro] block {i}: rc={res.returncode} ok={ok} "
-              f"out={out[:60]!r} err={(res.stderr or '')[:60]!r}", flush=True)
+        # drive the raw protocol — isolates the peek/read path completely
+        sub = comp.sync_call("kernel_exec", kid, f"print('blk-{i} ok', {i}*7)",
+                             wait=False)
+        blk = int(sub.get("block", 0))
+        out, off, rc, done = "", 0, None, False
+        deadline = _t.time() + 120
+        while _t.time() < deadline and not done:
+            pk = comp.sync_call("kernel_peek", kid, blk, out_offset=off,
+                                err_offset=0)
+            if pk.get("out_delta"):
+                out += pk["out_delta"]; off = pk.get("out_offset", off)
+            if not pk.get("running", True):
+                rc = pk.get("rc"); done = True
+            else:
+                _t.sleep(0.2)
+        ok = rc == 0 and f"blk-{i} ok {i * 7}" in out
+        print(f"[repro] block {i} (blk={blk}): rc={rc} ok={ok} "
+              f"out={out.strip()[:50]!r}", flush=True)
         if not ok:
             failures.append(i)
+            # eventually-visible (slow shim) or never-readable?
+            for delay in (5, 15):
+                _t.sleep(delay)
+                pk = comp.sync_call("kernel_peek", kid, blk,
+                                    out_offset=0, err_offset=0)
+                print(f"[repro]   +{delay}s re-peek blk={blk}: "
+                      f"running={pk.get('running')} rc={pk.get('rc')} "
+                      f"out={str(pk.get('out_delta'))[:50]!r}", flush=True)
     # substrate-side view: what did weft itself capture?
     try:
-        tr = ad.get_compute().sync_call("kernel_transcript", sess.kernel_id,
-                                        last=30)
-        print("[repro] weft transcript (block, rc, out head):")
+        tr = comp.sync_call("kernel_transcript", kid, last=30)
+        print("[repro] weft transcript rows:")
         for row in tr:
-            print("   ", row.get("block"), row.get("rc"),
-                  str(row.get("out"))[:60])
+            print("   ", repr(row)[:200])
     except Exception as e:  # noqa: BLE001
         print(f"[repro] transcript unavailable: {e}")
 finally:

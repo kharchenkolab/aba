@@ -773,6 +773,15 @@ def _run_remote_kernel(input_: dict, ctx: dict | None, project_id: str,
                                    if fetch_dir else ([], [], [], []))
     note = (f"ran on {site} in a persistent session there — variables persist "
             f"for your next run_python(site={site!r}) call")
+    if res.returncode == 0 and not (res.stdout or "").strip():
+        # known substrate issue (weft kernel capture race, see
+        # misc/bug2_weft_kernel_stdout.md): a block's stdout is intermittently
+        # never captured node-side while rc=0 is real. Say so — an agent that
+        # sees silent-success otherwise concludes the site is broken.
+        note += (". NOTE: no stdout was captured for this block (known "
+                 "remote-session capture issue — the code DID run, exit 0). "
+                 "If you needed printed values, assign them to variables and "
+                 "read them in the next call, or write results to a file.")
     if remote_only:
         note += (f". {len(remote_only)} larger output(s) stayed on {site} "
                  f"(kept-addressable): " + ", ".join(remote_only[:5])

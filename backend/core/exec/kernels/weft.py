@@ -311,7 +311,16 @@ class WeftKernelSession:
 
         def _drain_remaining() -> None:
             # After done, a final delta may still exceed one peek's max_bytes —
-            # keep reading until both streams are exhausted (bounded).
+            # keep reading until both streams are exhausted (bounded). On a
+            # REMOTE site the `.rc` sentinel can become visible BEFORE the
+            # block's final `.out` bytes are readable over the data shim
+            # (mendel repro: interspersed blocks returned rc=0 with empty
+            # stdout when this drain stopped at the first no-advance pull) —
+            # so remote drains are time-gated: only several consecutive quiet
+            # pulls, ~0.15s apart, count as settled. Local stays advance-gated
+            # (no added latency; the sandbox is directly consistent).
+            need_quiet = 4 if self.site != _LOCAL_SITE else 1
+            quiet = 0
             for _ in range(256):
                 before = (out_off, err_off)
                 try:
@@ -319,7 +328,12 @@ class WeftKernelSession:
                 except ComputeError:
                     return
                 if (out_off, err_off) == before:
-                    return
+                    quiet += 1
+                    if quiet >= need_quiet:
+                        return
+                    time.sleep(0.15)
+                else:
+                    quiet = 0
 
         last_status = time.time()
         try:
