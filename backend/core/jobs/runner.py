@@ -1168,8 +1168,12 @@ def _acquire_jobs_lease() -> bool:
     refusal instead of silently double-finalizing. ABA_JOBS_LEASE=off skips
     the check (e.g. a runtime dir on a filesystem without sane flock)."""
     global _JOBS_LEASE_FD
-    if os.environ.get("ABA_JOBS_LEASE", "").lower() in ("off", "0", "no"):
-        return True
+    try:
+        from core import config
+        if not config.settings.jobs_lease.get():
+            return True
+    except Exception:  # noqa: BLE001 — registry trouble must not skip the guard
+        pass
     try:
         import fcntl
         from core.config import PROJECTS_DIR

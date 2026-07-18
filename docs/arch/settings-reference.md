@@ -73,6 +73,7 @@ reduction — `derive` 1, `keep` 70, `merge` 50, `relocate` 2, `resolve-flag` 1.
 | `modules_eager` | `ABA_MODULES_EAGER` | str |  | move:site | keep |  | Eagerly materialize module manifests at startup (fat-SIF baked artifacts). |
 | `modules_enabled` | `ABA_MODULES_ENABLED` | str |  | move:site | keep | branches | '0' disables the environment-modules integration. |
 | `pixi_bin` | `ABA_PIXI_BIN` | str |  | keep | keep |  | Path to the pixi binary weft solves/realizes with. None → $PATH lookup, then $ABA_HOME/tools/pixi/bin/pixi. |
+| `jobs_lease` | `ABA_JOBS_LEASE` | bool | True | keep | keep | deploy | Single-writer jobs-plane lease: only the first aba instance on a runtime dir runs the worker/reconcile/poll loops (an exclusive flock on <runtime>/jobs.lease). False disables the check — for a runtime dir on a filesystem without sane flock semantics. |
 | `compute_self_service` | `ABA_COMPUTE_SELF_SERVICE` | bool | True | keep | keep | deploy | May users add/remove/reconfigure compute sites from the UI/agent? Shared installs (OOD/cluster deployments whose slurm sites the admin declares in weft-sites.yaml) set false — the Compute tab shows the deployment's machines read-only and the management API refuses with an actionable 403. |
 | `sif` | `ABA_SIF` | str |  | move:site | keep | deploy | Path to the fat/slim SIF image used to wrap jobs. |
 | `weft_publish_site` | `ABA_WEFT_PUBLISH_SITE` | str | local | keep | keep |  | Site whose realization store backs the published catalog (where env_adopt runs). |

@@ -904,6 +904,14 @@ setting("pixi_bin", env="ABA_PIXI_BIN", type="str", default=None,
         category="deploy", weft_fate="keep",
         doc="Path to the pixi binary weft solves/realizes with. None → "
             "$PATH lookup, then $ABA_HOME/tools/pixi/bin/pixi.")
+setting("jobs_lease", env="ABA_JOBS_LEASE", type="bool", default=True,
+        category="deploy", weft_fate="keep",
+        doc="Single-writer jobs-plane lease: only the first aba instance on a "
+            "runtime dir runs the worker/reconcile/poll loops (an exclusive "
+            "flock on <runtime>/jobs.lease). False disables the check — for "
+            "a runtime dir on a filesystem without sane flock semantics. "
+            "Two writers on one jobs plane finalize each other's rows "
+            "(the false-'infra failure' incident).")
 setting("compute_self_service", env="ABA_COMPUTE_SELF_SERVICE", type="bool",
         default=True, category="deploy", weft_fate="keep",
         deploy_injected=True,
