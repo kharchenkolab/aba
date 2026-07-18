@@ -158,6 +158,18 @@ the resume/approval POST driven from the harness); a SECOND real site for
 conflicting-gravity + multi-site preflight; cancel-midflight (sync cancel has
 unit coverage); cross_thread_separation + mid_chain_steering.
 
+**Slurm-specific live coverage** (round 2): `mn_slurm_sized_walltime` checks
+the sized-only walltime doctrine against the SCHEDULER's own truth —
+`scontrol show jobs` TimeLimit (the fixture runs no slurmdbd, so sacct is
+empty; scontrol's in-memory rows last MinJobAge, capture right after each
+step). `mn_timeout_kill_honesty` (node harness kills at the ceiling; agent
+reports the overrun, never fabricates the marker), `mn_scenario_branch`
+(re-run-with-changes → scenario_of provenance), `mn_cancel_background`
+(user cancel from the Jobs surface → honest cancellation report). Runner
+discipline: `--only` with unknown names is an error and ZERO scenarios run
+refuses to print ALL PASS (an unmatched filter once passed vacuously —
+the very class this study hunts).
+
 **Next round: UI/UX evaluation alongside the agent scenarios.** The study so
 far asserts on the JSON the cards read; the next round drives the REAL
 frontend in a browser (uvicorn + built frontend + Playwright) through the

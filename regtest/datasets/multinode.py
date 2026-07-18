@@ -613,27 +613,37 @@ def mn_slurm_sized_walltime(client, pid, tid):
         except Exception:  # noqa: BLE001
             return None
 
-    def _sacct():
-        out = hssh("sacct -X --noheader -o JobID,Timelimit,State")
-        rows = []
+    def _scontrol():
+        """{job_id: TimeLimit} from scontrol's in-memory table (the fixture
+        runs no slurmdbd, so sacct is EMPTY — completed jobs linger here for
+        MinJobAge, so capture right after each step)."""
+        out = hssh("scontrol show jobs -o 2>/dev/null")
+        rows = {}
         for ln in (out.stdout or "").splitlines():
-            parts = ln.split()
-            if len(parts) >= 2:
-                rows.append({"id": parts[0], "limit": parts[1]})
+            jid = limit = None
+            for tok in ln.split():
+                if tok.startswith("JobId="):
+                    jid = tok.split("=", 1)[1]
+                elif tok.startswith("TimeLimit="):
+                    limit = tok.split("=", 1)[1]
+            if jid:
+                rows[jid] = limit
         return rows
-    pre_ids = {r["id"] for r in _sacct()}
+    pre_ids = set(_scontrol())
     caps = [drive_turn(client, pid, tid,
         "On machine 'hpc', run a BACKGROUND job that computes the sum of "
         "1..5000 and prints it. Estimate it honestly as about 2 minutes of "
         "runtime on 1 core (pass the runtime estimate).")]
     wait_jobs_settled(client, pid)
+    seen = dict(_scontrol())               # background job still in MinJobAge
     answer = str(sum(range(1, 5001)))
     full = _denum(all_text(caps)) + "\n" + wait_for_text(client, pid, tid, answer)
     caps.append(drive_turn(client, pid, tid,
         "Now run a quick direct step on 'hpc' (not background, no estimate): "
         "print the machine's hostname."))
-    new = [r for r in _sacct() if r["id"] not in pre_ids]
-    mins = [(_limit_min(r["limit"]), r["limit"]) for r in new]
+    seen.update(_scontrol())               # + the sync step's job
+    mins = [(_limit_min(v or ""), v) for k, v in seen.items()
+            if k not in pre_ids]
     sized = [m for m, _ in mins if m is not None and m <= 45]
     default = [m for m, raw in mins
                if m is None or m >= 59]           # partition default / symbolic
