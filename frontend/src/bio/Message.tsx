@@ -160,7 +160,7 @@ function toolRunningLabel(name: string) {
 export function FigurePin({ entity, isPinned, onPin }: {
   entity: Entity
   isPinned: boolean
-  onPin: (id: string, pinned: boolean) => void
+  onPin: (id: string, pinned: boolean) => void | boolean | Promise<void | boolean>
 }) {
   // Optimistic flip ONLY when pinning (fire-and-forget POST). Unpin routes
   // through a confirm/consequence dialog — flipping optimistically there left
@@ -173,7 +173,16 @@ export function FigurePin({ entity, isPinned, onPin }: {
   return (
     <button
       className={`msg__tool msg__tool--pin ${pinned ? 'msg__tool--pinned' : 'msg__tool--hover'}`}
-      onClick={() => { if (!pinned) setOpt(true); onPin(entity.id, !pinned) }}
+      onClick={() => {
+        if (!pinned) {
+          setOpt(true)
+          // revert the optimistic red if the pin POST fails — otherwise the
+          // next click routes to unpin against a Result that never existed
+          Promise.resolve(onPin(entity.id, true))
+            .then(ok => { if (ok === false) setOpt(null) })
+            .catch(() => setOpt(null))
+        } else onPin(entity.id, false)
+      }}
       title={pinned ? 'Pinned — click to unpin' : 'Pin this figure'}
     >
       <svg viewBox="0 0 24 24" fill={pinned ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2"><path d="M12 17v5M9 3h6l-1 7 3 3H7l3-3z"/></svg>
@@ -1033,7 +1042,7 @@ interface Props {
   pinnedFigureIds?: Set<string>
   /** Keep (pin) a non-entity message as a snapshot, keyed by content. */
   keptKeys?: Set<string>
-  onKeepMessage?: (key: string, text: string, imageUrls: string[], pinned: boolean) => void
+  onKeepMessage?: (key: string, text: string, imageUrls: string[], pinned: boolean) => void | boolean | Promise<void | boolean>
   /** Map basename → {url, kind} for files written in this thread (any
    *  tool_result.plots / tables / files entry). Lets inline ` `foo.pdf` ` in
    *  agent prose render as a clickable link to /artifacts/<pid>/<hash><ext>. */
@@ -1091,7 +1100,12 @@ export default function Message({ message, isStreaming, collapseTools, onAnnotat
   function togglePin() {
     const next = !shownPinned
     setOptimistic(next)
-    onKeepMessage?.(key, msgText, imageUrls, next)
+    // /api/messages/pin is a content-key TOGGLE: a failed request that keeps
+    // the optimistic state makes the NEXT click toggle the wrong way (a
+    // "pin" click would archive the note) — revert on failure.
+    Promise.resolve(onKeepMessage?.(key, msgText, imageUrls, next))
+      .then(ok => { if (ok === false) setOptimistic(null) })
+      .catch(() => setOptimistic(null))
   }
 
   // Copy the message's text content to the clipboard. Briefly flips to a

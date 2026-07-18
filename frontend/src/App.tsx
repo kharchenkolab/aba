@@ -742,9 +742,9 @@ export default function App() {
       requestUnpin(id, ent?.title || '')
       return
     }
-    fetch(`/api/entities/${encodeURIComponent(id)}/pin`, { method: 'POST' })
-      .then(() => refresh())
-      .catch(() => {})
+    const pinDone = fetch(`/api/entities/${encodeURIComponent(id)}/pin`, { method: 'POST' })
+      .then(r => { if (!r.ok) return false; refresh(); return true })
+      .catch(() => false)
     // User-initiated pin reveals the right rail — the Result they're
     // pinning lands there, so they want to see it. (AI-driven pinning,
     // e.g. auto_interpret's caption write-back, goes through a different
@@ -759,14 +759,16 @@ export default function App() {
     // refreshes cover that gap (auto_interpret typically lands in ~6s);
     // refresh() is idempotent so overlapping with the broadcast is free.
     ;[3000, 7000, 12000].forEach(ms => window.setTimeout(() => refresh(), ms))
+    return pinDone   // FigurePin reverts its optimistic red on false
   }
   // Keep any (non-entity) message as a snapshot note, keyed by content.
-  const keepMessage = (key: string, text: string, image_urls: string[]) => {
+  // Returns success so the caller can revert its optimistic glyph.
+  const keepMessage = (key: string, text: string, image_urls: string[]) =>
     fetch('/api/messages/pin', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ key, text, image_urls, thread_id: currentThread?.id ?? threadId }),
-    }).then(() => refresh()).catch(() => {})
-  }
+    }).then(r => { if (!r.ok) return false; refresh(); return true })
+      .catch(() => false)
   // Chat-pin state derives from bio: kept message keys + figure ids
   // pinned via active-Result membership. The shell just passes the
   // sets to ChatPane; bio decides the rules (which Note source_keys

@@ -149,7 +149,10 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onPre
   // path → pinned-result entity id, so a second click UNPINS (archives) it
   // instead of adding a duplicate to the thread.
   const [pinnedIds, setPinnedIds] = useState<Record<string, string>>({})
-  async function pinFile(node: TreeNode, pinned: boolean) {
+  // Returns SUCCESS — FileBrowser reverts its optimistic glyph on false, so
+  // a failed pin can't leave a filled-red pin with no Result behind it (and
+  // a failed unpin can't show unpinned while the Result stays live).
+  async function pinFile(node: TreeNode, pinned: boolean): Promise<boolean> {
     if (pinned) {
       const ext = (node.name.split('.').pop() || '').toLowerCase()
       const kind = /^(png|jpe?g|gif|svg|webp)$/.test(ext) ? 'figure' : /^(csv|tsv)$/.test(ext) ? 'table' : 'file'
@@ -159,15 +162,22 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onPre
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ kind, label: node.name, thumb: kind === 'figure' ? href : undefined, href }),
         })
+        if (!r.ok) return false
         const ent = await r.json().catch(() => null)
-        if (ent?.id) setPinnedIds(m => ({ ...m, [node.path]: ent.id }))
-      } catch { /* leave unpinned on failure */ }
+        if (!ent?.id) return false
+        setPinnedIds(m => ({ ...m, [node.path]: ent.id }))
+      } catch { return false }
     } else {
       const id = pinnedIds[node.path]
-      if (id) await fetch(`/api/entities/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {})
+      if (!id) return false            // nothing recorded to unpin from here
+      try {
+        const r = await fetch(`/api/entities/${encodeURIComponent(id)}`, { method: 'DELETE' })
+        if (!r.ok) return false
+      } catch { return false }
       setPinnedIds(m => { const n = { ...m }; delete n[node.path]; return n })
     }
     onChange()
+    return true
   }
   // Discuss: set the chat CONTEXT (prefill + focus composer) without sending —
   // mirrors the plot-thumbnail "Discuss" so the user types their own question.

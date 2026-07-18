@@ -179,7 +179,8 @@ function DatasetDescription({ entity, onChange }: { entity: Entity; onChange: ()
     if ((val ?? '') === (entity.notes ?? '')) return
     fetch(`/api/entities/${encodeURIComponent(entity.id)}`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ notes: val }),
-    }).then(() => onChange()).catch(() => {})
+    }).then(r => { if (r.ok) onChange() }).catch(() => {})
+    // non-ok: no onChange — `val` stays dirty in the box and the next blur retries
   }
   const ref = useRef<HTMLTextAreaElement>(null)
   const grow = () => { const t = ref.current; if (t) { t.style.height = 'auto'; t.style.height = `${t.scrollHeight}px` } }
@@ -461,13 +462,19 @@ function NarrativeView({ entity, onChange }: FocusViewProps) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { setText((entity.metadata?.text as string) ?? ''); setDirty(false) }, [entity.id])
 
+  const [saveErr, setSaveErr] = useState(false)
   async function save() {
     const meta = { ...(entity.metadata ?? {}), text }
-    await fetch(`/api/entities/${encodeURIComponent(entity.id)}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ notes: text.slice(0, 200), metadata: meta }),
-    })
-    setDirty(false); onChange()
+    // a non-ok PATCH must NOT claim "Saved" — the textarea only resyncs on
+    // entity change, so a silently-failed save loses the manuscript edit
+    try {
+      const r = await fetch(`/api/entities/${encodeURIComponent(entity.id)}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes: text.slice(0, 200), metadata: meta }),
+      })
+      if (!r.ok) { setSaveErr(true); return }
+    } catch { setSaveErr(true); return }
+    setSaveErr(false); setDirty(false); onChange()
   }
   return (
     <div className="focus__narrative">
@@ -481,6 +488,7 @@ function NarrativeView({ entity, onChange }: FocusViewProps) {
       <div className="focus__narrative-bar">
         {dirty ? <button className="focus__promote" onClick={save}>Save</button>
                : <span className="focus__placeholder">Saved. The Stylist reviews on focus.</span>}
+        {saveErr && <span className="focus__drift-note">save failed — your edit is still here; try again</span>}
       </div>
     </div>
   )

@@ -56,12 +56,15 @@ export function useProposals(threadId: string | null, onWorldChange?: () => void
 
   const accept = useCallback(async (p: Proposal) => {
     setProposals(prev => prev.filter(x => x.id !== p.id))   // optimistic
-    await fetch(`/api/proposals/${p.id}/accept`, { method: 'POST' }).catch(() => {})
+    const ok = await fetch(`/api/proposals/${p.id}/accept`, { method: 'POST' })
+      .then(r => r.ok).catch(() => false)
     onWorldChange?.()
-    setUndoable({ id: p.id, label: ACCEPTED_LABEL[p.kind] ?? 'Done' })
-    clearTimeout(undoTimer.current)
-    undoTimer.current = setTimeout(() => setUndoable(null), 8000)
-    load()
+    if (ok) {   // no success toast + Undo for an accept that never happened
+      setUndoable({ id: p.id, label: ACCEPTED_LABEL[p.kind] ?? 'Done' })
+      clearTimeout(undoTimer.current)
+      undoTimer.current = setTimeout(() => setUndoable(null), 8000)
+    }
+    load()      // reconciles: a failed accept resurrects the card
   }, [load, onWorldChange])
 
   const dismiss = useCallback(async (p: Proposal) => {

@@ -24,7 +24,9 @@ export type TreeNode = FileNode & {
 export interface FileActions {
   onPromote?: (node: TreeNode) => void
   /** Toggle pin. `pinned` is the NEW state (true=pin, false=unpin). */
-  onPin?: (node: TreeNode, pinned: boolean) => void
+  /** Returns success — `false` (sync or via promise) REVERTS the optimistic
+   *  glyph flip, so a failed pin/unpin can't leave a phantom pinned state. */
+  onPin?: (node: TreeNode, pinned: boolean) => void | boolean | Promise<void | boolean>
   onDiscuss?: (node: TreeNode) => void
   /** Durably retain a not-yet-kept file (at-risk / in-sandbox) — the §6.2 late-pin. */
   onKeep?: (node: TreeNode) => void
@@ -251,11 +253,14 @@ export default function FileBrowser({
         {actions.onPin && (
           <button className={`files__action files__action--pin ${isPinned ? 'files__action--pinned' : ''}`}
                   title={isPinned ? 'Unpin from the thread' : 'Pin to the thread'} aria-label={isPinned ? 'Unpin' : 'Pin'}
-                  onClick={e => {
+                  onClick={async e => {
                     e.stopPropagation()
                     const next = !isPinned
                     setPinned(s => { const n = new Set(s); next ? n.add(node.path) : n.delete(node.path); return n })
-                    actions.onPin!(node, next)
+                    const ok = await Promise.resolve(actions.onPin!(node, next)).catch(() => false)
+                    if (ok === false) {   // server said no — revert the flip
+                      setPinned(s => { const n = new Set(s); next ? n.delete(node.path) : n.add(node.path); return n })
+                    }
                   }}>
             <PinGlyph filled={isPinned} />
           </button>
