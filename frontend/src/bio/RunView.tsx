@@ -18,6 +18,8 @@ import './RunView.css'
 
 export interface RunMeta {
   executor?: string; status?: string; where?: string; queue?: string; scheduler_job_id?: string
+  /** distinct REMOTE sites this run's steps executed on (backend-stamped) */
+  sites?: string[]
   resources?: { cores?: number; mem?: string; walltime?: string }
   submitted_at?: string; started_at?: string; finished_at?: string
   command?: string; log_tail?: string; error?: string
@@ -67,7 +69,11 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onPre
   void entities
   const m = (run.metadata?.run ?? {}) as RunMeta
   const status = m.status || 'succeeded'
-  const hpc = m.executor === 'remote-hpc'
+  // Placement: metadata.run.sites is the live signal (stamped at each remote
+  // step's completion); the executor marker covers imported/legacy runs. A
+  // run with neither ran locally — which the verdict says explicitly.
+  const remoteSites = (m.sites ?? []).filter(s => s && s !== 'local')
+  const hpc = remoteSites.length > 0 || m.executor === 'remote-hpc'
   const active = status === 'running' || status === 'queued'
   const [editing, setEditing] = useState(false)
   const [title, setTitle] = useState(run.title)
@@ -206,7 +212,7 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onPre
   // local run reads `ran locally · 2 min`). Failed runs headline the CAUSE —
   // m.error carries the plain-language translation when one exists; the raw
   // log stays behind the Log toggle.
-  const siteName = hpc ? (m.where || 'cluster') : null
+  const siteName = hpc ? (remoteSites.join(' + ') || m.where || 'cluster') : null
   const dur = rel(m.started_at || m.submitted_at, m.finished_at)
   const nTotal = duraSummary?.total ?? 0
   const nKept = (duraSummary?.retained ?? 0) + (duraSummary?.saving ?? 0)

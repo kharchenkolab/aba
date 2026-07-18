@@ -241,6 +241,15 @@ def register_artifacts_from_tool_result(
                           for a in (result_obj.get(grp) or []) if a.get("original_name")] \
                     if isinstance(result_obj, dict) else []
                 refresh_output_manifest(_rid, plot_urls_by_name=_by_name, ensure_names=_names)
+                # Placement truth for the Run card: results that ran through
+                # the substrate carry a compute block — stamp the site so the
+                # §8d verdict can say "ran on <site>" instead of the default
+                # local story (remote-sync AND background jobs both land here).
+                _comp = result_obj.get("compute") if isinstance(result_obj, dict) else None
+                if isinstance(_comp, dict):
+                    from content.bio.lifecycle.runs import note_run_site
+                    note_run_site(_rid, (_comp.get("placement") or {}).get("site")
+                                  or _comp.get("site"))
         except Exception:  # noqa: BLE001 — manifest is best-effort cosmetic
             pass
     return refreshed

@@ -269,6 +269,30 @@ def close_run(thread_id: str) -> Optional[str]:
     return rid
 
 
+def note_run_site(run_id: Optional[str], site: Optional[str]) -> None:
+    """Record WHERE a step of this Run executed (metadata.run.sites, deduped;
+    'local' is the default story so only REMOTE placement is recorded). The
+    Run card's §8d verdict renders placement from this — the legacy
+    executor:'remote-hpc' marker died with the retired sbatch lane, leaving
+    every remote run's card claiming 'ran locally' (found live by the
+    browser UI study). Best-effort, never raises."""
+    if not run_id or not site or site == "local":
+        return
+    try:
+        ent = get_entity(run_id)
+        if not ent:
+            return
+        run_meta = dict((ent.get("metadata") or {}).get("run") or {})
+        sites = list(run_meta.get("sites") or [])
+        if site in sites:
+            return
+        run_meta["sites"] = sites + [site]
+        from core.graph.entities import patch_metadata
+        patch_metadata(run_id, {"run": run_meta})
+    except Exception:  # noqa: BLE001 — placement note must never break a run
+        pass
+
+
 def _declared_output_names(run_metadata: dict) -> set:
     """Filename-like `expected_outputs` declared across the plan that opened this Run
     (recipe `produces:`) — as basenames. The §6 rank-1 "declared" keep signal. Empty if

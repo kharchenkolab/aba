@@ -63,12 +63,31 @@ def test_patch_missing_entity_returns_none():
     assert patch_metadata("ana_nope", {"k": 1}) is None
 
 
+def test_note_run_site_records_remote_placement():
+    """The Run card's verdict reads metadata.run.sites — the legacy
+    executor:'remote-hpc' marker has no writer since the sbatch lane retired,
+    so remote runs claimed 'ran locally' (browser-study finding). local is
+    the default story and is never recorded; sites dedupe."""
+    from content.bio.lifecycle.runs import note_run_site
+    eid = create_entity(entity_type="analysis", title="placement run",
+                        metadata={"run": {"outputs": []}})
+    note_run_site(eid, "local")          # default story — not recorded
+    assert "sites" not in (get_entity(eid)["metadata"].get("run") or {})
+    note_run_site(eid, "hpc")
+    note_run_site(eid, "hpc")            # dedup
+    note_run_site(eid, "mendel")
+    run_meta = get_entity(eid)["metadata"]["run"]
+    assert run_meta["sites"] == ["hpc", "mendel"]
+    assert run_meta["outputs"] == []     # sibling keys untouched
+
+
 if __name__ == "__main__":
     rc = 0
     for t in (test_patch_sets_only_named_keys,
               test_interleaved_writers_do_not_drop_each_other,
               test_patch_replaces_key_wholly_and_none_removes,
-              test_patch_missing_entity_returns_none):
+              test_patch_missing_entity_returns_none,
+              test_note_run_site_records_remote_placement):
         try:
             t()
             print(f"  [PASS] {t.__name__}")

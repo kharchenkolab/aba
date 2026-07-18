@@ -39,6 +39,19 @@ describe('RunView action band', () => {
     expect(screen.getByText(/^ran locally/)).toBeTruthy()
   })
 
+  it('the verdict names the REMOTE site from metadata.run.sites', async () => {
+    // the legacy executor:'remote-hpc' marker has no writer since the sbatch
+    // lane retired — every remote run's card read "ran locally" (found live
+    // by the browser UI study); metadata.run.sites is the stamped truth
+    const remote = { id: 'ana_r', type: 'analysis', title: 'bulk', metadata: {
+      run: { status: 'succeeded', sites: ['hpc'] } } } as unknown as never
+    await act(async () => {
+      render(<RunView run={remote} entities={[]} onFocus={() => {}} onChange={() => {}} />)
+    })
+    expect(screen.getByText(/^ran on hpc/)).toBeTruthy()
+    expect(screen.queryByText(/^ran locally/)).toBeNull()
+  })
+
   it('failed runs headline the cause in the verdict', async () => {
     const failed = { id: 'ana_f', type: 'analysis', title: 'sweep', metadata: {
       run: { status: 'failed', error: 'the input data at /x changed since registration\nlong trace…' },
