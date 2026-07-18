@@ -146,6 +146,10 @@ _PROJECTORS: dict[str, Callable[[dict], Any]] = {
     "status":             lambda e: e.get("status"),
     "tags":               lambda e: e.get("tags") or [],
     "notes":              lambda e: e.get("notes") or "",
+    # retention-critical: a Run whose keepers could not be kept carries
+    # this alert — invisible to the agent before it was projected here
+    # (live finding: the agent read the run and IMPROVISED a wrong cause)
+    "retention_alert":    lambda e: _md(e, "retention_alert"),
     "artifact_path":      lambda e: e.get("artifact_path"),
     "exec_id":            lambda e: e.get("exec_id"),
     "artifact_kind":      lambda e: e.get("artifact_kind"),
@@ -277,7 +281,7 @@ def _resolve_view_path(path: str):
     return None
 
 
-_UNIVERSAL_FALLBACK = ["title", "status", "tags", "notes"]
+_UNIVERSAL_FALLBACK = ["title", "status", "tags", "notes", "retention_alert"]
 
 # Top-level entity columns (vs metadata fields). The HTTP PATCH route
 # (main.py: entities_patch) is the source of truth; this list mirrors
