@@ -87,6 +87,15 @@ if [ -n "${ABA_SIF:-}" ]; then
   # Derived, not hardcoded: a site may root the deployment anywhere its nodes can read.
   _share="${ABA_SHARE:-$(dirname "${ABA_SITE_CONFIG:-/cluster/aba/site.yaml}")}"
   [ -d "${_share}" ] && binds+=( --bind "${_share}" )
+  # Also bind the DEPLOYMENT root (the dir holding site.yaml). Under the versioned layout
+  # ABA_SHARE is the release_root (…/app), so this is what covers the siblings envs/ (the
+  # published weft images consumers adopt), installation/, refs/. Skip if it's the same
+  # dir or already under a bound tree like /groups.
+  _deploy_root="$(dirname "${ABA_SITE_CONFIG:-/cluster/aba/site.yaml}")"
+  case "${_deploy_root}/" in
+    "${_share}/"*|/groups/*) ;;                                  # already covered
+    *) [ -d "${_deploy_root}" ] && binds+=( --bind "${_deploy_root}" ) ;;
+  esac
   # site.yaml `binds:` (→ ABA_EXTRA_BINDS): any further host paths the deployment needs
   # visible under --containall — e.g. a group/user tree outside /groups.
   for b in ${ABA_EXTRA_BINDS:-}; do [ -e "$b" ] && binds+=( --bind "$b" ); done
