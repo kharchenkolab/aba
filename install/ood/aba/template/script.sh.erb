@@ -7,15 +7,17 @@
 # is per-session here (the proxy prefix differs each launch). If ABA_SIF is set
 # (site.yaml image.sif) the backend runs FROM the image; otherwise from the
 # bind-mounted repo + venv (dev / direct nodes).
-set -x
+[ -n "${ABA_OOD_DEBUG:-}" ] && set -x   # opt-in shell trace (ABA_OOD_DEBUG=1); off by default
 
-ABA=/home/pkharchenko/aba/aba
-VENV=/home/pkharchenko/aba/aba_runtime/.venv
+# NON-SIF (dev/bare) lane repo + venv. NO personal path is baked into this shared
+# template: the code+venv come from a promoted release (below) or, for a bare dev node
+# with neither a SIF nor a release, from ABA_DEV_REPO / ABA_DEV_VENV set on the OOD app.
+ABA="${ABA_DEV_REPO:-}"
+VENV="${ABA_DEV_VENV:-}"
 # Versioned-release resolution for the NON-SIF lane (misc/slim_sif_deploy.md):
-# when the share carries a promoted release (releases/<id> or `current`), the
-# session code comes FROM the release payload — pin-on-launch and atomic swap
-# hold in the dev/bare lane exactly as in the SIF lane. The hardcoded repo
-# above remains the fallback for shares without a release tree.
+# when the share carries a promoted release (releases/<id> or `current`), the session
+# code — AND the venv, when the release ships an `env` component — come FROM the release
+# payload, so pin-on-launch + atomic swap hold in the bare lane exactly as in the SIF lane.
 if [ -z "${ABA_SIF:-}" ]; then
   _share="${ABA_SHARE:-/cluster/aba}"
   _rel="${ABA_RELEASE_ID:+${_share}/releases/${ABA_RELEASE_ID}}"
@@ -23,6 +25,7 @@ if [ -z "${ABA_SIF:-}" ]; then
   _rel="${_rel:-${_share}/current}"
   if [ -e "${_rel}/repo/backend" ]; then
     ABA="$(readlink -f "${_rel}/repo")"
+    [ -x "${_rel}/env/aba-venv/bin/python" ] && VENV="$(readlink -f "${_rel}/env/aba-venv")"
     echo "ABA: session code from release $(basename "$(readlink -f "${_rel}")") at ${ABA}"
   fi
 fi
@@ -181,6 +184,12 @@ if [ -n "${ABA_SIF:-}" ]; then
   UV=$!
 else
   # --- run from the bind-mounted repo + venv (dev / direct nodes) ---
+  if [ -z "${ABA}" ] || [ ! -x "${VENV}/bin/python" ]; then
+    echo "ABA: non-SIF lane but no repo/venv resolved (ABA='${ABA}', VENV='${VENV}')."
+    echo "     Set image.sif or image.release_root in site.yaml, or ABA_DEV_REPO + ABA_DEV_VENV"
+    echo "     on the OOD app for a bare dev node. Not launching."
+    exit 1
+  fi
   export ABA_TOOLS_DIR="${ABA_TOOLS_DIR:-$(dirname "${VENV}")/envs/tools}"
   cd "${ABA}/backend"
   "${VENV}/bin/python" -m uvicorn main:app --host 0.0.0.0 --port "${port}" &
