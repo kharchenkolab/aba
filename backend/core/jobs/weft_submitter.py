@@ -300,16 +300,19 @@ class WeftSubmitter:
         (payload / script).write_text(params.get("code", ""))
         _shutil.copyfile(Path(__file__).with_name("detached_entry.py"),
                          payload / "aba_entry.py")
+        timeout_s = int(params.get("timeout_s") or 600)
         (payload / "spec.json").write_text(json.dumps({
             "interpreter": "Rscript" if lang == "r" else "python3",
             "script": script,
             # memo nonce: identical code must NOT collide into weft's task
             # memo — "Re-run as-is" would silently return the cached result
             "job_id": job["id"],
+            # enforced BY THE HARNESS on the node — ssh sites have no
+            # scheduler walltime, so this is the only wall enforcement there
+            "timeout_s": timeout_s,
         }))
         ref = _adapter().sync_call("data_register", str(payload),
                                    ingest=True)["ref"]
-        timeout_s = int(params.get("timeout_s") or 600)
         est = params.get("estimate") or {}
         resources = {"cpus": int(est.get("cores") or 1)}
         if est.get("mem_gb"):

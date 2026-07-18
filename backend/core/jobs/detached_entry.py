@@ -14,9 +14,13 @@ as a SUBPROCESS per spec.json, so any runtime the node/env provides works
   payload/aba_entry.py    this file
   payload/user_code.py    (or user_code.R, ... — named by spec.script)
   payload/spec.json       {"interpreter": "python3"|"Rscript",
-                           "script": "user_code.py", "job_id": "<nonce>"}
+                           "script": "user_code.py", "job_id": "<nonce>",
+                           "timeout_s": <ceiling>}
                           job_id doubles as the MEMO NONCE: identical code
-                          must not collide into weft's task memo.
+                          must not collide into weft's task memo. timeout_s
+                          is enforced HERE (the node kills the script) —
+                          ssh-kind sites have no scheduler walltime, so
+                          without this a runaway loop runs forever.
   result.json             written HERE on completion:
                           {status, returncode, error?, stdout_tail,
                            outputs: [relpaths produced], runtime, seconds}
@@ -60,6 +64,7 @@ def main() -> int:
         spec = json.load(fh)
     interp = spec.get("interpreter") or "python3"
     script = os.path.join("payload", spec.get("script") or "user_code.py")
+    timeout = spec.get("timeout_s")   # ceiling; absent (legacy spec) → unbounded
     result = {"status": "ok", "returncode": 0, "stdout_tail": "",
               "outputs": [], "runtime": "", "seconds": 0.0,
               "job_id": spec.get("job_id")}
@@ -72,7 +77,8 @@ def main() -> int:
     result["runtime"] = _runtime_version(exe)
     before = _snapshot()
     try:
-        p = subprocess.run([exe, script], capture_output=True, text=True)
+        p = subprocess.run([exe, script], capture_output=True, text=True,
+                           timeout=timeout or None)
         tail = (p.stdout or "")[-20000:]
         if p.stderr:
             tail += ("\n--- stderr ---\n" + p.stderr[-6000:])
@@ -82,6 +88,15 @@ def main() -> int:
             result["status"] = "error"
             result["error"] = (p.stderr or p.stdout or "")[-2000:] \
                 or f"exit code {p.returncode}"
+    except subprocess.TimeoutExpired as e:
+        partial = e.stdout or ""
+        if isinstance(partial, bytes):
+            partial = partial.decode(errors="replace")
+        result["stdout_tail"] = partial[-20000:]
+        result.update(status="error", returncode=124,
+                      error=f"timed out after {timeout}s — the script was "
+                            f"killed on the node (timeout_s ceiling; raise it "
+                            f"or use a sized background job)")
     except Exception as e:  # noqa: BLE001 — report, never swallow
         result.update(status="error", returncode=1, error=str(e)[:2000])
     result["outputs"] = sorted(_snapshot() - before - {"result.json"})

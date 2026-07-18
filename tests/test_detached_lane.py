@@ -103,11 +103,39 @@ def test_detached_submit_ships_code_as_data(monkeypatch):
     assert (payload / "user_code.py").read_text() == "print('x')"
     spec = json.loads((payload / "spec.json").read_text())
     assert spec["job_id"] == "job_det_a" and spec["interpreter"] == "python3"
+    assert spec["timeout_s"] == 60      # enforced by the harness on the node
     # params updated: detached + honest env grade (no env resolvable here)
     row = get_job("job_det_a", project_id="default")
     p = row["params"]
     assert p["detached"] is True and p["weft_id"] == "wj_1"
     assert p.get("env_grade") == "node-system"
+
+
+def test_harness_enforces_timeout(_mp=None):
+    """The node-side harness kills the script at spec.timeout_s and writes an
+    error result — the ONLY wall enforcement on ssh-kind sites (no scheduler
+    walltime there): without it a runaway background job runs forever."""
+    import shutil as _sh
+    import subprocess as _sp
+    import time as _t
+    wd = Path(tempfile.mkdtemp(prefix="aba_harness_"))
+    payload = wd / "payload"
+    payload.mkdir()
+    _sh.copyfile(Path(_BACKEND) / "core" / "jobs" / "detached_entry.py",
+                 payload / "aba_entry.py")
+    (payload / "user_code.py").write_text(
+        "import time\nprint('started', flush=True)\ntime.sleep(60)\n")
+    (payload / "spec.json").write_text(json.dumps(
+        {"interpreter": "python3", "script": "user_code.py",
+         "job_id": "job_hto", "timeout_s": 1}))
+    t0 = _t.time()
+    p = _sp.run([sys.executable, "payload/aba_entry.py"], cwd=wd,
+                capture_output=True, text=True, timeout=30)
+    assert _t.time() - t0 < 20                      # killed at ~1s, not 60
+    res = json.loads((wd / "result.json").read_text())
+    assert res["status"] == "error" and p.returncode == 1
+    assert "timed out after 1s" in res["error"] and res["returncode"] == 124
+    assert "started" in res["stdout_tail"]          # partial output preserved
 
 
 def test_detached_slurm_walltime_only_when_sized(monkeypatch):
@@ -408,6 +436,7 @@ def _standalone() -> int:
 
     rc = 0
     for t in (test_detached_submit_ships_code_as_data,
+              test_harness_enforces_timeout,
               test_detached_slurm_walltime_only_when_sized,
               test_platform_mismatch_relocks_once_and_retries,
               test_detached_poll_fetches_results_over_data_plane,
