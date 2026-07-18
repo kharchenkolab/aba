@@ -497,6 +497,44 @@ def _producing_exec_id(input_: dict, ctx: dict | None) -> str | None:
         return None
 
 
+def _url_preflight(url: str) -> str | None:
+    """Best-effort semantic pre-check for the URL lane — datasets.py's
+    register_source explicitly leaves this to the caller. Catches the classic
+    trap: `url=` pointing at a directory-listing / landing / error page, which
+    would otherwise register a tiny HTML page as the "dataset" with no
+    complaint. Controller-side HEAD; every INCONCLUSIVE outcome (no network
+    here, server refuses HEAD, presigned URLs that 403 on HEAD) returns None —
+    the real fetch may run on a site with different connectivity, so only a
+    POSITIVE "this is HTML" / "this URL errors" blocks."""
+    if not url.startswith(("http://", "https://")):
+        return None                    # object-store schemes: no HEAD semantics
+    from urllib.parse import urlsplit
+    from urllib import request as _rq, error as _er
+    if urlsplit(url).path.lower().endswith((".html", ".htm", ".xhtml")):
+        return None                    # explicitly asking for an HTML document
+    try:
+        req = _rq.Request(url, method="HEAD",
+                          headers={"User-Agent": "aba-dataset-preflight"})
+        with _rq.urlopen(req, timeout=8) as r:
+            ctype = (r.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+    except _er.HTTPError as e:
+        if e.code in (403, 405, 501):  # HEAD refused/forbidden — inconclusive
+            return None
+        return (f"URL preflight: {url} answered HTTP {e.code} — nothing "
+                f"fetchable there. Check the link (fetching anyway would have "
+                f"registered the error page as the dataset).")
+    except Exception:  # noqa: BLE001 — no network HERE ≠ no network on the site
+        return None
+    if ctype in ("text/html", "application/xhtml+xml"):
+        return (f"URL preflight: {url} serves an HTML page ({ctype}), not a "
+                f"data file — usually a directory listing or landing page; "
+                f"registering it would mint a junk dataset. Pass a direct "
+                f"file URL. For a multi-file bundle, fetch the files into one "
+                f"directory (on the target site for remote data) and register "
+                f"that directory with `path=` (+ `site=`).")
+    return None
+
+
 def _register_dataset_url(url: str, site: str | None, title: str,
                           input_: dict, ctx: dict | None) -> dict:
     """URL lane (misc/datasets2.md §4A): weft fetches into the target site's
@@ -510,6 +548,9 @@ def _register_dataset_url(url: str, site: str | None, title: str,
     from core.graph.entities import create_entity, update_entity
     from core.graph.derivation import imported
     from content.bio.lifecycle.runs import agent_actor_for_thread
+    err = _url_preflight(url)
+    if err:
+        return {"error": err}
     try:
         rec = _wds.register_source(url, site=site)
     except Exception as e:  # noqa: BLE001 — structured cause to the agent
@@ -660,6 +701,18 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
         # Multi-path mode: resolve each, link them into a fresh DATA_DIR/<slug>/
         # bundle, register THAT bundle. Lets the agent register only the files
         # it actually wants without dragging derivatives that sit nearby on disk.
+        # This is a LOCAL operation (hardlink/copy into this machine's project
+        # data dir) — refuse a remote `site=` instead of silently dropping it:
+        # the files live on the site, the links would all come up missing, and
+        # the caller would get a hollow bundle with no hint why.
+        if site and site != "local":
+            return {"error": (
+                f"`paths=[…]` bundles files into this machine's DATA_DIR and "
+                f"cannot target a remote site (site={site!r} would be ignored). "
+                f"For a multi-file bundle on {site!r}: put the files into ONE "
+                f"directory there (e.g. a background job on the site), then "
+                f"register that directory with `path=<dir>, site={site!r}` — "
+                f"one dataset, bytes stay on the site.")}
         resolved = [_resolve_dataset_path(str(p), ctx) for p in paths_list]
         try:
             abspath, present, missing = _bundle_paths_into_data_dir(resolved, str(title))
@@ -951,6 +1004,19 @@ def add_to_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
         return {"error": f"dataset {dsid} not found"}
     if ent.get("type") != "dataset":
         return {"error": f"{dsid} is a {ent.get('type')}, not a dataset"}
+    # A remote-home dataset's directory lives on its site; a local isdir()
+    # check would fail and mislabel it "not directory-shaped". Refuse with
+    # the real reason and the working recipe instead.
+    md = ent.get("metadata") or {}
+    home_site = ((md.get("home") or {}).get("site")
+                 or md.get("dataset_site") or "local")
+    if home_site != "local":
+        where = ent.get("artifact_path") or md.get("ref_path")
+        return {"error": (
+            f"dataset {dsid} lives on site {home_site!r} at {where!r} — this "
+            f"tool links files locally and cannot reach it. Write the new "
+            f"files into that directory ON {home_site!r} (e.g. a background "
+            f"job on the site); they become part of the dataset in place.")}
     dest_dir = ent.get("artifact_path")
     if not dest_dir or not os.path.isdir(dest_dir):
         return {"error": f"dataset {dsid} is not directory-shaped "

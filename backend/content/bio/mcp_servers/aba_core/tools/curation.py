@@ -115,14 +115,20 @@ def register_curation_tools(mcp: FastMCP) -> None:
         - `path` (or `paths`) — a file/folder you produced or that already
           exists. Data already in place on shared/durable storage is
           registered BY REFERENCE (fingerprint only — no copy, however
-          large; identity is minted when it is first used).
-        - `url` — a plain http(s)/s3/gs URL: aba fetches it directly (no
-          need to download in run_python first). Add `site` to fetch it
-          straight onto that machine (bytes never travel through here) —
-          preferred when the analysis will run there.
+          large; identity is minted when it is first used). `paths` bundles
+          the listed LOCAL files into one dataset directory; it cannot
+          target a remote site — for a multi-file bundle on a site, gather
+          the files into one directory there and register that directory
+          with `path` + `site`.
+        - `url` — a plain http(s)/s3/gs URL to ONE data file: aba fetches
+          it directly (no need to download in run_python first). Not a
+          directory/listing URL — an HTML page is refused. Add `site` to
+          fetch straight onto that machine (bytes never travel through
+          here) — preferred when the analysis will run there.
         - `path` + `site` — data that lives ON a connected machine (e.g. a
           cluster's /groups share): checked and fingerprinted there,
-          registered by reference, never copied.
+          registered by reference, never copied. Works for a directory —
+          this is the canonical shape for a multi-file bundle on a site.
         Registering the same url/path twice reuses the existing dataset (no
         re-fetch) — it tells you so.
 
@@ -157,8 +163,10 @@ def register_curation_tools(mcp: FastMCP) -> None:
     @mcp.tool()
     def add_to_dataset(dataset_id: str, paths: list[str],
                        aba_ctx_id: str | None = None) -> dict:
-        """Hardlink one or more files into an existing directory-shaped
-        dataset's bundle."""
+        """Hardlink one or more LOCAL files into an existing
+        directory-shaped dataset's bundle. For a dataset homed on a remote
+        site, write the files into its directory on that site instead
+        (e.g. a background job there) — they join the dataset in place."""
         from core.runtime.tool_ctx import peek_ctx
         from content.bio.tools import add_to_dataset_tool
         return add_to_dataset_tool(
