@@ -1256,6 +1256,42 @@ def mn_missing_then_recover(client, pid, tid):
     ]
 
 
+@scenario("mn_bundle_header_drift")
+def mn_bundle_header_drift(client, pid, tid):
+    """The messy-multifile persona's REAL failure mode: a two-part export
+    where part B renamed a column (val → amount) and reordered the columns.
+    Register as ONE dataset and total the measure across both parts: the
+    agent must NOTICE the schema drift, disclose it, and produce the true
+    total — not silently misparse part B (a positional read would grab ids)
+    and not fabricate."""
+    ddir = R_DATA + "-hd"
+    hssh(f"mkdir -p {ddir} && "
+         f"(echo id,val; seq 0 149 | awk '{{print $1\",\"($1*2)%9}}') "
+         f"> {ddir}/part_a.csv && "
+         f"(echo amount,id; seq 150 299 | awk '{{print ($1*2)%9\",\"$1}}') "
+         f"> {ddir}/part_b.csv")
+    expected = str(sum((i * 2) % 9 for i in range(300)))
+    caps = [drive_turn(client, pid, tid,
+        f"The directory {ddir} on machine 'hpc' holds a two-part quarterly "
+        f"export (part_a.csv, part_b.csv) — same measurements, but the "
+        f"exports may not be perfectly consistent. Register it as ONE "
+        f"dataset called 'HD export' homed on hpc by reference, then "
+        f"compute the total of the measurement column across BOTH parts "
+        f"and tell me the total.", timeout_s=1200)]
+    txt = _denum(all_text(caps) + "\n" + agent_text(client, pid, tid))
+    ds = [d for d in find_entities(type="dataset", not_deleted=True)
+          if "hd export" in (d.get("title") or "").lower()]
+    disclosed = any(w in txt.lower() for w in
+                    ("renam", "amount", "different column", "column name",
+                     "header", "schema", "inconsistent", "differs",
+                     "reordered", "different name"))
+    return caps, [
+        ("ONE dataset entity for the bundle", len(ds) == 1),
+        ("true total across both drifted parts", _denum(expected) in txt),
+        ("schema drift disclosed, not silently smoothed over", disclosed),
+    ]
+
+
 @scenario("mn_cbe_smoke")
 def mn_cbe_smoke(client, pid, tid):
     """REAL-cluster smoke (cbe.next, slurm 26.05, real slurmdbd): one
@@ -1379,7 +1415,8 @@ def main():
                   mn_data_gravity_recall, mn_conflicting_gravity,
                   mn_cross_thread_separation, mn_mid_chain_steering,
                   mn_repeat_sync, mn_interrupt_sync, mn_first_use,
-                  mn_cbe_smoke, mn_missing_then_recover]]
+                  mn_cbe_smoke, mn_missing_then_recover,
+                  mn_bundle_header_drift]]
     # --only must NAME REAL scenarios: an unmatched filter ran ZERO scenarios
     # and printed ALL PASS vacuously (the exact bug class this study hunts)
     if only:
