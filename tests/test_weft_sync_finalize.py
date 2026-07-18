@@ -204,6 +204,43 @@ def test_reconcile_adopts_orphaned_sync_rows():
     check("poll loop still ignores the reaped row", jid_nosub not in watched)
 
 
+# ── 5. jobs-plane lease: single writer per runtime ───────────────────────────
+
+def test_jobs_plane_lease_single_writer():
+    import fcntl
+    from core.config import PROJECTS_DIR
+    check("first acquire wins", runner._acquire_jobs_lease() is True)
+    lease = PROJECTS_DIR.parent / "jobs.lease"
+    fd = os.open(lease, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            second = True     # would mean two writers can own the jobs plane
+        except OSError:
+            second = False
+    finally:
+        os.close(fd)
+    check("second writer refused while lease held", second is False)
+
+
+def test_start_worker_refuses_without_lease():
+    called = {"reconcile": False}
+    orig_acq = runner._acquire_jobs_lease
+    orig_rec = runner.reconcile_jobs
+    orig_started = runner._WORKER_STARTED
+    runner._acquire_jobs_lease = lambda: False
+    runner.reconcile_jobs = lambda: called.update(reconcile=True)
+    runner._WORKER_STARTED = False
+    try:
+        runner.start_worker()      # must return BEFORE reconcile/task creation
+    finally:
+        runner._acquire_jobs_lease = orig_acq
+        runner.reconcile_jobs = orig_rec
+    check("refused instance runs no reconcile", called["reconcile"] is False)
+    check("refusal is final for the process", runner._WORKER_STARTED is True)
+    runner._WORKER_STARTED = orig_started
+
+
 def _run():
     import traceback
     fails = 0

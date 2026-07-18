@@ -1151,6 +1151,56 @@ async def _inline_watchdog_loop() -> None:
         await asyncio.sleep(_INLINE_WATCH_S)
 
 
+_JOBS_LEASE_FD = None
+
+
+def _acquire_jobs_lease() -> bool:
+    """Single-writer ownership of the jobs plane (reconcile / worker / poll
+    loops) for THIS runtime's project DBs. Two aba instances sharing one
+    runtime — e.g. a long-running dev server plus a stale installed backend
+    briefly booted by the tray helper — BOTH finalized the same job rows; the
+    older instance evaluated detached tasks through its shared-fs-only poll
+    and stamped false "no result.json (infra failure)" verdicts onto runs
+    that had SUCCEEDED (live incident 2026-07-18, misc/bug1.md P0: the
+    intermittent, restart-independent false failures were the foreign
+    instance's poll loop). An exclusive flock lets only the first instance
+    run the jobs plane; later instances still serve their API but log a loud
+    refusal instead of silently double-finalizing. ABA_JOBS_LEASE=off skips
+    the check (e.g. a runtime dir on a filesystem without sane flock)."""
+    global _JOBS_LEASE_FD
+    if os.environ.get("ABA_JOBS_LEASE", "").lower() in ("off", "0", "no"):
+        return True
+    try:
+        import fcntl
+        from core.config import PROJECTS_DIR
+        lease = PROJECTS_DIR.parent / "jobs.lease"
+        lease.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(lease, os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            holder = ""
+            try:
+                holder = os.read(fd, 256).decode(errors="replace").strip()
+            except Exception:  # noqa: BLE001
+                pass
+            os.close(fd)
+            print("[jobs] WARNING jobs plane REFUSED: another aba instance "
+                  f"holds this runtime's lease ({holder or 'holder unknown'}). "
+                  "This instance serves the API but runs NO worker, reconcile, "
+                  "or poll loops — two writers on one jobs plane finalize each "
+                  "other's rows. Stop the other instance to take ownership.",
+                  flush=True)
+            return False
+        os.ftruncate(fd, 0)
+        os.write(fd, f"pid={os.getpid()}".encode())
+        _JOBS_LEASE_FD = fd            # held for the life of the process
+        return True
+    except Exception as e:  # noqa: BLE001 — lease trouble must not kill the server
+        print(f"[jobs] jobs-lease check skipped ({e})", flush=True)
+        return True
+
+
 def start_worker() -> None:
     """Launch the worker task once, from FastAPI startup.
 
@@ -1159,6 +1209,9 @@ def start_worker() -> None:
     state from a dead process."""
     global _WORKER_STARTED
     if _WORKER_STARTED:
+        return
+    if not _acquire_jobs_lease():
+        _WORKER_STARTED = True         # refusal is final for this process
         return
     try:
         reconcile_jobs()
