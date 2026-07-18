@@ -337,16 +337,22 @@ def ui_remote_run_badges(page, api, pid, tid):
     if not runs:
         return [("run created", False)]
     rid = runs[0]["id"]
+    # GROUND TRUTH first: wait until the durable view actually records the
+    # kept remote file (the keep lands in a continuation AFTER the turn) —
+    # only then is there anything for the card to render.
+    kept_remote = False
+    deadline = time.time() + 240
+    while time.time() < deadline and not kept_remote:
+        dv = api.get(f"/api/runs/{rid}/durable").json()
+        kept_remote = any(f.get("state") == "retained" and f.get("site") == "hpc"
+                          for f in dv.get("files", []))
+        time.sleep(6)
     card = page.locator(".runview")           # scope to the CARD — chat text
-    on_hpc = False                            # also says 'on hpc' (false pass)
-    deadline = time.time() + 180
-    while time.time() < deadline and not on_hpc:
-        page.goto(f"{BASE['url']}/p/{pid}/e/{rid}",
-                  wait_until="domcontentloaded")
-        time.sleep(5)
-        on_hpc = card.get_by_text("on hpc", exact=False).count() > 0
+    page.goto(f"{BASE['url']}/p/{pid}/e/{rid}", wait_until="domcontentloaded")
+    time.sleep(5)
     shot(page, "run_card_remote")
     verdict_remote = card.get_by_text("ran on hpc", exact=False).count() > 0
+    badge_remote = card.get_by_text("kept ✓ · on hpc", exact=False).count() > 0
     brought = False
     bb = card.get_by_text("bring the rest back", exact=False)
     if bb.count():
@@ -358,8 +364,10 @@ def ui_remote_run_badges(page, api, pid, tid):
                 brought = True
                 break
         shot(page, "run_card_after_bringback")
-    return [("run created", True), ("CARD reads kept on hpc", on_hpc),
+    return [("run created", True),
+            ("durable view records the kept remote file", kept_remote),
             ("verdict says ran on hpc (placement fix)", verdict_remote),
+            ("CARD badge reads kept ✓ · on hpc", badge_remote),
             ("bring-back lands local bytes (whereabouts clears)", brought)]
 
 
