@@ -16,9 +16,12 @@ import os
 import sys
 from pathlib import Path
 
-# MUST precede the backend import chain — core.config freezes these at import
-os.environ.setdefault("ABA_HISTORY_K_TOOL_KEEP", "3")
-os.environ.setdefault("ABA_HISTORY_K_TEXT_KEEP", "3")
+# MUST precede the backend import chain — core.config freezes these at import.
+# Shrink ONLY the Tier-2 trigger: the K-windows stay at defaults so a short
+# thread's history is NOT pruned first (shrunken K left the pruned history
+# under any threshold and Tier-2 could never fire — first-run finding, caught
+# by the vacuity guard). Tier-2 also requires len(messages) > TAIL_KEEP+2
+# (=22), hence the filler-turn count below.
 os.environ.setdefault("ABA_HISTORY_SUMMARY_THRESHOLD_CHARS", "6000")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -36,12 +39,12 @@ def compaction_survival(client, pid, tid):
         f"Register {URL} as a dataset called 'Signal table'. Then compute "
         f"the sum of its value column and pin that as a Result titled "
         f"'Signal total' with the number in the interpretation.")]
-    # chatty filler turns — enough messages + chars to cross the shrunken
-    # Tier-2 gate (TAIL_KEEP=20 messages AND 6k pruned chars)
-    for k in range(5):
+    # chatty filler turns — enough MESSAGES (>22, the TAIL_KEEP+2 gate) and
+    # enough unpruned CHARS (>6k threshold) for Tier-2 to actually fire
+    for k in range(8):
         caps.append(drive_turn(client, pid, tid,
             f"Quick check #{k}: print the integers from {k*50} to "
-            f"{k*50+120}, one per line, then print their sum on the last "
+            f"{k*50+200}, one per line, then print their sum on the last "
             f"line and tell me just that sum."))
     # the probe question — must be answerable from the DURABLE model alone
     caps.append(drive_turn(client, pid, tid,
