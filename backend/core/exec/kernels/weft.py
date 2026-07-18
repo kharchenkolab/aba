@@ -98,8 +98,8 @@ def for_pool(scope_key: str, lang: str, *, cwd: str, env_name: str | None,
     pid = str(projects.current() or "_none")
     if site and site != _LOCAL_SITE:
         from core.compute.errors import ComputeError
+        from core.compute import named_envs
         if env_name:
-            from core.compute import named_envs
             row = named_envs.resolve(pid, env_name)
             if row is None:
                 return None            # unknown env — caller surfaces the error
@@ -108,6 +108,10 @@ def for_pool(scope_key: str, lang: str, *, cwd: str, env_name: str | None,
             from core.compute import base_env, project_env
             base_env.require(lang)
             env_id = project_env.snapshot(pid, lang)
+        # kernel_start REFUSES an env not realized on its site (task realize
+        # builds implicitly; kernels don't — found by the mendel repro):
+        # pre-realize there, first use pays the build like a first job would
+        named_envs.ensure_ready(env_id, language=lang, site=site)
         setup = _weft_setup_code(lang, remote=True)
         try:
             return WeftKernelSession(scope_key, lang, env_id=env_id, site=site,

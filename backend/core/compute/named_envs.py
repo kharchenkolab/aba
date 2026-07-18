@@ -275,7 +275,7 @@ def _realize_probe(language: str) -> str:
 
 
 def _run_realize_task(env_id: str, ad, timeout_s: int, language: str,
-                      probe: Optional[str] = None) -> str:
+                      probe: Optional[str] = None, site: str = "local") -> str:
     """Submit an env-exercising task; return its terminal state. `probe` overrides
     the language default (e.g. a JVM CLI tool has neither python nor Rscript — it
     runs `<tool> --version`); the command MUST exercise the env or weft resolves
@@ -289,7 +289,7 @@ def _run_realize_task(env_id: str, ad, timeout_s: int, language: str,
     from the lock as a side effect (found live: the eviction/repair path silently
     no-op'd for exactly this reason)."""
     sub = _sync(ad.task_submit({"command": probe or _realize_probe(language),
-                                "env": env_id, "site": "local",
+                                "env": env_id, "site": site,
                                 "label": f"realize {env_id[:16]}"}, force=True))
     job_id = sub["job_id"]
     deadline = time.time() + timeout_s
@@ -320,44 +320,48 @@ def ensure_tool_env(specs: list[str], *, name: str, probe: str,
     return ensure_realized(res["env_id"], timeout_s=timeout_s, probe=probe)
 
 
-def _realization_ready(env_id: str) -> bool:
-    """Strategy-BLIND readiness: is the env realized on the local site?
+def _realization_ready(env_id: str, site: str = "local") -> bool:
+    """Strategy-BLIND readiness: is the env realized on the given site?
 
-    True when either a materialized directory prefix exists (directory strategy)
-    OR weft's `env_status` reports a local realization with `state=="ready"` — the
+    True when either a materialized directory prefix exists (directory strategy,
+    LOCAL only — a local prefix says nothing about a remote machine) OR weft's
+    `env_status` reports a realization on that site with `state=="ready"` — the
     SQUASHFS case, where the env is a read-only image mounted only inside a weft
     task/kernel, so there is NO raw prefix on disk at rest. Use this to answer
     'is it built?' without demanding a path (kernel lanes hand the EnvID to weft,
     which mounts it; module reconcile just needs 'ready')."""
-    if _ready_prefix(env_id) is not None:
+    if site == "local" and _ready_prefix(env_id) is not None:
         return True
     try:
         st = _sync(_adapter.get_compute().env_status(env_id))
     except Exception:  # noqa: BLE001
         return False
-    return any(r.get("site") == "local" and r.get("state") == "ready"
+    return any(r.get("site") == site and r.get("state") == "ready"
                for r in st.get("realizations", []))
 
 
 def ensure_ready(env_id: str, *, timeout_s: int = 900,
-                 language: str = "python", probe: Optional[str] = None) -> None:
-    """Realize the env on the local site if needed; return once it's READY.
+                 language: str = "python", probe: Optional[str] = None,
+                 site: str = "local") -> None:
+    """Realize the env ON THE GIVEN SITE if needed; return once it's READY.
 
     Strategy-blind — does NOT resolve a raw prefix (a squashfs env has none at
     rest). This is the correct call for consumers that only need the env BUILT and
     then run it THROUGH weft (interactive kernel lanes hand the EnvID to
-    `kernel_start(env_id=…)`; module reconcile just needs 'ready'). Raw-prefix
-    consumers (a subprocess exec of `<prefix>/bin/python`) use `ensure_realized`,
-    which is valid only for the directory strategy."""
-    if _realization_ready(env_id):
+    `kernel_start(env_id=…)` — which REFUSES an env not realized on its site,
+    unlike task realize which builds implicitly; module reconcile just needs
+    'ready'). Raw-prefix consumers (a subprocess exec of `<prefix>/bin/python`)
+    use `ensure_realized`, which is valid only for the directory strategy."""
+    if _realization_ready(env_id, site=site):
         return
     ad = _adapter.get_compute()
-    state = _run_realize_task(env_id, ad, timeout_s, language, probe=probe)
-    if not _realization_ready(env_id):
+    state = _run_realize_task(env_id, ad, timeout_s, language, probe=probe,
+                              site=site)
+    if not _realization_ready(env_id, site=site):
         raise ComputeError(
             "env.realize_failed",
-            f"{env_id} could not be realized locally "
-            f"(realize task state={state}) — its lock may be unbuildable here",
+            f"{env_id} could not be realized on {site!r} "
+            f"(realize task state={state}) — its lock may be unbuildable there",
             stage="realize")
 
 

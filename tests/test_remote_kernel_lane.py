@@ -111,6 +111,11 @@ class _FakeCompute:
     def sync_call(self, name, *a, **kw):
         return FAKE.sync_call(name, *a, **kw)
 
+    def env_status(self, env_id):
+        # remote pre-realization check (kernel_start refuses an env not
+        # realized on its site): report ready-on-site so no realize task runs
+        return {"realizations": [{"site": "mendel", "state": "ready"}]}
+
 
 # patch the compute port at its sources (call-time imports)
 import core.compute.adapter as adapter  # noqa: E402
