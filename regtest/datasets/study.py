@@ -634,6 +634,32 @@ def s_garbage(client, pid, tid):
     ]
 
 
+@scenario("bad_input_odd_format")
+def s_odd_format(client, pid, tid):
+    """The spreadsheet-export persona: a semicolon-delimited, Latin-1
+    encoded, CRLF file — the default shape of many European spreadsheet
+    exports. Registration + a correct numeric answer, no mojibake silently
+    poisoning the labels and no wrong-delimiter misparse (a comma-parse
+    would see ONE column and a sum of 0/garbage)."""
+    vals = [(i * 7) % 31 for i in range(150)]
+    expected = sum(vals)
+    body = "id;label;val\r\n" + "\r\n".join(
+        f"{i};ítem-{i} (café)µ;{v}" for i, v in enumerate(vals)) + "\r\n"
+    (www / "export.csv").write_bytes(body.encode("latin-1"))
+    url = URL.rsplit("/", 1)[0] + "/export.csv"
+    cap = drive_turn(client, pid, tid,
+        f"Register {url} as a dataset called 'EU export' and compute the sum "
+        f"of the val column. Tell me the sum and how many rows there are.")
+    txt = cap["text"].replace(",", "")
+    return [cap], [
+        ("dataset registered", any(t["name"] == "register_dataset"
+                                   for t in cap["tools"])),
+        ("sum correct despite ; delimiter + Latin-1 + CRLF",
+         str(expected) in txt),
+        ("row count correct", "150" in txt),
+    ]
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 def main():
     only = None
@@ -651,7 +677,8 @@ def main():
 
     scenarios = [(fn._scenario, fn) for fn in
                  [s_url, s_reuse, s_remote, s_drift, s_produced,
-                  s_keep_reuse, s_keep_triage, s_alert_loop, s_garbage]]
+                  s_keep_reuse, s_keep_triage, s_alert_loop, s_garbage,
+                  s_odd_format]]
     if only:
         known = {name for name, _ in scenarios}
         unknown = only - known
