@@ -795,9 +795,14 @@ def _run_remote_kernel(input_: dict, ctx: dict | None, project_id: str,
            "note": note}
     if env_name:
         out["env"] = env_name
+    # sidecar goes to LOCAL thread scratch — the kernel's work_dir is a
+    # REMOTE path; passing its "site:krn_x" label as cwd mkdir'd literal
+    # `site:krn_*` dirs under the backend process cwd (found as droppings
+    # in the repo after the live studies)
     _eid = _write_exec_record(
         lang="python", ctx=ctx, code=code,
-        cwd=f"{site}:{sess.kernel_id}", sess=sess,
+        cwd=str(scratch_dir(str(project_id), f"thread-{thread_id}")),
+        sess=sess,
         started_iso=started_iso, started_ts=start_ts, res=res,
         plots=plots, tables=tables, files=files,
     )
