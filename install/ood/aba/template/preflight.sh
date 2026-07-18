@@ -13,18 +13,45 @@ log="${staged}/preflight.log"
 # on the node): the `sif:` key under `image:`.
 SIF="$(grep -E '^[[:space:]]*sif:' "${ABA_SITE_CONFIG}" 2>/dev/null \
         | head -1 | sed -E 's/^[^:]*:[[:space:]]*//; s/[[:space:]"]//g' | tr -d "'")"
+# The share root holds site.yaml (+ the image, skeleton, institution bundle). Derive
+# it from ABA_SITE_CONFIG rather than assuming /cluster/aba, so a site can root the
+# deployment anywhere its nodes can read (incl. a home dir, for a pilot).
+_share="${ABA_SHARE:-$(dirname "${ABA_SITE_CONFIG}")}"
+
 if [ -z "${SIF}" ] || [ ! -e "${SIF}" ]; then
-  echo "preflight.sh: could not resolve image.sif from ${ABA_SITE_CONFIG} (got '${SIF}')" >> "$log"
-  exit 1
+  # No image (dev harness / bind-mounted lane) — run aba_preflight.py DIRECTLY
+  # with a host python. Version-locking still holds when the share carries a
+  # promoted release: the payload brings its own copy of the script, same as
+  # the SIF bakes one at its own version. Interpreter (needs PyYAML): explicit
+  # ABA_PF_PYTHON, else site.yaml `venv:` (the same venv the run lane uses),
+  # else python3.
+  _rel="${ABA_RELEASE_ID:+${_share}/releases/${ABA_RELEASE_ID}}"
+  [ -n "${_rel}" ] && [ ! -e "${_rel}" ] && _rel=""
+  _rel="${_rel:-${_share}/current}"
+  PF=""
+  [ -e "${_rel}/repo/install/ood/aba_preflight.py" ] \
+    && PF="$(readlink -f "${_rel}/repo")/install/ood/aba_preflight.py"
+  [ -z "${PF}" ] && [ -n "${ABA_PF_SCRIPT:-}" ] && [ -e "${ABA_PF_SCRIPT}" ] \
+    && PF="${ABA_PF_SCRIPT}"
+  if [ -z "${PF}" ]; then
+    echo "preflight.sh: no image.sif in ${ABA_SITE_CONFIG} (got '${SIF}') and no release preflight at ${_rel}/repo/install/ood/aba_preflight.py" >> "$log"
+    exit 1
+  fi
+  PY="${ABA_PF_PYTHON:-}"
+  if [ -z "${PY}" ]; then
+    _venv="$(grep -E '^[[:space:]]*venv:' "${ABA_SITE_CONFIG}" 2>/dev/null \
+             | head -1 | sed -E 's/^[^:]*:[[:space:]]*//; s/[[:space:]"]//g' | tr -d "'")"
+    [ -n "${_venv}" ] && [ -x "${_venv}/bin/python" ] && PY="${_venv}/bin/python"
+  fi
+  PY="${PY:-python3}"
+  echo "preflight.sh: no-SIF lane: ${PY} ${PF}" >> "$log"
+  "${PY}" "${PF}" >> "$log" 2>&1
+  exit $?
 fi
 
 # Binds: the staged dir (preflight writes aba-env.sh/status.yaml there), the site
 # config root, and — when present — the lab shares + the user's home.
 binds=(--bind "${staged}:${staged}")
-# The share root holds site.yaml (+ the image, skeleton, institution bundle). Derive
-# it from ABA_SITE_CONFIG rather than assuming /cluster/aba, so a site can root the
-# deployment anywhere its nodes can read (incl. a home dir, for a pilot).
-_share="${ABA_SHARE:-$(dirname "${ABA_SITE_CONFIG}")}"
 [ -d "${_share}" ] && binds+=(--bind "${_share}:${_share}")
 [ -d /groups ] && binds+=(--bind /groups:/groups)
 [ -n "${ABA_PF_HOME:-}" ] && [ -d "${ABA_PF_HOME}" ] && binds+=(--bind "${ABA_PF_HOME}:${ABA_PF_HOME}")
