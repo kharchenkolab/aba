@@ -343,7 +343,7 @@ def ui_remote_run_badges(page, api, pid, tid):
     kept_remote = False
     deadline = time.time() + 240
     while time.time() < deadline and not kept_remote:
-        dv = api.get(f"/api/runs/{rid}/durable").json()
+        dv = api.get(f"/api/runs/{rid}/durable?flat=1").json()   # default is the TREE model
         kept_remote = any(f.get("state") == "retained" and f.get("site") == "hpc"
                           for f in dv.get("files", []))
         time.sleep(6)
@@ -354,7 +354,7 @@ def ui_remote_run_badges(page, api, pid, tid):
     verdict_remote = card.get_by_text("ran on hpc", exact=False).count() > 0
     badge_remote = card.get_by_text("kept ✓ · on hpc", exact=False).count() > 0
     if not kept_remote:                       # the keep can land AFTER the poll
-        dv = api.get(f"/api/runs/{rid}/durable").json()   # gave up — resample so
+        dv = api.get(f"/api/runs/{rid}/durable?flat=1").json()   # gave up — resample so
         kept_remote = any(f.get("state") == "retained" and f.get("site") == "hpc"
                           for f in dv.get("files", []))   # ordering can't fail us
     brought = False
