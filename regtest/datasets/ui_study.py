@@ -353,6 +353,10 @@ def ui_remote_run_badges(page, api, pid, tid):
     shot(page, "run_card_remote")
     verdict_remote = card.get_by_text("ran on hpc", exact=False).count() > 0
     badge_remote = card.get_by_text("kept ✓ · on hpc", exact=False).count() > 0
+    if not kept_remote:                       # the keep can land AFTER the poll
+        dv = api.get(f"/api/runs/{rid}/durable").json()   # gave up — resample so
+        kept_remote = any(f.get("state") == "retained" and f.get("site") == "hpc"
+                          for f in dv.get("files", []))   # ordering can't fail us
     brought = False
     bb = card.get_by_text("bring the rest back", exact=False)
     if bb.count():
