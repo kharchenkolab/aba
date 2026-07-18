@@ -666,7 +666,36 @@ class WeftSubmitter:
             return None
         state = rows[0]["state"] if rows else None
         if state not in _TERMINAL:
-            return None
+            # LOCAL-lane restart orphan (stamped by reconcile_jobs): the
+            # in-process supervisor died with the old backend, so weft's local
+            # state can never advance on its own — but the task PROCESS
+            # survives a controller kill (reparented) and its entry still
+            # writes result.json when it finishes. That file is the durable
+            # truth: finalize from it despite the frozen state. A wordless
+            # orphan gets its walltime (+ grace) before an honest failure —
+            # never an instant one (it may be mid-run right now).
+            oat = params.get("local_orphan_at")
+            if not oat:
+                return None
+            if (self._run_dir(job) / "result.json").exists():
+                state = "DONE"          # the entry finished; fall through
+            else:
+                import time as _t
+                deadline = float(params.get("timeout_s") or 300) + 180
+                if _t.time() - float(oat) < deadline:
+                    return None
+                try:                    # nobody supervises it — stop the rest
+                    _adapter().sync_call("task_cancel", wid,
+                                         why="restart orphan past walltime")
+                except Exception:  # noqa: BLE001
+                    pass
+                res = {"error": (
+                    "the backend restarted while this local job was running "
+                    "and the job wrote no result within its walltime after "
+                    "the restart — it was orphaned by the restart and has "
+                    "been stopped; re-run it if the outputs are needed")}
+                res.setdefault("compute", self._compute_block(wid, state))
+                return res
         # Finalization decisions come from the PERSISTED row, never the
         # caller's snapshot: a stale dict (taken before _submit_detached
         # stamped the row, or carried across a restart by a dead in-tool

@@ -247,47 +247,60 @@ def verify_jobs_truth() -> list:
         comp = ad.get_compute()
     except Exception:  # noqa: BLE001 — substrate gone: nothing to compare against
         return out
-    if not PROJECTS_DIR.exists():
-        return out
-    for proj in sorted(PROJECTS_DIR.iterdir()):
-        db = proj / "project.db"
-        if not proj.is_dir() or not db.exists():
-            continue
+    # enumerate every DB that can hold job rows. The studies run with
+    # ABA_DB_PATH set → SINGLE mode → jobs live in the ONE flat DB and the
+    # PROJECTS_DIR walk sees nothing: without this branch the sweep was
+    # VACUOUSLY clean in every study (zero rows examined — the exact
+    # false-ALL-PASS class this harness exists to kill; found by
+    # restart_study, 2026-07)
+    dbs = []
+    from core import projects as _projects
+    if _projects.SINGLE:
+        from core.config import settings as _settings
+        p = Path(str(_settings.db_path.get()))
+        if p.exists():
+            dbs.append(p)
+    elif PROJECTS_DIR.exists():
+        dbs = [proj / "project.db" for proj in sorted(PROJECTS_DIR.iterdir())
+               if proj.is_dir() and (proj / "project.db").exists()]
+    all_rows = []
+    for db in dbs:
         try:
             c = sqlite3.connect(db); c.row_factory = sqlite3.Row
             if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
                              "AND name='jobs'").fetchone():
                 c.close(); continue
-            rows = c.execute("SELECT id,status,error,params FROM jobs").fetchall()
+            all_rows += c.execute(
+                "SELECT id,status,error,params FROM jobs").fetchall()
             c.close()
         except sqlite3.Error:
             continue
-        for r in rows:
+    for r in all_rows:
+        try:
+            p = json.loads(r["params"] or "{}")
+        except Exception:  # noqa: BLE001
+            continue
+        wid = p.get("weft_id")
+        if p.get("submitter") != "weft" or not wid:
+            continue
+        if r["status"] == "done" and (r["error"] or "").strip():
+            out.append(f"{r['id']}: done row carries an error "
+                       f"(double-finalize residue): {r['error'][:100]}")
+        try:
+            st = comp.sync_call("task_status", wid)
+            state = st[0]["state"] if st else None
+        except Exception:  # noqa: BLE001
+            continue
+        if state == "DONE" and r["status"] == "failed":
+            exit0 = True
             try:
-                p = json.loads(r["params"] or "{}")
+                exit0 = (comp.sync_call("task_result", wid)
+                         .get("exit_code") in (0, None))
             except Exception:  # noqa: BLE001
-                continue
-            wid = p.get("weft_id")
-            if p.get("submitter") != "weft" or not wid:
-                continue
-            if r["status"] == "done" and (r["error"] or "").strip():
-                out.append(f"{r['id']}: done row carries an error "
-                           f"(double-finalize residue): {r['error'][:100]}")
-            try:
-                st = comp.sync_call("task_status", wid)
-                state = st[0]["state"] if st else None
-            except Exception:  # noqa: BLE001
-                continue
-            if state == "DONE" and r["status"] == "failed":
-                exit0 = True
-                try:
-                    exit0 = (comp.sync_call("task_result", wid)
-                             .get("exit_code") in (0, None))
-                except Exception:  # noqa: BLE001
-                    pass
-                if exit0:
-                    out.append(f"{r['id']}: substrate DONE/exit 0 but row "
-                               f"FAILED: {(r['error'] or '')[:100]}")
+                pass
+            if exit0:
+                out.append(f"{r['id']}: substrate DONE/exit 0 but row "
+                           f"FAILED: {(r['error'] or '')[:100]}")
     fresh = [v for v in out if v not in _TRUTH_SEEN]
     _TRUTH_SEEN.update(out)
     return fresh
@@ -568,6 +581,59 @@ def s_alert_loop(client, pid, tid):
     ]
 
 
+@scenario("bad_input_garbage_csv")
+def s_garbage(client, pid, tid):
+    """BAD-INPUTS journey (release_test_plan): a realistically messy file —
+    numeric column polluted with 'n/a', '?', blanks, a stray ragged row —
+    registered and analyzed. The agent must (i) report the TRUE computable
+    sum over the valid entries, (ii) say HOW MANY entries it had to skip,
+    and (iii) never present the file as clean. Fabricating a tidy answer
+    over garbage is the failure this guards against."""
+    import random
+    rnd = random.Random(7)
+    rows, bad = [], 0
+    true_sum = 0
+    for i in range(240):
+        if i % 12 == 5:            # 20 polluted entries
+            rows.append(f"{i},{rnd.choice(['n/a', '?', ''])}")
+            bad += 1
+        else:
+            v = (i * 5) % 23
+            true_sum += v
+            rows.append(f"{i},{v}")
+    rows.insert(100, "9999,3,EXTRA,COLUMNS,HERE")   # one ragged row
+    (www / "messy.csv").write_text("id,val\n" + "\n".join(rows) + "\n")
+    url = URL.rsplit("/", 1)[0] + "/messy.csv"
+    cap = drive_turn(client, pid, tid,
+        f"Register {url} as a dataset called 'Messy readings', then compute "
+        f"the sum of the val column. Tell me the sum AND exactly how many "
+        f"entries you had to skip or clean, and why.")
+    caps = [cap]
+    txt = cap["text"]
+    # the ragged row's val=3 may legitimately be included (parsers differ);
+    # accept either the strict sum or strict+3, but ONLY those two numbers
+    ok_sum = str(true_sum) in txt or str(true_sum + 3) in txt
+    mentions_skips = any(w in txt.lower() for w in
+                         ("skip", "invalid", "non-numeric", "missing",
+                          "malformed", "clean", "drop", "exclud"))
+    # count honesty: 20 polluted (+1 ragged tolerated) — the number must sit
+    # NEAR a skip/clean word, not merely anywhere in the reply
+    import re
+    ok_count = bool(re.search(
+        r"(?:skip\w*|drop\w*|exclud\w*|invalid|non.numeric|missing|malformed|"
+        r"clean\w*)\D{0,60}\b2[01]\b"
+        r"|\b2[01]\b\D{0,60}(?:skip\w*|drop\w*|exclud\w*|invalid|non.numeric|"
+        r"missing|malformed|entries|rows|values)", txt, re.I))
+    return caps, [
+        ("dataset registered", any(t["name"] == "register_dataset"
+                                   for t in cap["tools"])),
+        ("reported sum is the TRUE computable sum (no fabrication)", ok_sum),
+        ("agent discloses the messy entries", mentions_skips),
+        ("skip-count is the true count (20, +1 if ragged row dropped)",
+         ok_count),
+    ]
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 def main():
     only = None
@@ -585,7 +651,7 @@ def main():
 
     scenarios = [(fn._scenario, fn) for fn in
                  [s_url, s_reuse, s_remote, s_drift, s_produced,
-                  s_keep_reuse, s_keep_triage, s_alert_loop]]
+                  s_keep_reuse, s_keep_triage, s_alert_loop, s_garbage]]
     if only:
         known = {name for name, _ in scenarios}
         unknown = only - known

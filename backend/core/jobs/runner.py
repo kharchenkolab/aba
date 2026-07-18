@@ -690,21 +690,38 @@ def reconcile_jobs() -> dict:
     reap_run_tokens: list[str] = []             # per-run scratch tokens — kill leftover OS procs
     reap_note = "backend restarted while job was running — orphaned"
 
-    if not PROJECTS_DIR.exists():
+    # SINGLE-DB mode (ABA_DB_PATH: tests, single-user installs) has no
+    # per-project DB files — jobs live in the ONE workspace DB, which the
+    # PROJECTS_DIR walk below never visits. Without this branch, restart
+    # recovery simply does not run there: zombies stay 'running', queued
+    # rows are never re-enqueued (found live by restart_study —
+    # reconcile logged projects_scanned: 0 and the orphan sat forever).
+    from core import projects as _projects
+    from pathlib import Path as _Path
+    stamped = 0                                 # local weft restart-orphans
+    targets: list[tuple[str, object]] = []
+    if _projects.SINGLE:
+        from core.config import settings as _settings
+        p = _Path(str(_settings.db_path.get()))
+        if p.exists():
+            targets.append(("single", p))
+    elif PROJECTS_DIR.exists():
+        for proj_dir in sorted(PROJECTS_DIR.iterdir()):
+            if not proj_dir.is_dir():
+                continue
+            db_file = proj_dir / "project.db"
+            if not db_file.exists():
+                continue
+            # Project id is the dir name (matches the convention everywhere).
+            if proj_dir.name.startswith("_"):
+                # Skip _scratch / _workspace housekeeping DBs.
+                continue
+            targets.append((proj_dir.name, db_file))
+    if not targets:
         return {"reaped_running": 0, "requeued_queued": 0, "projects_scanned": 0}
 
     n_projects = 0
-    for proj_dir in sorted(PROJECTS_DIR.iterdir()):
-        if not proj_dir.is_dir():
-            continue
-        db_file = proj_dir / "project.db"
-        if not db_file.exists():
-            continue
-        # Project id is the dir name (matches the convention everywhere else).
-        pid = proj_dir.name
-        if pid.startswith("_"):
-            # Skip _scratch / _workspace housekeeping DBs.
-            continue
+    for pid, db_file in targets:
         try:
             c = sqlite3.connect(db_file); c.row_factory = sqlite3.Row
             # Tolerate DBs without a jobs table (very old / freshly-created
@@ -800,6 +817,33 @@ def reconcile_jobs() -> dict:
                     reaped_targets.append((r["id"], pid))
                     print(f"[jobs.reconcile] reaped orphaned sync weft job "
                           f"{r['id']} — no substrate task to adopt", flush=True)
+            # 4. LOCAL-lane weft rows: their supervisor ran IN THIS PROCESS
+            #    and died with it, so weft's local state can never advance on
+            #    its own (substrate-side liveness gap —
+            #    misc/bug3_weft_local_orphan.md). Do NOT kill anything here:
+            #    the task PROCESS survives the crash and may be mid-run right
+            #    now (or already finished — its entry writes result.json
+            #    either way). Stamp the row; the poll loop finalizes from
+            #    result.json truth and enforces walltime for wordless ones.
+            for r in c.execute("SELECT id, params FROM jobs "
+                               "WHERE status IN ('queued','running')").fetchall():
+                try:
+                    rp = json.loads(r["params"] or "{}")
+                except Exception:  # noqa: BLE001
+                    continue
+                if rp.get("submitter") != "weft" or not rp.get("weft_id") \
+                        or rp.get("local_orphan_at"):
+                    continue
+                site = rp.get("weft_site") or rp.get("site")
+                if site and site != "local":
+                    continue    # remote lanes genuinely survive a restart
+                rp["local_orphan_at"] = time.time()
+                c.execute("UPDATE jobs SET params=? WHERE id=?",
+                          (json.dumps(rp), r["id"]))
+                stamped += 1
+                print(f"[jobs.reconcile] stamped local weft job {r['id']} as "
+                      f"restart-orphan — poll loop finalizes from result.json "
+                      f"truth (walltime-capped)", flush=True)
             c.commit()
             c.close()
         except sqlite3.Error as e:
@@ -834,6 +878,7 @@ def reconcile_jobs() -> dict:
         "resumed_inline": len(resumed),
         "requeued_queued": len(requeued) - len(resumed),
         "adopted_sync_weft": adopted_sync,
+        "stamped_local_orphans": stamped,
         "projects_scanned": n_projects,
         "killed_orphan_procs": killed,
     }
