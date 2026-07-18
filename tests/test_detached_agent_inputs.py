@@ -45,6 +45,90 @@ def test_site_without_background_goes_sync_remote(monkeypatch):
     assert seen == {"site": "mendel", "kind": "run_python"}
 
 
+def test_site_env_skips_local_realization(monkeypatch):
+    """A site= job must never fall into the local env lanes (the wrong-machine
+    bug): the named-env block realized the env LOCALLY (minutes of waste — the
+    site realizes its own copy via weft), and with kernels disabled the local
+    one-shot fallback ran the code HERE while the agent believed it ran on the
+    remote. The site branch must fire FIRST, like run_r's."""
+    import content.bio.tools.run_exec as rx
+    from core.compute import named_envs
+    import core.config as cfg
+
+    def _boom(*a, **k):
+        raise AssertionError("local env lane must not run for site= jobs")
+    monkeypatch.setattr(named_envs, "ensure_ready", _boom)
+    monkeypatch.setattr(cfg, "KERNEL_ENABLED", False)
+    monkeypatch.setattr(rx, "_run_in_named_env", _boom)
+    monkeypatch.setattr(rx, "_run_remote_sync",
+                        lambda inp, ctx, pid, tid, kind: {"status": "ok",
+                                                          "kind": kind})
+    out = rx.run_python({"code": "x=1", "site": "mendel", "env": "steps"},
+                        {"thread_id": "t"})
+    assert out == {"status": "ok", "kind": "run_python"}
+
+
+def test_site_background_skips_local_realization(monkeypatch):
+    """site= + background routes to the queued submit WITHOUT realizing the
+    named env locally — weft realizes the EnvID at the site."""
+    import content.bio.tools.run_exec as rx
+    from core.compute import named_envs
+    import core.exec.router as router
+    import core.exec.compute_env as ce
+    import core.jobs.runner as runner
+
+    def _boom(*a, **k):
+        raise AssertionError("local realization must not run for site= jobs")
+    monkeypatch.setattr(named_envs, "ensure_ready", _boom)
+    monkeypatch.setattr(named_envs, "resolve",
+                        lambda pid, name: {"env_id": "env-1"})
+    monkeypatch.setattr(ce, "compute_env", lambda: {})
+
+    class _Choice:
+        location = "background"
+        rationale = "test"
+    monkeypatch.setattr(router, "decide", lambda **k: _Choice())
+    seen = {}
+    monkeypatch.setattr(runner, "submit_python_job",
+                        lambda code, **kw: seen.update(kw) or {"id": "job_t1"})
+    out = rx.run_python({"code": "x=1", "site": "mendel", "env": "steps",
+                         "background": True}, {"thread_id": "t"})
+    assert out.get("deferred")
+    assert seen["site"] == "mendel" and seen["env"] == "steps"
+
+
+def test_sync_remote_env_identity(monkeypatch):
+    """The sync path resolves env identity by the SAME rules as the background
+    lane: env=None follows the project's active env, 'default' normalizes to
+    None, and a nonexistent named env errors helpfully instead of silently
+    running on the node's system runtime."""
+    import content.bio.tools.run_exec as rx
+    from core.compute import named_envs
+    import core.jobs.submit as sub
+
+    monkeypatch.setattr(named_envs, "get_active", lambda pid, lang: "proj-env")
+    monkeypatch.setattr(named_envs, "resolve",
+                        lambda pid, name: {"env_id": "e"} if name == "proj-env"
+                        else None)
+    seen = {}
+
+    def _capture(code, **kw):
+        seen.update(kw)
+        raise ValueError("stop at submit")
+    monkeypatch.setattr(sub, "submit_python_job", _capture)
+    out = rx._run_remote_sync({"code": "x", "site": "m"}, {}, "default", "t",
+                              "run_python")
+    assert out["status"] == "error" and seen["env"] == "proj-env"
+    seen.clear()
+    out = rx._run_remote_sync({"code": "x", "site": "m", "env": "default"}, {},
+                              "default", "t", "run_python")
+    assert out["status"] == "error" and seen["env"] is None
+    seen.clear()
+    out = rx._run_remote_sync({"code": "x", "site": "m", "env": "ghost"}, {},
+                              "default", "t", "run_python")
+    assert "ghost" in out["note"] and not seen
+
+
 def test_describe_compute_surfaces_remote_sites(monkeypatch):
     """The agent sizes up external machines from describe_compute — declared
     remote sites appear with kind + capacity, and the summary names them."""
@@ -94,6 +178,9 @@ def _standalone() -> int:
     rc = 0
     for t in (test_run_python_threads_site_to_submit_kwargs,
               test_site_without_background_goes_sync_remote,
+              test_site_env_skips_local_realization,
+              test_site_background_skips_local_realization,
+              test_sync_remote_env_identity,
               test_describe_compute_surfaces_remote_sites):
         mp = _MP()
         try:

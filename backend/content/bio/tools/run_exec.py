@@ -670,6 +670,21 @@ def _run_remote_sync(input_: dict, ctx: dict | None, project_id: str,
     site = input_["site"]
     timeout_s = max(5, min(int(input_.get("timeout_s") or 300), 1800))
     submit = submit_r_job if kind == "run_r" else submit_python_job
+    # Env identity — SAME rules as the background lane (bg_submit_kwargs):
+    # env=None follows the project's active python env; 'default'/reserved →
+    # None (pack snapshot); a NAMED env must exist (the detached submitter
+    # would otherwise silently fall back to the node system runtime).
+    env = input_.get("env")
+    if env is None and kind != "run_r":
+        from core.compute.named_envs import get_active
+        env = get_active(project_id, "python")
+    env_name = None if _is_default_env(env) else str(env).strip()
+    if env_name:
+        from core.compute.named_envs import resolve as _env_resolve
+        if _env_resolve(project_id, env_name) is None:
+            return {"status": "error", "env": env_name,
+                    "note": f"No isolated env '{env_name}'. Create it with "
+                            f"make_isolated_env(name='{env_name}')."}
     try:
         job = submit(input_.get("code", ""),
                      title=input_.get("title") or f"Remote step on {site}",
@@ -680,7 +695,7 @@ def _run_remote_sync(input_: dict, ctx: dict | None, project_id: str,
                                "cores": input_.get("est_cores"),
                                "mem_gb": input_.get("est_mem_gb"),
                                "gpu": input_.get("est_gpu")},
-                     env=input_.get("env"), site=site, timeout_s=timeout_s)
+                     env=env_name, site=site, timeout_s=timeout_s)
     except ValueError as e:          # unknown site — names the real ones
         return {"status": "error", "note": str(e)}
     # re-read: _submit_detached wrote weft_id/detached onto the row via its own
@@ -774,6 +789,17 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
     project_id = projects.current() or "default"
     thread_id = (ctx or {}).get("thread_id") or "default"
 
+    # Placement FIRST (misc/detached_compute.md): an explicit site= must never
+    # fall into the local lanes below — the named-env block realizes the env
+    # LOCALLY (minutes of waste; the site realizes its own copy via weft) and
+    # the kernels-off fallback would run the code HERE while the agent believes
+    # it ran remotely. run_r routes the same way.
+    if input_.get("site") and not input_.get("background"):
+        # SYNC remote run: like a local call, executed THERE (fresh process).
+        # Long steps go background=True — deferred + continuation.
+        return _run_remote_sync(input_, ctx, str(project_id), str(thread_id),
+                                "run_python")
+
     # §11.3: env=<named isolated env> runs in THAT env's persistent kernel — the
     # same interactive kernel path below, just a distinct scope-key + the env's
     # python (so state persists + plots harvest, unlike the old one-shot). Default/
@@ -800,14 +826,17 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
         # under that lock would wedge every kernel acquisition process-wide.
         # ensure_READY (strategy-blind): a squashfs env has no raw prefix and we
         # need none here — the kernel lane activates the EnvID through weft.
-        try:
-            named_envs.ensure_ready(row["env_id"])
-        except ComputeError as ce:
-            return {"status": "error", "env": env_name, "error": ce.to_payload(),
-                    "note": f"env '{env_name}' could not be realized: "
-                            f"{ce.detail or ce.code}"}
-        if not KERNEL_ENABLED:   # kernels off → stateless one-shot fallback
-            return _run_in_named_env(env_name, code, "python", timeout_s)
+        # A site= job skips both: weft realizes the EnvID at the SITE, and the
+        # kernels-off fallback must not hijack a remote-targeted background run.
+        if not input_.get("site"):
+            try:
+                named_envs.ensure_ready(row["env_id"])
+            except ComputeError as ce:
+                return {"status": "error", "env": env_name, "error": ce.to_payload(),
+                        "note": f"env '{env_name}' could not be realized: "
+                                f"{ce.detail or ce.code}"}
+            if not KERNEL_ENABLED:   # kernels off → stateless one-shot fallback
+                return _run_in_named_env(env_name, code, "python", timeout_s)
 
     # Lane selection (kernels.md §7): background > fresh > interactive.
     # - background: stateless job, deferred result the guide loop resumes from.
@@ -815,11 +844,6 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
     # - interactive (default): the thread's persistent kernel (state persists).
     # timeout_s is a CEILING, not an estimate; routing to background keys on the
     # agent's estimated_runtime_min so a defensive timeout doesn't mis-background.
-    if input_.get("site") and not input_.get("background"):
-        # SYNC remote run: like a local call, executed THERE (fresh process).
-        # Long steps go background=True — deferred + continuation.
-        return _run_remote_sync(input_, ctx, str(project_id), str(thread_id),
-                                "run_python")
     override = "background" if input_.get("background") else None
     est_min = float(input_.get("estimated_runtime_min") or 0)
     est = {"runtime_min": est_min, "cores": input_.get("est_cores"),
