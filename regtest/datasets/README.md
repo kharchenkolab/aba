@@ -158,6 +158,18 @@ the resume/approval POST driven from the harness); a SECOND real site for
 conflicting-gravity + multi-site preflight; cancel-midflight (sync cancel has
 unit coverage); cross_thread_separation + mid_chain_steering.
 
+**Next round: UI/UX evaluation alongside the agent scenarios.** The study so
+far asserts on the JSON the cards read; the next round drives the REAL
+frontend in a browser (uvicorn + built frontend + Playwright) through the
+same scenarios and evaluates what a scientist actually sees: Run-card state
+progression (queued → running → done) and the §8c two-axis badges; the
+LedgerStrip's quiet/noisy contract; whereabouts + bring-back as a clicked
+flow; Jobs panel live output during a background remote job; the drift
+banner after a source mutation; the chat-figure → pin → Result flow.
+Checkpoint screenshots get a heuristic review against the §8 card grammar
+(wording, affordance placement, cross-card consistency — a known weak spot);
+findings feed the UI/UX improvement backlog in more_weft_ui.md.
+
 ## Two-site coverage (mendel + docker fixture) — validated live
 
 Added the second real remote site (mendel over ssh) alongside the dockerized
