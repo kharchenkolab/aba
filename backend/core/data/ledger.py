@@ -75,16 +75,29 @@ def _dataset_items(durable: dict) -> list[dict]:
     return items
 
 
-def _keep_items(durable: dict, site: Optional[str] = None) -> list[dict]:
+def _keep_items(durable: dict, site: Optional[str] = None) -> tuple[list[dict], bool]:
     """Retained runs (grouped by label = run id): kept-in-place on a durable
     site OR shipped to the workspace → safe; kept on a site whose durable
-    declaration was revoked → at risk (the promise is broken)."""
+    declaration was revoked → at risk (the promise is broken).
+
+    Returns (items, ok). ok=False means the retention index was EXPECTED
+    (substrate configured) but unreachable — the caller must surface a
+    degraded state, never render the empty list as "all safe": during an
+    outage the quiet ledger told the user their kept results were safe and
+    the disconnect card showed a machine as empty (outage-honesty review).
+    A weft-less fallback deployment (substrate never configured) stays a
+    quiet ([], True) — nothing is being hidden there."""
     from core.compute import retention
     try:
         rows = retention.retained(site=site) or []
-    except Exception as e:  # noqa: BLE001 — no substrate → no keeps
+    except Exception as e:  # noqa: BLE001
         _log.debug("ledger: retained() unavailable (%s)", e)
-        return []
+        try:
+            from core.compute import adapter as _ad
+            expected = bool(_ad.status().get("ok"))
+        except Exception:  # noqa: BLE001
+            expected = False
+        return [], not expected
     by_label: dict = {}
     for r in rows:
         if r.get("state") not in ("done", "pinned-pending", "queued", "inflight"):
@@ -103,23 +116,31 @@ def _keep_items(durable: dict, site: Optional[str] = None) -> list[dict]:
         items.append({"entity_id": lbl, "kind": "run_keeps", "title": None,
                       "state": state, "site": "/".join(sorted(g["sites"])),
                       "bytes": g["bytes"], "why": why})
-    return items
+    return items, True
 
 
 def data_ledger(project_id: Optional[str] = None) -> dict:
     """The §1 rollup: every valued item in exactly one state, plus totals.
     `project_id` is accepted for the route shape; the graph is already scoped
-    to the active project's DB."""
+    to the active project's DB. `degraded: true` means the retention index
+    was unreachable — kept-result rows may be MISSING from `items`, so the
+    strip must not go quiet ("quiet means safe" is the UI contract)."""
     durable = _durable_map()
-    items = _dataset_items(durable) + _keep_items(durable)
+    keeps, keeps_ok = _keep_items(durable)
+    items = _dataset_items(durable) + keeps
     totals = {"items": len(items),
               "safe": sum(1 for i in items if i["state"] == "safe"),
               "at_risk": sum(1 for i in items if i["state"] == "at_risk"),
               "changed": sum(1 for i in items if i["state"] == "changed"),
               "unknown": sum(1 for i in items if i["state"] == "unknown")}
     sites = sorted({i["site"] for i in items if i["site"] and i["site"] != "local"})
-    return {"items": items, "totals": totals, "remote_sites": sites,
-            "multi_site": bool(sites)}
+    out = {"items": items, "totals": totals, "remote_sites": sites,
+           "multi_site": bool(sites), "degraded": not keeps_ok}
+    if not keeps_ok:
+        out["degraded_note"] = ("the retention index is unreachable — the "
+                                "safety of kept results cannot be assessed "
+                                "right now (they are missing from this list)")
+    return out
 
 
 def site_holdings(site: str) -> dict:
@@ -127,7 +148,7 @@ def site_holdings(site: str) -> dict:
     kept results (count + bytes), dataset homes (referenced in place), and the
     at-risk-if-gone rollup a Disconnect preview needs."""
     durable = _durable_map()
-    keeps = _keep_items(durable, site=site)
+    keeps, keeps_ok = _keep_items(durable, site=site)
     from core.graph.entities import list_entities
     homes = []
     for e in list_entities(type_filter="dataset", include_archived=False):
@@ -137,7 +158,16 @@ def site_holdings(site: str) -> dict:
             homes.append({"entity_id": e["id"], "title": e.get("title"),
                           "path": home.get("path")})
     kept_bytes = sum(k["bytes"] or 0 for k in keeps)
-    return {"site": site,
-            "kept_runs": len(keeps), "kept_bytes": kept_bytes,
-            "dataset_homes": homes,
-            "at_risk_if_gone": len(keeps) + len(homes)}
+    out = {"site": site,
+           "kept_runs": len(keeps), "kept_bytes": kept_bytes,
+           "dataset_homes": homes,
+           "at_risk_if_gone": len(keeps) + len(homes)}
+    if not keeps_ok:
+        # a disconnect/durable-off card gated on kept_runs>0 showed NO
+        # warning during an outage — the machine looked empty exactly when
+        # it could not be assessed
+        out["unknown"] = True
+        out["note"] = ("compute substrate unreachable — what this machine "
+                       "holds cannot be assessed right now; retry before "
+                       "disconnecting")
+    return out

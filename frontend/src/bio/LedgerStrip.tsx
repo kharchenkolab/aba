@@ -22,6 +22,9 @@ export interface Ledger {
   totals: { items: number; safe: number; at_risk: number; changed: number; unknown: number }
   remote_sites: string[]
   multi_site: boolean
+  /** retention index unreachable — kept-result rows may be MISSING */
+  degraded?: boolean
+  degraded_note?: string
 }
 
 const STATE_WORD: Record<string, string> = {
@@ -46,6 +49,19 @@ export default function LedgerStrip({ projectId, onFocus }: {
   if (!led) return null
   const t = led.totals
   const attention = t.at_risk + t.changed + t.unknown
+  // Degraded is NEVER quiet: quiet means "all safe", and during a substrate
+  // outage the kept-result rows are missing from the ledger — saying nothing
+  // would claim safety we cannot assess.
+  if (led.degraded) {
+    return (
+      <div className="ledger">
+        <div className="ledger__line">
+          <span className="ledger__flag">⚠ {led.degraded_note
+            || 'data-safety status unavailable — compute substrate unreachable'}</span>
+        </div>
+      </div>
+    )
+  }
   // Quiet by default: all safe AND single-machine → say nothing at all.
   if (!attention && !led.multi_site) return null
 

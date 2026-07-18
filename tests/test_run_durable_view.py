@@ -42,6 +42,37 @@ def _retained_dir(tmp: Path, target: str, files: dict) -> str:
     return str(d)
 
 
+def test_durable_view_outage_reads_unknown_not_discarded(monkeypatch):
+    """OUTAGE HONESTY: with the substrate configured but the retention index
+    unreachable, an unharvested large output must read 'unknown — retention
+    storage unreachable', NEVER 'discarded — it was not kept' (the outage
+    made kept crown-jewel files vanish from the panel as discarded)."""
+    import core.compute.adapter as admod
+
+    def _boom(**kw):
+        raise RuntimeError("substrate unreachable")
+    monkeypatch.setattr(runsmod, "get_entity",
+                        lambda rid: {"id": rid, "metadata": {"weft_targets": ["krn_9"]}})
+    monkeypatch.setattr(retmod, "retained", _boom)
+    monkeypatch.setattr(retmod, "inventory", lambda t: {"entries": []})
+    monkeypatch.setattr(retmod, "file_stat", _boom)
+    monkeypatch.setattr(admod, "status", lambda: {"ok": True})   # configured
+    monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [
+        {"original_name": "big.parquet", "url": None, "kind": "file",
+         "size": _BIG}])
+    view = runsmod.run_durable_view("run-out")
+    f = view["files"][0]
+    assert f["state"] == "unknown" and "unreachable" in f["badge"]
+    assert view["summary"]["degraded"] is True
+    assert view["summary"]["unknown"] == 1
+    # weft-less fallback deployment: same failure but substrate NOT expected
+    # → today's behavior (cleared), no degraded flag
+    monkeypatch.setattr(admod, "status", lambda: {"ok": False})
+    view2 = runsmod.run_durable_view("run-out")
+    assert view2["files"][0]["state"] == "cleared"
+    assert "degraded" not in view2["summary"]
+
+
 def test_durable_view_states(tmp_path, monkeypatch):
     loc = _retained_dir(tmp_path, "krn_1", {"big.h5ad": "x" * 10})
     monkeypatch.setattr(runsmod, "get_entity",
@@ -72,7 +103,8 @@ def test_durable_view_states(tmp_path, monkeypatch):
     assert by["model.pt"]["badge"] == "keeping… · keeps the version at run settlement"
     assert by["model.pt"]["large"] is True
     assert view["summary"] == {"retained": 1, "saving": 1, "in_store": 1,
-                               "at_risk": 0, "in_sandbox": 0, "cleared": 0, "total": 3}
+                               "at_risk": 0, "in_sandbox": 0, "cleared": 0,
+                               "unknown": 0, "total": 3}
 
 
 def test_durable_view_serves_retained_local_directly_from_weft(tmp_path, monkeypatch):

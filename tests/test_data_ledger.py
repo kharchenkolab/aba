@@ -34,6 +34,29 @@ def _ds(title, **md):
     return out if isinstance(out, str) else out["id"]
 
 
+def test_outage_is_degraded_never_quietly_safe(monkeypatch):
+    """OUTAGE HONESTY: with the substrate CONFIGURED but retained() failing,
+    the ledger must say degraded (kept rows are missing) — the quiet "all
+    safe" render told users their kept results were safe during an outage,
+    and the disconnect card showed a machine as empty. A weft-less fallback
+    deployment (substrate never configured) stays quiet — nothing hidden."""
+    import core.compute.adapter as admod
+
+    def _boom(**kw):
+        raise RuntimeError("substrate unreachable")
+    monkeypatch.setattr(scfg, "list_declared_sites", lambda: [])
+    monkeypatch.setattr(retmod, "retained", _boom)
+    monkeypatch.setattr(admod, "status", lambda: {"ok": True})   # configured
+    led = lg.data_ledger()
+    assert led["degraded"] is True and "unreachable" in led["degraded_note"]
+    h = lg.site_holdings("far")
+    assert h["unknown"] is True and "cannot be assessed" in h["note"]
+    # fallback deployment: substrate never configured → quiet, not degraded
+    monkeypatch.setattr(admod, "status", lambda: {"ok": False})
+    assert lg.data_ledger()["degraded"] is False
+    assert "unknown" not in lg.site_holdings("far")
+
+
 def test_local_only_project_is_quiet(monkeypatch):
     """The §-quiet contract at the DATA layer: all-local & safe → nothing to
     render (multi_site False, zero non-safe). The UI snapshot test rides this."""
@@ -79,7 +102,9 @@ def test_keeps_state_follows_durable_declaration(monkeypatch):
         {"label": "run3", "site": "local", "in_place": 0, "bytes": 5, "state": "done"},
         {"label": "dead", "site": "siteC", "in_place": 1, "bytes": 9, "state": "failed"},
     ])
-    items = {i["entity_id"]: i for i in lg._keep_items(lg._durable_map())}
+    keeps, ok = lg._keep_items(lg._durable_map())
+    assert ok is True
+    items = {i["entity_id"]: i for i in keeps}
     assert items["run1"]["state"] == "safe"
     assert items["run2"]["state"] == "at_risk"       # in place, no durable promise
     assert items["run3"]["state"] == "safe"          # shipped home
@@ -113,7 +138,8 @@ def _standalone() -> int:
             self._u.clear()
 
     rc = 0
-    for t in (test_local_only_project_is_quiet,
+    for t in (test_outage_is_degraded_never_quietly_safe,
+              test_local_only_project_is_quiet,
               test_ledger_states_and_quiescence,
               test_keeps_state_follows_durable_declaration,
               test_site_holdings_counts_keeps_and_homes):

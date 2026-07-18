@@ -214,4 +214,7 @@ export interface SiteHoldings {
   kept_bytes: number
   dataset_homes: { entity_id: string; title?: string | null; path?: string | null }[]
   at_risk_if_gone: number
+  /** retention index unreachable — kept counts are NOT assessable (zeros lie) */
+  unknown?: boolean
+  note?: string
 }

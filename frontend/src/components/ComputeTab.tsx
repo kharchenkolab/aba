@@ -299,7 +299,9 @@ function SiteDetail({ site, advanced, selfService, onChanged }: {
                             // §2: un-declaring durable storage can break kept results'
                             // promise — preview the consequence before acting.
                             computeApi.holdings(s.name)
-                              .then(h => { setHoldings(h); if (h.kept_runs > 0) setConfirmDurableOff(true)
+                              .then(h => { setHoldings(h)
+                                           // unknown = outage: can't assess what the promise covers — confirm, never silently revoke
+                                           if (h.kept_runs > 0 || h.unknown) setConfirmDurableOff(true)
                                            else act('durable', () => computeApi.edit(s.name, { durable: false })) })
                               .catch(() => act('durable', () => computeApi.edit(s.name, { durable: false })))
                           }} />
@@ -309,9 +311,11 @@ function SiteDetail({ site, advanced, selfService, onChanged }: {
                     )}
                     {confirmDurableOff && holdings && (
                       <div className="cmp-confirm">
-                        {holdings.kept_runs} kept result{holdings.kept_runs === 1 ? '' : 's'}
-                        {holdings.kept_bytes > 0 ? ` (${fmtGB(holdings.kept_bytes)})` : ''} on this machine
-                        would become at risk — the files stay put, but nothing promises they survive.
+                        {holdings.unknown
+                          ? (holdings.note || 'compute substrate unreachable — what this machine holds cannot be assessed right now')
+                          : <>{holdings.kept_runs} kept result{holdings.kept_runs === 1 ? '' : 's'}
+                            {holdings.kept_bytes > 0 ? ` (${fmtGB(holdings.kept_bytes)})` : ''} on this machine
+                            would become at risk — the files stay put, but nothing promises they survive.</>}
                         <div className="cmp-actions">
                           <button className="cmp-btn cmp-btn--danger" disabled={busy !== null}
                             onClick={() => { setConfirmDurableOff(false)
@@ -460,6 +464,10 @@ function SiteDetail({ site, advanced, selfService, onChanged }: {
       </div>
       {confirmDisconnect && (
         <div className="cmp-confirm">
+          {holdings?.unknown && (
+            <div>⚠ {holdings.note
+              || 'compute substrate unreachable — what this machine holds cannot be assessed right now; retry before disconnecting'}</div>
+          )}
           {holdings && (holdings.kept_runs > 0 || holdings.dataset_homes.length > 0) && (
             <div>
               {[holdings.kept_runs > 0

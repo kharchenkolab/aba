@@ -324,7 +324,8 @@ _TRANSIENT_GLOBS = ("*.tmp", "*.pyc", "*.lock", "chunk_*", "*~", ".DS_Store")
 # retained/saving are weft's durability; in-store is aba's serving cache only; at-risk is a
 # large output live on scratch that nothing has kept yet (RED — the crown-jewel-in-danger).
 _COUNT_KEY = {"retained": "retained", "saving": "saving", "in-store": "in_store",
-              "at-risk": "at_risk", "in-sandbox": "in_sandbox", "cleared": "cleared"}
+              "at-risk": "at_risk", "in-sandbox": "in_sandbox", "cleared": "cleared",
+              "unknown": "unknown"}
 
 
 def _is_transient(path: str) -> bool:
@@ -1037,6 +1038,7 @@ def run_durable_view(run_id: str) -> dict:
     pending_lit: set = set()     # literal include paths of pinned-pending retains → per-file "saving"
     pending_glob: list = []      # glob include patterns of pinned-pending retains
     failed_rows = 0              # retain rows that ended `failed` — surfaced, not swallowed
+    view_degraded = False        # retention index unreachable (substrate expected)
     try:
         for row in (retention.retained(label=run_id) or []):
             state = row.get("state")
@@ -1069,6 +1071,15 @@ def run_durable_view(run_id: str) -> dict:
                     done_sel.append((sel.get("include") or [], sel.get("exclude") or [], meta))
     except Exception as e:  # noqa: BLE001
         _log.warning("durable view: retained() failed for %s: %s", run_id, e)
+        # outage honesty: with the substrate CONFIGURED but the retention
+        # index unreachable, kept files must NOT fall through to "discarded —
+        # it was not kept" (they render as unknown below); a weft-less
+        # fallback deployment stays on the normal path.
+        try:
+            from core.compute import adapter as _ad
+            view_degraded = bool(_ad.status().get("ok"))
+        except Exception:  # noqa: BLE001
+            pass
 
     # terminal inventory paths (survive the sweep) across the Run's targets — the fallback
     # when a live stat isn't available.
@@ -1126,6 +1137,7 @@ def run_durable_view(run_id: str) -> dict:
     # becomes explicit.
     run_open = md.get("run_state") == "open"
     _CLEARED = "discarded — swept by housekeeping; it was not kept"
+    _UNKNOWN = "unknown — retention storage unreachable right now"
     _TEMP = "" if run_open else "temporary — will be discarded; Keep it to save it"
 
     def _live(is_large: bool):
@@ -1143,7 +1155,7 @@ def run_durable_view(run_id: str) -> dict:
 
     files = []
     counts = {"retained": 0, "saving": 0, "in_store": 0,
-              "at_risk": 0, "in_sandbox": 0, "cleared": 0}
+              "at_risk": 0, "in_sandbox": 0, "cleared": 0, "unknown": 0}
     for rel, a in by_rel.items():
         url = a.get("url")
         size = a.get("size") or a.get("bytes") or 0
@@ -1177,10 +1189,14 @@ def run_durable_view(run_id: str) -> dict:
                     size = live_bytes
                     large = size > _MAX_HARVEST_BYTES
                 state, badge = _live(large)
-            elif performed:
+            elif performed and not view_degraded:
                 state, badge = "cleared", _CLEARED
             elif rel in inv_paths:
                 state, badge = _live(large)          # proxy: inventoried at terminal
+            elif view_degraded:
+                # the retained index was unreachable — a KEPT file would land
+                # here and "discarded — it was not kept" would be a lie
+                state, badge = "unknown", _UNKNOWN
             else:
                 state, badge = "cleared", _CLEARED
         # Served URL, decoupled from state. R4 (serve local files directly from weft, not the
@@ -1190,7 +1206,7 @@ def run_durable_view(run_id: str) -> dict:
         # present (immediate + reliable during the live/saving window), else the tier-resolving
         # /file route (remote in-place fetches on open, B4). `cleared` has no bytes → no link.
         weft_url = f"/api/runs/{run_id}/file?rel={quote(rel)}"
-        if state == "cleared":
+        if state in ("cleared", "unknown"):
             view_url = None
         elif state == "retained":
             # A LOCALLY-servable retained file (weft's durable tree on this box, incl. a local
@@ -1205,6 +1221,8 @@ def run_durable_view(run_id: str) -> dict:
                       "badge": badge, "url": view_url, "site": site, "large": large})
         counts[_COUNT_KEY[state]] += 1
     summary: dict = {**counts, "total": len(files)}
+    if view_degraded:
+        summary["degraded"] = True   # UI: badge honesty, not "discarded"
     # P1 honest surfacing (UI-only — never injected into agent context; see project
     # CLAUDE.md on shared agent inputs): declared outputs the run never produced, retain
     # rows that ended `failed`, and the last synchronous retain error recorded on the Run.

@@ -33,6 +33,13 @@ const noisyLedger: Ledger = {
   remote_sites: ['siteB', 'siteC'], multi_site: true,
 }
 
+const degradedLedger: Ledger = {
+  items: [], totals: { items: 0, safe: 0, at_risk: 0, changed: 0, unknown: 0 },
+  remote_sites: [], multi_site: false,
+  degraded: true,
+  degraded_note: 'the retention index is unreachable — the safety of kept results cannot be assessed right now (they are missing from this list)',
+}
+
 describe('LedgerStrip', () => {
   let origFetch: typeof globalThis.fetch
   beforeEach(() => { origFetch = globalThis.fetch })
@@ -45,6 +52,14 @@ describe('LedgerStrip', () => {
     expect(container!.innerHTML).toBe('')          // zero chrome, not a green banner
     expect(screen.queryByText(/safe/)).toBeNull()
     expect(screen.queryByText(/site/i)).toBeNull()
+  })
+
+  it('DEGRADED is never quiet: an outage renders the warning, not silence', async () => {
+    // quiet means "all safe" — during a substrate outage the kept rows are
+    // MISSING from the ledger, so silence would claim safety we can't assess
+    mockLedger(degradedLedger)
+    await act(async () => { render(<LedgerStrip projectId="p1" />) })
+    expect(screen.getByText(/retention index is unreachable/)).toBeTruthy()
   })
 
   it('renders the verdict + Review list when something needs attention', async () => {
