@@ -36,7 +36,14 @@ _run_one() {
   # script-style tests that don't set their own ABA_RUNTIME_DIR (else they fall to
   # the /workspace default → PermissionError).
   export ABA_RUNTIME_DIR; ABA_RUNTIME_DIR="$(mktemp -d -t aba_rt_XXXXXX)"
-  if "$PY" -m pytest "$f" -q -p no:cacheprovider "$@" >/dev/null 2>&1; then return 0; fi
+  # NOTE: no stray "$@" here — inside this function it re-expands to $f, so pytest
+  # got the path TWICE. A single path with an all-module skip exits 0 ("1 skipped");
+  # the duplicate made pytest collect nothing → exit 5, which we (below) counted as
+  # a FAIL. That turned every opt-in/skip-gated file (e.g. the live-agent tests)
+  # into a false failure. Also treat 5 (no tests collected) as pass — an
+  # all-skipped file is not a failure.
+  "$PY" -m pytest "$f" -q -p no:cacheprovider >/dev/null 2>&1; local rc=$?
+  if [ "$rc" -eq 0 ] || [ "$rc" -eq 5 ]; then return 0; fi
   if grep -qE '__name__ == .__main__.' "$f"; then
     ABA_RUNTIME_DIR="$(mktemp -d -t aba_rt_XXXXXX)"
     "$PY" "$f" >/dev/null 2>&1 && return 0
