@@ -73,9 +73,13 @@ An env lock's **platform set is part of its identity** (weft: adding a
 platform yields a NEW EnvID solved for all members). aba's specs
 (`named_envs._spec_for`, pack specs) lock for the CONTROLLER's platform by
 default; the detached compute lane re-locks **lazily at first remote use**
-(`named_envs.ensure_platform`: recorded spec + the site's platform →
-`env_ensure(update=True)`, registry updated with `platforms`), triggered by
-weft's `env.platform_mismatch` at realize. Solve cost and
+(`named_envs.ensure_platform`), triggered by weft's `env.platform_mismatch`
+at realize. The re-lock replays the env **as built**: the registry row
+persists the create-time `base_spec` (python_version pin included) and each
+`extend()` layer's package list; `ensure_platform` re-solves the base spec
++ platforms (`env_ensure(update=True)`), then re-applies layers as
+`extends_env` links — reconstruction from the flat package list silently
+re-locked a pinned env to the default python and flattened the layering. Solve cost and
 platform-availability failures land on the remote attempt, never on local
 work — a package with no build for the site's platform fails THAT submission
 with a named cause. See misc/detached_compute.md + jobs-and-hpc.md.

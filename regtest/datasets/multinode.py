@@ -137,11 +137,18 @@ def wait_for_text(client, pid, tid, needle, timeout_s=180):
 
 
 def _site_ran(caps):
-    """The site= a background run_python/run_r actually carried."""
+    """site= values of run_python/run_r calls that did NOT error — a mere
+    invocation must not count as 'ran on the site' (a failed call would
+    otherwise pass site-routing checks vacuously). A call whose result the
+    stream didn't carry (deferred envelope) counts — the scenario's own
+    output checks cover its success."""
     sites = []
     for t in tools_named(caps, "run_python") + tools_named(caps, "run_r"):
         s = t["input"].get("site")
-        if s:
+        res = t.get("result")
+        ok = (not isinstance(res, dict)
+              or res.get("status") not in ("error", "cancelled"))
+        if s and ok:
             sites.append(s)
     return sites
 
@@ -216,7 +223,12 @@ def mn_status_surfaces(client, pid, tid):
     from must show it as SAFE ON HPC. Mechanism-agnostic: the agent may keep
     the run output in place OR register it as a durable-home dataset — both
     are valid 'safe on hpc' outcomes; we assert whichever surface reflects it,
-    plus the project ledger, on the exact JSON the cards read."""
+    plus the project ledger, on the exact JSON the cards read.
+    Scoped to entities THIS scenario creates — the shared single-DB study
+    accumulates entities across scenarios, and a stale hpc-homed entity from
+    an earlier one must not satisfy these checks."""
+    pre = ({e["id"] for e in find_entities(type="analysis", not_deleted=True)}
+           | {e["id"] for e in find_entities(type="dataset", not_deleted=True)})
     caps = [drive_turn(client, pid, tid,
         "Open an analysis run titled 'Remote production'. Then run a BACKGROUND "
         "job on machine 'hpc' that writes a LARGE ~60 MB file called big.bin "
@@ -225,14 +237,18 @@ def mn_status_surfaces(client, pid, tid):
     wait_jobs_settled(client, pid)
 
     def _on_hpc_somewhere():
-        # (a) a run whose durable view marks big.bin kept on hpc
+        # (a) a NEW run whose durable view marks big.bin kept on hpc
         for r in find_entities(type="analysis", not_deleted=True):
+            if r["id"] in pre:
+                continue
             dv = _durable(client, r["id"])
             for f in dv["files"]:
                 if f["rel"].endswith("big.bin") and f.get("site") == "hpc":
                     return ("run", r["id"], f)
-        # (b) a dataset whose durable home is on hpc
+        # (b) a NEW dataset whose durable home is on hpc
         for e in find_entities(type="dataset", not_deleted=True):
+            if e["id"] in pre:
+                continue
             home = ((e.get("metadata") or {}).get("home")
                     or (e.get("metadata") or {}).get("weft_home") or {})
             if home.get("site") == "hpc":
@@ -391,15 +407,19 @@ def mn_pin_remote_result(client, pid, tid):
     dv = _durable(client, run["id"]) if run else {"files": []}
     plot_harvested = (any("squares.png" in str(o.get("label", "")) for o in outs)
                       or any(f["rel"].endswith("squares.png") for f in dv["files"]))
+    # snapshot BEFORE the pin turn — a Result left by an earlier scenario in
+    # the shared single-DB study must not satisfy "pinning worked"
+    pre_results = {e["id"] for e in find_entities(type="result", not_deleted=True)}
     caps.append(drive_turn(client, pid, tid,
         "That looks good — pin/save it as a Result titled 'Squares curve' "
         "with a one-line interpretation of the shape."))
     wait_jobs_settled(client, pid)
-    results = find_entities(type="result", not_deleted=True)
+    new_results = [e for e in find_entities(type="result", not_deleted=True)
+                   if e["id"] not in pre_results]
     return caps, [
         ("remote step ran on hpc", "hpc" in _site_ran(caps)),
         ("the plot was harvested back into the run's outputs", plot_harvested),
-        ("a Result entity now exists after pinning", bool(results)),
+        ("THIS pin created a Result entity", bool(new_results)),
     ]
 
 
@@ -462,10 +482,13 @@ def mn_provenance_after_chain(client, pid, tid):
         "Open a run 'Prov check'. On machine 'hpc', compute z = i%7 for "
         "i in 1..120 and make a bar plot saved as bars.png. Bring it back.")]
     wait_jobs_settled(client, pid)
+    # scenario-scoped: only a Result created by THIS pin turn counts
+    pre_results = {e["id"] for e in find_entities(type="result", not_deleted=True)}
     caps.append(drive_turn(client, pid, tid,
         "Pin that as a Result titled 'Bars' with a short interpretation."))
     wait_jobs_settled(client, pid)
-    results = find_entities(type="result", not_deleted=True)
+    results = [e for e in find_entities(type="result", not_deleted=True)
+               if e["id"] not in pre_results]
     # provenance question — the placement block should let the agent name hpc
     caps.append(drive_turn(client, pid, tid,
         "For the 'Bars' result: which machine actually produced it, and how "
@@ -572,7 +595,27 @@ def mn_gpu_routing(client, pid, tid):
 def mn_rerun_asis_recomputes(client, pid, tid):
     """The memo-nonce design: re-running IDENTICAL remote code must actually
     RECOMPUTE (a fresh weft task), not silently return a memo-cached result.
-    Two runs of the same code → two DISTINCT weft task ids."""
+    Two runs of the same code → two DISTINCT weft task ids. Snapshot-diffed:
+    the shared single-DB study accumulates hpc jobs across scenarios, and a
+    global count could NEVER fail — the whole point is that THESE two turns
+    each minted a fresh task."""
+    def _hpc_wids():
+        from core.graph.jobs import _row_to_job
+        import sqlite3
+        from core.graph._schema import active_db_path
+        wids = set()
+        try:
+            c = sqlite3.connect(active_db_path()); c.row_factory = sqlite3.Row
+            for r in c.execute("SELECT * FROM jobs").fetchall():
+                p = (_row_to_job(r).get("params") or {})
+                if p.get("site") == "hpc" and p.get("weft_id"):
+                    wids.add(p["weft_id"])
+            c.close()
+        except Exception:  # noqa: BLE001
+            pass
+        return wids
+
+    pre_wids = _hpc_wids()
     caps = [drive_turn(client, pid, tid,
         "On machine 'hpc', compute and print the sum of 1..1234. Run it "
         "directly.")]
@@ -580,27 +623,14 @@ def mn_rerun_asis_recomputes(client, pid, tid):
         "Run that exact same computation on 'hpc' again — I want it actually "
         "re-run, not a cached answer."))
     full = _denum(all_text(caps) + "\n" + thread_text(client, pid, tid))
-    # distinct weft task ids across the two identical runs = no memo collision
-    from core.graph.jobs import _row_to_job
-    import sqlite3
-    from core.graph._schema import active_db_path
-    wids = set()
-    try:
-        c = sqlite3.connect(active_db_path()); c.row_factory = sqlite3.Row
-        for r in c.execute("SELECT * FROM jobs").fetchall():
-            p = (_row_to_job(r).get("params") or {})
-            if p.get("site") == "hpc" and p.get("weft_id"):
-                wids.add(p["weft_id"])
-        c.close()
-    except Exception:  # noqa: BLE001
-        pass
+    new_wids = _hpc_wids() - pre_wids
     hpc_runs = [t for t in tools_named(caps, "run_python")
                 if t["input"].get("site") == "hpc"]
     return caps, [
         ("both runs targeted hpc", len(hpc_runs) >= 2),
         ("correct sum reported", str(sum(range(1, 1235))) in full),
-        ("re-run produced a DISTINCT weft task (no memo collision)",
-         len(wids) >= 2),
+        ("THESE re-runs minted DISTINCT weft tasks (no memo collision)",
+         len(new_wids) >= 2),
     ]
 
 
@@ -802,7 +832,8 @@ def main():
                         pass
                 print("[cleanup] sites unregistered")
     finally:
-        out = hssh("rm -rf /home/physicist/aba-mn-data && echo cleaned")
+        out = hssh("rm -rf /home/physicist/aba-mn-data "
+                   "/home/physicist/aba-mn-crash && echo cleaned")
         print("[cleanup] hpc data dirs:", out.stdout.strip() or out.stderr[-120:])
         if MENDEL_OK:
             mout = mssh(f"rm -rf {M_ROOT} {M_DATA} && echo cleaned")

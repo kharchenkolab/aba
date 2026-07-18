@@ -150,7 +150,16 @@ def drive_turn(client, pid, tid, text, timeout_s=900):
                 cap["text"].append(ev.get("text") or ev.get("delta") or "")
             elif t == "tool_start":
                 cap["tools"].append({"name": ev.get("name") or ev.get("tool"),
-                                     "input": ev.get("input") or {}})
+                                     "input": ev.get("input") or {},
+                                     "tool_use_id": ev.get("tool_use_id")})
+            elif t == "tool_result":
+                # pair the envelope back onto its call — assertions can then
+                # distinguish "was invoked" from "succeeded"
+                for tc in reversed(cap["tools"]):
+                    if tc.get("tool_use_id") == ev.get("tool_use_id"):
+                        tc["result"] = (ev.get("result")
+                                        if isinstance(ev.get("result"), dict) else {})
+                        break
             elif t in ("error", "notice"):
                 cap.setdefault("errors", []).append(
                     {"type": t, "text": ev.get("text"),

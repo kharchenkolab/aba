@@ -144,7 +144,14 @@ Harness disciplines learned live: isolated per-scenario data dirs (a shared
 dir let leftover files create ambiguity the agent correctly refused to guess
 through); wait_for_text polls for DEFERRED-continuation results (jobs-settled
 + fixed sleep is too early — the gather/report runs later); number-normalize
-checks so '12,070,100' matches '12070100'.
+checks so '12,070,100' matches '12070100'. **Scenario-scoped assertions**
+(adversarial-review finding): the study shares ONE DB across scenarios, so
+any "some entity/job exists" check is satisfied by an EARLIER scenario and
+can never fail — snapshot ids/weft-ids before the scenario's turns and
+assert on the DIFF (the memo-nonce check was vacuous exactly this way).
+`drive_turn` pairs `tool_result` envelopes back onto their calls, and
+`_site_ran` counts only calls that did not error — an invocation alone must
+not pass a "ran on the site" check.
 
 Follow-ups (not built): planning->approval->execute with a remote step (needs
 the resume/approval POST driven from the harness); a SECOND real site for

@@ -238,20 +238,29 @@ declared sites — the unchanged lane above) vs **detached** (host-bearing or
 ad-hoc sites — never guess shared-fs). Detached submit
 (`_build_detached_task`) ships code AS DATA: a payload dir
 {`detached_entry.py` — stdlib-only, language-agnostic harness that runs the
-user script as a subprocess and writes `result.json` — user script, spec +
-job-id **memo nonce**} → `data_register(ingest=True)` → staged task input;
+user script as a subprocess, ENFORCES `spec.timeout_s` (the only wall
+enforcement on ssh sites, which have no scheduler walltime) and writes
+`result.json` — user script, spec + job-id **memo nonce**} →
+`data_register(ingest=True)` → staged task input (the staging dir is
+deleted after registration so spec.json never surfaces as a Run output);
 command `python3 payload/aba_entry.py` under the env's prefix when
 `env=EnvID` rides along (weft realizes the env at the site). A platform
 mismatch (weft surfaces it at REALIZE, async) triggers ONE lazy re-lock
-(`named_envs.ensure_platform`) + transparent resubmit at the poll side.
-`_poll_detached` reads `result.json` + small outputs over the data plane
-into the local run dir → the standard controller-side harvest; large
-outputs stay on the node (kept / `(run,rel)` / bring-back). Env-less runs
-stamp `env_grade: node-system` + runtime. **Walltime doctrine:** an explicit
-walltime is asked only for SIZED jobs (agent estimate given; timeout+300) —
-an ask inflated from the default timeout pends forever under
-`PartitionTimeLimit` (verified live); unsized jobs ride the partition
-default. Tests: `tests/test_detached_lane.py`, `test_detached_agent_inputs.py`,
+(`named_envs.ensure_platform` — replays the env AS BUILT from its persisted
+base spec + extend layers, keeping a python pin) + transparent resubmit at
+the poll side. `_poll_detached` reads `result.json` + small outputs over
+the data plane into the local run dir → the standard controller-side
+harvest; large outputs stay on the node (kept / `(run,rel)` / bring-back).
+Env-less runs stamp `env_grade: node-system` + runtime. Sync rows are BORN
+`sync` (before the substrate submit — no poll-loop adoption window); a
+submit that dies on the substrate marks the row `failed` (a stale 'queued'
+row would restart-reconcile onto the LOCAL worker). **Walltime doctrine
+(`_sized_walltime`, ONE policy for both transports):** an explicit walltime
+is asked only for SIZED jobs (agent estimate given; timeout+300) — an ask
+inflated from the default timeout pends forever under `PartitionTimeLimit`
+(verified live); unsized jobs ride the partition default; nextflow heads
+are sized by design (their timeout IS the chosen head walltime). Tests:
+`tests/test_detached_lane.py`, `test_detached_agent_inputs.py`,
 `test_detached_cluster.py` (opt-in docker e2e), `regtest/datasets/multinode.py`
 (live agent).
 
@@ -261,9 +270,6 @@ default. Tests: `tests/test_detached_lane.py`, `test_detached_agent_inputs.py`,
   describe the RETIRED sbatch `SlurmSubmitter` as live (W3.5 deleted that lane; the cluster
   path is `WeftSubmitter(site=<slurm site>)`). The weft-era sections at the bottom are
   current; the top half needs a consolidation pass.
-- **Shared-fs walltime hazard.** The shared-fs lane still asks `timeout+900` walltime
-  unconditionally — the same PartitionTimeLimit eternal-pend trap the detached lane fixed
-  (sized-only asks) applies on low-cap partitions; give it the same treatment.
 - **`runner.py` is a ~1300-line god-module** fusing five responsibilities: the local async
   worker, the submit API (`submit_*_job`), finalize+continuation dispatch, restart
   reconcile/reap, and the Slurm poll + inline watchdog loops. `LocalSubmitter` living here
