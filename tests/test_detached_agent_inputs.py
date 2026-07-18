@@ -129,6 +129,38 @@ def test_sync_remote_env_identity(monkeypatch):
     assert "ghost" in out["note"] and not seen
 
 
+def test_run_r_kernel_selfheals_to_stateless(monkeypatch):
+    """run_r must self-heal like run_python: a transient kernel-boot failure
+    gets a hard reset + ONE retry, then the stateless Rscript one-shot with a
+    LOUD kernel_warning — it previously hard-errored on the first hiccup."""
+    import content.bio.tools.run_exec as rx
+    import core.config as cfg
+    from core.compute import base_env, project_env
+    import core.exec.kernels as kern
+    import core.exec.run as execrun
+
+    monkeypatch.setattr(cfg, "KERNEL_ENABLED", True)
+    monkeypatch.setattr(base_env, "require", lambda lang: None)
+    monkeypatch.setattr(project_env, "ensure", lambda pid, lang: None)
+    calls = {"boots": 0, "restarts": 0}
+
+    class _Pool:
+        def get_or_start(self, tid, lang, cwd=None):
+            calls["boots"] += 1
+            raise RuntimeError("slow first boot")
+
+        def restart(self, tid, lang):
+            calls["restarts"] += 1
+    monkeypatch.setattr(kern, "get_pool", lambda: _Pool())
+    monkeypatch.setattr(execrun, "run_r_code",
+                        lambda code, **kw: {"stdout": "fallback ok",
+                                            "returncode": 0})
+    out = rx.run_r({"code": "x <- 1"}, {"thread_id": "t"})
+    assert calls["boots"] == 2 and calls["restarts"] == 2   # exactly one retry
+    assert out["stdout"] == "fallback ok"
+    assert "WITHOUT the persistent R session" in out["kernel_warning"]
+
+
 def test_describe_compute_surfaces_remote_sites(monkeypatch):
     """The agent sizes up external machines from describe_compute — declared
     remote sites appear with kind + capacity, and the summary names them."""
@@ -181,6 +213,7 @@ def _standalone() -> int:
               test_site_env_skips_local_realization,
               test_site_background_skips_local_realization,
               test_sync_remote_env_identity,
+              test_run_r_kernel_selfheals_to_stateless,
               test_describe_compute_surfaces_remote_sites):
         mp = _MP()
         try:

@@ -1132,7 +1132,38 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
         record_weft_target(active_run_id(str(thread_id)), getattr(sess, "kernel_id", None))
         res = sess.execute(code, cancel_token=cancel_token, timeout_s=timeout_s)
     except Exception as e:  # noqa: BLE001
-        return {"error": f"R kernel error: {e}"}
+        # Parity with run_python's kernel self-heal: a transient failure (slow
+        # first IRkernel boot on a fresh install) gets a hard reset + ONE
+        # retry, then degrades to the stateless Rscript one-shot with a LOUD
+        # warning — run_r previously returned a hard error on the first
+        # hiccup while run_python healed itself.
+        _ktries = int(input_.get("_kernel_tries", 0))
+        print(f"[run_r] kernel attempt {_ktries + 1} failed: {e}")
+        try:
+            from core.exec.kernels import get_pool as _gp
+            _gp().restart(str(thread_id), "r")
+        except Exception:  # noqa: BLE001
+            pass
+        if _ktries < 1:
+            return run_r({**input_, "_kernel_tries": _ktries + 1}, ctx)
+        from core.exec.run import run_r_code
+        _rid = ((ctx or {}).get("run_id")
+                or getattr(cancel_token, "run_id", None) or uuid.uuid4().hex)
+        try:
+            result = run_r_code(code, project_id=str(project_id),
+                                run_id=str(_rid), timeout_s=timeout_s,
+                                cancel_token=cancel_token)
+        except Exception as e2:  # noqa: BLE001
+            return {"error": f"R kernel error: {e}; "
+                             f"stateless fallback also failed: {e2}"}
+        if isinstance(result, dict):
+            result["kernel_warning"] = (
+                "⚠ Ran WITHOUT the persistent R session (it was temporarily "
+                "unavailable). Objects and libraries from earlier run_r calls "
+                "are NOT available here, and the working directory is a fresh "
+                "per-run scratch dir — define everything in THIS call and use "
+                "absolute paths for files you want to keep.")
+        return result
     if res.timed_out:
         return {"error": f"R code timed out ({timeout_s}s limit)"}
     if res.cancelled:
