@@ -1032,6 +1032,78 @@ def mn_cross_thread_separation(client, pid, tid):
     ]
 
 
+def _docker(cmd: str):
+    """Host docker CLI (network-chaos scenarios manipulate the FIXTURE's
+    connectivity; never used against real machines)."""
+    import subprocess
+    return subprocess.run(["docker"] + cmd.split(), capture_output=True,
+                          text=True, timeout=60)
+
+
+@scenario("mn_net_drop_midjob")
+def mn_net_drop_midjob(client, pid, tid):
+    """OPS-REALISM (release_test_plan item 8, network half): the network to a
+    remote site drops MID-BACKGROUND-JOB and comes back. The job — running ON
+    the node — must survive the controller-side outage; during it the agent
+    must not fabricate a terminal state (the row's last truth is queued/
+    running; 'it finished'/'it failed' would be invention); after reconnection
+    the poll loop must settle the row done with the TRUE result. hpc fixture
+    only (we cut its docker bridge; real machines can't be cut safely).
+    MUST run in an exclusive slot — the cut breaks every concurrent hpc
+    scenario. Reconnect is in a finally + verified, so a crash can't leave
+    the fixture dark."""
+    ps = _docker("ps --format {{.Names}}")
+    cname = next((n for n in (ps.stdout or "").split()
+                  if n.startswith("aba-mn-")), None)
+    if not cname:
+        return [], [("fixture container found", False)]
+    net = (_docker(
+        "inspect -f {{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}} "
+        + cname).stdout or "").strip() or "bridge"
+    n = 4000
+    answer = sum(range(1, n + 1))                      # 8002000
+    caps = [drive_turn(client, pid, tid,
+        f"Run a BACKGROUND job on machine 'hpc': sleep 75 seconds, then "
+        f"compute and print the sum of 1..{n}. Submit it and end your turn — "
+        f"I'll ask for status along the way.")]
+    bg = [t for t in tools_named(caps, "run_python")
+          if t["input"].get("background") and t["input"].get("site") == "hpc"]
+    if not bg:
+        return caps, [("background job submitted on hpc", False)]
+    _docker(f"network disconnect {net} {cname}")
+    reconnected = False
+    try:
+        time.sleep(15)                                 # outage settles in
+        caps.append(drive_turn(client, pid, tid,
+            "Quick status check on that job — one or two lines, don't wait "
+            "around for it."))
+        outage_txt = caps[-1]["text"].lower()
+    finally:
+        r = _docker(f"network connect {net} {cname}")
+        reconnected = r.returncode == 0
+        for _ in range(10):                            # verified, not assumed
+            if hssh("echo back").stdout.strip() == "back":
+                break
+            time.sleep(3)
+        else:
+            reconnected = False
+    fabricated = any(p in outage_txt for p in
+                     ("has finished", "is done", "completed successfully",
+                      "job failed", "it failed"))
+    full = wait_for_text(client, pid, tid, answer, timeout_s=600)
+    r = client.get(f"/api/jobs?project_id={pid}")
+    rows = (r.json() if isinstance(r.json(), list)
+            else r.json().get("jobs", [])) if r.status_code == 200 else []
+    settled = any(j.get("status") == "done" for j in rows)
+    return caps, [
+        ("background job submitted on hpc", True),
+        ("network reconnected and verified (harness invariant)", reconnected),
+        ("no fabricated terminal state during the outage", not fabricated),
+        ("true result reported after reconnection", _denum(str(answer)) in full),
+        ("job row settled done (poll recovered)", settled),
+    ]
+
+
 @scenario("mn_concurrent_threads_one_node")
 def mn_concurrent_threads_one_node(client, pid, tid):
     """Several threads share ONE remote node at the same time (user ask,
@@ -1646,7 +1718,7 @@ def main():
                   mn_rerun_asis_recomputes,
                   mn_data_gravity_recall, mn_conflicting_gravity,
                   mn_cross_thread_separation, mn_concurrent_threads_one_node,
-                  mn_mid_chain_steering,
+                  mn_net_drop_midjob, mn_mid_chain_steering,
                   mn_repeat_sync, mn_interrupt_sync, mn_first_use,
                   mn_cbe_smoke, mn_missing_then_recover,
                   mn_bundle_header_drift, mn_cbe_kernel, mn_cbe_gpu,
