@@ -835,6 +835,93 @@ def ui_failed_run_card(page, api, pid, tid):
     ]
 
 
+@ui_scenario("ui_two_tabs")
+def ui_two_tabs(page, api, pid, tid):
+    """SAME-USER CONCURRENCY (release_test_plan item 8, in-scope half): two
+    real browser tabs on ONE project — the second tab submits while the
+    first tab's turn is still streaming. Hunts the SILENT-LOSS class: a
+    user types into tab 2, nothing visibly happens, and the message
+    evaporates. Acceptable outcomes: the second turn runs (before/after),
+    or a VISIBLE refusal/queue notice. Also asserts cross-tab convergence:
+    after reload both tabs render the same thread truth. Markers computed
+    (51*67, 83*59) so needles can't come from the prompts."""
+    m1, m2 = 51 * 67, 83 * 59                    # 3417, 4897
+    box1 = page.locator("textarea").first
+    box1.wait_for(state="visible", timeout=15_000)
+    ctx2 = page.context.browser.new_context()
+    try:
+        page2 = ctx2.new_page()
+        page2.goto(BASE["url"], wait_until="domcontentloaded")
+        _enter_project(page2)
+        box2 = page2.locator("textarea").first
+        box1.fill("Run a quick local python step that sleeps 20 seconds and "
+                  "then computes and prints 51*67. Report the number.")
+        box1.press("Enter")
+        time.sleep(4)                            # tab-1 stream is live
+        shot(page2, "two_tabs_tab2_during_stream")
+        tab2_enabled = False
+        try:
+            tab2_enabled = box2.is_enabled()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            box2.fill("Compute 83*59 with a quick local python step and "
+                      "report the number.")
+            box2.press("Enter")
+        except Exception:  # noqa: BLE001
+            pass
+        print(f"    [obs] tab-2 composer enabled during tab-1 stream: "
+              f"{tab2_enabled}")
+        deadline = time.time() + 300             # both tabs settle
+        while time.time() < deadline:
+            try:
+                if (page.locator(".composer__stop").count() == 0
+                        and page2.locator(".composer__stop").count() == 0):
+                    break
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(3)
+        time.sleep(5)
+        # thread truth via API (the surface both tabs render from)
+        r = api.get(f"/api/messages?thread_id={tid}&project_id={pid}")
+        raw = r.text if r.status_code == 200 else ""
+        raw_n = raw.replace(",", "")
+        ran1 = str(m1) in raw_n
+        ran2 = str(m2) in raw_n
+        body2 = ""
+        try:
+            body2 = page2.locator("body").inner_text()
+        except Exception:  # noqa: BLE001
+            pass
+        notice2 = any(w in body2.lower() for w in
+                      ("another turn", "in progress", "busy", "wait",
+                       "queued", "error"))
+        shot(page2, "two_tabs_tab2_after")
+        # convergence: reload BOTH tabs — same thread truth in each
+        page.reload(wait_until="domcontentloaded"); _enter_project(page)
+        page2.reload(wait_until="domcontentloaded"); _enter_project(page2)
+        time.sleep(5)
+        b1 = page.locator("body").inner_text().replace(",", "")
+        b2 = page2.locator("body").inner_text().replace(",", "")
+        shot(page, "two_tabs_tab1_reloaded")
+        converged = (str(m1) in b1) == (str(m1) in b2) and \
+                    (str(m2) in b1) == (str(m2) in b2)
+        return [
+            ("tab-1 turn completed with the true number", ran1),
+            ("tab-2 not silently lost (ran OR visible notice)",
+             ran2 or notice2),
+            ("no crash banner in either tab",
+             "couldn't be displayed" not in b1 + b2
+             and "couldn’t be displayed" not in b1 + b2),
+            ("tabs converge after reload (same thread truth)", converged),
+        ]
+    finally:
+        try:
+            ctx2.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _register_hpc() -> None:
     """Best-effort: the dockerized slurm fixture (multinode's), for the
     remote-truth UI scenarios. Skipped cleanly when absent."""
