@@ -53,10 +53,30 @@ run() {  # try the scenario venv, fall back to the runtime venv (scanpy etc.)
   ( cd "$dir" && "$RV" _make_data.py ) >/dev/null 2>&1
 }
 
+# A scenario's data is "present" only if EVERY declared data_files entry exists — not
+# merely that data/ is non-empty. An interrupted prior run can leave a PARTIAL data/
+# (e.g. mystery.fasta written, blast_hits.tsv not); the old non-empty check skipped it,
+# so the scenario ran against missing inputs and every step failed (blast_seq: 0/9).
+_data_complete() {  # $1 = scenario dir
+  local dir="$1" f files
+  [ -d "$dir/data" ] || return 1
+  files=$(awk '/^data_files:/{f=1;next} f&&/^-[[:space:]]/{sub(/^-[[:space:]]*/,"");print} f&&/^[^[:space:]-]/{f=0}' "$dir/scenario.yaml" 2>/dev/null)
+  # no declared list → fall back to the old "non-empty" test
+  [ -z "$files" ] && { [ -n "$(ls -A "$dir/data" 2>/dev/null)" ]; return $?; }
+  while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    f="${f%\"}"; f="${f#\"}"; f="${f%\'}"; f="${f#\'}"
+    [ -e "$dir/data/$f" ] || return 1
+  done <<EOF
+$files
+EOF
+  return 0
+}
+
 echo -n "[top-level] "; if run "$HERE"; then echo ok; ok=$((ok+1)); else echo FAIL; fail=$((fail+1)); failed="$failed top-level"; fi
 for g in "$HERE"/*/_make_data.py; do
   d="$(dirname "$g")"; n="$(basename "$d")"
-  if [ -z "$FORCE" ] && [ -d "$d/data" ] && [ -n "$(ls -A "$d/data" 2>/dev/null)" ]; then
+  if [ -z "$FORCE" ] && _data_complete "$d"; then
     echo "[$n] skip (data present)"; skip=$((skip+1)); continue
   fi
   echo -n "[$n] "; if run "$d"; then echo ok; ok=$((ok+1)); else echo FAIL; fail=$((fail+1)); failed="$failed $n"; fi
