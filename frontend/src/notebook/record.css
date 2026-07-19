@@ -70,6 +70,10 @@ input { font: inherit; }
   color: var(--ink-2); width: 100%;
 }
 .toc__item:hover { background: var(--paper); color: var(--ink); }
+.toc__item.is-active {
+  background: var(--paper); color: var(--ink); font-weight: 600;
+  box-shadow: inset 2px 0 0 var(--teal);
+}
 .toc__phase { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; position: relative; top: -1px; }
 .toc__phase--early { background: #d6d3d1; }
 .toc__phase--mid { background: var(--teal); }

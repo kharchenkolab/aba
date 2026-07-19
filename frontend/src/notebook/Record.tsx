@@ -404,6 +404,25 @@ export default function Record() {
   const [newOpen, setNewOpen] = useState(false)
   const [q, setQ] = useState('')
   const [scope, setScope] = useState<'story' | 'noticed' | 'everything'>('everything')
+  const [activeAnchor, setActiveAnchor] = useState('')
+
+  // TOC tracks the reader's position: the anchor nearest above the upper
+  // third of the document column is "where you are".
+  const ANCHORS = [
+    ...sections.map(s => `el-${s.id}`),
+    ...trails.map(t => `el-${t.id}`),
+    'el-loose', 'el-sediment',
+  ]
+  const onDocScroll = (e: React.UIEvent<HTMLElement>) => {
+    const doc = e.currentTarget
+    const line = doc.getBoundingClientRect().top + doc.clientHeight / 3
+    let best = ''
+    for (const id of ANCHORS) {
+      const el = document.getElementById(id)
+      if (el && el.getBoundingClientRect().top <= line) best = id
+    }
+    if (best !== activeAnchor) setActiveAnchor(best)
+  }
 
   const scrollTo = (domId: string) => {
     const el = document.getElementById(domId)
@@ -464,22 +483,22 @@ export default function Record() {
 
         <div className="toc__group">story so far</div>
         {sections.map(s => (
-          <button key={s.id} className="toc__item" onClick={() => scrollTo(`el-${s.id}`)}>
+          <button key={s.id} className={`toc__item ${activeAnchor === `el-${s.id}` ? 'is-active' : ''}`} onClick={() => scrollTo(`el-${s.id}`)}>
             <span className={`toc__phase toc__phase--${s.phase}`} />
             {s.question}
           </button>
         ))}
         <div className="toc__group">field notes</div>
         {trails.map(t => (
-          <button key={t.id} className="toc__item" onClick={() => scrollTo(`el-${t.id}`)}>
+          <button key={t.id} className={`toc__item ${activeAnchor === `el-${t.id}` ? 'is-active' : ''}`} onClick={() => scrollTo(`el-${t.id}`)}>
             <span className="toc__trail">⋱</span> {t.id} · {t.title}
           </button>
         ))}
-        <button className="toc__item" onClick={() => scrollTo('el-loose')}>
+        <button className={`toc__item ${activeAnchor === 'el-loose' ? 'is-active' : ''}`} onClick={() => scrollTo('el-loose')}>
           <span className="toc__trail">·</span> loose notes
         </button>
         <div className="toc__group">sediment</div>
-        <button className="toc__item" onClick={() => scrollTo('el-sediment')}>
+        <button className={`toc__item ${activeAnchor === 'el-sediment' ? 'is-active' : ''}`} onClick={() => scrollTo('el-sediment')}>
           {sediment.length} runs · complete · automatic
         </button>
 
@@ -511,7 +530,7 @@ export default function Record() {
       </nav>
 
       {/* ---------- the document ---------- */}
-      <main className="doc">
+      <main className="doc" onScroll={onDocScroll}>
         <header className="doc__head">
           <h1>{project.title}</h1>
           <div className="doc__sub">
