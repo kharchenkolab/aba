@@ -28,17 +28,48 @@ from core import projects                                    # noqa: E402
 from core.graph.jobs import get_job                          # noqa: E402
 from core.jobs.runner import submit_python_job               # noqa: E402
 from core.exec.run import run_python_code, run_r_code         # noqa: E402
-from core.exec import isolated_env as iso                    # noqa: E402
+from core.compute import named_envs                          # noqa: E402
 
 projects.init()
 
 
-def _make_venv_env(pid: str, name: str) -> Path:
-    """A throwaway venv at the isolated-env path so env_python resolves (stands in
-    for a real make_isolated_env build, which needs uv + minutes)."""
-    d = iso.env_dir(name, pid)
-    d.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run([sys.executable, "-m", "venv", str(d)], check=True, capture_output=True)
+@pytest.fixture(autouse=True)
+def _pack_mode(monkeypatch):
+    """W3.5 weft-only: the default run lanes require a base pack. Present pack-mode
+    so a default (non-env) background run resolves the project session interpreter
+    (the backend python here) instead of erroring no_base_pack. Isolated-env runs
+    (env=…) use named_envs and are unaffected."""
+    import _packmode
+    _packmode.enable(monkeypatch)
+
+
+# Planted prefixes by EnvID — a module-level stand-in for weft realization
+# (a real solve needs network + minutes; the dispatch under test is aba's).
+_PLANTED: dict[str, Path] = {}
+_real_ensure_realized = named_envs.ensure_realized
+named_envs.ensure_realized = (
+    lambda env_id, **kw: _PLANTED.get(env_id) or _real_ensure_realized(env_id, **kw))
+
+
+def _plant_named_env(pid: str, name: str, language: str = "python") -> Path:
+    """Register a named env handle whose 'realization' is a local venv (python)
+    or a stub prefix with bin/Rscript (r) — stands in for a weft realize."""
+    d = Path(tempfile.mkdtemp(prefix=f"aba_plant_{name}_"))
+    if language == "python":
+        subprocess.run([sys.executable, "-m", "venv", str(d)],
+                       check=True, capture_output=True)
+    else:
+        (d / "bin").mkdir(parents=True, exist_ok=True)
+        rs = d / "bin" / "Rscript"
+        rs.write_text("#!/bin/sh\nexit 0\n")
+        rs.chmod(0o755)
+    env_id = f"env:v1:test-{pid}-{name}"
+    data = named_envs._load(pid)
+    data["envs"][name] = {"env_id": env_id, "language": language,
+                          "packages": [], "history": [],
+                          "created_at": 0, "updated_at": 0}
+    named_envs._save(pid, data)
+    _PLANTED[env_id] = d
     return d
 
 
@@ -51,7 +82,7 @@ def test_submit_carries_env():
 def test_run_python_code_uses_isolated_env():
     pid = projects.create_project("envbg-run")["id"]
     projects.set_current(pid)
-    envdir = _make_venv_env(pid, "iso1")
+    envdir = _plant_named_env(pid, "iso1")
     r = run_python_code("import sys; print('PFX', sys.prefix)", project_id=pid,
                         env="iso1", timeout_s=60)
     assert r.get("returncode") == 0, r
@@ -64,7 +95,7 @@ def test_isolated_env_is_standalone_no_overlay():
     (standalone), unlike the default run."""
     pid = projects.create_project("envbg-standalone")["id"]
     projects.set_current(pid)
-    _make_venv_env(pid, "iso2")
+    _plant_named_env(pid, "iso2")
     code = ("import sys; "
             "print('OVERLAY' if any('pylib_proj' in p for p in sys.path) else 'CLEAN')")
     r = run_python_code(code, project_id=pid, env="iso2", timeout_s=60)
@@ -93,32 +124,29 @@ def test_submit_r_carries_env():
     assert get_job(job["id"], project_id=pid)["params"]["env"] == "renv"
 
 
-def test_run_r_code_isolated_env_preamble(monkeypatch):
-    """run_r_code(env=) prepends the isolated R lib to .libPaths() (standalone) —
-    mocks Rscript+executor so it runs without a provisioned R."""
+def test_run_r_code_isolated_env_uses_own_rscript(monkeypatch):
+    """run_r_code(env=) runs the NAMED env's own Rscript (a full standalone weft
+    env — no .libPaths() stacking) — mocks the executor so no real R runs."""
     pid = projects.create_project("envbg-rpre")["id"]; projects.set_current(pid)
-    lib = iso.r_env_lib("renv", pid); lib.mkdir(parents=True, exist_ok=True)
-    import core.exec.run as runmod, core.exec.r as rmod
-    fake = Path(tempfile.mktemp() + "_rscript"); fake.write_text("x")
-    monkeypatch.setattr(rmod, "_rscript", lambda: fake)
+    prefix = _plant_named_env(pid, "renv", language="r")
+    import core.exec.run as runmod
     captured = {}
     class _Res:
         timed_out = False; cancelled = False; returncode = 0; stdout = ""; stderr = ""
     def _exec(self, env, argv, **kw):
+        captured["argv"] = list(argv)
         captured["script"] = Path(argv[-1]).read_text(); return _Res()
     monkeypatch.setattr(runmod.MaterializingExecutor, "materialize",
                         lambda self, prov: type("E", (), {"python": None})())
     monkeypatch.setattr(runmod.MaterializingExecutor, "exec", _exec)
     run_r_code("cat('hi')", project_id=pid, env="renv", timeout_s=30)
-    s = captured.get("script", "")
-    assert str(lib) in s and ".libPaths(c(" in s, s
+    assert captured["argv"][0] == str(prefix / "bin" / "Rscript"), captured.get("argv")
+    assert ".libPaths(c(" not in captured.get("script", "")   # standalone env
 
 
 def test_run_r_code_missing_env_errors(monkeypatch):
+    # A missing NAMED env errors (goes the named-env branch, not the base pack).
     pid = projects.create_project("envbg-rmiss")["id"]; projects.set_current(pid)
-    import core.exec.r as rmod
-    fake = Path(tempfile.mktemp() + "_rs"); fake.write_text("x")
-    monkeypatch.setattr(rmod, "_rscript", lambda: fake)
     r = run_r_code("cat(1)", project_id=pid, env="nope", timeout_s=20)
     assert "error" in r and "not available" in r["error"], r
 

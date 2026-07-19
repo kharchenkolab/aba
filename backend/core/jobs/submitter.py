@@ -49,27 +49,66 @@ def submitter_name() -> str:
     return config.settings.batch_submitter.get().strip().lower()
 
 
-def get_submitter() -> "BatchSubmitter":
-    """The active submitter for this deployment. Lazy imports avoid a cycle
-    (runner ⇆ submitter) and keep Slurm code off the import path when local."""
-    name = submitter_name()
-    if name == "slurm":
-        from core.jobs.slurm_submitter import SlurmSubmitter
-        return SlurmSubmitter()
+def _local_lane() -> "BatchSubmitter":
+    """The local background lane (weft rewrite W2): a bare weft task when the
+    compute substrate is up — durable across restarts, placement-bearing exec
+    records — else the legacy in-process worker, loudly (transparent
+    degradation, never silent)."""
+    from core.jobs.weft_submitter import WeftSubmitter, weft_available
+    if weft_available():
+        return WeftSubmitter()
+    print("[jobs] compute substrate offline — background job falls back to the "
+          "in-process worker (no durable state across restarts)")
     from core.jobs.runner import LocalSubmitter
     return LocalSubmitter()
 
 
-def get_submitter_for(target: str) -> "BatchSubmitter":
-    """Submitter for a per-job submission target (see in-place submission,
-    misc/inplace_submission.md): 'inline' → LocalSubmitter (run the job in ABA's own
-    process/allocation, no sbatch); 'slurm' → SlurmSubmitter. Anything else → the
-    deployment default. This is the seam that lets a small job run in-place even when
-    the deployment default is Slurm."""
-    if target == "inline":
+def _slurm_lane(kind: str | None = None) -> "BatchSubmitter":
+    """The cluster lane (W3.3): a weft task on the deployment's slurm-kind
+    site when one is declared (weft-sites.yaml) and the substrate is up.
+    Nextflow heads ride the SAME bare weft task: the command
+    `python -m core.jobs.slurm_entry` dispatches `run_nextflow` on the node
+    (slurm_entry.py), the node runs the head over the shared FS (host-by-default),
+    and WeftSubmitter already forwards the nextflow spec + routes resume by
+    weft_id (runner.py). `kind` is retained for the call interface.
+
+    Weft-only (W3.4 tail): the legacy sbatch lane is GONE. A cluster deployment
+    declares a slurm-kind weft site (`host:` omitted = local transport on the
+    submit node); with none declared we degrade to the LOCAL weft lane so jobs
+    still run (on this node) — never a hard failure, never sbatch."""
+    del kind  # nextflow no longer special-cased — same lane as python/R
+    from core.jobs.weft_submitter import WeftSubmitter, weft_slurm_site
+    site = weft_slurm_site()
+    if site:
+        return WeftSubmitter(site=site)
+    print("[jobs] ABA_BATCH_SUBMITTER=slurm but no slurm-kind weft site declared "
+          "(weft-sites.yaml) — running background jobs on the LOCAL weft lane")
+    return _local_lane()
+
+
+def get_submitter(kind: str | None = None) -> "BatchSubmitter":
+    """The active submitter for this deployment. Lazy imports avoid a cycle
+    (runner ⇆ submitter) and keep Slurm code off the import path when local.
+    `kind` (job kind) routes nextflow heads to their special-cased lane."""
+    name = submitter_name()
+    if name == "slurm":
+        return _slurm_lane(kind)
+    if name == "worker":     # explicit legacy escape hatch (in-process worker)
         from core.jobs.runner import LocalSubmitter
         return LocalSubmitter()
+    return _local_lane()
+
+
+def get_submitter_for(target: str, kind: str | None = None) -> "BatchSubmitter":
+    """Submitter for a per-job submission target (see in-place submission,
+    misc/inplace_submission.md): 'inline' → the local lane (run the job on THIS
+    node — a bare weft task, or the in-process worker when the substrate is
+    offline); 'slurm' → the cluster lane (a weft task on the declared slurm
+    site, else legacy sbatch). Anything else → the deployment default. This is
+    the seam that lets a small job run in-place even when the deployment
+    default is Slurm."""
+    if target == "inline":
+        return _local_lane()
     if target == "slurm":
-        from core.jobs.slurm_submitter import SlurmSubmitter
-        return SlurmSubmitter()
-    return get_submitter()
+        return _slurm_lane(kind)
+    return get_submitter(kind)

@@ -12,9 +12,9 @@ Each setting is declared once via `setting()` and read through `config.settings.
 - **reduction** — the fewer-better-variables plan (`keep` / `dead` / `resolve-flag` / `merge:<group>` / `derive:<from>` / `relocate:<layer>`).
 - **flags** — `branches` (changes behavior), `secret` (redacted), `deploy` (launcher-forwarded / `deploy_injected`).
 
-**120 settings** across 11 categories.  
-weft_fate — `keep` 59, `move:envspec` 10, `move:site` 21, `retire` 24, `revisit` 6.  
-reduction — `derive` 3, `keep` 64, `merge` 50, `relocate` 2, `resolve-flag` 1.
+**124 settings** across 11 categories.  
+weft_fate — `keep` 66, `move:envspec` 9, `move:site` 21, `retire` 22, `revisit` 6.  
+reduction — `derive` 1, `keep` 70, `merge` 50, `relocate` 2, `resolve-flag` 1.
 
 ### Tag vocabularies
 
@@ -41,22 +41,22 @@ reduction — `derive` 3, `keep` 64, `merge` 50, `relocate` 2, `resolve-flag` 1.
 
 | setting | env | type | default | weft_fate | reduction | flags | doc |
 |---|---|---|---|---|---|---|---|
-| `artifacts_dir` | `ARTIFACTS_DIR` | path | /workspace/aba-runtime/projects/_workspace/artifacts | keep | keep |  | Workspace-level artifacts dir (no-project fallback). |
-| `data_dir` | `DATA_DIR` | path | /workspace/aba-runtime/projects/_workspace/data | keep | keep |  | Workspace-level data dir (no-project fallback). |
-| `envs_dir` | `ABA_ENVS_DIR` | path | /workspace/aba-runtime/envs | move:envspec | keep | deploy | Materialized-tools area (conda envs + pylib overlay); wipeable whole. |
+| `artifacts_dir` | `ARTIFACTS_DIR` | path | /users/peter.kharchenko/.aba/runtime/projects/_workspace/artifacts | keep | keep |  | Workspace-level artifacts dir (no-project fallback). |
+| `data_dir` | `DATA_DIR` | path | /users/peter.kharchenko/.aba/runtime/projects/_workspace/data | keep | keep |  | Workspace-level data dir (no-project fallback). |
+| `envs_dir` | `ABA_ENVS_DIR` | path | /users/peter.kharchenko/.aba/runtime/envs | move:envspec | keep | deploy | Materialized-tools area (conda envs + pylib overlay); wipeable whole. |
 | `frontend_dist` | `ABA_FRONTEND_DIST` | str |  | keep | keep | deploy | Built frontend dist dir served by the backend. |
 | `home_dir` | `ABA_HOME` | str |  | keep | keep | deploy | Install home ($ABA_HOME): config.env, oauth store, vendor. None → ~/.aba. |
 | `pagoda3_dist` | `ABA_PAGODA3_DIST` | str |  | move:site | keep |  | pagoda3 viewer dist dir (else derived under $ABA_HOME/vendor). |
-| `projects_dir` | `ABA_PROJECTS_DIR` | path | /workspace/aba-runtime/projects | keep | keep |  | Per-project consolidated roots (projects/<pid>/). |
+| `projects_dir` | `ABA_PROJECTS_DIR` | path | /users/peter.kharchenko/.aba/runtime/projects | keep | keep |  | Per-project consolidated roots (projects/<pid>/). |
 | `raw_request_dir` | `ABA_RAW_REQUEST_DIR` | str | /tmp/aba_llm_sent | keep | keep |  | Debug dump dir for raw LLM requests (diagnostics only). |
-| `refs_dir` | `ABA_REFS_DIR` | path | /workspace/aba-runtime/refs | keep | keep |  | Content-addressed shared reference store (genomes, indices, annotations). |
+| `refs_dir` | `ABA_REFS_DIR` | path | /users/peter.kharchenko/.aba/runtime/refs | keep | keep |  | Content-addressed shared reference store (genomes, indices, annotations). |
 | `refsources_dir` | `ABA_REFSOURCES_DIR` | str |  | move:site | keep |  | Override for the reference-sources catalog dir. |
 | `release_id` | `ABA_RELEASE_ID` | str |  | move:site | keep | deploy | Active release id under $ABA_SHARE/releases (else resolve_current()). |
-| `runtime_dir` | `ABA_RUNTIME_DIR` | path | /workspace/aba-runtime | keep | keep | deploy | Root for all mutable runtime state (projects, envs, refs, workspace DB). |
+| `runtime_dir` | `ABA_RUNTIME_DIR` | path | /users/peter.kharchenko/.aba/runtime | keep | keep | deploy | Root for all mutable runtime state (projects, envs, refs, workspace DB). |
 | `share_dir` | `ABA_SHARE` | str |  | move:site | keep | deploy | Shared install tree ($ABA_SHARE) for immutable releases; unset on personal/slim. |
 | `tools_dir` | `ABA_TOOLS_DIR` | str |  | move:envspec | keep |  | Override for the materialized-tools dir (else derived under ENVS_DIR). |
 | `turn_log_dir` | `ABA_TURN_LOG_DIR` | str | /tmp/aba_turnlog | keep | keep |  | Directory for per-turn structured logs. |
-| `work_dir` | `ABA_WORK_DIR` | path | /workspace/aba-runtime/projects/_workspace/work | keep | keep |  | Workspace-level work dir (no-project fallback). |
+| `work_dir` | `ABA_WORK_DIR` | path | /users/peter.kharchenko/.aba/runtime/projects/_workspace/work | keep | keep |  | Workspace-level work dir (no-project fallback). |
 
 ## deploy
 
@@ -66,16 +66,19 @@ reduction — `derive` 3, `keep` 64, `merge` 50, `relocate` 2, `resolve-flag` 1.
 |---|---|---|---|---|---|---|---|
 | `accelerator` | `ABA_ACCELERATOR` | str |  | move:site | derive:gpu-probe | branches | Accelerator hint ('cuda' → CUDA-aware paths); else CPU / probe-derived. |
 | `apptainer_tmpdir` | `ABA_APPTAINER_TMPDIR` | str |  | move:site | keep | deploy | TMPDIR for apptainer/singularity build+run scratch. |
-| `base_lock` | `ABA_BASE_LOCK` | str |  | move:envspec | keep |  | Path to the base environment lock (integrity check). |
 | `job_wrap` | `ABA_JOB_WRAP` | str |  | move:site | keep | branches deploy | Job wrapper mode ('sif' → run jobs via apptainer exec <SIF>). |
 | `lmod_init` | `ABA_LMOD_INIT` | str |  | move:site | keep |  | Lmod init script path (else from site config init_path). |
 | `module_binds` | `ABA_MODULE_BINDS` | str |  | move:site | keep | deploy | Space-separated bind mounts injected when wrapping jobs in the SIF. |
 | `module_init` | `ABA_MODULE_INIT` | str |  | move:site | keep | deploy | Lmod init snippet path for module-based nextflow/tool execution. Forwarded into the SIF so an offloaded bare job (nf-core head) can re-init the site's module system on its compute node. |
 | `modules_eager` | `ABA_MODULES_EAGER` | str |  | move:site | keep |  | Eagerly materialize module manifests at startup (fat-SIF baked artifacts). |
 | `modules_enabled` | `ABA_MODULES_ENABLED` | str |  | move:site | keep | branches | '0' disables the environment-modules integration. |
-| `offload_backend_dir` | `ABA_OFFLOAD_BACKEND_DIR` | str |  | retire | derive:sif | deploy | Backend dir made importable in offloaded jobs; else the live backend dir. |
-| `offload_python` | `ABA_OFFLOAD_PYTHON` | str |  | retire | derive:sif | deploy | Python interpreter for offloaded (sbatch) jobs; else sys.executable. |
+| `pixi_bin` | `ABA_PIXI_BIN` | str |  | keep | keep |  | Path to the pixi binary weft solves/realizes with. None → $PATH lookup, then $ABA_HOME/tools/pixi/bin/pixi. |
+| `jobs_lease` | `ABA_JOBS_LEASE` | bool | True | keep | keep | deploy | Single-writer jobs-plane lease: only the first aba instance on a runtime dir runs the worker/reconcile/poll loops (an exclusive flock on <runtime>/jobs.lease). False disables the check — for a runtime dir on a filesystem without sane flock semantics. |
+| `compute_self_service` | `ABA_COMPUTE_SELF_SERVICE` | bool | True | keep | keep | deploy | May users add/remove/reconfigure compute sites from the UI/agent? Shared installs (OOD/cluster deployments whose slurm sites the admin declares in weft-sites.yaml) set false — the Compute tab shows the deployment's machines read-only and the management API refuses with an actionable 403. |
 | `sif` | `ABA_SIF` | str |  | move:site | keep | deploy | Path to the fat/slim SIF image used to wrap jobs. |
+| `weft_publish_site` | `ABA_WEFT_PUBLISH_SITE` | str | local | keep | keep |  | Site whose realization store backs the published catalog (where env_adopt runs). |
+| `weft_publish_staging` | `ABA_WEFT_PUBLISH_STAGING` | str |  | keep | keep |  | Where a publish's build churn lands (weft env_publish `staging`): None → weft 'auto' (under the site root); an absolute node-local path (e.g. /dev/shm/pubstage) is fastest on a netfs tree — the slow tree then gets one sequential image write instead of ~10^4 small-file ops. |
+| `weft_publish_tree` | `ABA_WEFT_PUBLISH_TREE` | str |  | keep | keep | deploy | Published base-env catalog tree (shared read-only folder). When set, base packs ADOPT from it by name (no solve); unset → solve locally. Admin seeds it with core.compute.seeding. |
 
 ## mode
 
@@ -135,6 +138,7 @@ reduction — `derive` 3, `keep` 64, `merge` 50, `relocate` 2, `resolve-flag` 1.
 | `preexec_veto` | `ABA_PREEXEC_VETO` | str | on | keep | keep | branches | Pre-exec safety veto; 'off' disables it. |
 | `prompt_arm` | `ABA_PROMPT_ARM` | str | control | keep | keep | branches | A/B prompt arm selector (default 'control'). |
 | `recovery_disabled` | `ABA_RECOVERY_DISABLED` | bool | False | keep | keep | branches | Any value disables the scribe recovery journal. |
+| `weft_kernels` | `ABA_WEFT_KERNELS` | bool | False | keep | keep | branches | Route the interactive kernel through weft kernel_* (WeftKernelSession) instead of jupyter_client. |
 
 ## experimental
 
@@ -179,14 +183,14 @@ reduction — `derive` 3, `keep` 64, `merge` 50, `relocate` 2, `resolve-flag` 1.
 
 | setting | env | type | default | weft_fate | reduction | flags | doc |
 |---|---|---|---|---|---|---|---|
-| `batch_submitter` | `ABA_BATCH_SUBMITTER` | str | local | retire | keep | branches deploy | Batch backend: 'local' or 'slurm'. Forwarded into the SIF — it's the local-vs-slurm SELECTOR; unset inside the container → every background job silently runs in-process on the session node. |
+| `batch_submitter` | `ABA_BATCH_SUBMITTER` | str | local | retire | keep | branches deploy | Batch backend: 'local' (the local lane — a bare weft task when the compute substrate is up, else the in-process worker), 'slurm', or 'worker' (force the legacy in-process worker). Forwarded into the SIF — it's the placement SELECTOR; unset inside the container → every background job silently runs in-process on the session node. |
 | `hpc_config` | `ABA_HPC_CONFIG` | str |  | retire | relocate:hpc.yaml | deploy | Path to hpc.yaml compute-topology override (else $ABA_HOME/hpc.yaml). Forwarded into the SIF alongside the submitter (partition/QOS catalog). |
 | `inline_auto_max_cores` | `ABA_INLINE_AUTO_MAX_CORES` | float | 8.0 | retire | merge:inline |  | Max cores an auto-inline job may claim before offloading. |
 | `inline_auto_max_mem_gb` | `ABA_INLINE_AUTO_MAX_MEM_GB` | float | 32.0 | retire | merge:inline |  | Max memory (GB) an auto-inline job may claim before offloading. |
 | `inline_stall_cpu_sample_s` | `ABA_INLINE_STALL_CPU_SAMPLE_S` | float | 3.0 | retire | merge:inline |  | CPU sampling window (s) for stall detection. |
 | `inline_stall_min` | `ABA_INLINE_STALL_MIN` | float | 20.0 | retire | merge:inline |  | Whole-run silence budget (min) before an inline run is deemed stalled. |
-| `slurm_mem_frac` | `ABA_SLURM_MEM_FRAC` | float | 0.85 | retire | keep |  | Fraction of node memory an inline job may use before offloading. |
-| `slurm_walltime_frac` | `ABA_SLURM_WALLTIME_FRAC` | float | 0.8 | retire | keep |  | Fraction of walltime an inline job may use before offloading. |
+| `slurm_mem_frac` | `ABA_SLURM_MEM_FRAC` | float | 0.85 | retire | keep |  | Fraction of node memory a step may use before routing to the background lane. |
+| `slurm_walltime_frac` | `ABA_SLURM_WALLTIME_FRAC` | float | 0.8 | retire | keep |  | Fraction of walltime a step may use before routing to the background lane. |
 
 ## nextflow
 

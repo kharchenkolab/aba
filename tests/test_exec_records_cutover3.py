@@ -33,6 +33,15 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 from core.graph._schema import init_db, _conn          # noqa: E402
 from core.graph import entities, exec_records          # noqa: E402
+import pytest                                           # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _pack_mode(monkeypatch):
+    """W3.5 weft-only: run_python seeds need a base pack — present pack-mode."""
+    import _packmode
+    _packmode.enable(monkeypatch)
+
 
 _failures: list[str] = []
 

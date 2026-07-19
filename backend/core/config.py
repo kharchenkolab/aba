@@ -369,7 +369,19 @@ class _LazyDir(os.PathLike):
 
 
 def _resolve_runtime_dir() -> Path:
-    return Path(os.getenv("ABA_RUNTIME_DIR", "/workspace/aba-runtime")).resolve()
+    # Default derives from the install home ($ABA_HOME, else ~/.aba) — matching
+    # the installers' shell fallback `${ABA_RUNTIME_DIR:-$ABA_HOME/runtime}`.
+    # NEVER default to a shared absolute path: two personal installs that both
+    # fell back to one /workspace would collide on projects/artifacts (silent
+    # overwrite) or hard-fail on a read-only mount. Container/OOD deploys inject
+    # ABA_RUNTIME_DIR explicitly (this setting is deploy_injected).
+    v = os.getenv("ABA_RUNTIME_DIR")
+    if v:
+        return Path(v).resolve()
+    # Inlined (not aba_home(), which is defined later — this resolver runs at
+    # import via ENVS_DIR); same $ABA_HOME-else-~/.aba logic.
+    home = os.getenv("ABA_HOME") or str(Path.home() / ".aba")
+    return (Path(home) / "runtime").resolve()
 
 
 def _resolve_under_runtime(env_key: str, *parts: str) -> Path:
@@ -644,6 +656,18 @@ KERNEL_ENABLED = setting(
     weft_fate="revisit",
     doc="Master switch for the interactive kernel lane; off → stateless one-shot exec.",
 ).get()
+
+# W-K1 (kernels_to_weft.md): route the interactive kernel through weft's native
+# kernel_* (WeftKernelSession) instead of the jupyter_client transport. Default
+# OFF — the cutover is incremental (W-K1a isolated-env lane, then W-K1b default
+# lane on session-kernels) and rollback is flipping this back. When off, the pool
+# keeps building JupyterKernelSession.
+WEFT_KERNELS = setting(
+    "weft_kernels", env="ABA_WEFT_KERNELS", type="bool", default=False,
+    category="behavior", branches=True, weft_fate="keep",
+    doc="Route the interactive kernel through weft kernel_* (WeftKernelSession) "
+        "instead of jupyter_client.",
+).get()
 KERNEL_IDLE_TTL_S = setting(
     "kernel_idle_ttl_s", env="ABA_KERNEL_IDLE_TTL_S", type="int", default=3600,
     category="tuning", weft_fate="revisit", reduction="merge:kernel",
@@ -691,6 +715,20 @@ HISTORY_SUMMARY_THRESHOLD_CHARS = setting(
     reduction="merge:history",
     doc="Layer-B trigger: summarize when pruned history still exceeds this many chars.",
 ).get()
+
+# Setting OBJECT (lazy .get() at the call site), not a frozen constant: the
+# override is an operator/harness escape hatch that must be readable at turn
+# time. DISTINCT from the global-threshold var above — reusing that key made
+# an operator tuning the fall-through default silently clobber every agent
+# spec's pinned budget (review F5, 2026-07-19).
+HISTORY_SUMMARY_BUDGET_OVERRIDE = setting(
+    "history_summary_budget_override_chars",
+    env="ABA_HISTORY_SUMMARY_BUDGET_OVERRIDE_CHARS", type="int", default=0,
+    category="tuning", weft_fate="keep", reduction="merge:history",
+    doc="When >0, overrides EVERY agent spec's pinned Tier-2 summary budget "
+        "(explicit operator/harness intent). 0 = no override: the spec pin, "
+        "else the global threshold, applies.",
+)
 
 # Live-tail of run_r/run_python output: chunks emitted from the kernel are
 # coalesced before being forwarded as `tool_chunk` SSE events, so a chatty
@@ -840,22 +878,17 @@ setting("release_id", env="ABA_RELEASE_ID", type="str", default=None,
         category="paths", deploy_injected=True, weft_fate="move:site",
         doc="Active release id under $ABA_SHARE/releases (else resolve_current()).")
 
-# ── Container / offload / modules deploy wiring (mostly move:site under weft) ──
+# ── Container / modules deploy wiring (mostly move:site under weft) ──
+# Retired W3.4: base_lock (ABA_BASE_LOCK — the served-base lock died with the
+# self-heal machinery) and offload_python/offload_backend_dir (ABA_OFFLOAD_* —
+# the sbatch offload lane is gone, #35). An old OOD card still setting these gets
+# an "unrecognized ABA_* var" startup warning; the vars do nothing.
 setting("sif", env="ABA_SIF", type="str", default=None, category="deploy",
         deploy_injected=True, weft_fate="move:site",
         doc="Path to the fat/slim SIF image used to wrap jobs.")
 setting("job_wrap", env="ABA_JOB_WRAP", type="str", default="", category="deploy",
         branches=True, weft_fate="move:site",
         doc="Job wrapper mode ('sif' → run jobs via apptainer exec <SIF>).")
-setting("base_lock", env="ABA_BASE_LOCK", type="str", default=None,
-        category="deploy", weft_fate="move:envspec",
-        doc="Path to the base environment lock (integrity check).")
-setting("offload_python", env="ABA_OFFLOAD_PYTHON", type="str", default=None,
-        category="deploy", weft_fate="retire", reduction="derive:sif",
-        doc="Python interpreter for offloaded (sbatch) jobs; else sys.executable.")
-setting("offload_backend_dir", env="ABA_OFFLOAD_BACKEND_DIR", type="str",
-        default=None, category="deploy", weft_fate="retire", reduction="derive:sif",
-        doc="Backend dir made importable in offloaded jobs; else the live backend dir.")
 setting("apptainer_tmpdir", env="ABA_APPTAINER_TMPDIR", type="str", default=None,
         category="deploy", weft_fate="move:site",
         doc="TMPDIR for apptainer/singularity build+run scratch.")
@@ -879,6 +912,51 @@ setting("modules_eager", env="ABA_MODULES_EAGER", type="str", default="",
 setting("accelerator", env="ABA_ACCELERATOR", type="str", default="",
         category="deploy", branches=True, weft_fate="move:site", reduction="derive:gpu-probe",
         doc="Accelerator hint ('cuda' → CUDA-aware paths); else CPU / probe-derived.")
+
+# ── Compute substrate (weft) — the W0 wiring of misc/weft_rewrite.md ─────────
+# These are the settings the weft migration ADDS; the weft_fate=retire/move
+# ledger names what it removes. Both default-derive so a personal install
+# needs nothing set.
+# NOTE (settings reduction, 2026-07): the weft workspace and weft-sites.yaml
+# locations are NOT settings — they derive from $ABA_HOME unconditionally
+# ($ABA_HOME/weft, $ABA_HOME/weft-sites.yaml; adapter.weft_workspace() /
+# sites_config_path()). Relocating them means relocating ABA_HOME. The former
+# ABA_WEFT_WORKSPACE / ABA_WEFT_SITES env vars are ignored.
+setting("pixi_bin", env="ABA_PIXI_BIN", type="str", default=None,
+        category="deploy", weft_fate="keep",
+        doc="Path to the pixi binary weft solves/realizes with. None → "
+            "$PATH lookup, then $ABA_HOME/tools/pixi/bin/pixi.")
+setting("jobs_lease", env="ABA_JOBS_LEASE", type="bool", default=True,
+        category="deploy", weft_fate="keep",
+        doc="Single-writer jobs-plane lease: only the first aba instance on a "
+            "runtime dir runs the worker/reconcile/poll loops (an exclusive "
+            "flock on <runtime>/jobs.lease). False disables the check — for "
+            "a runtime dir on a filesystem without sane flock semantics. "
+            "Two writers on one jobs plane finalize each other's rows "
+            "(the false-'infra failure' incident).")
+setting("compute_self_service", env="ABA_COMPUTE_SELF_SERVICE", type="bool",
+        default=True, category="deploy", weft_fate="keep",
+        deploy_injected=True,
+        doc="May users add/remove/reconfigure compute sites from the UI/"
+            "agent? Shared installs (OOD/cluster deployments whose slurm "
+            "sites the admin declares in weft-sites.yaml) set false — the "
+            "Compute tab shows the deployment's machines read-only and the "
+            "management API refuses with an actionable 403.")
+setting("weft_publish_tree", env="ABA_WEFT_PUBLISH_TREE", type="str", default=None,
+        category="deploy", weft_fate="keep", deploy_injected=True,
+        doc="Published base-env catalog tree (shared read-only folder). When "
+            "set, base packs ADOPT from it by name (no solve); unset → solve "
+            "locally. Admin seeds it with core.compute.seeding.")
+setting("weft_publish_site", env="ABA_WEFT_PUBLISH_SITE", type="str",
+        default="local", category="deploy", weft_fate="keep",
+        doc="Site whose realization store backs the published catalog "
+            "(where env_adopt runs).")
+setting("weft_publish_staging", env="ABA_WEFT_PUBLISH_STAGING", type="str",
+        default=None, category="deploy", weft_fate="keep",
+        doc="Where a publish's build churn lands (weft env_publish `staging`): "
+            "None → weft 'auto' (under the site root); an absolute node-local path "
+            "(e.g. /dev/shm/pubstage) is fastest on a netfs tree — the slow tree "
+            "then gets one sequential image write instead of ~10^4 small-file ops.")
 
 # ── DB / process modes ───────────────────────────────────────────────────────
 setting("db_path", env="ABA_DB_PATH", type="str", default=None, category="mode",
@@ -1036,20 +1114,25 @@ setting("r_ppm_snapshot", env="ABA_R_PPM_SNAPSHOT", type="str", default="latest"
 setting("batch_submitter", env="ABA_BATCH_SUBMITTER", type="str", default="local",
         coerce=_coerce_lower_strip, empty_is_unset=True, category="cluster",
         branches=True, weft_fate="retire", deploy_injected=True,
-        doc="Batch backend: 'local' or 'slurm'. Forwarded into the SIF — it's the "
-            "local-vs-slurm SELECTOR; unset inside the container → every background job "
-            "silently runs in-process on the session node.")
+        doc="Batch backend: 'local' (the local lane — a bare weft task when the "
+            "compute substrate is up, else the in-process worker), 'slurm', or "
+            "'worker' (force the legacy in-process worker). Forwarded into the SIF — "
+            "it's the placement SELECTOR; unset inside the container → every "
+            "background job silently runs in-process on the session node.")
 setting("hpc_config", env="ABA_HPC_CONFIG", type="str", default=None,
         category="cluster", weft_fate="retire", reduction="relocate:hpc.yaml",
         deploy_injected=True,
         doc="Path to hpc.yaml compute-topology override (else $ABA_HOME/hpc.yaml). "
             "Forwarded into the SIF alongside the submitter (partition/QOS catalog).")
+# slurm_mem_frac/slurm_walltime_frac stay: still LIVE via core/exec/router.py
+# (read directly from the env) — the Slurm-mode threshold for routing a won't-fit
+# step to the background (weft slurm) lane. weft_fate=retire is intent, not yet.
 setting("slurm_mem_frac", env="ABA_SLURM_MEM_FRAC", type="float", default=0.85,
         category="cluster", weft_fate="retire",
-        doc="Fraction of node memory an inline job may use before offloading.")
+        doc="Fraction of node memory a step may use before routing to the background lane.")
 setting("slurm_walltime_frac", env="ABA_SLURM_WALLTIME_FRAC", type="float",
         default=0.8, category="cluster", weft_fate="retire",
-        doc="Fraction of walltime an inline job may use before offloading.")
+        doc="Fraction of walltime a step may use before routing to the background lane.")
 setting("inline_stall_min", env="ABA_INLINE_STALL_MIN", type="float", default=20.0,
         category="cluster", weft_fate="retire", reduction="merge:inline",
         doc="Whole-run silence budget (min) before an inline run is deemed stalled.")
@@ -1136,7 +1219,7 @@ setting("scratch_dir", env="ABA_SCRATCH", type="str", default=None, category="bu
 # share_dir/release_id/sif` are already marked at declaration; add the rest here.
 for _n in ("site_config", "group", "model_snapshot", "job_wrap", "apptainer_tmpdir",
            "module_binds", "subscription_oauth", "nextflow_module", "nextflow_profiles",
-           "nextflow_config", "nextflow_cachedir", "offload_python", "offload_backend_dir"):
+           "nextflow_config", "nextflow_cachedir"):
     _REGISTRY[_n].deploy_injected = True
 
 # Credential env vars the launcher also forwards but that the registry does NOT own

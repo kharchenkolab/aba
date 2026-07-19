@@ -27,10 +27,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))   # so `tests.scenarios` resolves
 sys.path.insert(0, str(ROOT / "backend"))
 
-from tests.live_chat_runner import (run_scenario_live,
+from live_chat_runner import (run_scenario_live,
                                      server_reachable,
                                      LiveRunReport)
-from tests.scenarios import SCENARIOS
+from scenarios import SCENARIOS
 
 pytestmark = pytest.mark.platform     # no in-process bio import
 

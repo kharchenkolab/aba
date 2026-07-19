@@ -165,7 +165,11 @@ def resolve_release_image(release_root):
         return {}
     rdir = os.path.realpath(cur)               # concrete releases/<id> — the pin
     out = {"ABA_RELEASE_ID": os.path.basename(rdir), "ABA_SHARE": release_root}
-    sifs = sorted(glob.glob(os.path.join(rdir, "sif", "*.sif")))
+    # The app image is a `.sif` (fat/slim) OR a bare `.sqfs` (the weft profile — built via
+    # the rootless --sandbox + mksquashfs path, which yields a plain squashfs; apptainer
+    # execs it by content regardless of extension). Match both so a weft release resolves.
+    sifs = sorted(glob.glob(os.path.join(rdir, "sif", "*.sif"))
+                  + glob.glob(os.path.join(rdir, "sif", "*.sqfs")))
     if sifs:
         out["ABA_SIF"] = sifs[0]
     venv = os.path.join(rdir, "env", "aba-venv")
@@ -462,6 +466,24 @@ def main():
             lines.append(f"export ABA_NEXTFLOW_CONFIG={shq(ex(nf['config']))}")
         if nf.get("cachedir"):
             lines.append(f"export ABA_NEXTFLOW_CACHEDIR={shq(ex(nf['cachedir']))}")
+        # compute-site management (site.yaml `compute:`) — a SHARED deployment sets
+        # self_service: false so Settings → Compute renders the deployment's machines
+        # read-only, the management API 403s, and the Guide's site tools refuse to add
+        # one. Absent → defaults on (personal installs manage their own sites). YAML 1.1
+        # reads bare false/no/off as the boolean False, so normalize to a 0/1 string.
+        comp = site.get("compute") or {}
+        if "self_service" in comp:
+            _ss = comp["self_service"]
+            _ss = "1" if (_ss is True or str(_ss).strip().lower() in ("1", "true", "yes", "on")) else "0"
+            lines.append(f"export ABA_COMPUTE_SELF_SERVICE={shq(_ss)}")
+        # published weft env-image tree (site.yaml `envs: {publish_tree}`) — the weft profile's
+        # science stacks are adopted read-only from here (no solve). Sets ABA_WEFT_PUBLISH_TREE
+        # (+ site); base_env.env_id adopts by name. Absent → each session solves its own.
+        envs = site.get("envs") or {}
+        if envs.get("publish_tree"):
+            lines.append(f"export ABA_WEFT_PUBLISH_TREE={shq(ex(envs['publish_tree']))}")
+        if envs.get("publish_site"):
+            lines.append(f"export ABA_WEFT_PUBLISH_SITE={shq(envs['publish_site'])}")
         if cred_mode == "apikey":
             lines += [f"export ANTHROPIC_API_KEY={shq(cred_val)}", "export ABA_LLM_CREDENTIAL=apikey"]
         elif cred_mode == "oauth":          # explicit oauth token from a cred file

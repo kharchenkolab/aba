@@ -17,8 +17,16 @@ markers = [
 ]
 testpaths = ["tests"]
 addopts = "--strict-markers"
+# Discover ONLY `test_*.py`. Pytest's default also globs `*_test.py`, which
+# sweeps in the standalone Playwright e2e SCRIPTS under tests/ood/ — they read
+# os.environ["ABA_TEST_TOKEN"] / import _pwenv at module top, so collection
+# raises (KeyError/SystemExit) and — because an import-time error during
+# `pytest tests/` is an INTERNALERROR — silently aborts the ENTIRE sweep with
+# zero output. Real pytest modules here are all `test_*.py`; the scripts are not.
+python_files = ["test_*.py"]
 
-# Note on the standalone-script tests (tests/dN_*.py, tests/p*.py, etc.):
-# they're not pytest-discoverable; tests/check_platform_purity.py guards
-# them via AST scan. New pytest-discoverable tests (tests/test_*.py)
-# should pick a marker.
+# Note on the standalone-script tests (tests/dN_*.py, tests/p*.py,
+# tests/ood/*_test.py, etc.): they're not pytest-discoverable; run directly or
+# via their own drivers. tests/check_platform_purity.py guards the platform
+# ones via AST scan. New pytest-discoverable tests (tests/test_*.py) should
+# pick a marker.

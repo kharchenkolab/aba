@@ -35,7 +35,7 @@ def test_harvest_falls_back_to_ambient_when_no_project_id():
     # falls back to the ambient project (whatever is bound — `_workspace` when
     # nothing is, or the test harness's project under conftest). The point is it
     # uses current_project_id(), not a hard-coded id.
-    from core.config import current_project_id
+    from core.projects import current as current_project_id   # moved from core.config (burn-down #1)
     assert tables and tables[0]["url"].startswith(f"/artifacts/{current_project_id()}/"), tables[0]["url"]
 
 

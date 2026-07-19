@@ -43,3 +43,70 @@ def test_bearer_none_when_expired_no_refresh(monkeypatch, tmp_path):
     (tmp_path / "oauth.json").write_text(json.dumps(
         {"access_token": "dead", "expires_at": 1}))    # long past
     assert llm._oauth_bearer() is None
+
+
+# ── 2026-07-18: a dead store must not poison the chain ───────────────────────
+
+def test_failed_refresh_falls_through_to_cli_credential(monkeypatch, tmp_path):
+    """An expired store whose refresh FAILS must fall through to the CLI
+    credential (file or macOS keychain) instead of returning None — found
+    live: a 400ing refresh blocked a perfectly valid CLI token."""
+    import json as _json
+    import time as _time
+    from core import llm
+
+    store = tmp_path / "oauth.json"
+    store.write_text(_json.dumps({"access_token": "stale",
+                                  "refresh_token": "dead",
+                                  "expires_at": _time.time() - 3600}))
+    monkeypatch.setattr(llm, "_oauth_store_path", lambda: str(store))
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)  # leaked by store_oauth_token in earlier tests
+    monkeypatch.setattr(llm, "_refresh_oauth", lambda s: None)   # 400s
+    monkeypatch.setattr(llm.os.path, "expanduser",
+                        lambda p: str(tmp_path / "nofile") if ".claude" in p else p)
+    llm._CLI_CRED_CACHE.update(tok=None, until=0.0)
+
+    calls = {}
+
+    class FakeProc:
+        returncode = 0
+        stdout = _json.dumps({"claudeAiOauth": {
+            "accessToken": "cli-tok-123",
+            "expiresAt": int((_time.time() + 3600) * 1000)}})
+        stderr = ""
+
+    def fake_run(argv, **kw):
+        calls["argv"] = argv
+        return FakeProc()
+    import subprocess as _sp
+    monkeypatch.setattr(_sp, "run", fake_run)
+    monkeypatch.setattr(llm.sys, "platform", "darwin")
+    monkeypatch.setattr(llm, "_CLI_CRED_ENABLED", True)  # conftest disables the whole tier
+
+    assert llm._oauth_bearer() == "cli-tok-123"
+    assert "security" in calls["argv"][0]
+
+    # expired CLI token reads as missing (never a confusing 401 downstream)
+    llm._CLI_CRED_CACHE.update(tok=None, until=0.0)
+    FakeProc.stdout = _json.dumps({"claudeAiOauth": {
+        "accessToken": "cli-tok-old",
+        "expiresAt": int((_time.time() - 10) * 1000)}})
+    assert llm._oauth_bearer() is None
+
+
+def test_cli_credential_tier_is_dark_in_tests(monkeypatch, tmp_path):
+    """Regression (the leak that started this): the tier-3 CLI credential is disabled
+    in tests (conftest sets _CLI_CRED_ENABLED=False + clears the cache), so the resolver
+    returns nothing even when a VALID credentials FILE is present — no developer token is
+    ever read or interpolated into an assertion. Proves the tier is genuinely dark."""
+    import time as _time
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / ".credentials.json").write_text(json.dumps(
+        {"claudeAiOauth": {"accessToken": "should-not-be-read",
+                           "expiresAt": int((_time.time() + 3600) * 1000)}}))
+    monkeypatch.setattr(llm.os.path, "expanduser",
+                        lambda p: str(tmp_path / ".claude" / ".credentials.json")
+                        if ".claude" in p else p)
+    llm._CLI_CRED_CACHE.update(tok=None, until=0.0)
+    assert llm._CLI_CRED_ENABLED is False          # conftest darkened the whole tier
+    assert llm._cli_credential() is None           # present file NOT read (tier dark)

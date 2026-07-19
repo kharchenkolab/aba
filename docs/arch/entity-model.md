@@ -160,7 +160,7 @@ something promotes it — and promotion is **bilateral and explicit**:
   scratch file becomes a tracked artifact via `store.register(...)` (store-by-reference,
   `core/data/store.py:58`).
 - **Who did it is recorded.** `create_entity` defaults `actor` from the ambient context
-  (`core/runtime/actor.py` — `human:<uid>` on a mutating HTTP route, `agent:<run_id>` inside
+  (`core/graph/actor.py` — `human:<uid>` on a mutating HTTP route, `agent:<run_id>` inside
   a turn) and `derivation` from an `exec_id` when present (`entities.py:104`). So every
   promotion carries its attribution for free.
 

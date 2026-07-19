@@ -1,0 +1,47 @@
+# Example env pack (weft rewrite W1) — the SINGLE-CELL PYTHON base as bundle
+# content. This is domain content (recipe-pack territory), NOT platform code:
+# the platform's envs/ facet (core/bundle/loader) knows "env pack"; only this
+# file names scanpy. The real pack ships from kharchenkolab/aba-recipe-pack;
+# this fixture documents the format and backs the composition tests.
+#
+# Translated from install/core/environment.yml — the base science env becomes a
+# named, versioned weft EnvSpec that the compute substrate solves into an
+# EnvID; project additions layer on via extends_env (a project delta), never by
+# editing this base.
+
+name: python-bio
+title: Single-cell Python
+languages: [python]
+# Modules policy overlay (aba-side, not weft): "on" = eagerly materialize.
+# QUOTE the value — bare on/off are YAML 1.1 booleans (parse to True/False).
+default_state: "on"
+# import-names / file-extensions that trigger first-use provisioning.
+first_use: [scanpy, anndata, scvi, .h5ad, .h5mu]
+role: base
+# capability import-name resolution (§4b(i)): so ensure_capability recognizes a
+# package the base already provides under a different import name.
+import_names:
+  scvi: scvi-tools
+  sklearn: scikit-learn
+  igraph: python-igraph
+
+# --- verbatim weft EnvSpec (aba adds nothing here; solving is weft's job) ---
+spec:
+  platforms: [linux-64, osx-arm64]
+  deps:
+    conda:
+      - python =3.12
+      - "numpy <2.5"          # numba (via scanpy/scvi) needs numpy<2.5
+      - pandas
+      - scipy
+      - matplotlib-base
+      - scikit-learn
+      - h5py
+      - anndata >=0.10
+      - scanpy >=1.10
+      - scvi-tools >=1.1
+      - leidenalg
+      - python-igraph
+    pypi:
+      - lstar-sc ==0.2.1
+      - "zarr >=3.1"

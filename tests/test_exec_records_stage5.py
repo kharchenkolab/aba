@@ -27,6 +27,16 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 from core.graph._schema import init_db                  # noqa: E402
 from core.graph import entities, edges, exec_records    # noqa: E402
+import pytest                                            # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _pack_mode(monkeypatch):
+    """W3.5 weft-only: the seed run_python needs a base pack — present pack-mode
+    (backend interpreter as the session) so the seed executes."""
+    import _packmode
+    _packmode.enable(monkeypatch)
+
 
 _failures: list[str] = []
 

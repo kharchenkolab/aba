@@ -155,71 +155,43 @@ export interface DisplayMessage {
   ts?: string
 }
 
-// SSE events from backend
-export interface DeltaEvent       { type: 'delta';       text: string }
-export interface ToolStartEvent   { type: 'tool_start';  name: string; input: Record<string, unknown>; tool_use_id?: string }
-export interface ToolResultEvent  { type: 'tool_result'; name: string; result: Record<string, unknown>; tool_use_id?: string }
-/** #334 — coalesced live stdout/stderr chunk from run_python / run_r, keyed
- *  back to the originating tool_start by `tool_use_id`. */
-export interface ToolChunkEvent {
-  type: 'tool_chunk'
-  tool_use_id: string
-  stream: 'stdout' | 'stderr'
-  text: string
-  bytes_total: number     // cumulative bytes for this stream (lifetime counter)
-  elapsed_s: number       // seconds since execute() began
-}
-export interface DoneEvent        { type: 'done' }
-export interface ErrorEvent       { type: 'error';       text: string; detail?: string }
-export interface NoticeEvent      { type: 'notice';      text: string }
-export interface PlanEvent {
-  type: 'plan'
-  title?: string
-  summary?: string
-  rationale?: string
-  assumptions?: string[]
-  steps: (PlanStepShape | string)[]
-  concerns?: PlanConcern[]
-}
-export interface ManifestEvent    { type: 'manifest'; manifest: ManifestSnapshot; run_id?: string }
+// SSE events — single-sourced from the backend wire contract
+// (backend/core/runtime/wire.py → generated src/wire.ts). Event SHAPES are
+// generated; only resource interiors (Entity, JobRow, ManifestSnapshot, plan
+// shapes) remain hand-maintained in this file.
+export type {
+  SSEEvent, NotificationEvent, TurnEventBase,
+  ManifestEvent, DeltaEvent, ToolStartEvent, ToolProgressEvent, ToolChunkEvent,
+  ToolResultEvent, EntityRegisteredEvent, PlanEvent, ClarificationPendingEvent,
+  ApprovalPendingEvent, DeferredToolPendingEvent, JobSubmittedEvent, NoticeEvent,
+  CancelledEvent, ErrorEvent, UsageEvent, DoneEvent, SuggestionLoggedEvent,
+  HelloEvent, EntityUpdatedEvent, ModuleEvent,
+} from './wire'
 
-/** P-cancel — Guide loop saw a user cancellation. SSE event emitted
- *  just before the turn closes; UI uses it to render a "(cancelled)"
- *  notice instead of treating it as a normal completion. */
-export interface CancelledEvent {
-  type:   'cancelled'
-  reason: string
-  run_id: string
-}
-
-/** B1 — the Guide paused the turn on ask_clarification. The UI shows the
- *  one-line question with an inline answer input that posts to
- *  /api/turns/{run_id}/resume. */
+/** Option-1 enable flow (misc/modules.md): one-click Enable buttons for a
+ *  turned-off module on a clarification card. Referenced by the generated
+ *  ClarificationPendingEvent. */
 export interface ModuleEnableOffer {
   module: string
   title: string
   options: { mode: 'on' | 'first_use'; label: string }[]
 }
-export interface ClarificationPendingEvent {
-  type: 'clarification_pending'
-  question: string
-  tool_use_id: string
-  run_id: string
-  /** Option-1 enable flow (misc/modules.md): render one-click Enable buttons for a
-   *  turned-off module; the user enables it, then the turn resumes. */
-  enable?: ModuleEnableOffer
-}
 
-/** Fix #5 — a tool returned {deferred:true, job_id}, halting the turn in
- *  AWAITING_TOOL_RESULT. Frontend clears the tool_start's spinner and shows
- *  a queued badge with the job id. The webhook later posts the real
- *  tool_result, which the UI handles via the normal tool_result branch. */
-export interface DeferredToolPendingEvent {
-  type: 'deferred_tool_pending'
-  tool_name: string
-  tool_use_id: string
-  deferred_id: string
-  run_id: string
+/** A background job row as the backend serializes it on the wire
+ *  (core/graph/jobs.py:_row_to_job). Referenced by the generated
+ *  JobSubmittedEvent. */
+export interface JobRow {
+  id: string
+  kind?: string
+  title?: string
+  status: string
+  focus_entity_id?: string | null
+  params?: Record<string, unknown> | null
+  log_tail?: string | null
+  error?: string | null
+  created_at?: string | null
+  started_at?: string | null
+  finished_at?: string | null
 }
 
 /** Current pending clarification state exposed by useChat. */
@@ -229,17 +201,6 @@ export interface PendingClarification {
   enable?: ModuleEnableOffer
 }
 
-/** P1 #3 — the Guide paused on a per-tool approval. Tool with
- *  approval_policy != 'never' won't run until the user explicitly says
- *  so. Rare by design (the bar is "real money / hard-to-reverse"). */
-export interface ApprovalPendingEvent {
-  type: 'approval_pending'
-  tool_name: string
-  summary: string
-  tool_use_id: string
-  run_id: string
-  policy: string
-}
 export interface PendingApproval {
   runId: string
   toolName: string
@@ -266,27 +227,6 @@ export interface ManifestSnapshot {
   policy_text: string
 }
 
-export interface EntityRegisteredEvent {
-  type: 'entity_registered'
-  entity: Entity
-}
-
-/** #1 — live phase/progress for a long synchronous tool call (installs,
- *  kernel exec, nextflow). Streamed between tool_start and tool_result. */
-export interface ToolProgressEvent {
-  type: 'tool_progress'
-  name: string
-  message: string
-  phase?: string
-  tool_use_id?: string
-}
-
-/** A background job was submitted (run_python background=true). */
-export interface JobSubmittedEvent {
-  type: 'job_submitted'
-  job: { id: string; status?: string; title?: string }
-}
-
 /** Observability Console: one captured SSE event (delta excluded — that's
  *  the chat text). `level` gates it in the detail-level selector. */
 export interface LogEntry {
@@ -303,24 +243,6 @@ export interface JobInfo {
   title?: string
   t: number
 }
-
-export type SSEEvent =
-  | DeltaEvent
-  | ToolStartEvent
-  | ToolResultEvent
-  | ToolProgressEvent
-  | ToolChunkEvent
-  | JobSubmittedEvent
-  | EntityRegisteredEvent
-  | DoneEvent
-  | ErrorEvent
-  | NoticeEvent
-  | PlanEvent
-  | ManifestEvent
-  | ClarificationPendingEvent
-  | ApprovalPendingEvent
-  | CancelledEvent
-  | DeferredToolPendingEvent
 
 // ---------- Entities ----------
 
@@ -379,4 +301,7 @@ export interface Entity {
   deleted_at: string | null
   created_at: string
   updated_at: string
+  /** Human-readable location of the artifact within the project tree
+   *  (backend _row_to_entity always includes it; was missing here). */
+  display_path?: string | null
 }

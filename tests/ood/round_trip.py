@@ -29,7 +29,8 @@ with sync_playwright() as p:
     pg = ctx.new_page()
 
     log("opening", APP, "control panel")
-    pg.goto(f"{E.BASE}/pun/sys/dashboard/batch_connect/sys/{APP}/session_contexts/new",
+    _app_path = APP if "/" in APP else f"sys/{APP}"   # "dev/aba" targets a sandbox app
+    pg.goto(f"{E.BASE}/pun/sys/dashboard/batch_connect/{_app_path}/session_contexts/new",
             wait_until="networkidle", timeout=60000)
     pg.click("input[type=submit][value=Launch]")
     pg.wait_for_load_state("networkidle", timeout=60000)

@@ -24,6 +24,15 @@ The events:
 - on_plan_failed            side-effect — plan-driving turn errored;
                             bio sets lifecycle='failed'.
                             ctx: {plan_entity_id}
+- on_stop                   side-effect (among other handlers) — every
+                            completed turn; bio reconciles the open
+                            Run's durable retain (P1 turn-end seam).
+                            ctx: {thread_id, …}
+- on_turn_failed            side-effect — ANY turn errored (plan or
+                            plain); bio runs the same Run retain
+                            reconciliation so outputs produced before
+                            the crash are still kept.
+                            ctx: {thread_id, plan_entity_id}
 - on_background_job_submit  query — guide.py needs the active_run_id
                             to stamp on a background job. Bio writes
                             it back via ctx['active_run_id'].
@@ -45,7 +54,8 @@ from core.hooks.dispatcher import register
 # guide.py, not on bio's internal layout.
 from content.bio.graph.figure_history import figure_history
 from content.bio.lifecycle.plans import set_plan_lifecycle
-from content.bio.lifecycle.runs import active_run_id, close_run, open_run
+from content.bio.lifecycle.runs import (active_run_id, close_run, open_run,
+                                         retain_run_keepers, run_id_for_plan)
 from content.bio.tools import _feedlog
 
 
@@ -82,8 +92,10 @@ def _on_plan_presented(ctx: dict) -> None:
 
 
 def _on_plan_complete(ctx: dict) -> None:
-    """#160: when this turn was driving a plan's execution, mark the
-    plan completed. Idempotent + safe on a missing entity."""
+    """#160: when this turn was driving a plan's execution, mark the plan completed, and
+    retain the Run's keepers NOW (plan-end) so durability + the Files panel are ready
+    promptly instead of waiting for Run-close (which we delay for follow-ups). Both are
+    idempotent + best-effort."""
     eid = ctx.get("plan_entity_id")
     if not eid:
         return
@@ -91,6 +103,16 @@ def _on_plan_complete(ctx: dict) -> None:
         set_plan_lifecycle(eid, "completed")
     except Exception:  # noqa: BLE001 — plan-tracking is best-effort
         pass
+    # Retain the Run's keepers at plan-end. guide dispatches on_plan_complete with only
+    # plan_entity_id, so resolve the Run from that (thread_id is a fallback if present).
+    try:
+        tid = ctx.get("thread_id")
+        rid = run_id_for_plan(eid) or (active_run_id(str(tid)) if tid else None)
+        if rid:
+            retain_run_keepers(rid)
+            _feedlog(f"SERVER retain@plan_complete run={rid}")
+    except Exception as e:  # noqa: BLE001 — retain must never break the turn
+        _feedlog(f"SERVER retain@plan_complete FAILED: {e}")
 
 
 def _on_plan_failed(ctx: dict) -> None:
@@ -102,6 +124,28 @@ def _on_plan_failed(ctx: dict) -> None:
         set_plan_lifecycle(eid, "failed")
     except Exception:  # noqa: BLE001
         pass
+
+
+def _reconcile_open_run(ctx: dict) -> None:
+    """P1 end-of-turn Run reconciliation: retain the open Run's keepers at EVERY turn
+    end — on_stop covers every completed turn (incl. a plain follow-up re-run, where no
+    plan event fires and outputs previously sat un-kept until the idle backstop), and
+    on_turn_failed covers a turn that crashed AFTER producing outputs (exactly when the
+    keep matters most). Cumulative + idempotent, so firing alongside on_plan_complete
+    is harmless."""
+    tid = ctx.get("thread_id")
+    if not tid:
+        return
+    try:
+        rid = active_run_id(str(tid))
+        if rid:
+            retain_run_keepers(rid)
+            _feedlog(f"SERVER retain@turn_end run={rid}")
+    except Exception as e:  # noqa: BLE001 — retention must never break the turn
+        try:
+            _feedlog(f"SERVER retain@turn_end FAILED: {e}")
+        except Exception:  # noqa: BLE001 — log is best-effort
+            pass
 
 
 def _on_background_job_submit(ctx: dict) -> None:
@@ -143,5 +187,7 @@ register("on_run_save_opt_out", _on_run_save_opt_out)
 register("on_plan_presented", _on_plan_presented)
 register("on_plan_complete", _on_plan_complete)
 register("on_plan_failed", _on_plan_failed)
+register("on_stop", _reconcile_open_run)
+register("on_turn_failed", _reconcile_open_run)
 register("on_background_job_submit", _on_background_job_submit)
 register("on_resolve_displayed_id", _on_resolve_displayed_id)

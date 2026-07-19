@@ -65,7 +65,7 @@ def test_create_without_derivation_is_none_for_now():
 
 
 def test_actor_mechanism():
-    from core.runtime.actor import acting_as, current_actor
+    from core.graph.actor import acting_as, current_actor
     assert current_actor() is None
     with acting_as("human:local"):
         assert current_actor() == "human:local"
@@ -76,7 +76,7 @@ def test_actor_mechanism():
 
 
 def test_create_entity_defaults_actor_from_ambient():
-    from core.runtime.actor import acting_as
+    from core.graph.actor import acting_as
     with acting_as("human:local"):
         eid = create_entity(entity_type="narrative", title="amb1")
     assert get_entity(eid)["actor"] == "human:local"        # ambient default

@@ -1,0 +1,54 @@
+# Default base env pack (weft rewrite W3.4) — R / BIOCONDUCTOR, shipped by the
+# installer into $ABA_HOME/installation/envs/ on FRESH personal installs
+# (see python_bio.yaml). Under weft, R and Python are two named
+# packs (two EnvIDs), decoupled exactly as today's separate conda envs are —
+# bumping R can't touch the Python base.
+#
+# first_use by default: the Bioconductor toolchain is heavy, so it materializes
+# on first R demand rather than eagerly (the current r-bio module policy).
+
+name: r-bio
+title: R / Bioconductor
+languages: [r]
+default_state: first_use
+first_use: [Seurat, .rds, r-bio]
+role: base
+import_names:
+  SingleCellExperiment: bioconductor-singlecellexperiment
+  DESeq2: bioconductor-deseq2
+
+spec:
+  platforms: [linux-64, osx-arm64]
+  # r-presto + the bioconductor-* set live on bioconda (both osx-arm64 and
+  # linux-64); weft's default is conda-forge only, so without this every
+  # bioconda-only dep is "no candidates" (r-presto reported first). conda-forge
+  # first is the standard bioconda channel order.
+  channels: [conda-forge, bioconda]
+  deps:
+    conda:
+      - r-base =4.4.*
+      - r-remotes
+      - r-biocmanager
+      - r-irkernel
+      - r-matrix
+      - r-rcpp
+      - r-rcpparmadillo
+      - r-rcppeigen
+      - r-rcppprogress
+      - r-igraph
+      - r-irlba
+      - r-xml2
+      - r-hdf5r
+      - r-ggrepel
+      - r-kernsmooth
+      - r-dplyr
+      - r-seurat
+      - r-presto
+      - bioconductor-biomart
+      - bioconductor-singlecellexperiment
+      - bioconductor-deseq2
+      - bioconductor-edger
+      - bioconductor-limma
+    # R secondary/release repos (§4b R ecosystem) — extra CRAN-likes folded
+    # into the joint closure. weft's r_repositories; empty here (PPM is default).
+  # release_repos: []

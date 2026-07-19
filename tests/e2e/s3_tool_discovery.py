@@ -42,7 +42,6 @@ from content.bio.tools import (                              # noqa: E402
     search_pypi, search_bioconda, search_nf_core,
     propose_capability_tool, ensure_capability, run_python, run_r, run_nextflow,
 )
-from content.bio.capabilities import load_r_base_specs       # noqa: E402
 
 RUN = os.environ.get("ABA_DISC_RUN") == "1"
 _sel = os.environ.get("ABA_DISC_SCENARIOS", "all")
@@ -102,7 +101,8 @@ def s2_seurat():
     name = "2 scRNA standard (Seurat, r_package CRAN/PPM-binary)"
 
     def discover():
-        specs = load_r_base_specs()
+        from core.bundle.active import get_bundle
+        specs = list(get_bundle().r_base_specs)
         return ("r-seurat" in specs, f"in curated base manifest: {'r-seurat' in specs}")
 
     def execute():

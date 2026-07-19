@@ -7,11 +7,36 @@
 # is per-session here (the proxy prefix differs each launch). If ABA_SIF is set
 # (site.yaml image.sif) the backend runs FROM the image; otherwise from the
 # bind-mounted repo + venv (dev / direct nodes).
-set -x
+[ -n "${ABA_OOD_DEBUG:-}" ] && set -x   # opt-in shell trace (ABA_OOD_DEBUG=1); off by default
 
-ABA=/home/pkharchenko/aba/aba
-VENV=/home/pkharchenko/aba/aba_runtime/.venv
+# NON-SIF (dev/bare) lane repo + venv. NO personal path is baked into this shared
+# template: the code+venv come from a promoted release (below) or, for a bare dev node
+# with neither a SIF nor a release, from ABA_DEV_REPO / ABA_DEV_VENV set on the OOD app.
+ABA="${ABA_DEV_REPO:-}"
+VENV="${ABA_DEV_VENV:-}"
+# Versioned-release resolution for the NON-SIF lane (misc/slim_sif_deploy.md):
+# when the share carries a promoted release (releases/<id> or `current`), the session
+# code — AND the venv, when the release ships an `env` component — come FROM the release
+# payload, so pin-on-launch + atomic swap hold in the bare lane exactly as in the SIF lane.
+if [ -z "${ABA_SIF:-}" ]; then
+  _share="${ABA_SHARE:-/cluster/aba}"
+  _rel="${ABA_RELEASE_ID:+${_share}/releases/${ABA_RELEASE_ID}}"
+  [ -n "${_rel}" ] && [ ! -e "${_rel}" ] && _rel=""
+  _rel="${_rel:-${_share}/current}"
+  if [ -e "${_rel}/repo/backend" ]; then
+    ABA="$(readlink -f "${_rel}/repo")"
+    [ -x "${_rel}/env/aba-venv/bin/python" ] && VENV="$(readlink -f "${_rel}/env/aba-venv")"
+    echo "ABA: session code from release $(basename "$(readlink -f "${_rel}")") at ${ABA}"
+  fi
+fi
 
+# Re-home the session under the per-user runtime dir. If preflight failed to
+# set one, say so and stop — exporting HOME="/.home" would crash the backend
+# at import (unwritable root path) with a far less legible traceback.
+if [ -z "${ABA_RUNTIME_DIR:-}" ]; then
+  echo "ABA: ABA_RUNTIME_DIR is unset — preflight did not produce aba-env.sh (see preflight.log). Not launching."
+  exit 1
+fi
 export HOME="${ABA_RUNTIME_DIR}/.home"; mkdir -p "$HOME"
 # NB: do NOT hardcode a model here — that would override the bundle default
 # (system_bundle/settings.yaml `default_model`) and any per-user Settings choice for
@@ -62,6 +87,15 @@ if [ -n "${ABA_SIF:-}" ]; then
   # Derived, not hardcoded: a site may root the deployment anywhere its nodes can read.
   _share="${ABA_SHARE:-$(dirname "${ABA_SITE_CONFIG:-/cluster/aba/site.yaml}")}"
   [ -d "${_share}" ] && binds+=( --bind "${_share}" )
+  # Also bind the DEPLOYMENT root (the dir holding site.yaml). Under the versioned layout
+  # ABA_SHARE is the release_root (…/app), so this is what covers the siblings envs/ (the
+  # published weft images consumers adopt), installation/, refs/. Skip if it's the same
+  # dir or already under a bound tree like /groups.
+  _deploy_root="$(dirname "${ABA_SITE_CONFIG:-/cluster/aba/site.yaml}")"
+  case "${_deploy_root}/" in
+    "${_share}/"*|/groups/*) ;;                                  # already covered
+    *) [ -d "${_deploy_root}" ] && binds+=( --bind "${_deploy_root}" ) ;;
+  esac
   # site.yaml `binds:` (→ ABA_EXTRA_BINDS): any further host paths the deployment needs
   # visible under --containall — e.g. a group/user tree outside /groups.
   for b in ${ABA_EXTRA_BINDS:-}; do [ -e "$b" ] && binds+=( --bind "$b" ); done
@@ -87,12 +121,13 @@ if [ -n "${ABA_SIF:-}" ]; then
   # set (config.deploy_injected_keys(), = `aba settings --deploy-env`). ERB can't call
   # Python at render, so this list is a MIRROR kept in sync by
   # tests/test_deploy_forward_loop.py — add a var here AND mark it deploy_injected in
-  # core/config.py, or the guard fails. (ABA_FRONTEND_DIST + ABA_OFFLOAD_* are injected
-  # with computed values above / below; they're in the registry set too.)
+  # core/config.py, or the guard fails. (ABA_FRONTEND_DIST is injected with a computed
+  # value above; it's in the registry set too.)
   for v in ABA_RUNTIME_DIR ABA_ENVS_DIR ABA_SITE_CONFIG ABA_GROUP ABA_MODEL ABA_HOME \
            ABA_SHARE ABA_RELEASE_ID ABA_SIF ABA_JOB_WRAP ABA_APPTAINER_TMPDIR \
            ABA_BATCH_SUBMITTER ABA_HPC_CONFIG ABA_MODULE_INIT ABA_MODULE_BINDS ABA_SUBSCRIPTION_OAUTH \
            ABA_NEXTFLOW_MODULE ABA_NEXTFLOW_PROFILES ABA_NEXTFLOW_CONFIG ABA_NEXTFLOW_CACHEDIR \
+           ABA_WEFT_PUBLISH_TREE ABA_COMPUTE_SELF_SERVICE \
            ANTHROPIC_API_KEY ABA_LLM_CREDENTIAL CLAUDE_CODE_OAUTH_TOKEN; do
     eval "_v=\${$v:-}"; [ -n "${_v}" ] && envs+=( --env "$v=${_v}" )
   done
@@ -127,24 +162,10 @@ if [ -n "${ABA_SIF:-}" ]; then
     [ -s "$nss/group" ]  && binds+=( --bind "$nss/group:/etc/group" )
   fi
 
-  # --- Option B offload: run offloaded jobs BARE on the compute node (misc/
-  # slim_sif_deploy.md). A background Slurm job runs OUTSIDE any container, where
-  # /opt/aba-venv + /opt/aba/backend (the in-image paths the backend would bake
-  # into job.sh) don't exist. Point offloaded jobs at the shared-FS base venv +
-  # a copy of the backend extracted from the image (cached per release under the
-  # user runtime, on a compute-node-visible FS). slurm_submitter._offload_runtime
-  # reads ABA_OFFLOAD_PYTHON / ABA_OFFLOAD_BACKEND_DIR; unset → native, unchanged.
-  if [ -n "${ABA_BASE_DIR:-}" ] && [ -x "${ABA_BASE_DIR}/bin/python" ]; then
-    obd="${ABA_RUNTIME_DIR}/.offload/${ABA_RELEASE_ID:-static}/backend"
-    if [ ! -d "$obd" ]; then
-      mkdir -p "$(dirname "$obd")"
-      apptainer exec --bind "$(dirname "$obd")":"$(dirname "$obd")" "${ABA_SIF}" \
-        cp -a /opt/aba/backend "$obd.$$" 2>/dev/null && mv -f "$obd.$$" "$obd" 2>/dev/null || true
-    fi
-    envs+=( --env "ABA_OFFLOAD_PYTHON=${ABA_BASE_DIR}/bin/python" )
-    if [ -d "$obd" ]; then envs+=( --env "ABA_OFFLOAD_BACKEND_DIR=${obd}" )
-    else echo "ABA: WARNING offload backend not staged ($obd) — background Slurm jobs may fail"; fi
-  fi
+  # (Removed W3.4: the "Option B offload" block that staged a backend copy and
+  # forwarded ABA_OFFLOAD_PYTHON/ABA_OFFLOAD_BACKEND_DIR for BARE sbatch jobs —
+  # the sbatch offload lane is gone (#35). Cluster background jobs now run via the
+  # weft slurm site, not a bare re-exec on the compute node.)
 
   # --- Host environment-modules plumbing (site.yaml `modules:` → ABA_MODULE_* in
   # aba-env.sh): bind the cluster's Lmod + modulefiles + tool trees so IN-SESSION
@@ -172,6 +193,12 @@ if [ -n "${ABA_SIF:-}" ]; then
   UV=$!
 else
   # --- run from the bind-mounted repo + venv (dev / direct nodes) ---
+  if [ -z "${ABA}" ] || [ ! -x "${VENV}/bin/python" ]; then
+    echo "ABA: non-SIF lane but no repo/venv resolved (ABA='${ABA}', VENV='${VENV}')."
+    echo "     Set image.sif or image.release_root in site.yaml, or ABA_DEV_REPO + ABA_DEV_VENV"
+    echo "     on the OOD app for a bare dev node. Not launching."
+    exit 1
+  fi
   export ABA_TOOLS_DIR="${ABA_TOOLS_DIR:-$(dirname "${VENV}")/envs/tools}"
   cd "${ABA}/backend"
   "${VENV}/bin/python" -m uvicorn main:app --host 0.0.0.0 --port "${port}" &

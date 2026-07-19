@@ -16,7 +16,9 @@ if _BACKEND not in sys.path:
 from core.exec.kernels.jupyter import _kernel_env  # noqa: E402
 
 
-def test_r_kernel_sets_future_defaults():
+def test_r_kernel_sets_future_defaults(monkeypatch):
+    import _packmode
+    _packmode.enable(monkeypatch)          # W3.5: the R kernel env requires an R pack
     env = _kernel_env("r", "/tmp")
     assert env["R_FUTURE_PLAN"] == "sequential"
     assert int(env["R_FUTURE_GLOBALS_MAXSIZE"]) >= 2 * 1024 ** 3   # well above the 500 MiB default
@@ -24,7 +26,9 @@ def test_r_kernel_sets_future_defaults():
     assert "R_FUTURE_PLAN" not in _kernel_env("python", "/tmp")
 
 
-def test_future_defaults_overridable():
+def test_future_defaults_overridable(monkeypatch):
+    import _packmode
+    _packmode.enable(monkeypatch)
     os.environ["ABA_R_FUTURE_PLAN"] = "multicore"
     os.environ["ABA_R_FUTURE_GLOBALS_MAXSIZE"] = "123"
     try:

@@ -116,6 +116,10 @@ class TurnSink:
         appends to the JSONL on disk for post-restart replay (C-2).
 
         Called from the agent loop (on the event loop thread)."""
+        # Wire-contract conformance (core/runtime/wire.py) — warn-once,
+        # never fatal: the transport is the last line of defence.
+        from core.runtime import wire
+        wire.check(payload, "turn")
         self._seq += 1
         seq = self._seq
         rec = (seq, payload)

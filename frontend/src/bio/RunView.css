@@ -20,12 +20,53 @@
 .run-pill--cancelled { color: var(--text-4); background: var(--tree-active-bg); }
 .run-pill__dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; animation: run-pulse 1.2s ease-in-out infinite; }
 @keyframes run-pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.3 } }
+
+/* Per-run durability summary (output_durability.md §6.2) — glanceable posture + the
+   "show cleared" toggle. Chips mirror the per-file badge palette (FilesView.css). */
+.runview__dura-summary { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 4px 0 8px; }
+.dura-chip { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 9999px; border: 1px solid transparent; }
+.dura-chip--retained { color: #15803d; background: #dcfce7; border-color: #bbf7d0; }
+.dura-chip--saving   { color: #b45309; background: #fef3c7; border-color: #fde68a; }
+.dura-chip--at-risk  { color: #b91c1c; background: #fee2e2; border-color: #fecaca; }
+.dura-chip--in-store { color: #1d4ed8; background: #eff6ff; border-color: #bfdbfe; }
+.dura-chip--sandbox  { color: #6b7280; background: var(--surface-3); border-color: var(--border); }
+.dura-chip--cleared  { color: var(--text-4); background: var(--surface-3); border-color: var(--border); cursor: pointer; }
+.dura-chip--cleared:hover { color: var(--text-2); }
+.dura-chip--temp     { color: #6b7280; background: var(--surface-3); border-color: var(--border); }
+.dura-chip--unknown  { color: #92400e; background: #fef3c7; border-color: #fcd34d; }
+.runview__whereabouts { font-size: 12px; color: var(--text-3); margin: 4px 0; }
 .runview__meta { font-size: 12.5px; color: var(--text-2); font-family: var(--mono); }
 .runview__meta--dim { color: var(--text-4); font-size: 11.5px; }
 .runview__act { border: 1px solid var(--border); background: var(--bg); color: var(--text-2); font-size: 12.5px; padding: 5px 12px; border-radius: 8px; cursor: pointer; }
 .runview__act:hover { background: var(--tree-active-bg); color: var(--text); }
 .runview__act--danger { color: #b91c1c; border-color: #fecaca; }
 .runview__act--danger:hover { background: #fee2e2; }
+.runview__verdict { font-size: 12.5px; color: var(--text-2); }
+.runview__verdict--failed { color: #b91c1c; }
+.runview__alert { margin: 2px 0 4px; font-size: 12px; color: #b45309; }
+.runview__origin { font-size: 12px; color: var(--text-4); margin: 2px 0 6px; }
+.runview__origin-link {
+  border: none; background: none; padding: 0; font-size: 12px;
+  color: var(--text-3); cursor: pointer; text-decoration: underline dotted;
+  display: inline-flex; align-items: center; gap: 3px; margin: 0 2px;
+}
+.runview__origin-link:hover { color: var(--text); }
+.runview__origin-link:disabled { text-decoration: none; cursor: default; }
+.runview__details { font-size: 12px; color: var(--text-3); margin: 4px 0; font-family: var(--mono); }
+
+/* ⋯ overflow for the rare re-run verbs */
+.runview__more { position: relative; display: inline-block; }
+.runview__menu {
+  position: absolute; top: calc(100% + 4px); right: 0; z-index: 30;
+  min-width: 180px; padding: 4px; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--bg); box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+  display: flex; flex-direction: column;
+}
+.runview__menu button {
+  border: none; background: none; text-align: left; font-size: 12.5px;
+  color: var(--text-2); padding: 6px 10px; border-radius: 6px; cursor: pointer;
+}
+.runview__menu button:hover { background: var(--tree-active-bg); color: var(--text); }
 
 /* Detail toggles */
 .runview__toggles { display: flex; gap: 4px; }
@@ -61,6 +102,8 @@
 .runview__browse-link {
   border: none; background: none; cursor: pointer; padding: 0;
   font-family: var(--sans); font-size: 11px; letter-spacing: 0; text-transform: none; color: var(--accent);
+  text-decoration: none;   /* same quiet look when the "link" is an <a> */
+  margin-left: 10px;
 }
 .runview__browse-link:hover { text-decoration: underline; }
 /* File-preview modal — mirrors the plot-thumbnail preview overlay. */

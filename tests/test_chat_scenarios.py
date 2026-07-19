@@ -38,7 +38,7 @@ os.environ.setdefault("DATA_DIR",        str(Path(_tmp) / "data"))
 os.environ.setdefault("ARTIFACTS_DIR",   str(Path(_tmp) / "artifacts"))
 sys.path.insert(0, str(ROOT / "backend"))
 
-from tests.scenarios import SCENARIOS, Scenario                  # noqa: E402
+from scenarios import SCENARIOS, Scenario                       # noqa: E402
 
 pytestmark = pytest.mark.bio   # scenarios with use_real_tool dispatch
                                 # bio tools (search_skills, Skill, …);

@@ -29,8 +29,13 @@ def check(label, cond, detail=""):
 
 
 def _skip(msg):
+    # dual-use gate: a clean exit for script runs, a real SKIP under pytest
+    # (SystemExit at import is an INTERNALERROR that silently kills a whole
+    # `pytest tests/` sweep — and printing the PASSED marker on a skip is a lie)
     print(f"[SKIP] {msg}")
-    print("ALL LIVE-AGENT-ATTACH CHECKS PASSED")
+    if "pytest" in sys.modules:
+        import pytest
+        pytest.skip(msg, allow_module_level=True)
     raise SystemExit(0)
 
 
@@ -127,4 +132,7 @@ async def main():
     return 1 if _failures else 0
 
 
-raise SystemExit(asyncio.run(main()))
+if __name__ == "__main__":                 # script-style: run via `python tests/…`.
+    raise SystemExit(asyncio.run(main()))  # guarded so a pytest IMPORT (which hits the
+                                           # module-level opt-in skip above) never executes
+                                           # main(), and run_tests.sh's script path has an anchor.

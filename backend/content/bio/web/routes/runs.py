@@ -15,7 +15,7 @@ import mimetypes
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from core.web.deps import require_project
@@ -48,13 +48,14 @@ def runs_refresh_manifest(rid: str, _pid: str = Depends(require_project)):
 
 @router.post("/api/runs/{rid}/cancel")
 def run_cancel(rid: str, _pid: str = Depends(require_project)):
-    e = _run_or_404(rid)
-    meta = dict(e.get("metadata") or {})
-    run = dict(meta.get("run") or {})
-    run["status"] = "cancelled"
-    run["finished_at"] = _now()
-    meta["run"] = run
-    return update_entity(rid, metadata=meta)
+    _run_or_404(rid)
+    # nested-path patch: writing the whole `run` object read-modify-wrote the
+    # SAME key the manifest writer holds — a concurrent refresh could silently
+    # revert this cancellation (recheck-confirmed). Set only the two fields
+    # this route owns, atomically.
+    from core.graph.entities import patch_metadata
+    return patch_metadata(rid, {"run.status": "cancelled",
+                                "run.finished_at": _now()})
 
 
 class PinOutputRequest(BaseModel):
@@ -148,22 +149,129 @@ def run_tree(rid: str):
 
 @router.get("/api/runs/{rid}/file")
 def run_file(rid: str, rel: str, download: int = 0):
-    """Serve a single file from a Run's output directory. `rel` is the
-    path relative to the run dir; traversal outside is rejected.
-    Images/text render inline; `download=1` forces an attachment."""
+    """Serve a single file from a Run, resolved across tiers (weft retained tree →
+    live sandbox; misc/output_durability.md §6.2) so it keeps working past the
+    sandbox sweep. `rel` is relative to the run dir; traversal outside is rejected
+    on every base. Images/text render inline; `download=1` forces an attachment."""
+    _run_or_404(rid)
+    from content.bio.lifecycle.runs import resolve_run_file, read_run_file
+    name = Path(rel).name
+    media = mimetypes.guess_type(name)[0] or "application/octet-stream"
+    headers = {"Content-Disposition": f'attachment; filename="{name}"'} if download else {}
+    # Tier 1: a local file (retained tree / scratch) → stream from disk.
+    target = resolve_run_file(rid, rel)
+    if target:
+        return FileResponse(target, media_type=media, headers=headers)
+    # Tier 2 (B1b): an IN-SANDBOX file (live/dead kernel jobdir, not local) → capped weft
+    # preview read. A truncated result means it's past the preview channel — Keep it.
+    data, truncated, total = read_run_file(rid, rel)
+    if data is not None and not truncated:
+        return Response(content=data, media_type=media, headers=headers)
+    if truncated:
+        raise HTTPException(413, f"{rel!r} is {total} bytes — too large to preview; "
+                                 "Keep it to retain, then download")
+    raise HTTPException(404, f"no file {rel!r} in the run (retained or sandbox)")
+
+
+@router.get("/api/runs/{rid}/archive")
+def run_archive(rid: str):
+    """ZIP of the Run's locally-servable output files — the run-level "Local
+    copy all" (§8e.3). Files whose bytes aren't available from this machine
+    (remote in-place keeps, discarded files) are LISTED in a manifest inside
+    the zip rather than silently omitted — the archive never lies about
+    completeness."""
+    _run_or_404(rid)
+    import io
+    import zipfile
+    from content.bio.lifecycle.runs import run_durable_view, resolve_run_file, read_run_file
+    view = run_durable_view(rid)
+    if not view["files"]:
+        raise HTTPException(404, "run has no recorded output files")
+    # the zip is assembled IN MEMORY — refuse past the fetch guardrail rather
+    # than OOM the controller (the sibling read routes are capped; this
+    # aggregate route wasn't — limits-parity review)
+    from core.data.datasets import FETCH_GUARDRAIL_BYTES
+    total = sum(f.get("bytes") or 0 for f in view["files"]
+                if f.get("state") != "cleared")
+    if total > FETCH_GUARDRAIL_BYTES:
+        raise HTTPException(413, f"outputs total {total / 1e9:.1f} GB — too "
+                                 f"large for a single archive; download files "
+                                 f"selectively instead")
+    buf = io.BytesIO()
+    skipped: list[str] = []
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for f in view["files"]:
+            rel = f["rel"]
+            if f.get("state") == "cleared":
+                skipped.append(f"{rel} — discarded (swept by housekeeping)")
+                continue
+            p = resolve_run_file(rid, rel)
+            if p:
+                zf.write(p, arcname=rel)
+                continue
+            data, truncated, _total = read_run_file(rid, rel)
+            if data is not None and not truncated:
+                zf.writestr(rel, data)
+            else:
+                where = f" (on {f['site']})" if f.get("site") else ""
+                skipped.append(f"{rel} — not available from this machine{where}")
+        if skipped:
+            zf.writestr("SKIPPED-FILES.txt",
+                        "Not included in this archive:\n" + "\n".join(skipped) + "\n")
+    return Response(content=buf.getvalue(), media_type="application/zip",
+                    headers={"Content-Disposition":
+                             f'attachment; filename="{rid}-outputs.zip"'})
+
+
+@router.get("/api/runs/{rid}/durable")
+def run_durable(rid: str, flat: int = 0):
+    """The Run's durability view — per-file state (retained / saving / in-store / at-risk /
+    in-sandbox / cleared) merged from weft's retained tree + inventory + the live sandbox. Returns a
+    TreeNode-compatible tree (root → folders → file nodes with `state`/`badge`) so the
+    Files panel renders it directly, plus a `summary`. `?flat=1` returns the flat
+    {files, summary} model instead. Backs the sweep-surviving Files listing (§6.2)."""
+    _run_or_404(rid)
+    from content.bio.lifecycle.runs import run_durable_view, run_durable_tree
+    return run_durable_view(rid) if flat else run_durable_tree(rid)
+
+
+class _KeepBody(BaseModel):
+    rel: str
+
+
+@router.post("/api/runs/{rid}/keep")
+def run_keep(rid: str, body: _KeepBody, _pid: str = Depends(require_project)):
+    """User late-pin (output_durability.md §6.2): durably retain one of the Run's files on
+    demand. Recorded as a level-2 keep decision (`metadata.keep_decision.include`) and
+    applied through the CUMULATIVE retain (P1) — a bare retain(include=[rel]) would
+    REPLACE the Run's stored selection (weft keeps one row per target) and silently drop
+    every earlier keep at settlement. Returns the merged decision + durable summary."""
     run = _run_or_404(rid)
-    base = run.get("artifact_path")
-    if not base:
-        raise HTTPException(404, "run has no output directory")
-    base_p = Path(base).resolve()
-    target = (base_p / rel).resolve()
-    if base_p != target and base_p not in target.parents:
-        raise HTTPException(400, "path escapes the run directory")
-    if not target.is_file():
-        raise HTTPException(404, f"no file {rel!r} in the run output")
-    media = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
-    headers = {"Content-Disposition": f'attachment; filename="{target.name}"'} if download else {}
-    return FileResponse(str(target), media_type=media, headers=headers)
+    rel = (body.rel or "").strip()
+    if not rel:
+        raise HTTPException(400, "rel is required")
+    targets = list((run.get("metadata") or {}).get("weft_targets") or [])
+    if not targets:
+        raise HTTPException(400, "run has no weft target to retain from")
+    from content.bio.lifecycle.runs import set_keep_decision
+    out = set_keep_decision(rid, keep=[rel])
+    if out.get("error"):
+        raise HTTPException(400, out["error"])
+    return {"ok": True, "rel": rel, "decision": out.get("decision"),
+            "summary": out.get("summary")}
+
+
+@router.post("/api/runs/{rid}/bring-back")
+def run_bring_back(rid: str, force: bool = False, _pid: str = Depends(require_project)):
+    """§8e.4: ship this Run's kept files to the workspace (managed local copy).
+    Location axis only — keeps stay kept where they live. `force=true` waives
+    the size guardrail (never a silent multi-GB transfer otherwise)."""
+    _run_or_404(rid)
+    from content.bio.lifecycle.runs import bring_back_run
+    out = bring_back_run(rid, force=force)
+    if out.get("error"):
+        raise HTTPException(400, out["error"])
+    return out
 
 
 @router.get("/api/runs/{run_id}/artifacts")

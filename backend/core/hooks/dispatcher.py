@@ -17,10 +17,21 @@ Events used today (the names matter — handlers depend on them):
                         focus_entity_type, total_tool_calls, history,
                         thread_id, focus_entity_id, suggestion (handler may
                         set)
+    on_turn_failed    — fired when a turn errors out (guide's FAILED
+                        branch, plan-driving or plain); ctx has thread_id,
+                        plan_entity_id (may be None). on_stop does NOT fire
+                        on this path — a handler that must see every turn
+                        end (e.g. Run output retention) subscribes to both.
     on_project_open   — fired when a project is opened (set_current); ctx
                         has pid. Handlers must be cheap + idempotent —
                         they run on every project switch. Bio uses this
                         for display-path backfill.
+    on_project_first_open — fired ONCE per project per process, the first
+                        time this process addresses the project's DB
+                        (set_current or ensure_opened; ctx has pid). The
+                        runtime's turn reaper subscribes
+                        (core/runtime/checkpoint.py) — the waist fires the
+                        event rather than importing upward (plane lint, W0.2).
 
 Adding a new event = pick a name and document it here.
 """

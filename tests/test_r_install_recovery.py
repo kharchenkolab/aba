@@ -2,7 +2,7 @@
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
-from core.exec.r import version_ge, parse_version_requirement, install_command
+from core.exec.r import version_ge, parse_version_requirement
 
 
 def test_version_ge():
@@ -23,10 +23,3 @@ def test_parse_version_requirement():
         assert parse_version_requirement(t) == {"package": "sccore", "min_version": "1.1.0"}, t
     assert parse_version_requirement("some unrelated compile error") is None
     assert parse_version_requirement("") is None
-
-
-def test_install_command_force():
-    forced = install_command("github", "kharchenkolab/sccore", lib="/tmp/lib", ref="dev", force=True)
-    assert "install_github" in forced and "force=TRUE" in forced and "upgrade='always'" in forced
-    plain = install_command("github", "kharchenkolab/sccore", lib="/tmp/lib", ref="dev", force=False)
-    assert "force=TRUE" not in plain and "upgrade='never'" in plain

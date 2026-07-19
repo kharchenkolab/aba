@@ -8,10 +8,10 @@ loop (search → propose → approve) lands in P3. Freezing the API here means
 P1-P3 fill in behavior without reshaping callers.
 """
 from core.catalog.catalog import (
-    CAPABILITY, REFERENCE,
+    CAPABILITY, REFERENCE, ROLES,
     register_capability, list_capabilities, search_capabilities, resolve_capability,
     propose_capability, update_capability, approve_capability, capability_status,
-    register_seed_provider,
+    register_seed_provider, capability_role, converters_for,
 )
 from core.catalog.collections import (
     register_collection_dir, collection_capabilities, find_collection_capability,
@@ -19,10 +19,10 @@ from core.catalog.collections import (
 )
 
 __all__ = [
-    "CAPABILITY", "REFERENCE",
+    "CAPABILITY", "REFERENCE", "ROLES",
     "register_capability", "list_capabilities", "search_capabilities", "resolve_capability",
     "propose_capability", "update_capability", "approve_capability", "capability_status",
-    "register_seed_provider",
+    "register_seed_provider", "capability_role", "converters_for",
     "register_collection_dir", "collection_capabilities", "find_collection_capability",
     "collection_domains",
 ]

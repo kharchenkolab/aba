@@ -17,14 +17,14 @@ which silently relocated state-dependent cells into a fresh process):
   killed) plus honoring the explicit flag.
 
 `location` stays "local" | "background"; the active submitter
-(`ABA_BATCH_SUBMITTER`) turns a "background" choice into a local async job or an
-`sbatch` job. Thresholds are tunable via ABA_SLURM_MEM_FRAC / ABA_SLURM_WALLTIME_FRAC.
+(`ABA_BATCH_SUBMITTER`) turns a "background" choice into a local weft task or a
+weft slurm-site task. Thresholds are tunable via ABA_SLURM_MEM_FRAC / ABA_SLURM_WALLTIME_FRAC.
 """
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Optional, Protocol
+from typing import Optional
 
 
 @dataclass
@@ -87,16 +87,3 @@ def decide(*, env: Optional[dict] = None,
     if reasons:
         return ExecutorChoice("background", "Slurm: " + "; ".join(reasons))
     return ExecutorChoice("local", "fits this node — interactive")
-
-
-class ExecutionRouter(Protocol):
-    def route(self, **kwargs) -> ExecutorChoice: ...
-
-
-class LocalRouter:
-    """Thin object wrapper over `decide` (kept for the existing call sites)."""
-
-    def route(self, *, env: Optional[dict] = None,
-              estimate: Optional[dict] = None,
-              override: Optional[str] = None, **_ignored) -> ExecutorChoice:
-        return decide(env=env, estimate=estimate, override=override)

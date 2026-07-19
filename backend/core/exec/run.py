@@ -16,7 +16,6 @@ from typing import Optional
 from core.config import ARTIFACTS_DIR, DATA_DIR
 from core.data.workspace import scratch_dir
 from core.exec import MaterializingExecutor, Provisioning
-from core.exec.materialize import project_pylib_paths
 
 
 def run_python_code(
@@ -27,6 +26,7 @@ def run_python_code(
     timeout_s: int = 90,
     cancel_token=None,
     env: Optional[str] = None,
+    interp: Optional[str] = None,
     stream: bool = False,
 ) -> dict:
     """Run `code` in the project's scratch workspace and return the run_python
@@ -38,38 +38,49 @@ def run_python_code(
     scratch = scratch_dir(str(project_id), str(run_id))
 
     # §11: an ISOLATED env (run_python(env=…, background=True)) runs STANDALONE —
-    # its OWN python, no project overlay — matching the interactive isolated-env
-    # kernel. bind the project so ensure_env_built / env_python resolve THIS
-    # project's env (the background worker doesn't pin a project, and a Slurm node
-    # shares the FS + lock so it can use or rebuild the env).
-    interp: Optional[str] = None
+    # its OWN python (a weft-realized prefix), no project overlay — matching the
+    # interactive isolated-env kernel. weft rebuilds a GC-reclaimed realization
+    # from the env's lock transparently at realize time.
+    interp = (interp or "").strip() or None    # the param survives; branches below may set it
     if env:
-        from core.exec import isolated_env as iso
-        from core import projects as _projects
+        from core.compute import named_envs
+        from core.compute.errors import ComputeError
         try:
-            with _projects.bind(str(project_id)):
-                iso.ensure_env_built(env)       # rebuild from lock if a GC reclaimed it
-        except Exception:  # noqa: BLE001
-            pass
-        py = iso.env_python(env, str(project_id))
-        if not py.exists():
-            return {"error": f"isolated env {env!r} is not available (project {project_id})."}
+            py = named_envs.interpreter(str(project_id), env)
+        except ComputeError as ce:
+            return {"error": f"isolated env {env!r} is not available "
+                             f"(project {project_id}): {ce.detail or ce.code}"}
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"isolated env {env!r} is not available "
+                             f"(project {project_id}): {e}"}
         interp = str(py)
+    elif interp:
+        # W3.4: a pre-resolved interpreter (a background job's spec carries the
+        # snapshot/session prefix python resolved AT SUBMIT — the entry process
+        # has no compute substrate). Standalone.
+        pass
+    else:
+        # W3.5 weft-only: the default lane is the PROJECT's session over the
+        # bundle-declared base pack — REQUIRED, no served-base fallback. A
+        # deployment with no python pack is misconfigured (loud, structured).
+        from core.compute import base_env, project_env
+        from core.compute.errors import ComputeError
+        try:
+            base_env.require("python")
+            interp = str(project_env.interpreter(str(project_id), "python"))
+        except (ComputeError, RuntimeError) as ce:
+            return {"error": f"the python environment pack is not available: {ce}"}
 
-    # Preamble: DATA_DIR prepended; for the DEFAULT env the pylib overlay is
-    # appended (the .venv wins, overlay fills gaps). An isolated env is
-    # standalone — skip the overlay so its own site-packages are authoritative.
+    # Preamble: DATA_DIR prepended. Every run is now a weft env (isolated named
+    # env or the project's base-pack session) — STANDALONE, its own site-packages
+    # authoritative; additions layer via extends_env / session_install, never
+    # sys.path stacking. (The served-base project pylib overlay is gone.)
     from core.config import project_data_dir
     # `project_id` is authoritative (the job's project). The ambient
-    # current_project_id() is the _workspace fallback on a Slurm compute node,
-    # so always use the passed id for the data dir + pylib overlay.
+    # current_project_id() is the _workspace fallback on a Slurm compute node.
     _pid = str(project_id)
     _data_dir = project_data_dir(_pid)
     lines = [f"DATA_DIR = {str(_data_dir)!r}", "import sys as _sys"]
-    if not env:
-        # §11.4: project overlay PREPENDED (project wins); shared overlay folded into base.
-        for _p in reversed(list(project_pylib_paths(_pid))):
-            lines.append(f"_sys.path.insert(0, {str(_p)!r})")
     # Provenance (provenance.md §3.3): seed the stateless run so a zero-delta
     # re-run is bit-stable; the seed is recorded in the exec record. Guarded —
     # numpy is optional and the user's own seed (if any) overrides this.
@@ -84,11 +95,13 @@ def run_python_code(
     _since = (scratch / "script.py").stat().st_mtime
 
     ex = MaterializingExecutor()
-    menv = ex.materialize(Provisioning())         # base venv + tools-env PATH overlay
-    # Harden: never let an empty/blank interpreter slip through to Popen (the
-    # `Permission denied: ''` class). Coerce + strip each candidate, fall back to
-    # this process's own interpreter as the last resort.
-    used_interp = str(interp or menv.python or sys.executable or "").strip() or sys.executable
+    menv = ex.materialize(Provisioning())         # base-venv subprocess run harness
+    # `interp` is the weft interpreter (named env / job-spec / base-pack session);
+    # it is always resolved by here — the no-pack case already returned an error.
+    # Never fall back to the backend venv (sys.executable) for science code.
+    used_interp = str(interp or "").strip()
+    if not used_interp:
+        return {"error": "no python interpreter resolved for this run (internal)"}
     # Env-var parity with the interactive kernel (jupyter.py _kernel_env):
     # the agent's code routinely reads WORK_DIR / DATA_DIR / ARTIFACTS_DIR via
     # `os.environ[...]` since they're set up that way for run_python (kernel
@@ -158,6 +171,7 @@ def run_r_code(
     timeout_s: int = 600,
     cancel_token=None,
     env: Optional[str] = None,
+    interp: Optional[str] = None,
     stream: bool = False,
 ) -> dict:
     """Background R execution — mirrors run_python_code's return shape so the
@@ -179,29 +193,40 @@ def run_r_code(
     scratch = scratch_dir(str(project_id), str(run_id))
 
     from core.config import project_data_dir
-    from core.exec.r import _rscript, libpaths_expr
     # Authoritative project (see run_python_code) — not the _workspace ambient.
     _data_dir = project_data_dir(str(project_id))
-
-    rscript = _rscript()
-    if not rscript.exists():
-        return {"error": "Rscript not provisioned. Run ensure_r_runtime() first."}
 
     # R preamble — kept short. The agent's own script.R follows verbatim.
     lib_lines: list[str] = []
     if env:
-        # §11: isolated R env — its lib dir FIRST on .libPaths(), then the base
-        # (standalone, NOT the project lib), matching iso.r_run_in. The libdir is
-        # project-scoped on the shared FS, so a Slurm compute node sees it.
-        from core.exec import isolated_env as iso
-        lib = iso.r_env_lib(env, str(project_id))
-        if not lib.exists():
-            return {"error": f"isolated R env {env!r} is not available (project {project_id})."}
-        lib_lines.append(f'.libPaths(c({str(lib)!r}, .libPaths()))')
+        # §11: isolated R env — under weft a named R env is a FULL standalone
+        # env (its own R + libs, a realized prefix), not a lib dir stacked on
+        # the base. Use its Rscript; no .libPaths() juggling.
+        from core.compute import named_envs
+        from core.compute.errors import ComputeError
+        try:
+            rscript = named_envs.interpreter(str(project_id), env)
+        except ComputeError as ce:
+            return {"error": f"isolated R env {env!r} is not available "
+                             f"(project {project_id}): {ce.detail or ce.code}"}
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"isolated R env {env!r} is not available "
+                             f"(project {project_id}): {e}"}
+    elif interp:
+        # W3.4: a pre-resolved Rscript from the job spec (see the python lane).
+        from pathlib import Path as _P
+        rscript = _P(interp)
     else:
-        lib_expr = libpaths_expr(str(project_id))
-        if lib_expr:
-            lib_lines.append(lib_expr)
+        # W3.5 weft-only: the default R lane is the PROJECT's session over the
+        # bundle-declared R base pack — REQUIRED, standalone (its own .libPaths,
+        # no stack). No tools-env R fallback; a missing R pack is loud.
+        from core.compute import base_env, project_env
+        from core.compute.errors import ComputeError
+        try:
+            base_env.require("r")
+            rscript = project_env.interpreter(str(project_id), "r")
+        except (ComputeError, RuntimeError) as ce:
+            return {"error": f"the R environment pack is not available: {ce}"}
     preamble_lines = list(lib_lines)
     preamble_lines.append(f'setwd({str(scratch)!r})')
     preamble_lines.append("set.seed(0)")   # provenance.md §3.3 — bit-stable re-run
@@ -389,8 +414,14 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0,
             display = str(f.relative_to(scratch))
         except ValueError:
             display = f.name
+        try:
+            nbytes = f.stat().st_size
+        except OSError:
+            nbytes = 0
+        # record the size so the durable Files panel shows real bytes for
+        # normally-copied files too (not just oversize link-only ones).
         bucket.append({"url": f"/artifacts/{pid}/{dest_name}",
-                       "original_name": display})
+                       "original_name": display, "bytes": nbytes})
 
     # 1) Figures
     for f in _iter_kept(scratch, (".png",), since_ts):
@@ -424,10 +455,22 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0,
         except OSError:
             continue
         if st.st_size > _MAX_HARVEST_BYTES:
+            # Too large to copy into the served artifact store (would balloon
+            # disk), but NOT dropped: record a link-only entry so it lands in
+            # produced[] (→ a retain candidate — weft is its only durable home)
+            # and shows in the Files tab. No served `url` — it isn't inline-
+            # linkable until retained/fetched. (A0, misc/output_durability.md §9.)
+            try:
+                display = str(f.relative_to(scratch))
+            except ValueError:
+                display = f.name
+            files.append({"url": None, "original_name": display,
+                          "bytes": st.st_size, "link_only": True})
             warnings.append(
-                f"File '{f.name}' is {st.st_size // (1024*1024)}MB — too "
-                f"large to auto-copy; it's still on disk in WORK_DIR but "
-                f"won't be linkable from chat."
+                f"File '{display}' is {st.st_size // (1024*1024)}MB — too large "
+                f"to auto-copy into the artifact store; it stays in the run "
+                f"sandbox and is retained durably when the run settles (listed "
+                f"in Files, not inline-linkable)."
             )
             continue
         suf = f.suffix.lower()

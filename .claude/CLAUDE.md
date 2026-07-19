@@ -1,10 +1,10 @@
 # ABA — project notes
 
 ## What ABA is
-ABA is an AI-orchestrated, **entity-oriented** workspace for biological data analysis: biologists and an AI agent ("Guide") collaborate through a shared, typed, persistent entity graph to carry out **long-term research projects** across the full cycle — data → analysis → results → conclusions → manuscript. Scientific outputs (datasets, runs, results, findings, claims) are first-class typed entities with provenance, so both humans and agents can focus at any level of abstraction and build on prior work — a research *partner*, not a notebook with a chatbot stapled on.
+ABA is an AI-orchestrated, **entity-oriented** workspace for data analysis: users and an AI agent ("Guide") collaborate through a shared, typed, persistent entity graph to carry out **long-term research projects** across the full cycle — data → analysis → results → conclusions → manuscript. Analysis outputs (datasets, runs, results, findings, claims) are first-class typed entities with provenance, so both humans and agents can focus at any level of abstraction and build on prior work — a research *partner*, not a notebook with a chatbot stapled on.
 
 ## Conventions
-- this webapp will be used by biologists: the UI/UX should operate with familiar scientific entities and concepts
+- the UI/UX should operate in terms of familiar domain entities and concepts for its users
 - build robust, modular architecture
 - suggest opportunities to implement more general or flexible solution by engaging AI agents on different levels
 - use short git commit messages with no signature
@@ -14,6 +14,7 @@ ABA is an AI-orchestrated, **entity-oriented** workspace for biological data ana
 - System prompts / rules compose bundle scopes system → installation → lab → user (narrowest-wins): universal always-on rules (e.g. `behavior.md`) live in `backend/system_bundle/rules/` (this repo); site/lab/user rules go in an `aba-bundle-starter`-derived bundle's `rules/`.
 - Deployments update via `aba update` (ABA code from `main`); install paths/hosts are per-deployment, not recorded here.
 - Architecture docs: `docs/arch/` — a succinct, code-cited doc per subsystem (index in `docs/arch/README.md`); `misc/*.md` are the design/evolution logs behind them.
+- Arch docs are **coherent descriptions of the CURRENT system, never a journal**: no dated section headers, no "as built <date>" / "NEW" addenda — integrate changes into the existing narrative as if the doc were written today. History and rationale live in `misc/` and git; an arch doc may *link* there, not accrete.
 - Consult the relevant `docs/arch/` doc before touching a subsystem; keep it true — update it + its **Known gaps** at any change that materially alters that part.
 
 ## Change discipline for shared agent inputs (tool catalog, prompts, context)

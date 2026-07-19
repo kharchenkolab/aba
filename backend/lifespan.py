@@ -23,9 +23,9 @@ async def on_startup():
     start_worker()
     # Recover sys.executable FIRST if the launcher left it '' (bare argv[0] in
     # os.execve) — an empty interpreter silently poisons every subprocess that
-    # falls back to it (base self-heal pip, run_python, materialize), surfacing as
+    # falls back to it (run_python, materialize, capability verify), surfacing as
     # `PermissionError: [Errno 13] Permission denied: ''`. Must run before
-    # anything spawns a subprocess (incl. the reaper + base self-heal below).
+    # anything spawns a subprocess (incl. the reaper below).
     try:
         from core.exec.env_integrity import ensure_sys_executable
         ensure_sys_executable()
@@ -55,44 +55,39 @@ async def on_startup():
     except ValueError:
         print("[startup] ABA_SETTINGS_STRICT set — refusing to boot with bad config:")
         raise
+    # Compute substrate (weft) — W0.4 wiring (misc/weft_rewrite.md §3/§7). Best-
+    # effort: a missing weft/pixi records a degraded status; the selfcheck below
+    # surfaces it. Becomes load-bearing when envs cut over (W1).
+    try:
+        from core import compute as _compute
+        _cs = _compute.configure()
+        print(f"[startup] compute substrate: "
+              f"{'ok — ' if _cs['ok'] else 'OFFLINE — '}{_cs['detail']}")
+        if _cs["ok"]:
+            # Settings→Compute live refresh: weft site events → notification bus
+            from core.web.routers.compute import wire_event_relay
+            wire_event_relay()
+    except Exception as e:  # noqa: BLE001
+        print(f"[startup] compute substrate wiring failed (non-fatal): {e}")
     try:
         from core.runtime import selfcheck
         from core.exec.env_integrity import check_envs_dir_shared, check_base_dir_shared
         from core.config import check_settings_valid
+        from core.compute import check_compute
         selfcheck.register("envs_dir_shared", check_envs_dir_shared)
         selfcheck.register("base_dir_shared", check_base_dir_shared)
         selfcheck.register("settings_valid", check_settings_valid)
+        selfcheck.register("compute_substrate", check_compute)
         for _r in selfcheck.run():
             if not _r["ok"]:
                 print(f"[startup] SELFCHECK {_r['severity'].upper()}: {_r['name']} — {_r['detail']}")
     except Exception as e:  # noqa: BLE001
         print(f"[startup] selfcheck failed (non-fatal): {e}")
-    # Base self-heal + immutability (env_refactor.md) and isolated-env GC, run in
-    # the BACKGROUND so startup-to-ready isn't blocked. self_heal_base skips the
-    # ~9s deep verify entirely when the base is unchanged (fingerprint stamp) or
-    # on a read-only image (SIF/OOD) — both the steady state — and only does the
-    # full deep verify + repair-from-lock + refreeze when the base actually
-    # changed. The kernel-spawn path's import failures still get caught + repaired
-    # post-hoc by env_root_cause, covering the brief first-boot window.
-    async def _bg_base_maintenance():
-        def _work():
-            try:
-                from core.exec.env_integrity import self_heal_base
-                self_heal_base()
-            except Exception as e:  # noqa: BLE001
-                import traceback as _tb
-                print(f"[startup] base self-heal failed (non-fatal): {e}\n{_tb.format_exc()}")
-            # §11.6 lazy GC: reclaim built bytes of long-idle isolated envs (their
-            # spec/lock stays, so next use rebuilds transparently).
-            try:
-                from core.exec.isolated_env import gc_isolated_envs
-                gc = gc_isolated_envs()
-                if gc:
-                    print(f"[startup] reclaimed {len(gc)} long-idle isolated env(s): {gc}")
-            except Exception as e:  # noqa: BLE001
-                print(f"[startup] isolated-env GC failed (non-fatal): {e}")
-        await asyncio.to_thread(_work)
-    asyncio.create_task(_bg_base_maintenance())
+    # Base self-heal is GONE (W3.4/W3.5): weft owns environment realization now —
+    # the base is a static conda env (no runtime pip overlay to drift/repair), and
+    # weft envs are content-addressed + rebuilt from their lock on next use, so
+    # there is no boot-time base repair or isolated-env sweep. Named-env reclaim is
+    # gc_plan/env_evict via `aba doctor`, not a startup task.
 
     # Module reconciler (misc/modules.md): the backend — not the installer — owns
     # post-install. Installs every enabled-but-missing module (default: the python-bio
@@ -111,63 +106,9 @@ async def on_startup():
     from core.runtime import notifications as _notif
     _notif.set_loop(asyncio.get_event_loop())
 
-    # Background-provision the curated shared R base (r_base.yaml: Seurat,
-    # DESeq2/limma/edger/apeglm, tidyverse, cairo, Rcpp*). When everything
-    # is already in the tools env, this completes in ~500ms (two
-    # `micromamba list --json` calls, no solve). When the env is missing a
-    # package, the solve + install runs in this thread — backend stays
-    # responsive throughout. Daemon thread = dies with the process; never
-    # blocks startup.
-    def _provision_r_base_bg():
-        import time as _t
-        try:
-            # Staged prewarm (lazy_env_init.md): while the base is still being built
-            # (boot|completing), python-bio completion is in flight —
-            # defer here so two micromamba solves don't race the same tools env. On
-            # the next boot (base ready) this runs and finds R already built (no-op).
-            from core.exec.env_integrity import base_stage
-            if base_stage() != "ready":
-                print("[r_base] base still staging — R build deferred; will verify on next boot",
-                      flush=True)
-                return
-            # r-bio is a module now (misc/modules.md). If the tools env is already
-            # present (eager/OOD built it pre-start), keep it healthy with the curated
-            # top-up below. If it's NOT present: disabled (default on personal) → skip
-            # (installs on first use); enabled → the reconciler owns the build
-            # (install-r-bio.sh), so defer this top-up to avoid two solves racing.
-            from core.modules import registry as _mreg, manager as _mmgr
-            _rbio = _mreg.get("r-bio")
-            if _rbio and _mmgr.actual_state(_rbio) != "ready":
-                if not _mmgr.is_enabled(_rbio):
-                    print("[r_base] r-bio disabled + not present — skipping (installs on first use)",
-                          flush=True)
-                else:
-                    print("[r_base] r-bio enabled but not built yet — reconciler owns the build; "
-                          "deferring curated top-up", flush=True)
-                return
-            # Read-only baked base (a fat SIF bakes the R tools env into the immutable image
-            # at $ABA_TOOLS_DIR). The curated top-up installs into that env — impossible on a
-            # read-only mount, and unnecessary: the baked env IS the curated base, frozen at
-            # build time. Attempting it would burn a micromamba solve and log a failure on
-            # every launch. Skip cleanly; the env is authoritative.
-            import os as _os
-            from core.exec.materialize import tools_env as _tenv
-            _te = _tenv()
-            if _te.exists() and not _os.access(_te, _os.W_OK):
-                print(f"[r_base] tools env {_te} is read-only (baked image) — "
-                      "skipping curated top-up; the baked R base is authoritative", flush=True)
-                return
-            from content.bio.capabilities import provision_r_base
-            t0 = _t.perf_counter()
-            provision_r_base()
-            dt = _t.perf_counter() - t0
-            if dt > 5:
-                print(f"[r_base] provisioned curated shared R base in {dt:.0f}s", flush=True)
-            else:
-                print(f"[r_base] curated shared R base already provisioned ({dt*1000:.0f}ms)", flush=True)
-        except Exception as e:  # noqa: BLE001
-            print(f"[r_base] provision failed (non-fatal — agent can still per-project install): {e}", flush=True)
-    threading.Thread(target=_provision_r_base_bg, name="r_base_provision", daemon=True).start()
+    # (weft-only) The shared R base is no longer provisioned into a conda
+    # tools env at boot: R is the r-bio base pack, realized lazily by the
+    # reconciler / first run_r (project_env session).
     # Pass-E follow-up: any Turn rows in GENERATING/EXECUTING_TOOLS/
     # SUMMARIZING state are from a process that didn't survive; they
     # cannot be resumed (stream + tool dispatch are in-memory). Mark
@@ -307,6 +248,14 @@ async def on_shutdown():
                     if not t.done():
                         t.cancel()
     _kill_owned_kernels()   # 5. belt + braces — reap any kernel started since
+    # 6. Compute substrate: release the adapter's thread pool. weft's own
+    #    pollers are daemon threads; detached jobs keep running and reconcile()
+    #    picks them back up on next boot.
+    try:
+        from core import compute as _compute
+        _compute.shutdown()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def register_lifecycle(app) -> None:

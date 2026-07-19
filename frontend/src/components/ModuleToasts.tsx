@@ -6,6 +6,7 @@
  * aba:viewer-error seam, so a click-triggered failure becomes an agent turn).
  */
 import { useEffect, useState } from 'react'
+import { apiPost } from '../lib/api'
 
 type MState = 'queued' | 'installing' | 'ready' | 'failed'
 interface Ev { id: string; title: string; state: MState; progress?: string | null; error?: string | null }
@@ -32,7 +33,7 @@ export default function ModuleToasts() {
 
   const dismiss = (id: string) => setItems(prev => prev.filter(p => p.id !== id))
   const retry = (id: string) => {
-    fetch(`/api/modules/${encodeURIComponent(id)}/retry`, { method: 'POST' }).catch(() => {})
+    apiPost(`/api/modules/${encodeURIComponent(id)}/retry`).catch(() => {})
   }
   const askGuide = (it: Ev) => {
     // Reuse the viewer-error → bug-composer seam (App listens for this).

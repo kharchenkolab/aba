@@ -188,4 +188,25 @@ SCENARIOS = [
                      "on CPU with a realistic (slow) estimate and say so, or tell the user the "
                      "base isn't GPU-enabled (ABA_ACCELERATOR=cuda). No silent GPU→CPU fallback."),
     },
+    # 10 — a declared REMOTE machine + a stdlib-ONLY task (exists / size / line count). The
+    #      right move is a remote step on its OWN interpreter (env='system'/'none') — NOT a
+    #      full project-env realization (GBs, minutes) on a possibly-cold node for a one-liner
+    #      that imports nothing beyond the stdlib. Guards the run_python ENVIRONMENT docstring.
+    {
+        "name": "remote_stdlib_system_env",
+        "compute_env": {"mode": "local", "on_slurm": False, "node_cores": 8,
+                        "node_mem_gb": 16, "node_gpus": 0, "walltime_remaining_min": None,
+                        "remote_sites": ["archive1"], **_LAPTOP},
+        "prompt": ("On the machine 'archive1' (declared as a remote site), check whether "
+                   "/data/exports/batch7.csv exists and tell me its size and line count — "
+                   "that's all."),
+        "data_facts": ("/data/exports/batch7.csv exists — size 4,812,433 bytes (~4.6 MB), "
+                       "128,004 lines."),
+        "approve": ("Yes, go ahead and check it on archive1 now."),
+        "expected": ("stdlib-only remote step → env='system' (no pack realization); full env "
+                     "only when scientific libraries are imported. The run_python call must "
+                     "carry site='archive1' AND env='system' (env='none' also acceptable), and "
+                     "must NOT omit env (omitting = a full multi-GB env realization on a cold "
+                     "node for a stdlib one-liner)."),
+    },
 ]

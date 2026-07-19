@@ -266,6 +266,23 @@ def doctor() -> int:
             chk("backend responding (:8000)", r.status == 200, "start it: `aba up`")
     except Exception:  # noqa: BLE001
         print("  — backend not responding on :8000 (start it with `aba up` if expected)", flush=True)
+
+    # Compute substrate (weft) — the execution plane for kernels + background jobs. Probes
+    # pixi + the weft install directly (independent of the running server) and lists the
+    # declared sites: the implicit `local` site + any slurm/ssh sites in weft-sites.yaml.
+    # W3.5 is weft-only, so a degraded substrate means kernels/jobs can't run.
+    _csurf = _compute_surface(home)
+    if _csurf is not None:
+        _cstat = _csurf.get("status") or {}
+        chk(f"compute substrate (weft): {_cstat.get('detail', '?')}", bool(_cstat.get("ok")),
+            "weft substrate degraded — re-run the installer's provision-weft (pixi + weft), "
+            "or check `aba settings`; kernels and background jobs require it")
+        _sites = _csurf.get("sites") or []
+        _sd = ", ".join(
+            (s.get("name") or "?") + f"({s.get('kind')}" + (f"@{s['host']}" if s.get("host") else "") + ")"
+            for s in _sites)
+        print(f"  ✓ weft sites: {_sd or 'local only'}", flush=True)
+
     # Slurm — only relevant on a cluster-personal install.
     if shutil.which("sinfo"):
         try:
@@ -315,11 +332,12 @@ def doctor() -> int:
         _me = _re.search(r"ABA_ENVS_DIR=(\S+)", cfg_txt)
         _mr = _re.search(r"ABA_RUNTIME_DIR=(\S+)", cfg_txt)
         if not _me and not _mr:
-            # The default (config.py) is /workspace/aba-runtime — node-local scratch on
-            # many clusters. Under Slurm that silently breaks provisioned-package jobs.
+            # The default (config.py) is $ABA_HOME/runtime (i.e. your home) — often
+            # quota-limited, and on some setups node-local. Under Slurm that can break
+            # provisioned-package jobs; prefer an explicit shared cluster path.
             chk("provisioning dir configured for shared storage (Slurm)", False,
                 "neither ABA_RUNTIME_DIR nor ABA_ENVS_DIR is set in config.env — the default "
-                "(/workspace/aba-runtime) is node-local on many clusters; set one to a shared path")
+                "($ABA_HOME/runtime, your home) may be quota'd or node-local; point one at shared cluster scratch")
         else:
             _envs = (_me.group(1) if _me else _mr.group(1) + "/envs").strip("\"'")
             _kind, _fstype = _fs_kind_for_path(_envs)
@@ -387,6 +405,40 @@ def _settings_surface(home: Path) -> tuple[int, list]:
         return int(d.get("n", 0)), list(d.get("unknown", []))
     except Exception:  # noqa: BLE001
         return 0, []
+
+
+def _compute_surface(home: Path) -> "dict | None":
+    """{status:{ok,detail}, sites:[{name,kind,host}]} via the backend compute facade —
+    the weft substrate health (core.compute.status after configure) + declared sites
+    (weft-sites.yaml + the implicit `local` site). None if the backend isn't resolvable.
+    Best-effort in doctor: a degraded substrate is reported, never raised."""
+    r = _run_in_backend(home,
+        "import json\n"
+        "from core import compute\n"
+        "from core.compute.adapter import sites_config_path\n"
+        "st = compute.configure()\n"                     # probes pixi/weft, sets status
+        "sites = [{'name': 'local', 'kind': 'local', 'host': None}]\n"
+        "try:\n"
+        "    import yaml\n"
+        "    p = sites_config_path()\n"
+        "    if p.exists():\n"
+        "        doc = yaml.safe_load(p.read_text()) or {}\n"
+        "        for s in (doc.get('sites') or []):\n"
+        "            c = (s or {}).get('config') or {}\n"
+        "            sites.append({'name': (s or {}).get('name'), 'kind': (s or {}).get('kind'), 'host': c.get('host')})\n"
+        "except Exception: pass\n"
+        "print('ABA_JSON=' + json.dumps({'status': {'ok': bool(st.get('ok')), 'detail': st.get('detail')}, 'sites': sites}))",
+        timeout=60)
+    if not r or r.returncode != 0:
+        return None
+    import json
+    for ln in (r.stdout or "").splitlines():
+        if ln.startswith("ABA_JSON="):
+            try:
+                return json.loads(ln[len("ABA_JSON="):])
+            except Exception:  # noqa: BLE001
+                return None
+    return None
 
 
 def settings_cmd(deploy_env: bool = False) -> int:

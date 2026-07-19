@@ -111,14 +111,22 @@ def register_jobs_tools(mcp: FastMCP) -> None:
           has, or might approach the allocation's remaining walltime, or would be
           meaningfully faster AND that speedup beats the partition's queue wait
           (read the `wait` label). Otherwise run interactively.
-        - ALWAYS: a background/Slurm job is a FRESH process with NONE of your
-          interactive objects — load inputs from disk, write outputs to disk.
+        - REMOTE (a machine in `remote_sites`): run_python/run_r with
+          `site=<name>` — chosen by DATA GRAVITY: prefer the machine already
+          holding the inputs over transferring data. A short step runs
+          SYNCHRONOUSLY (like a local call, fresh process there); a long one
+          adds `background=True`. It reads paths valid THERE and writes to
+          its working directory.
+        - ALWAYS: a background/Slurm/remote job is a FRESH process with NONE of
+          your interactive objects — load inputs from disk, write outputs to disk.
 
         Returns: `mode`, `node_cores`/`node_mem_gb`/`node_gpus`,
-        `walltime_remaining_min` (null = unbounded), and on a cluster
+        `walltime_remaining_min` (null = unbounded), on a cluster
         `partitions` (each with `cpus_per_node`, `mem_gb_per_node`, `gpu`,
         `nodes_idle`, `max_walltime`, `wait`) + `partitions_source`
-        (live|config) + `user_access`. `summary` is a one-line digest.
+        (live|config) + `user_access`, and `remote_sites` (declared compute
+        machines usable via site=: name, kind, cpus/mem/gpus when probed).
+        `summary` is a one-line digest.
         """
         from core.exec.compute_env import compute_env
         e = compute_env(ttl=0)          # agent wants the current load, not a cached read
@@ -128,6 +136,40 @@ def register_jobs_tools(mcp: FastMCP) -> None:
         if wt is not None:
             local += f" · ~{round(wt / 60, 1)}h walltime left"
         e["summary"] = f"Mode: {e['mode']}. {local}."
+        # declared remote machines (detached lane): usable via run_python/
+        # run_r site= — listed so placement can follow the data
+        try:
+            from core.jobs.weft_submitter import declared_compute_sites
+            remotes = [s for s in declared_compute_sites()
+                       if s["name"] != "local"]
+            if remotes:
+                from core.compute import adapter as _ad
+                caps = {r.get("name"): r for r in
+                        _ad.get_compute().sync_call("sites_list")}
+                for s in remotes:
+                    c = caps.get(s["name"]) or {}
+                    for k in ("cpus", "mem_gb", "gpus", "health"):
+                        if c.get(k) is not None:
+                            s[k] = c[k]
+                e["remote_sites"] = remotes
+                e["summary"] += " Remote machines (site=): " + "; ".join(
+                    f"{s['name']} ({s.get('kind')}"
+                    + (f", {s['cpus']} cores" if s.get("cpus") else "")
+                    + ")" for s in remotes)
+        except Exception:  # noqa: BLE001
+            # substrate CONFIGURED but unreachable → say so; silence would
+            # read as "no remote machines exist" (outage-honesty review). A
+            # weft-less deployment stays quiet — nothing is being hidden.
+            try:
+                from core.compute import adapter as _ad
+                if _ad.status().get("ok"):
+                    e["remote_sites_note"] = (
+                        "compute substrate unreachable — remote machines are "
+                        "temporarily unavailable (do not conclude none exist)")
+                    e["summary"] += " NOTE: remote machines temporarily " \
+                                    "unavailable (substrate unreachable)."
+            except Exception:  # noqa: BLE001
+                pass
         if e.get("partitions"):
             e["summary"] += f" Slurm partitions ({e.get('partitions_source')}): " + "; ".join(
                 f"{p['partition']} (≤{p.get('cpus_per_node', '?')} cores/node"

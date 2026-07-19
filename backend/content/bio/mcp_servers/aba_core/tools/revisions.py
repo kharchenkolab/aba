@@ -165,14 +165,38 @@ def register_revision_tools(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def export_reproduction_bundle(entity_id: str, aba_ctx_id: str | None = None) -> dict:
-        """Write a portable reproduction bundle for this figure/table — the
-        producing code, a pinned requirements lock, and the full provenance record
-        — to a directory. USE THIS when the user needs to reproduce 'for the
-        record' (a journal/policy requirement). Returns {bundle_dir, files}."""
+        """Write a portable reproduction bundle for this figure/table. USE THIS
+        when the user needs to reproduce 'for the record' (a journal/policy
+        requirement). A result produced on the compute substrate (background
+        job / named env) exports as ONE verifiable tarball — the full env+input
+        closure plus the entity's provenance in a sealed envelope; re-derivation
+        elsewhere proves itself by identical output refs (returns {mode:'weft',
+        bundle_file, weft.reproducibility}). Other results export the legacy
+        folder: code + pinned requirements + provenance record (returns
+        {mode:'folder', bundle_dir, files})."""
         from content.bio.lifecycle.revisions import export_bundle as _export
         try:
             return _export(entity_id)
         except ValueError as e:
+            return {"error": str(e)}
+
+    @mcp.tool()
+    def import_reproduction_bundle(path: str, aba_ctx_id: str | None = None) -> dict:
+        """Load a reproduction bundle (a .aba-bundle.tar.gz exported by
+        export_reproduction_bundle, possibly from ANOTHER deployment) into this
+        workspace: environments, specs, and input blobs are restored, and the
+        result is ready to RE-DERIVE. Returns the target `task` (run it as a
+        background job to re-derive; identical output refs prove reproduction),
+        `recorded_outputs` to compare against, and — when the bundle came from
+        aba — the producing entity's record + lineage under `aba`. Nothing is
+        auto-registered: inspect, re-derive, then promote results normally."""
+        from content.bio.lifecycle.revisions import import_bundle_file as _import
+        from core.compute import ComputeError
+        try:
+            return _import(path)
+        except ComputeError as e:
+            return {"error": e.to_payload()}
+        except Exception as e:  # noqa: BLE001
             return {"error": str(e)}
 
     @mcp.tool()

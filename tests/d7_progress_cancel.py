@@ -127,13 +127,6 @@ def test_cancellable_subprocess():
     dt = time.time() - t0
     check("cancel kills the process promptly", r2.returncode != 0 and dt < 5, f"rc={r2.returncode} dt={dt:.1f}s")
 
-    # run_micromamba + r layer accept the cancel token (plumbing present)
-    from core.exec.mamba import run_micromamba
-    from core.exec.r import r_install, ensure_r_runtime, r_has_package
-    check("run_micromamba accepts cancel_token", "cancel_token" in inspect.signature(run_micromamba).parameters)
-    for fn in (r_install, ensure_r_runtime):
-        check(f"{fn.__name__} accepts cancel_token", "cancel_token" in inspect.signature(fn).parameters)
-
 
 def test_inspect_package():
     print("inspect_package — one-call orientation")

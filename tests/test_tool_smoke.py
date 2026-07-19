@@ -63,7 +63,8 @@ def test_all_tool_modules_import():
 def test_read_csv_golden_path():
     """read_csv_info on a real CSV must return a populated preview + column
     info with NO soft-error — this is the exact path `tabulate` broke."""
-    from core.config import current_project_id, project_data_dir
+    from core.config import project_data_dir
+    from core.projects import current as current_project_id   # moved (burn-down #1)
     from content.bio.tools.ctx_read import read_csv_info
     d = project_data_dir(current_project_id())
     (d / "smoke.csv").write_text("gene,count,group\nACT1,101,ctrl\nTUB1,57,treat\n")
@@ -79,7 +80,8 @@ def test_read_csv_degrades_without_tabulate(monkeypatch):
     back to a plain-text preview rather than hard-fail (belt-and-suspenders on
     the fix, independent of what the env happens to carry)."""
     import pandas as pd
-    from core.config import current_project_id, project_data_dir
+    from core.config import project_data_dir
+    from core.projects import current as current_project_id   # moved (burn-down #1)
     from content.bio.tools.ctx_read import read_csv_info
 
     def _boom(self, *a, **k):

@@ -13,7 +13,7 @@ if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 
 import core.jobs.slurm_entry as SE          # noqa: E402
-import core.exec.env_integrity as EI        # noqa: E402
+import core.exec.verify as EI               # noqa: E402
 import core.exec.run as RUN                 # noqa: E402
 
 

@@ -74,11 +74,12 @@ async def notifications_stream():
     A "hello" event fires on connect so the client knows the stream is live.
     """
     from core.runtime import notifications as _notif
+    from core.runtime import wire
 
     async def gen():
         q = _notif.subscribe()
         try:
-            yield f"data: {json.dumps({'type': 'hello'})}\n\n"
+            yield f"data: {json.dumps(wire.hello())}\n\n"
             while True:
                 try:
                     ev = await asyncio.wait_for(q.get(), timeout=25.0)

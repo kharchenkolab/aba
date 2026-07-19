@@ -289,10 +289,13 @@ export default function App() {
     const es = new EventSource('/api/notifications')
     es.onmessage = (msg) => {
       try {
-        const ev = JSON.parse(msg.data)
+        const ev = JSON.parse(msg.data) as import('./wire').NotificationEvent
         if (ev.type === 'entity_updated') refresh()
         // Module install progress → ModuleToasts + the Modules tab listen for this.
         else if (ev.type === 'module') window.dispatchEvent(new CustomEvent('aba:module', { detail: ev }))
+        // Compute-site lifecycle (registration narration, queue verification) →
+        // Settings → Compute tab live refresh.
+        else if (ev.type === 'compute') window.dispatchEvent(new CustomEvent('aba:compute', { detail: ev }))
       } catch {}
     }
     return () => { es.close() }
@@ -594,6 +597,16 @@ export default function App() {
     sendMessage(text)
   }
 
+  // Prefill the Guide composer WITHOUT sending: reveal the chat peek (a user
+  // gesture, so it clears the sticky collapse like pinning does), seed the
+  // text, focus the cursor. The generic hook behind Discuss-style affordances
+  // — the user hits Enter as-is or types their real question first.
+  const prefillGuide = (text: string) => {
+    userCollapsedRef.current = false; _setRightCollapsedRaw(false)
+    setPrefill(text)
+    setComposerFocus(n => n + 1)
+  }
+
   // "Chat" gesture on a run output: bring the plot into the Guide chat. We fetch
   // the (same-origin) image and attach it so the Guide can SEE it, then PREFILL
   // the composer (focused) — the user hits Enter as-is or types their actual
@@ -660,8 +673,9 @@ export default function App() {
       : annotation
         ? `Look at "${label}" and highlighting. `
         : `Let's look at "${label}". `
-    setPrefill(prefill)
-    setComposerFocus(n => n + 1)
+    // prefillGuide also reveals a collapsed right rail — Discuss on any
+    // surface must never focus an invisible composer.
+    prefillGuide(prefill)
   }
 
   // Pin a run output (used by the detached preview window, which carries the
@@ -728,9 +742,9 @@ export default function App() {
       requestUnpin(id, ent?.title || '')
       return
     }
-    fetch(`/api/entities/${encodeURIComponent(id)}/pin`, { method: 'POST' })
-      .then(() => refresh())
-      .catch(() => {})
+    const pinDone = fetch(`/api/entities/${encodeURIComponent(id)}/pin`, { method: 'POST' })
+      .then(r => { if (!r.ok) return false; refresh(); return true })
+      .catch(() => false)
     // User-initiated pin reveals the right rail — the Result they're
     // pinning lands there, so they want to see it. (AI-driven pinning,
     // e.g. auto_interpret's caption write-back, goes through a different
@@ -745,14 +759,16 @@ export default function App() {
     // refreshes cover that gap (auto_interpret typically lands in ~6s);
     // refresh() is idempotent so overlapping with the broadcast is free.
     ;[3000, 7000, 12000].forEach(ms => window.setTimeout(() => refresh(), ms))
+    return pinDone   // FigurePin reverts its optimistic red on false
   }
   // Keep any (non-entity) message as a snapshot note, keyed by content.
-  const keepMessage = (key: string, text: string, image_urls: string[]) => {
+  // Returns success so the caller can revert its optimistic glyph.
+  const keepMessage = (key: string, text: string, image_urls: string[]) =>
     fetch('/api/messages/pin', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ key, text, image_urls, thread_id: currentThread?.id ?? threadId }),
-    }).then(() => refresh()).catch(() => {})
-  }
+    }).then(r => { if (!r.ok) return false; refresh(); return true })
+      .catch(() => false)
   // Chat-pin state derives from bio: kept message keys + figure ids
   // pinned via active-Result membership. The shell just passes the
   // sets to ChatPane; bio decides the rules (which Note source_keys
@@ -865,6 +881,7 @@ export default function App() {
           annotClear={annotClear}
           compact={!primary}
           onAsk={askGuide}
+          onPrefill={prefillGuide}
           onChatResult={chatAboutResult}
           onBrowseFiles={(path?: string) => { openProjectSection('files'); setFilesTarget(t => ({ path: path ?? '', n: t.n + 1 })) }}
           projectId={url.pid ?? undefined}

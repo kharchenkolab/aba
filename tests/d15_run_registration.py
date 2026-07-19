@@ -97,6 +97,20 @@ c = close_run_tool({}, ctx)
 check("close_run_tool ok (empty → discarded)", c.get("status") == "ok")
 check("close_run_tool noop when none open", close_run_tool({}, ctx).get("status") == "noop")
 
+print("\nre-run WITH CHANGES branches (§8f: scenario_of edge)")
+base = open_run_tool({"title": "baseline sweep"}, ctx)
+base_id = base["run_id"]
+close_run_tool({}, ctx)   # (empty → discarded is fine; the id still anchors the edge)
+variant = open_run_tool({"title": "sweep — variant B", "rerun_of": base_id}, ctx)
+ve = get_entity(variant["run_id"])
+check("variant Run records scenario_of = baseline", (ve or {}).get("scenario_of") == base_id, str(ve))
+close_run_tool({}, ctx)
+# a bad / non-run rerun_of is ignored, never raises, never self-links
+plain = open_run_tool({"title": "fresh work", "rerun_of": "not_a_real_id"}, ctx)
+pe = get_entity(plain["run_id"])
+check("bogus rerun_of ignored (no scenario_of)", (pe or {}).get("scenario_of") in (None, ""))
+close_run_tool({}, ctx)
+
 print("\nbackground-job pin path (analysis_ctx.analysis_id pins the Run)")
 rid3 = open_run(TID, "job pipeline", focus_entity_id=None)
 resj, inpj = _fig_result("/artifacts/job.png", "job.png", "# job output")

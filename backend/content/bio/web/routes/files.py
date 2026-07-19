@@ -84,6 +84,24 @@ def files_download_zip(path: str = ""):
     if not leaves:
         raise HTTPException(404, f"no files under {path!r}")
 
+    # in-memory zip: refuse past the fetch guardrail rather than OOM the
+    # controller (the sibling read routes are capped; this aggregate wasn't)
+    from core.data.datasets import FETCH_GUARDRAIL_BYTES
+
+    def _leaf_bytes(leaf) -> int:
+        if leaf.get("artifact_path"):
+            src = _resolve_artifact_disk_path(leaf["artifact_path"])
+            try:
+                return src.stat().st_size if src and src.exists() else 0
+            except OSError:
+                return 0
+        return len(leaf.get("content") or leaf.get("synthesized_content") or "")
+    total = sum(_leaf_bytes(x) for x in leaves)
+    if total > FETCH_GUARDRAIL_BYTES:
+        raise HTTPException(413, f"files under {path!r} total {total / 1e9:.1f} GB "
+                                 f"— too large for a single archive; download "
+                                 f"folders or files selectively")
+
     base = (node.get("path") or "").rstrip("/")
     base_prefix_len = len(base) + 1 if base else 0
 

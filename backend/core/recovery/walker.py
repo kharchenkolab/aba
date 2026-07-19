@@ -469,7 +469,19 @@ def recover_project(
     if not dry_run:
         try:
             from core.recovery.report import build_report  # noqa: PLC0415
-            build_report(source_dir, pid=pid, db_path=Path(tdb))
+            crep = build_report(source_dir, pid=pid, db_path=Path(tdb))
+            # I4 — surface an UNAMBIGUOUS env-portability problem in the visible
+            # warnings (the full detail rides recovery_report.json's
+            # env_registry block). Named isolated envs whose EnvID isn't in this
+            # deployment's weft store are gone (their locks travelled as a
+            # pointer only); the default sessions self-heal, so they aren't
+            # flagged. Absence of the registry file is ambiguous (no custom envs
+            # vs lost) → left to the report, not the banner.
+            if crep.env_named_unrecoverable:
+                report.warnings.append(
+                    "env registry: named env(s) not recoverable in this "
+                    f"deployment's compute store: {sorted(crep.env_named_unrecoverable)} "
+                    "— their locks didn't travel; recreate with make_isolated_env")
         except Exception as e:
             report.warnings.append(f"compatibility report failed: {e}")
         # R4 — refresh by-title symlinks from the just-imported entities.

@@ -27,54 +27,6 @@ def test_hdf5r_in_r_base_spec():
 
 
 # ── #6b: missing-system-lib detection covers hdf5r's wording ─────────────────
-def test_diagnose_install_detects_hdf5_not_found():
-    from core.exec.r import diagnose_install, _SYS_LIB_CONDA
-    log = ("checking for HDF5... no\n"
-           "configure: error: We could not find your HDF5 installation. "
-           "Use the --with-hdf5 argument...\n"
-           "ERROR: configuration failed for package 'hdf5r'\n")
-    diag = diagnose_install(log)
-    lib = (diag.get("missing_lib") or "").lower()
-    assert lib == "hdf5", diag
-    # and it maps to a conda package the recovery can install
-    assert _SYS_LIB_CONDA.get(lib) == "hdf5"
-
-
-def test_diagnose_install_existing_patterns_still_work():
-    from core.exec.r import diagnose_install
-    assert (diagnose_install("/usr/bin/ld: cannot find -lglpk").get("missing_lib")) == "glpk"
-
-
-def test_diagnose_install_banner_does_not_drown_real_error():
-    """The pagoda2 regression: R prints `using C++ compiler:` for every file in a
-    big build; that banner used to fill the window (last-8 matches) and hide the
-    real failure. The diagnostic must surface the error, NOT the banner."""
-    from core.exec.r import diagnose_install
-    banner = "using C++ compiler: 'x86_64-conda-linux-gnu-c++ (conda-forge gcc 14.3.0) 14.3.0'\n"
-    log = (banner * 30
-           + "ERROR: compilation failed for package 'hdf5r'\n"
-           + "Warning: installation of package 'hdf5r' had non-zero exit status\n"
-           + banner * 30)
-    lines = diagnose_install(log)["lines"]
-    assert "hdf5r" in lines and "non-zero exit status" in lines, lines
-    assert "using C++ compiler" not in lines, "the benign compiler banner must not appear"
-
-
-def test_diagnose_install_captures_lazy_loading_cause():
-    """The real pagoda2-devel failure: R prints the actionable cause (a dependency
-    VERSION MISMATCH) on the indented line AFTER 'Error in loadNamespace(…) :',
-    which matches no marker. The diagnostic must carry that WHY, not just the
-    generic 'lazy loading failed' symptom the agent was left with."""
-    from core.exec.r import diagnose_install
-    log = ("** byte-compile and prepare package for lazy loading\n"
-           "Error in loadNamespace(i, c(lib.loc, .libPaths()), versionCheck = vI[[i]]) : \n"
-           "  namespace ‘sccore’ 1.0.7 is being loaded, but >= 1.1.0 is required\n"
-           "Calls: <Anonymous> ... loadNamespace -> namespaceImport -> loadNamespace\n"
-           "Execution halted\n"
-           "ERROR: lazy loading failed for package ‘pagoda2’\n"
-           "Warning: installation of package ‘pagoda2’ had non-zero exit status\n")
-    lines = diagnose_install(log)["lines"]
-    assert "sccore" in lines and "1.1.0" in lines and "required" in lines.lower(), lines
 
 
 # ── #6c: a swallowed (exit-0) install failure is surfaced as FAILED ──────────

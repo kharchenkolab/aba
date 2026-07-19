@@ -76,26 +76,41 @@ def inspect_env(input_: dict, ctx: dict | None = None) -> dict:
         from core.exec.env_integrity import env_overview
         ov = env_overview(pid)
         if is_r:
-            from core.exec.r import project_r_lib
-            ov["r_project_lib"] = str(project_r_lib(pid)) if pid else None
+            # The weft R session prefix is the R env (no project-lib overlay).
+            from core.compute import base_env as _bev, project_env as _penv
+            try:
+                ov["r_session"] = (str(_penv.prefix(str(pid), "r"))
+                                   if (pid and _bev.active("r")) else None)
+            except Exception:  # noqa: BLE001 — overview must not fail on R
+                ov["r_session"] = None
         return {"status": "ok", "scope": "overview", "language": "r" if is_r else "python",
                 "tiers": ov}
 
     if is_r:
-        # Direct Rscript (like r_has_package) so it works without a kernel ctx
-        # and respects the project's .libPaths(). requireNamespace = real load;
-        # packageVersion + find.package give version/tier.
-        from core.exec.r import _run_rscript, project_r_lib, libpaths_expr
-        _lib = libpaths_expr(pid)
-        expr = ((_lib + "; " if _lib else "")
-                + f"ok <- requireNamespace({name!r}, quietly=TRUE); "
+        # Probe the project's weft R SESSION (base pack + additions); its own
+        # .libPaths() is authoritative, so there is no project-lib overlay to
+        # stack. requireNamespace = real load; packageVersion + find.package give
+        # version/location. No R pack declared → the R lane is unavailable here.
+        import subprocess
+        from core.compute import base_env as _bev, project_env as _penv
+        from core.compute.errors import ComputeError
+        if not _bev.active("r"):
+            return {"status": "unavailable", "name": name, "language": "r",
+                    "loads": False,
+                    "error": "no R environment pack is declared for this deployment"}
+        try:
+            _rs = str(_penv.interpreter(str(pid or "_none"), "r"))
+        except (ComputeError, RuntimeError) as e:
+            return {"status": "error", "name": name, "language": "r",
+                    "loads": False, "error": f"R session unavailable: {e}"}
+        expr = (f"ok <- requireNamespace({name!r}, quietly=TRUE); "
                 + f"cat('ABA_LOADS=', isTRUE(ok), '\\n', sep=''); "
                 + f"if (isTRUE(ok)) {{ cat('ABA_VER=', as.character(packageVersion({name!r})), '\\n', sep=''); "
                 + f"cat('ABA_LOC=', find.package({name!r}), '\\n', sep='') }}")
         try:
-            proc = _run_rscript(expr, timeout_s=120)
-            out = (getattr(proc, "stdout", "") or "")
-            err = (getattr(proc, "stderr", "") or "")
+            proc = subprocess.run([_rs, "-e", expr], capture_output=True,
+                                  text=True, timeout=120)
+            out, err = proc.stdout or "", proc.stderr or ""
         except Exception as e:  # noqa: BLE001
             return {"status": "error", "name": name, "language": "r",
                     "loads": False, "error": str(e)[:400]}
@@ -106,11 +121,9 @@ def inspect_env(input_: dict, ctx: dict | None = None) -> dict:
                     return ln[len(key):].strip()
             return None
         loads = (_pick("ABA_LOADS=") == "TRUE")
-        loc = _pick("ABA_LOC=")
-        tier = ("project-lib" if (loc and pid and str(project_r_lib(pid)) in loc) else
-                ("base" if loads else "unknown"))
         return {"status": "ok", "name": name, "language": "r", "loads": loads,
-                "version": _pick("ABA_VER="), "location": loc, "tier": tier,
+                "version": _pick("ABA_VER="), "location": _pick("ABA_LOC="),
+                "tier": ("session" if loads else "unknown"),
                 "error": None if loads else (err or out)[-600:]}
 
     from core.exec.env_integrity import python_package_status
@@ -119,20 +132,20 @@ def inspect_env(input_: dict, ctx: dict | None = None) -> dict:
 
 
 def make_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
-    """Create/refresh an ISOLATED environment you OWN (Python venv, or — with
-    language='r' — a standalone R library) and install packages into it with FULL
-    version control. USE THIS when a package conflicts with the base (a different
-    numpy, tensorflow, an ABI-incompatible wheel) or you need to resolve a
-    dependency conflict your own way — the shared base is never touched. Run code
-    in it with run_in_isolated_env. (Note for R: a *project* R install already
-    overrides the base via .libPaths, so reach for this only for a fully
-    project-independent / one-off conflicting lib.) Returns {status, name,
-    language, engine, installed, verified, error}."""
-    from core.exec import isolated_env as iso
+    """Create/refresh an ISOLATED environment you OWN (a weft-solved env — Python,
+    or with language='r' a standalone R env) with FULL version control. USE THIS
+    when a package conflicts with the base (a different numpy, tensorflow, an
+    ABI-incompatible wheel) or you need to resolve a dependency conflict your own
+    way — the shared base is never touched. Run code in it with
+    run_in_isolated_env. Returns {status, name, language, engine, env_id,
+    installed, verified, error}."""
+    from core.compute import named_envs
+    from core.compute.errors import ComputeError
+    from core import projects
     name = (input_.get("name") or "").strip()
     if not name:
         return {"status": "error", "note": "make_isolated_env needs a `name`."}
-    if iso.is_reserved_name(name):
+    if named_envs.is_reserved_name(name):
         return {"status": "error", "name": name,
                 "note": f"'{name}' is reserved (default/base/shared/project) — it denotes "
                         "the normal environment, not an isolated one. Pick another name."}
@@ -140,43 +153,59 @@ def make_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
     label = "R" if is_r else "Python"
     lang = "r" if is_r else "python"
     packages = list(input_.get("packages") or [])
+    pid = str(projects.current() or "default")
     try:
-        info = iso.r_create_env(name) if is_r else iso.create_env(name)
+        # Existing env + packages → layer on (extends_env; the env is never
+        # mutated in place). Fresh name → solve a new env. Solving is eager so
+        # conflicts surface NOW with weft's structured cause; realization is
+        # lazy — the first run materializes the prefix.
+        if named_envs.resolve(pid, name) is not None and packages:
+            res = named_envs.extend(pid, name, packages)
+        else:
+            res = named_envs.create(pid, name, language=lang, packages=packages,
+                                    python_version=(input_.get("python_version") or None))
+    except ComputeError as e:
+        return {"status": "error", "name": name, "language": lang,
+                "error": e.to_payload(),
+                "note": f"could not solve the env: {e.detail or e.code}"}
     except Exception as e:  # noqa: BLE001
         return {"status": "error", "name": name, "note": f"could not create env: {e}"}
-    engine = info["engine"]
-    if not packages:
-        iso.capture_env_spec(name, language=lang, packages=[])   # §11.6 spec/lock
-        _run = "run_r" if is_r else "run_python"
-        return {"status": "ok", "name": name, "language": lang, "engine": engine,
-                "note": f"Isolated {label} env {name!r} ready ({engine}); install packages "
-                        f"or run code in it with {_run}(env={name!r}, code=…)."}
-    res = (iso.r_install_into(name, packages) if is_r
-           else iso.install_into(name, packages, verify_imports=input_.get("verify_imports")))
-    if not res["ok"]:
-        return {"status": "error", "name": name, "language": lang, "engine": engine,
-                "installed": packages, "error": res.get("error"),
-                "note": "Isolated env created, but the install failed — see error."}
-    iso.capture_env_spec(name, language=lang, packages=packages)   # §11.6 spec/lock
+    out = {"status": "ok", "name": name, "language": lang, "engine": "weft",
+           "env_id": res["env_id"], "installed": packages}
+    verify = input_.get("verify_imports")
+    if packages and verify:
+        ok, err = named_envs.verify_imports(pid, name, list(verify))
+        out["verified"] = ok
+        if not ok:
+            return {**out, "status": "error", "error": err,
+                    "note": "Env solved, but the requested imports failed inside it — see error."}
     _run = "run_r" if is_r else "run_python"
-    return {"status": "ok", "name": name, "language": lang, "engine": engine,
-            "installed": res["installed"], "verified": res.get("verified"),
-            "note": f"Isolated {label} env {name!r} ready ({engine}); run code in it with "
-                    f"{_run}(env={name!r}, code=…)."}
+    out["note"] = (f"Isolated {label} env {name!r} solved; run code in it with "
+                   f"{_run}(env={name!r}, code=…) — the first run materializes it. "
+                   f"Calling make_isolated_env again with more packages LAYERS them on.")
+    return out
 
 
 def run_in_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
     """Run code inside an isolated env created by make_isolated_env — your sandbox
     for conflict resolution / troubleshooting. `language` = python (default) | r.
     Returns {status, language, stdout, stderr}."""
-    from core.exec import isolated_env as iso
+    from core.compute import named_envs
+    from core import projects
     name = (input_.get("name") or "").strip()
     code = input_.get("code") or ""
     if not name or not code:
         return {"status": "error", "note": "run_in_isolated_env needs `name` and `code`."}
     is_r = (input_.get("language") or "python").strip().lower() in ("r", "rlang")
-    ts = int(input_.get("timeout_s") or 600)
-    r = iso.r_run_in(name, code, timeout_s=ts) if is_r else iso.run_in(name, code, timeout_s=ts)
+    # same ceiling as every other exec lane (run_python/run_r/remote-sync) —
+    # this tool alone accepted an unbounded ask (limits-parity review)
+    ts = max(5, min(int(input_.get("timeout_s") or 600), 1800))
+    pid = str(projects.current() or "default")
+    if named_envs.resolve(pid, name) is None:
+        return {"status": "error", "name": name,
+                "note": f"No isolated env '{name}'. Create it with make_isolated_env("
+                        f"name='{name}'" + (", language='r'" if is_r else "") + ")."}
+    r = named_envs.run_in(pid, name, code, timeout_s=ts)
     return {"status": "ok" if r["ok"] else "error", "name": name,
             "language": "r" if is_r else "python", "stdout": r["stdout"], "stderr": r["stderr"]}
 
@@ -185,17 +214,17 @@ def set_active_env(input_: dict, ctx: dict | None = None) -> dict:
     """§11.2 — set the project's ACTIVE python env; bare run_python uses it until
     changed. name='default' resets to the normal served stack. (Python only — R's
     per-project lib already overrides the base, so run_r has no active pointer.)"""
-    from core.exec import isolated_env as iso
+    from core.compute import named_envs
     from core import projects
     name = (input_.get("name") or "").strip()
     if not name:
         return {"status": "error", "note": "set_active_env needs a `name` (or 'default')."}
-    pid = projects.current()
-    if name.lower() != "default" and name not in iso.list_envs():
+    pid = str(projects.current() or "default")
+    if name.lower() != "default" and named_envs.resolve(pid, name) is None:
         return {"status": "error", "name": name,
                 "note": f"No isolated python env '{name}'. Create it with make_isolated_env, "
                         "or pass 'default' to use the normal environment."}
-    iso.set_active_env(pid, name, "python")
+    named_envs.set_active(pid, name, "python")
     if name.lower() == "default":
         return {"status": "ok", "active_python_env": "default",
                 "note": "Bare run_python now uses the default served stack."}
@@ -205,37 +234,56 @@ def set_active_env(input_: dict, ctx: dict | None = None) -> dict:
 
 
 def _is_constraint_conflict(msg: str) -> bool:
-    """Does a pip failure look like UNSAT-against-the-base (a version/constraint
-    conflict the pinned base forbids), vs a transient/typo/network error?
-    Conservative — only the clear pip resolver-conflict signals, so we never
-    mis-route a fat-fingered package name into isolation."""
+    """Does an install failure look like UNSAT-against-the-base (a version/
+    constraint conflict the pinned base forbids), vs a transient/typo/network
+    error? Conservative — only clear resolver-conflict signals, so we never
+    mis-route a fat-fingered package name into isolation. Covers BOTH the pip
+    resolver strings (served-base lane) AND weft's structured session/layer
+    conflict signals (W3.4 pack lane — a session_install/extends_env delta that
+    contradicts the frozen base), so a conflicting capability auto-isolates in
+    either deployment instead of hard-erroring."""
     m = (msg or "").lower()
     return any(s in m for s in (
         "resolutionimpossible",
         "conflicting dependencies",
         "the conflict is caused by",
+        # weft (ComputeError.__str__ carries the code + detail):
+        "env.solve_conflict",
+        "env.layer_conflict",
+        "incremental install failed in session",
+        "unsatisfiable as pinned",
     ))
 
 
 def _auto_isolate(name: str, pip_specs: list[str], cap: dict) -> dict:
-    """UNSAT against the base → install into an ISOLATED env the agent owns
+    """UNSAT against the base → solve an ISOLATED weft env the agent owns
     (base untouched). The capability is NOT importable in run_python; the agent
     runs its code via run_in_isolated_env."""
-    from core.exec import isolated_env as iso
+    from core.compute import named_envs
+    from core.compute.errors import ComputeError
+    from core import projects
     env_name = f"cap-{name}"
     imp = cap.get("import_name")
+    pid = str(projects.current() or "default")
     try:
-        iso.create_env(env_name)
-        res = iso.install_into(env_name, pip_specs, verify_imports=[imp] if imp else None)
+        res = named_envs.create(pid, env_name, language="python", packages=pip_specs)
+    except ComputeError as ce:
+        return {"status": "error", "name": name, "isolated_env": env_name,
+                "note": "conflicts with the base AND the isolated solve also failed — see error.",
+                "error": ce.to_payload()}
     except Exception as ie:  # noqa: BLE001
         return {"status": "error", "name": name,
                 "note": f"conflicts with the base, and the isolated-env fallback failed: {ie}"}
-    if not res["ok"]:
-        return {"status": "error", "name": name, "isolated_env": env_name,
-                "note": "conflicts with the base AND the isolated install also failed — see error.",
-                "error": res.get("error")}
+    verified = None
+    if imp:
+        ok, err = named_envs.verify_imports(pid, env_name, [imp])
+        verified = ok
+        if not ok:
+            return {"status": "error", "name": name, "isolated_env": env_name,
+                    "note": "conflicts with the base AND the isolated install also failed — see error.",
+                    "error": err}
     return {"status": "ready_isolated", "name": name, "isolated_env": env_name,
-            "installed": res["installed"], "verified": res.get("verified"),
+            "env_id": res["env_id"], "installed": pip_specs, "verified": verified,
             "note": (f"{name} conflicts with the base environment, so it was installed in an "
                      f"ISOLATED env {env_name!r} (the shared base was left untouched). It is NOT "
                      f"importable in run_python — run its code with "
@@ -472,10 +520,8 @@ def _detect_import_name(pip_specs: list[str]) -> str | None:
     'kb-python' → 'kb_python') and thrashing on ModuleNotFoundError. Returns the
     first top-level module name, or None if undetectable."""
     import os, re, glob
-    try:
-        from core.exec.materialize import pylib_paths
-        dirs = [str(p) for p in pylib_paths()]
-    except Exception:  # noqa: BLE001
+    dirs = _session_site_dirs()
+    if not dirs:
         return None
     _norm = lambda s: re.sub(r"[-_.]+", "-", s).lower()
     for spec in pip_specs or []:
@@ -503,19 +549,34 @@ def _detect_import_name(pip_specs: list[str]) -> str | None:
     return None
 
 
+def _session_site_dirs() -> list[str]:
+    """The project's weft python SESSION site-packages dirs — where
+    session_install lands packages (the weft replacement for the served-base pip
+    overlay). Empty when no python pack is declared / the session isn't realizable."""
+    try:
+        from core.compute import base_env as _bev, project_env as _penv
+        from core.exec.materialize import _site_paths
+        from core import projects as _pj
+        if not _bev.active("python"):
+            return []
+        pfx = _penv.prefix(str(_pj.current() or "_none"), "python")
+        return [str(p) for p in _site_paths(pfx)]
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def _overlay_has_import(import_name: str) -> bool:
-    """Is import_name already materialized in the pip overlay? Faithful to
-    run_python (which appends the overlay to sys.path) but thread-safe — probes
-    the overlay dir directly via PathFinder, never mutating sys.path."""
+    """Is import_name already materialized in the project's weft session? Probes
+    the session site-packages directly via PathFinder (thread-safe — never mutates
+    sys.path)."""
     if not import_name:
         return False
     try:
-        from core.exec.materialize import pylib_paths
         from importlib.machinery import PathFinder
         import importlib
-        importlib.invalidate_caches()   # overlay dir may have appeared post-startup
-        search = [str(p) for p in pylib_paths()]
-        return PathFinder.find_spec(import_name, search) is not None
+        importlib.invalidate_caches()
+        search = _session_site_dirs()
+        return bool(search) and PathFinder.find_spec(import_name, search) is not None
     except Exception:  # noqa: BLE001
         return False
 
@@ -722,6 +783,104 @@ def _r_module_block() -> dict | None:
     return None
 
 
+def _default_probe_python() -> str | None:
+    """The project's weft SESSION python that import-probes + installs run
+    against, or None when NO python base pack is declared (a python-less
+    deployment — the caller degrades). A weft error when a pack IS declared but
+    the session won't realize PROPAGATES (it is NOT swallowed into None): the
+    old swallow silently diverted installs onto the served-base/micromamba path
+    on a transient weft hiccup — the exact hybrid-revival bug W3.5 removes."""
+    from core import projects
+    from core.compute import base_env, project_env
+    if not base_env.active("python"):
+        return None
+    return str(project_env.interpreter(str(projects.current() or "_none"), "python"))
+
+
+
+def _r_version_in_session(pid: str, libname: str) -> str | None:
+    """packageVersion() against the PROJECT SESSION's R (pack mode)."""
+    import subprocess
+    from core.compute import project_env
+    try:
+        rs = project_env.interpreter(str(pid), "r")
+        r = subprocess.run([str(rs), "-e",
+                            f'cat(as.character(packageVersion("{libname}")))'],
+                           capture_output=True, text=True, timeout=120)
+        v = (r.stdout or "").strip()
+        return v if r.returncode == 0 and v else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
+                          name: str) -> dict:
+    """W3.4 pack mode: R capability into the PROJECT's session over the R base
+    pack. conda-first (binary r-*/bioconductor-* into the session — live, no
+    compile); github/source via the CAPTURED session installer (rides
+    snapshots as a portable post_install step). The shared pack is never
+    mutated — additions live in the project session."""
+    from core import projects
+    from core.compute import project_env
+    from core.exec import r as rexec
+    pid = str(projects.current() or "default")
+    rp = dict((cap.get("provisioning") or {}).get("r") or {})
+    for _k in ("ref", "source", "package"):
+        if input_.get(_k):
+            rp[_k] = input_[_k]
+    _src = rp.get("source", "cran")
+    _pkg = rp.get("package") or cap.get("name")
+    libname = rp.get("library") or (
+        _pkg.split("/")[-1] if _src == "github"
+        else (_pkg[2:] if _src == "conda" and _pkg.startswith("r-") else _pkg))
+    min_version = (str(input_.get("min_version") or rp.get("min_version") or "").strip() or None)
+    force = bool(input_.get("force")) or any(input_.get(_k) for _k in ("ref", "source", "package"))
+    installed = _r_version_in_session(pid, libname)
+    if installed and not force and (not min_version or rexec.version_ge(installed, min_version)):
+        return {"status": "ready", "name": cap.get("name"), "archetype": "r_package",
+                "library": libname, "version": installed,
+                "note": f"Already available — library({libname}) {installed} works in run_r."}
+    try:
+        if _src in ("cran", "bioconductor", "conda"):
+            conda_name = _pkg if _pkg.startswith(("r-", "bioconductor-")) else (
+                f"bioconductor-{_pkg.lower()}" if _src == "bioconductor" else f"r-{_pkg.lower()}")
+            try:
+                project_env.install(pid, "r", [conda_name], eco="conda")
+            except Exception:  # noqa: BLE001 — no conda build → captured source install
+                _cmd = (f"Rscript -e 'if (!requireNamespace(\"BiocManager\", quietly=TRUE)) "
+                        f"install.packages(\"BiocManager\"); BiocManager::install(\"{_pkg}\", "
+                        f"update=FALSE, ask=FALSE)'" if _src == "bioconductor" else
+                        f"Rscript -e 'install.packages(\"{_pkg}\")'")
+                project_env.run_installer(pid, "r", _cmd,
+                                          note=f"{_src} install of {_pkg} (no conda binary)")
+        elif _src == "github":
+            _ref = f', ref="{rp.get("ref")}"' if rp.get("ref") else ""
+            project_env.run_installer(
+                pid, "r",
+                f"Rscript -e 'if (!requireNamespace(\"remotes\", quietly=TRUE)) "
+                f"install.packages(\"remotes\"); remotes::install_github(\"{_pkg}\"{_ref}, "
+                f"upgrade=\"never\", force={str(force).upper()})'",
+                note=f"github install of {_pkg}")
+        else:
+            return {"status": "error", "name": name,
+                    "note": f"unknown R source {_src!r} (cran|bioconductor|conda|github)"}
+    except Exception as e:  # noqa: BLE001
+        return {"status": "error", "name": name, "archetype": "r_package",
+                "note": f"R install into the project env failed: {e}"}
+    new_ver = _r_version_in_session(pid, libname)
+    if not new_ver:
+        return {"status": "error", "name": name, "archetype": "r_package",
+                "library": libname,
+                "note": f"Installed, but library({libname}) is not loadable in the "
+                        f"project R env — NOT marking ready."}
+    # a stale loaded namespace in the running R kernel can pin the old build
+    rexec.r_unload_namespace(libname, (ctx or {}).get("thread_id"))
+    return {"status": "ready", "name": cap.get("name"), "archetype": "r_package",
+            "library": libname, "version": new_ver,
+            "note": f"Installed into the project R env; library({libname}) {new_ver} "
+                    f"is usable in run_r now."}
+
+
 def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
     """Materialize a catalogued capability on demand (P1). Python libraries go
     into the wipeable overlay so the next run_python can import them; non-pip
@@ -774,21 +933,58 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
                             f"Slurm jobs; not installed in-process. Invoke it from "
                             f"run_python(background=True) / a Slurm step."}
         # (A) Already importable? An uncatalogued name can still be satisfied — a
-        # core/base package (e.g. `lstar` ← the base `lstar-sc`) or one a prior
-        # session materialized into the overlay. Verify a REAL import on the runtime
-        # path BEFORE routing to external registries; if it loads, the capability the
-        # agent needs (to `import` it) is already there — returning "candidates" here
-        # was the bug that made the agent try to re-install (or bail on) a package it
-        # already had. verify_python_imports (not find_spec): a present-but-unloadable
-        # package has a spec but explodes on import. Guard on isidentifier() so only a
-        # plausible import name is probed (a pip name like `scikit-learn` isn't one).
-        if name.isidentifier():
-            from core.exec.env_integrity import verify_python_imports
-            _ok, _ = verify_python_imports([name])
-            if _ok:
-                return {"status": "ready", "name": name, "import_name": name,
-                        "note": f"Already available — `import {name}` works in run_python "
-                                f"(provided by the base env or a prior install); no install needed."}
+        # core/base package or one a prior session materialized into the overlay.
+        # Verify a REAL import on the runtime path BEFORE routing to external
+        # registries; if it loads, the capability the agent needs (to `import` it)
+        # is already there — returning "candidates" here was the bug that made the
+        # agent try to re-install (or bail on) a package it already had.
+        # verify_python_imports (not find_spec): a present-but-unloadable package
+        # has a spec but explodes on import. Probe names: the name itself (if a
+        # plausible identifier — a pip name like `scikit-learn` isn't one) PLUS
+        # any import aliases the env packs declare for it (#11: asked by package
+        # name, probed by real import name).
+        _probes = [name] if name.isidentifier() else []
+        try:
+            from core.compute import env_packs as _ep
+            _probes += [a for a in _ep.import_names_for_package(name)
+                        if a not in _probes]
+        except Exception:  # noqa: BLE001
+            pass
+        if _probes:
+            from core.exec.verify import verify_python_imports
+            try:
+                _probe_py = _default_probe_python()
+            except Exception:  # noqa: BLE001 — no realizable session → skip the shortcut
+                _probe_py = None
+            if _probe_py is not None:
+                for _p in _probes:
+                    _ok, _ = verify_python_imports([_p], python_exe=_probe_py)
+                    if _ok:
+                        return {"status": "ready", "name": name, "import_name": _p,
+                                "note": f"Already available — `import {_p}` works in run_python "
+                                        f"(provided by the base env or a prior install); no install needed."}
+        # (B) Declared by an env pack? (#11 already-provided recognition.) The
+        # bundle's env packs declare base contents + import aliases; if a pack
+        # provides this name, the answer is that pack — NEVER an external
+        # registry, where a same-name hit is often an unrelated package.
+        try:
+            from core.compute import env_packs as _ep
+            _provider_packs = _ep.packs_providing(name)
+            for _p in _probes:
+                _provider_packs += [x for x in _ep.packs_providing(_p)
+                                    if x not in _provider_packs]
+        except Exception:  # noqa: BLE001
+            _provider_packs = []
+        if _provider_packs:
+            return {"status": "provided_by_pack", "name": name,
+                    "packs": _provider_packs,
+                    "import_name": _probes[0] if _probes else None,
+                    "note": (f"'{name}' is declared by the environment pack(s) "
+                             f"{', '.join(repr(p) for p in _provider_packs)} — it is part of a "
+                             f"curated base, not something to install from an external "
+                             f"registry. If the import failed just now, the pack isn't "
+                             f"materialized yet: enable/materialize it (Settings → Modules, "
+                             f"or ask the user), then retry.")}
         # E-1: parallel-search external registries for an exact-name match
         # instead of pointing at list_capabilities (which would also be
         # empty for an uncatalogued name). Returns suggestions shaped for
@@ -835,6 +1031,33 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
                         f"runnable here. Implement it with ABA capabilities (search the "
                         f"catalogue / propose_capability for the real libraries), using "
                         f"read_capability for its inputs."}
+    # Role-aware framing (#11): a viewer/converter is used differently from a
+    # library — say so on every ready response, so the agent doesn't try to
+    # `import` a viewer or hand a converter to the user as an app. Provisioning
+    # below is role-agnostic (a converter is often just a library to install).
+    from core.catalog import capability_role
+    _role = capability_role(cap)
+    _role_note = ""
+    if _role == "viewer":
+        _vb = cap.get("viewer") or {}
+        _opens = ", ".join(list(_vb.get("extensions") or []) +
+                           list(_vb.get("entity_types") or [])) or "its declared formats"
+        _role_note = (f" ROLE: viewer — it opens {_opens} visually for the USER "
+                      f"(offered on matching entities' Open-with); it is not an "
+                      f"importable analysis library.")
+    elif _role == "converter":
+        _cb = cap.get("converter") or {}
+        _role_note = (f" ROLE: converter — transforms "
+                      f"{', '.join(_cb.get('from') or ['?'])} → "
+                      f"{', '.join(_cb.get('to') or ['?'])}; use it to change formats, "
+                      f"typically feeding a viewer or another tool.")
+
+    def _ready(payload: dict) -> dict:
+        payload.setdefault("role", _role)
+        if _role_note and payload.get("status") == "ready":
+            payload["note"] = (payload.get("note") or "") + _role_note
+        return payload
+
     from core.runtime import progress
     progress.emit(f"Materializing '{cap.get('name')}'…", phase="ensure")
     prov = cap.get("provisioning") or {}
@@ -850,21 +1073,32 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         # overlay), not PathFinder.find_spec — a present-but-unloadable package
         # (wrong-numpy ABI, partial install, missing system lib) HAS a spec but
         # explodes on import (the tensorflow incident). verify, don't presume.
-        from core.exec.env_integrity import verify_python_imports
+        from core.exec.verify import verify_python_imports
+        from core.compute.errors import ComputeError
+        from core import projects as _projects
+        from core.compute import project_env as _penv
+        try:
+            _probe_py = _default_probe_python()
+        except (ComputeError, RuntimeError) as ce:
+            return {"status": "error", "name": name,
+                    "note": f"the python environment pack is not available: {ce}"}
+        if _probe_py is None:
+            return {"status": "error", "name": name,
+                    "note": "no python environment pack is declared for this deployment"}
         _imp0 = cap.get("import_name")
         if _imp0:
-            _ok, _ = verify_python_imports([_imp0])
+            _ok, _ = verify_python_imports([_imp0], python_exe=_probe_py)
             if _ok:
-                return {"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
+                return _ready({"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
                         "archetype": cap.get("archetype"), "import_name": _imp0,
-                        "note": f"Already available; `import {_imp0}` works in run_python."}
-        from core.exec import MaterializingExecutor, Provisioning
+                        "note": f"Already available; `import {_imp0}` works in run_python."})
         try:
-            from core import projects as _projects
-            MaterializingExecutor().materialize(
-                Provisioning(pip=list(prov["pip"])),
-                scope=str(cap.get("scope", "system")),
-                cancel_token=_ct, project_id=_projects.current())
+            # Install LIVE into the project's default weft session
+            # (session_install) — the running kernel imports it after the cache
+            # invalidation below (no restart); the next background job's snapshot
+            # picks it up as a frozen EnvID.
+            _penv.install(str(_projects.current() or "_none"), "python",
+                          list(prov["pip"]), eco="pypi")
         except Exception as e:  # noqa: BLE001
             # Solve-driven placement (env_refactor.md): if the constrained install
             # is UNSAT against the pinned base (the package needs versions the
@@ -884,14 +1118,14 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         # Verify the install actually LOADS before claiming ready — no more
         # "ready"-lies for ABI-broken / partial installs.
         if imp:
-            _ok, _detail = verify_python_imports([imp])
+            _ok, _detail = verify_python_imports([imp], python_exe=_probe_py)
             if not _ok:
                 return {"status": "error", "name": name, "import_name": imp,
                         "note": (f"Installed, but `import {imp}` fails to load — likely an ABI "
                                  f"mismatch (built against a different numpy), a partial install, "
                                  f"or a missing system library. NOT marking ready."),
                         "detail": _detail}
-        note = "Installed into the materialized-library overlay; importable from run_python now."
+        note = "Installed into the project's weft session; importable from run_python now."
         if imp:
             note += f" Import it with `import {imp}`."
         else:
@@ -912,32 +1146,49 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
                     _sess.execute("import importlib as _il; _il.invalidate_caches()", timeout_s=15)
         except Exception:  # noqa: BLE001
             pass
-        return {"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
-                "archetype": cap.get("archetype"), "import_name": imp, "note": note}
+        return _ready({"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
+                "archetype": cap.get("archetype"), "import_name": imp, "note": note})
     if prov.get("conda"):
         if (cap.get("archetype") == "r_package"):   # R via conda is still the r-bio module
             _blk = _r_module_block()
             if _blk:
                 return _blk
         # `_mod` (resolved + recorded up top) means a cluster module also covers this
-        # CLI tool — it's loaded in the project's background jobs. We still build conda
-        # for in-process use; a conda failure is non-fatal when `_mod` covers it.
-        from core.exec import MaterializingExecutor, Provisioning
+        # CLI tool — it's loaded in the project's background jobs. The conda spec
+        # lands LIVE in the project's weft session (its bin/ is on the kernel PATH
+        # via the session prefix); a failure is non-fatal when `_mod` covers it.
+        def _mod_covered(reason: str):
+            return _ready({"status": "ready", "name": cap.get("name"),
+                    "version": cap.get("version"), "archetype": cap.get("archetype"),
+                    "module": _mod, "note": f"Provided by cluster module '{_mod}' "
+                    f"(loaded in background Slurm jobs); the local conda install {reason}."})
         try:
-            MaterializingExecutor().materialize(Provisioning(conda=prov["conda"]), cancel_token=_ct)
+            _probe_py = _default_probe_python()
+        except Exception:  # noqa: BLE001 — no realizable session; handled below
+            _probe_py = None
+        if _probe_py is None:
+            if _mod:
+                return _mod_covered("isn't needed there (no local python pack)")
+            return {"status": "error", "name": name,
+                    "note": "no realizable python environment pack for a conda install"}
+        try:
+            from core import projects as _projects
+            from core.compute import project_env as _penv
+            _c = prov["conda"]
+            _spec = _c["spec"] if isinstance(_c, dict) else _c
+            _penv.install(str(_projects.current() or "_none"), "python",
+                          [_spec] if isinstance(_spec, str) else list(_spec),
+                          eco="conda")
         except Exception as e:  # noqa: BLE001
             if _mod:
-                return {"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
-                        "archetype": cap.get("archetype"), "module": _mod,
-                        "note": f"Provided by cluster module '{_mod}' (loaded in background Slurm "
-                                f"jobs); the conda install isn't needed there and failed: {e}"}
-            return {"status": "error", "name": name, "note": f"conda materialization failed: {e}"}
-        _note = ("Installed into the conda tools env; the binary is on PATH — "
+                return _mod_covered(f"isn't needed there and failed: {e}")
+            return {"status": "error", "name": name, "note": f"conda install failed: {e}"}
+        _note = ("Installed into the project's weft session; the binary is on PATH — "
                  "invoke it from run_python via subprocess.")
         if _mod:
             _note += f" Background Slurm jobs also load cluster module '{_mod}'."
-        return {"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
-                "archetype": cap.get("archetype"), "note": _note, "module": _mod}
+        return _ready({"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
+                "archetype": cap.get("archetype"), "note": _note, "module": _mod})
     if prov.get("mcp_server"):
         # Live adoption: connect the external server now so its tools become
         # callable as 'server:tool' for the rest of this session.
@@ -958,10 +1209,10 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         res = add_server(cfg)
         if res.get("status") in ("connected", "already_connected"):
             tools = res.get("tools") or []
-            return {"status": "ready", "name": cap.get("name"), "archetype": "mcp_server",
+            return _ready({"status": "ready", "name": cap.get("name"), "archetype": "mcp_server",
                     "tools": tools,
                     "note": f"Connected; {len(tools)} tool(s) now callable: "
-                            f"{', '.join(tools[:8])}{'…' if len(tools) > 8 else ''}."}
+                            f"{', '.join(tools[:8])}{'…' if len(tools) > 8 else ''}."})
         return {"status": "error", "name": cap.get("name"), "archetype": "mcp_server",
                 "note": f"Could not connect MCP server: {res.get('note')}"}
     if prov.get("pipeline"):
@@ -970,123 +1221,40 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         if engine != "nextflow":
             return {"status": "deferred", "name": cap.get("name"), "archetype": "pipeline",
                     "note": f"Pipeline engine '{engine}' isn't wired yet (only nextflow)."}
-        from core.exec import MaterializingExecutor, Provisioning
+        from core.compute import named_envs
         try:
-            MaterializingExecutor().materialize(Provisioning(conda={"channel": "bioconda", "spec": "nextflow"}), cancel_token=_ct)
+            named_envs.ensure_tool_env(["nextflow"], name="aba-tool-nextflow",
+                                       probe="nextflow -version",
+                                       channels=["bioconda", "conda-forge"])
         except Exception as e:  # noqa: BLE001
             return {"status": "error", "name": cap.get("name"), "archetype": "pipeline",
-                    "note": f"Could not install nextflow: {e}"}
+                    "note": f"Could not provision nextflow: {e}"}
         ref = pl.get("nf_core") or cap.get("name")
-        return {"status": "ready", "name": cap.get("name"), "archetype": "pipeline",
-                "note": f"nextflow installed and on PATH. Run this pipeline with "
-                        f"run_nextflow(pipeline='{ref}', profile='test', ...). "
-                        f"(Large runs will route to HPC/remote later — local only for now.)"}
+        return _ready({"status": "ready", "name": cap.get("name"), "archetype": "pipeline",
+                "note": f"nextflow provisioned (weft tool env). Run this pipeline with "
+                        f"run_nextflow(pipeline='{ref}', profile='test', ...) — it puts "
+                        f"nextflow on PATH from the cached env. "
+                        f"(Large runs will route to HPC/remote later — local only for now.)"})
     if prov.get("r"):
         # Module gate (misc/modules.md): R is the r-bio module — honor an OFF toggle
         # by asking the user instead of silently installing the toolchain.
         _blk = _r_module_block()
         if _blk:
             return _blk
-        # RIGHT-WAY provisioning: if the R toolchain (r-bio module) isn't built yet,
-        # build it THROUGH the module (install-r-bio.sh: conda binaries for r-base +
-        # Seurat + Bioconductor) — one consistent path that also flips the module to
-        # ready in Settings → Modules — before any per-package install. Blocks with
-        # progress; a failure is surfaced (the turn/agent can diagnose).
+        # W3.4 pack mode: the R pack + project session replace the r-bio shell
+        # toolchain — install into the session (conda-first, captured escape
+        # hatch), never the shared base.
+        # weft-only: the R pack + project session ARE the R toolchain — install
+        # into the session (conda-first, captured installer escape hatch). REQUIRED:
+        # there is no tools-env/micromamba R fallback anymore.
+        from core.compute import base_env as _bev
+        from core.compute.errors import ComputeError
         try:
-            from core.modules import registry as _mreg, manager as _mmgr
-            _rspec = _mreg.get("r-bio")
-            if _rspec and _mmgr.actual_state(_rspec) != "ready":
-                from core.modules.reconciler import install_and_wait
-                from core.runtime import progress as _prog
-                _ok, _err = install_and_wait("r-bio", on_progress=lambda m: _prog.emit(m, phase="ensure"))
-                if not _ok:
-                    return {"status": "error", "name": name, "module": "r-bio",
-                            "note": f"The R toolchain (r-bio) failed to install: {_err}. "
-                                    f"The install log is at ~/.aba/logs/module-r-bio.log."}
-        except Exception:  # noqa: BLE001 — never let module wiring break the legacy path
-            pass
-        # R package (r_provisioning.md): already on the library path → ready;
-        # else a project-scoped native install (CRAN/Bioconductor/GitHub). The
-        # shared base is never mutated here — only curation grows it.
-        rp = dict(prov["r"])
-        # Per-install overrides (P5 fix #2): the caller can pin a different git
-        # ref / source / package for THIS install without re-cataloguing — e.g.
-        # ensure_capability(name='pagoda2', source='github',
-        # package='kharchenkolab/pagoda2', ref='devel') installs from a branch
-        # even though the catalog entry is the CRAN release. Transient: the
-        # catalog row is not mutated.
-        for _k in ("ref", "source", "package"):
-            if input_.get(_k):
-                rp[_k] = input_[_k]
-        from core.exec import r as rexec
-        from core import projects
-        pid = projects.current() or "default"
-        _src = rp.get("source", "cran")
-        _pkg = rp.get("package") or cap.get("name")
-        libname = rp.get("library") or (
-            _pkg.split("/")[-1] if _src == "github"
-            else (_pkg[2:] if _src == "conda" and _pkg.startswith("r-") else _pkg))
-        # The runtime now carries the foundational compiled deps (igraph/irlba/
-        # Rcpp*/xml2) as binaries, so GitHub/CRAN installs find them on
-        # .libPaths() instead of source-compiling. Heavy frameworks stay on-demand.
-        rexec.ensure_r_runtime()
-        # Version-aware presence check (was presence-only — the sccore-upgrade
-        # trap): a min-version requirement, an explicit force, or an install
-        # override (ref/source/package — "I want THIS build") all mean "already
-        # installed" is NOT enough, so reinstall instead of short-circuiting to
-        # "ready" while leaving a stale version.
-        min_version = (str(input_.get("min_version") or rp.get("min_version") or "").strip() or None)
-        force = bool(input_.get("force"))
-        override = any(input_.get(_k) for _k in ("ref", "source", "package"))
-        installed_ver = rexec.r_package_version(libname, project_id=pid)
-        satisfied = installed_ver is not None and (
-            not min_version or rexec.version_ge(installed_ver, min_version))
-        if satisfied and not force and not override:
-            return {"status": "ready", "name": cap.get("name"), "archetype": "r_package",
-                    "library": libname, "version": installed_ver,
-                    "note": f"Already available — library({libname}) {installed_ver} works in run_r."}
-        # (Re)install. force=TRUE so install_github replaces an already-present-but-
-        # stale build; required whenever we're upgrading or honoring an override.
-        do_force = force or override or (installed_ver is not None and min_version is not None)
-        res = rexec.r_install(_src, _pkg, project_id=pid, library=libname,
-                              ref=rp.get("ref"), force=do_force, cancel_token=_ct)
-        if res.get("status") == "ready":
-            new_ver = rexec.r_package_version(libname, project_id=pid) or res.get("version")
-            # If the OLD version is loaded in the running R kernel it can't be
-            # swapped in place — unload it so the next library() loads the new one
-            # (falls back to restart_kernel if another loaded namespace pins it).
-            unloaded = rexec.r_unload_namespace(libname, (ctx or {}).get("thread_id"))
-            if res.get("source") == "conda" or res.get("via") == "conda":
-                where = "into the shared R environment (Bioconductor binary)"
-            else:
-                where = "into the project R library" + (
-                    " (recompiled from source)" if res.get("source_fallback") else "")
-            note = (f"Installed {libname}{(' ' + new_ver) if new_ver else ''} {where}; "
-                    f"use library({libname}) in run_r.")
-            if not unloaded and installed_ver and new_ver and installed_ver != new_ver:
-                note += (" A prior load may be cached in the R session — restart_kernel "
-                         "so the new version takes effect.")
-            return {"status": "ready", "name": cap.get("name"), "archetype": "r_package",
-                    "library": libname, "version": new_ver, "note": note}
-        # Error → surface the actionable diagnostic (missing-system-lib hint) AND,
-        # crucially, any unmet VERSION requirement so the agent upgrades the dep in
-        # ONE step instead of inferring the whole dance.
-        out = {"status": "error", "name": cap.get("name"), "archetype": "r_package",
-               "note": res.get("note") or "R install failed."}
-        if res.get("missing_lib"):
-            out["missing_lib"] = res["missing_lib"]
-        if res.get("diagnostic"):
-            out["diagnostic"] = res["diagnostic"]
-        req = rexec.parse_version_requirement(
-            (res.get("note") or "") + "\n" + str(res.get("diagnostic") or ""))
-        if req:
-            out["requires"] = req
-            out["note"] = (f"{out['note']} — needs {req['package']} >= {req['min_version']}. "
-                           f"Upgrade it first: ensure_capability(name={req['package']!r}, "
-                           f"min_version={req['min_version']!r}, force=true), then retry. "
-                           f"(The reinstall unloads the stale namespace; if another loaded "
-                           f"package pins it, restart_kernel.)")
-        return out
+            _bev.require("r")
+        except (ComputeError, RuntimeError) as ce:
+            return {"status": "error", "name": name,
+                    "note": f"the R environment pack is not available: {ce}"}
+        return _ready(_ensure_r_via_session(cap, input_, ctx, name))
     return {"status": "error", "name": name, "note": "capability has no recognized provisioning."}
 
 

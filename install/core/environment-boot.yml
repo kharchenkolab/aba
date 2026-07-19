@@ -1,13 +1,13 @@
 # ABA BOOT environment — the minimal base that lets the SERVER start under the
 # `staged` prewarm strategy (ABA_ENV_PREWARM=staged; see misc/lazy_env_init.md).
 #
-# Strict SUBSET of environment.yml: language toolchains + the ABI core
-# (numpy/scipy/pandas) + the backend runtime + the Jupyter kernel + the viewer
-# data layer — enough to serve the UI, run data-management + light Python in a
-# kernel, and open the pagoda3 viewer. The heavier scientific + bio stack
-# (scanpy/anndata/scvi-tools→torch/leidenalg/…) is added AFTERWARDS, while the
-# server is already up, by `micromamba env update -f environment.yml` — so the
-# completed base is the SAME end state as the eager (full-up-front) build.
+# Strict SUBSET of environment.yml: language toolchains + the numeric core
+# (numpy/pandas) + the backend runtime + the Jupyter kernel-client — enough to
+# serve the UI and run data-management + light Python. What `micromamba env update
+# -f environment.yml` adds afterwards is now only build helpers + typst — the
+# single-cell science + viewer stack (scanpy/scvi/anndata/lstar-sc/zarr/scipy) is
+# weft-owned, realized in SESSION kernels/packs, NOT installed into this base
+# (W3.4). So the completed base is the SAME end state as the eager build.
 #
 # Drift guard: install/core/helper/tests/test_env_boot_subset.py asserts this is a
 # subset of environment.yml (same pins) and that the pip: section is identical.
@@ -26,28 +26,23 @@ dependencies:
   - pip
   - pnpm
 
-  # ── ABI core — MUST live in the base: overlays ABI-anchor against the base
-  #    numpy (docs/arch/envs.md), and pandas/numpy cover early data-management
-  #    + light compute during background completion. ──────────────────────
-  # Pin numpy<2.5 to match environment.yml (numba needs <2.5) so the boot base —
-  # and the ABI anchor derived from it — never starts on a numpy the full env
-  # update would have to walk back.
+  # ── numeric core — pandas + numpy cover the backend's own imports (data
+  #    management + to_markdown). scipy/lstar/zarr are pack-owned, not here. ──
+  # Pin numpy<2.5 to match environment.yml (a known-good numpy for pandas) so the
+  # boot base never starts on a numpy the full env update would have to walk back.
   - numpy<2.5
   - pandas
-  - scipy
   - pyyaml          # backend: `import yaml`
   - tabulate        # pandas.DataFrame.to_markdown() (ctx_read + describe tools)
 
-  # ── Python Jupyter kernel (run_python runs here from first boot) ───────
+  # ── Jupyter kernel CLIENT only — the KernelManager (jupyter_client) the backend
+  #    uses to talk to kernels + the `jupyter kernelspec` CLI. The kernel PROCESS
+  #    runs ipykernel from the weft SESSION python (pack), not here. ──
   - jupyter_client
-  - ipykernel
-  - nbformat
-  - nbconvert
 
-  # ── backend runtime + viewer data layer — IDENTICAL to environment.yml's pip:
-  #    section (every entry is platform-CORE). Keep in lock-step. lstar-sc/zarr are
-  #    the .lstar.zarr reader/converter — core (used to PRODUCE stores, independent of
-  #    the browser viewer, which is the toggleable viewer-pagoda3 module). ──
+  # ── backend runtime — IDENTICAL to environment.yml's pip: section (every entry
+  #    is platform-CORE). Keep in lock-step. The viewer data layer (lstar-sc/zarr)
+  #    is NOT here — it moved to the weft python pack (python_bio.yaml). ──
   - pip:
       - fastapi
       - uvicorn[standard]
@@ -60,5 +55,3 @@ dependencies:
       - python-dotenv
       - pypdfium2
       - pillow
-      - lstar-sc==0.2.1
-      - zarr>=3.1

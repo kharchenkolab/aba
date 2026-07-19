@@ -35,22 +35,6 @@ def register_collections_from_bundle() -> int:
     return n
 
 
-def load_r_base_specs() -> list[str]:
-    """Curated shared-R-base conda specs, composed across scopes from the
-    bundle's catalog/ (*.yaml `packages:` lists). core.exec.r provides the
-    batch-install mechanism. Returns [] if no scope contributes a manifest."""
-    from core.bundle.active import get_bundle
-    return list(get_bundle().r_base_specs)
-
-
-def provision_r_base() -> None:
-    """Batch-install the curated R base into the shared tools env. HEAVY
-    (Bioconductor/Seurat-scale conda solve) — an ops/on-demand action, not a
-    per-request one; the agent installs project-local via ensure_capability."""
-    from core.exec.r import ensure_r_base
-    ensure_r_base(load_r_base_specs())
-
-
 def load_seed() -> int:
     """Upsert the bundle's composed capability catalog into the active project's
     catalog. Idempotent: skips any (name, version) already present. Returns the

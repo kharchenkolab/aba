@@ -107,7 +107,7 @@ def create_entity(
     # Phase 2B: default the actor from the ambient context (set at the HTTP /
     # turn boundary) when the caller doesn't pass one explicitly.
     if actor is None:
-        from core.runtime.actor import current_actor
+        from core.graph.actor import current_actor
         actor = current_actor()
     _warn_if_unbound(entity_type)
     now = _utcnow()
@@ -376,6 +376,107 @@ def update_entity(entity_id: str, **fields) -> Optional[dict]:
     args.append(entity_id)
     with _conn() as c:
         cur = c.execute(f"UPDATE entities SET {', '.join(sets)} WHERE id = ?", args)
+        c.commit()
+        if cur.rowcount == 0:
+            return None
+    row = get_entity(entity_id)
+    if row:
+        _emit_upsert(entity_id, row)
+    return row
+
+
+def _json_path(parts: list) -> str:
+    return "$" + "".join(f'."{p}"' for p in parts)
+
+
+def patch_metadata(entity_id: str, updates: dict) -> Optional[dict]:
+    """Atomically set the given metadata keys in one SQL UPDATE (json_set per
+    key), leaving every other key untouched.
+
+    This is the remedy for the metadata lost-update race: the prevalent
+    get_entity → mutate dict → update_entity(metadata=whole_blob) pattern
+    REPLACES the blob, so two concurrent writers to different keys drop each
+    other's write (a poll-loop `weft_targets` append vs a threadpool route's
+    `run` manifest write — either can silently erase the other, aiming
+    retention at nothing). Writers that touch ONE key must use this.
+
+    Keys may be DOTTED ("run.sites"): the write lands at that NESTED path in
+    the same single statement, with missing parent objects created and
+    sibling subkeys untouched — several writers can then share one top-level
+    object (manifest / cancel / placement all live under `run`) without
+    read-modify-writing each other's fields away, which per-top-level-key
+    atomicity alone could not prevent (the recheck-confirmed same-key race).
+
+    Values replace the addressed key wholly (json_set — no deep merge);
+    None REMOVES the key. Returns the fresh row (None if the entity does
+    not exist). For list APPENDs use append_metadata_list."""
+    expr = "COALESCE(metadata, '{}')"
+    args: list = []
+    # ensure missing parents FIRST (each exactly once, from the original
+    # column — ensuring mid-chain would reset a parent and drop the sets
+    # already chained onto it)
+    ensured: list = []
+    for k, v in updates.items():
+        parts = [p for p in str(k).split(".") if p]
+        if v is None or len(parts) < 2:
+            continue
+        for i in range(1, len(parts)):
+            pp = _json_path(parts[:i])
+            if pp not in ensured:
+                ensured.append(pp)
+    for pp in ensured:
+        expr = (f"json_set({expr}, ?, json(COALESCE("
+                f"json_extract(COALESCE(metadata,'{{}}'), ?), '{{}}')))")
+        args += [pp, pp]
+    for k, v in updates.items():
+        parts = [p for p in str(k).split(".") if p]
+        if v is None:
+            expr = f"json_remove({expr}, ?)"
+            args.append(_json_path(parts))
+        else:
+            expr = f"json_set({expr}, ?, json(?))"
+            args += [_json_path(parts), json.dumps(v)]
+    if not args:
+        return get_entity(entity_id)
+    with _conn() as c:
+        cur = c.execute(
+            f"UPDATE entities SET metadata = {expr}, updated_at = ? WHERE id = ?",
+            [*args, _utcnow(), entity_id])
+        c.commit()
+        if cur.rowcount == 0:
+            return None
+    row = get_entity(entity_id)
+    if row:
+        _emit_upsert(entity_id, row)
+    return row
+
+
+def append_metadata_list(entity_id: str, path: str, value) -> Optional[dict]:
+    """Atomic single-statement APPEND to a JSON list at a (possibly nested)
+    metadata path — json_insert at '$.…[#]', with missing parents and the
+    list itself created on the way. Two concurrent appends BOTH land (there
+    is no read-modify-write window to lose one in); callers wanting
+    set-semantics pre-check for presence best-effort and dedupe at READ —
+    a rare racing duplicate is tolerable, a lost element is not (run
+    placement sites, weft target lists)."""
+    parts = [p for p in str(path).split(".") if p]
+    expr = "COALESCE(metadata, '{}')"
+    args: list = []
+    for i in range(1, len(parts)):
+        pp = _json_path(parts[:i])
+        expr = (f"json_set({expr}, ?, json(COALESCE("
+                f"json_extract(COALESCE(metadata,'{{}}'), ?), '{{}}')))")
+        args += [pp, pp]
+    lp = _json_path(parts)
+    expr = (f"json_set({expr}, ?, json(COALESCE("
+            f"json_extract(COALESCE(metadata,'{{}}'), ?), '[]')))")
+    args += [lp, lp]
+    expr = f"json_insert({expr}, ?, json(?))"
+    args += [lp + "[#]", json.dumps(value)]
+    with _conn() as c:
+        cur = c.execute(
+            f"UPDATE entities SET metadata = {expr}, updated_at = ? WHERE id = ?",
+            [*args, _utcnow(), entity_id])
         c.commit()
         if cur.rowcount == 0:
             return None

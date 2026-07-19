@@ -33,7 +33,7 @@ _catalog_fixture.install()
 from core.graph._schema import init_db                       # noqa: E402
 from core.graph.entities import list_entities                # noqa: E402
 from core.graph.jobs import get_job                          # noqa: E402
-from core.exec import LocalRouter                            # noqa: E402
+from core.exec import decide                                 # noqa: E402
 import content.bio  # noqa: E402,F401
 import content.bio.lifecycle.registry  # noqa: E402,F401  (registers on_job_complete artifact hook)
 from content.bio.tools import run_python, ensure_capability  # noqa: E402
@@ -49,11 +49,10 @@ def check(label, cond, detail=""):
 
 
 def test_router():
-    print("ExecutionRouter: sync vs background")
-    r = LocalRouter()
-    check("short run → local", r.route(estimate={"runtime_min": 0.5}).location == "local")
-    check("long run → background", r.route(estimate={"runtime_min": 10}).location == "background")
-    check("explicit override → background", r.route(override="background").location == "background")
+    print("router decide(): sync vs background")
+    check("short run → local", decide(estimate={"runtime_min": 0.5}).location == "local")
+    check("long run → background", decide(estimate={"runtime_min": 10}).location == "background")
+    check("explicit override → background", decide(override="background").location == "background")
 
 
 def test_deferred_shape():

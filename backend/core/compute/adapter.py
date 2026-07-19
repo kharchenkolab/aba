@@ -1,0 +1,363 @@
+"""WeftAdapter — the ONE object behind all three compute ports.
+
+Owns the process-wide embedded `Weft(workspace)` instance (weft is a
+synchronous library over single-writer sqlite; its own pollers/drivers run on
+daemon threads). Every port call runs on a small dedicated thread pool so the
+event loop never blocks on a solve or a submission; weft's Store serializes
+writes internally with an RLock, so a few concurrent threads are safe and a
+long solve does not starve kernel polls.
+
+Pass-through mechanics: any *public weft tool* (methods carrying the
+`_weft_tool` marker) is exposed as an equivalently-named async method via
+``__getattr__`` — the ports in ports.py document which calls belong to which
+port. Error payloads (weft never raises across its boundary) become
+`ComputeError`.
+
+Lifecycle: `configure()` at startup — best-effort: a missing weft package /
+pixi binary records a degraded status surfaced by `status()` + the
+`compute_substrate` selfcheck, and any later `get_compute()` raises a
+ComputeError naming the fix. It never blocks boot (W0 is wiring, not a
+runtime dependency; W1 makes envs flow through here).
+"""
+from __future__ import annotations
+
+import asyncio
+import functools
+import shutil
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from typing import Any, Optional
+
+from core import config
+from core.compute.errors import ComputeError, is_error_payload
+
+_LOCAL_SITE = "local"
+
+
+def run_sync(coro):
+    """Run a port coroutine from a WORKER thread (tools run via
+    run_in_executor; the one-shot run path is sync).
+
+    Three cases:
+      * no running loop on this thread → plain asyncio.run.
+      * a running loop on a WORKER thread → run on a fresh thread and block.
+        This is the in-process MCP bridge: it spins a per-call event loop on
+        the tool executor thread and runs SYNC tools on it — that loop's whole
+        job is to block until the tool returns, so blocking it is correct
+        (found live: the first pack-mode run_python raised here).
+      * a running loop on the MAIN thread → hard error. That's uvicorn's loop;
+        blocking it on a solve freezes every request — await the port instead."""
+    import threading
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    if threading.current_thread() is threading.main_thread():
+        raise RuntimeError("run_sync is worker-thread-only: on the main event "
+                           "loop, await the port directly")
+    box: dict = {}
+
+    def _r():
+        try:
+            box["v"] = asyncio.run(coro)
+        except BaseException as e:  # noqa: BLE001 — re-raised below
+            box["e"] = e
+
+    t = threading.Thread(target=_r, name="weft-run-sync", daemon=True)
+    t.start()
+    t.join()
+    if "e" in box:
+        raise box["e"]
+    return box.get("v")
+
+
+def weft_workspace() -> Path:
+    """The deployment's weft workspace (holds .weft state + the local site
+    root). One per deployment; per-project identity stays in the waist.
+    DERIVED, not a setting: always $ABA_HOME/weft — relocate ABA_HOME to
+    relocate it (settings reduction, 2026-07)."""
+    return config.aba_home() / "weft"
+
+
+def sites_config_path() -> Path:
+    """The deployment's site declarations. DERIVED, not a setting: always
+    $ABA_HOME/weft-sites.yaml, beside the workspace it bootstraps."""
+    return config.aba_home() / "weft-sites.yaml"
+
+
+def resolve_pixi() -> Optional[str]:
+    """The pixi binary weft solves with: explicit setting → $PATH → the
+    install-tree default. None when nowhere to be found (degraded)."""
+    explicit = config.settings.pixi_bin.get()
+    if explicit:
+        return explicit
+    found = shutil.which("pixi")
+    if found:
+        return found
+    candidate = config.aba_home() / "tools" / "pixi" / "bin" / "pixi"
+    return str(candidate) if candidate.exists() else None
+
+
+class WeftAdapter:
+    """Implements SitePort + EnvPort + RunPort (see ports.py) over one Weft."""
+
+    def __init__(self, workspace: Path, pixi_bin: str):
+        from weft.api import Weft   # the only weft import in aba
+        self._pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="weft")
+        self.workspace = workspace
+        self.pixi_bin = pixi_bin
+        workspace.mkdir(parents=True, exist_ok=True)
+        self._weft = Weft(workspace, pixi_bin=pixi_bin)
+        self._ensure_local_site(pixi_bin)
+
+    def _ensure_local_site(self, pixi_bin: str) -> None:
+        registered = {s.get("name") for s in self._weft.sites_list()}
+        if _LOCAL_SITE not in registered:
+            r = self._weft.register_site(
+                _LOCAL_SITE, "local",
+                self._with_ro_root(
+                    {"root": str(self.workspace / "site-local"),
+                     # retention2: the workspace sits on the user's own disk —
+                     # keeps pin in place, never trip the no-durable refusal
+                     "durable": True,
+                     "pixi_source": pixi_bin}))
+            if is_error_payload(r):
+                raise ComputeError.from_payload(r)
+        self._register_configured_sites(registered)
+        self._refresh_shims()
+        self._ensure_ro_roots()
+
+    @staticmethod
+    def _publish_tree() -> Optional[str]:
+        """The published-env tree (ABA_WEFT_PUBLISH_TREE / site.yaml envs.publish_tree),
+        or None. Consumers must list it in a site's `ro_roots` for weft to mount the
+        published images in place (the consumer half of publish/adopt)."""
+        try:
+            return (config.settings.weft_publish_tree.get() or "").strip() or None
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _with_ro_root(self, cfg: dict) -> dict:
+        """Add the publish tree to a site config's `ro_roots` (idempotent) so weft may
+        adopt the published env images read-only in place. No tree set → cfg unchanged."""
+        tree = self._publish_tree()
+        if not tree:
+            return cfg
+        roots = list(cfg.get("ro_roots") or [])
+        if tree not in roots:
+            roots.append(tree)
+            cfg = {**cfg, "ro_roots": roots}
+        return cfg
+
+    def _ensure_ro_roots(self) -> None:
+        """Reconcile: ensure every registered site carries the publish tree in its
+        persisted `ro_roots`. Fresh registrations already get it (_with_ro_root); this
+        covers a site registered BEFORE a publish tree was declared (an upgrade) — it
+        re-registers ONLY when the tree is missing, so it's a one-time cost per site per
+        tree change (re-register probes), never a per-boot expense. Best-effort."""
+        tree = self._publish_tree()
+        if not tree:
+            return
+        for name in [s.get("name") for s in self._weft.sites_list()]:
+            if not name:
+                continue
+            try:
+                row = self._weft.sites_describe(name)
+                cfg = dict(row.get("config") or {})
+                if tree in (cfg.get("ro_roots") or []):
+                    continue                              # already present — no re-register
+                r = self._weft.register_site(name, row.get("kind"), self._with_ro_root(cfg))
+                if is_error_payload(r):
+                    print(f"[compute] ro_roots update for site {name!r} failed: {r.get('error')}")
+                else:
+                    print(f"[compute] site {name!r}: added publish tree to ro_roots")
+            except Exception as e:  # noqa: BLE001 — a dead host must not block boot
+                print(f"[compute] ro_roots reconcile for site {name!r} skipped: {e}")
+
+    def _refresh_shims(self) -> None:
+        """Re-run each registered site's `ensure_bootstrap` so the shim + pixi under
+        the site root track the INSTALLED weft. register_site bootstraps only NEW
+        sites (weft persists them, so `_ensure_local_site`/`_register_configured_sites`
+        skip the rest) — without this, an `aba update` / weft bump leaves STALE shims on
+        already-registered sites, and new shim verbs (e.g. file-root data_fingerprint,
+        weft 3972cc2) fail with confusing errors. `ensure_bootstrap` is idempotent and
+        byte-diffs the shim, so this is a cheap no-op when nothing changed and never
+        re-probes. Best-effort per site: a dead host must not block boot."""
+        for name, adapter in list(getattr(self._weft, "adapters", {}).items()):
+            try:
+                adapter.ensure_bootstrap()
+            except Exception as e:  # noqa: BLE001 — surfaced by doctor / the site's own errors
+                print(f"[compute] shim refresh for site {name!r} skipped: {e}")
+
+    def _register_configured_sites(self, registered: set) -> None:
+        """Deployment-declared sites (W3.1): `$ABA_HOME/weft-sites.yaml`
+        lists non-local sites — slurm/ssh entries the installer
+        or an operator wrote. Registered once (weft persists them); errors are
+        LOUD but never boot-blocking (a dead login node must not stop the
+        server; doctor + the site's own errors surface it)."""
+        path = sites_config_path()
+        if not path.exists():
+            return
+        try:
+            import yaml
+            doc = yaml.safe_load(path.read_text()) or {}
+        except Exception as e:  # noqa: BLE001
+            print(f"[compute] unreadable sites config {path}: {e}")
+            return
+        for entry in (doc.get("sites") or []):
+            name = (entry or {}).get("name")
+            kind = (entry or {}).get("kind")
+            cfg = dict((entry or {}).get("config") or {})
+            if not name or not kind or name in registered:
+                continue
+            cfg.setdefault("pixi_source", self.pixi_bin)
+            r = self._weft.register_site(name, kind, self._with_ro_root(cfg))
+            if is_error_payload(r):
+                print(f"[compute] site {name!r} ({kind}) failed to register: "
+                      f"{r.get('error')}: {r.get('detail')}")
+            else:
+                print(f"[compute] registered site {name!r} ({kind}) from {path.name}")
+
+    # -- pass-through machinery ------------------------------------------------
+
+    async def _call(self, name: str, /, *args: Any, **kw: Any) -> Any:
+        fn = getattr(self._weft, name)
+        loop = asyncio.get_running_loop()
+        out = await loop.run_in_executor(self._pool, functools.partial(fn, *args, **kw))
+        if is_error_payload(out):
+            raise ComputeError.from_payload(out)
+        return out
+
+    def __getattr__(self, name: str):
+        # Fallback for weft tools not (yet) declared on a port Protocol —
+        # anything else is a typo and must fail loudly here, not disappear
+        # into weft internals. Dunder/private lookups fail fast (also guards
+        # __init__-time recursion before self._weft exists).
+        if name.startswith("_"):
+            raise AttributeError(name)
+        target = getattr(type(self._weft), name, None)
+        if target is None or not getattr(target, "_weft_tool", False):
+            raise AttributeError(f"WeftAdapter: {name!r} is not a weft tool")
+        return functools.partial(self._call, name)
+
+    def sync_call(self, name: str, /, *args: Any, **kw: Any) -> Any:
+        """SYNCHRONOUS pass-through for FAST weft calls (store reads/writes:
+        task_submit with a known env, task_status, task_cancel) from contexts
+        that cannot await — e.g. the job submitters, which today run on the
+        event-loop thread. NEVER use for solves/realizations (env_ensure on a
+        fresh spec) — those block for minutes and belong on the async port.
+        Same error conversion as the async path."""
+        target = getattr(type(self._weft), name, None)
+        if target is None or not getattr(target, "_weft_tool", False):
+            raise AttributeError(f"WeftAdapter: {name!r} is not a weft tool")
+        out = getattr(self._weft, name)(*args, **kw)
+        if is_error_payload(out):
+            raise ComputeError.from_payload(out)
+        return out
+
+    def raw_controller(self):
+        """The embedded Weft instance itself. ONLY for mounting weft-ui in
+        shared-controller mode (one controller, two surfaces — the
+        two-controller hazard fix, misc/compute_settings.md §8). Never a
+        tool-call path: aba code calls tools through the ports."""
+        return self._weft
+
+    def subscribe_events(self, callback) -> None:
+        """In-process push of weft's event feed (bootstrap.step, site.*,
+        job.*, …) — same objects events_poll yields. Not a port method
+        (weft's events_subscribe is not a PUBLIC_TOOL); it exists so the web
+        layer can relay site events to the notification bus without reaching
+        around the doorway. The callback runs on weft's emitting thread —
+        keep it cheap and thread-safe."""
+        self._weft.events_subscribe(callback)
+
+    def close(self) -> None:
+        self._pool.shutdown(wait=False, cancel_futures=True)
+
+
+def _install_port_methods() -> None:
+    """Materialize every port-Protocol member as a real async pass-through
+    method on WeftAdapter (same-named weft tool). Real methods — not just
+    __getattr__ — so Python 3.12's getattr_static-based runtime Protocol
+    checks see them, and so the port surface is greppable on the class.
+    test_compute_ports.py asserts each name is a genuine weft tool, which
+    turns a weft-side rename into a loud test failure instead of a runtime
+    AttributeError."""
+    from core.compute.ports import EnvPort, RunPort, SitePort
+
+    def _make(name: str):
+        async def method(self, *args: Any, **kw: Any) -> Any:
+            return await self._call(name, *args, **kw)
+        method.__name__ = name
+        method.__qualname__ = f"WeftAdapter.{name}"
+        method.__doc__ = f"Pass-through to weft `{name}` (see ports.py)."
+        return method
+
+    for port in (SitePort, EnvPort, RunPort):
+        for name in getattr(port, "__protocol_attrs__", ()):
+            if not hasattr(WeftAdapter, name):
+                setattr(WeftAdapter, name, _make(name))
+
+
+_install_port_methods()
+
+
+# -- process-wide lifecycle -----------------------------------------------------
+
+_adapter: Optional[WeftAdapter] = None
+_status: dict = {"ok": False, "severity": "info",
+                 "detail": "compute substrate not configured yet"}
+
+
+def configure() -> dict:
+    """Create the process-wide adapter (idempotent). Returns the status dict
+    (also kept for `status()`/selfcheck). Never raises — degradation is
+    recorded and surfaced, not fatal (the substrate becomes load-bearing in W1)."""
+    global _adapter, _status
+    if _adapter is not None:
+        return _status
+    pixi = resolve_pixi()
+    if pixi is None:
+        _status = {"ok": False, "severity": "warning",
+                   "detail": "pixi binary not found (set ABA_PIXI_BIN or install "
+                             "to $ABA_HOME/tools/pixi/bin/pixi) — weft substrate offline"}
+        return _status
+    try:
+        _adapter = WeftAdapter(weft_workspace(), pixi)
+        _status = {"ok": True, "severity": "info",
+                   "detail": f"weft workspace {weft_workspace()} (pixi: {pixi})"}
+    except ModuleNotFoundError:
+        _status = {"ok": False, "severity": "warning",
+                   "detail": "weft package not installed in this environment — "
+                             "weft substrate offline"}
+    except Exception as e:  # noqa: BLE001 — boot must not die on substrate wiring
+        _status = {"ok": False, "severity": "warning",
+                   "detail": f"weft substrate failed to start: {type(e).__name__}: {e}"}
+    return _status
+
+
+def get_compute() -> WeftAdapter:
+    """The process adapter. Raises ComputeError (with the configure status as
+    the detail) when the substrate is offline — callers surface that, they
+    don't guess."""
+    if _adapter is None:
+        raise ComputeError("substrate_offline", _status["detail"], stage="aba",
+                           hints={"fix": "check `compute_substrate` in /api/health"})
+    return _adapter
+
+
+def status() -> dict:
+    return dict(_status)
+
+
+def check_compute() -> dict:
+    """selfcheck adapter (core.runtime.selfcheck) — surfaces substrate health
+    on /api/health + the admin drawer."""
+    return dict(_status)
+
+
+def shutdown() -> None:
+    global _adapter
+    if _adapter is not None:
+        _adapter.close()
+        _adapter = None

@@ -187,6 +187,17 @@ def register_artifacts_from_tool_result(
                 # focused entity. This is what lets a Result trace back to the dataset
                 # it analyzed even when the recipe read it by path with nothing focused.
                 rec = _get_exec(exec_id_ptr) or {}
+                # Record the weft target on the (now-existing) Run so retention can
+                # name it at close. The early record_weft_target in run_exec no-ops on
+                # a single-turn Run (no open Run when the cell ran); this is the
+                # reliable point — the Run exists here. (output_durability.md §A2, §6.3)
+                _wt = rec.get("weft_target")
+                if _wt:
+                    try:
+                        from content.bio.lifecycle.runs import record_weft_target
+                        record_weft_target(analysis_id, _wt)
+                    except Exception as e:  # noqa: BLE001 — bookkeeping, never blocks
+                        _log.debug("record_weft_target (hook) failed: %s", e)
                 for inp in rec.get("inputs") or []:
                     ref = inp.get("ref")
                     if inp.get("kind") == "dataset" and ref and ref != analysis_id and ref != focused:
@@ -230,6 +241,15 @@ def register_artifacts_from_tool_result(
                           for a in (result_obj.get(grp) or []) if a.get("original_name")] \
                     if isinstance(result_obj, dict) else []
                 refresh_output_manifest(_rid, plot_urls_by_name=_by_name, ensure_names=_names)
+                # Placement truth for the Run card: results that ran through
+                # the substrate carry a compute block — stamp the site so the
+                # §8d verdict can say "ran on <site>" instead of the default
+                # local story (remote-sync AND background jobs both land here).
+                _comp = result_obj.get("compute") if isinstance(result_obj, dict) else None
+                if isinstance(_comp, dict):
+                    from content.bio.lifecycle.runs import note_run_site
+                    note_run_site(_rid, (_comp.get("placement") or {}).get("site")
+                                  or _comp.get("site"))
         except Exception:  # noqa: BLE001 — manifest is best-effort cosmetic
             pass
     return refreshed

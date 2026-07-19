@@ -58,6 +58,37 @@ def _to_capability(entity: dict) -> dict:
     return meta
 
 
+# ── roles (weft rewrite #11) ─────────────────────────────────────────────────
+# What an entry IS FOR — how the agent/user interacts with it — orthogonal to
+# `archetype` (which describes how it's PROVISIONED: library/cli/r_package/
+# mcp/pipeline). A `viewer` opens entities visually; a `converter` transforms
+# between formats. Both carry a declarative block of the same name:
+#   viewer:    {mode, entity_types, extensions, mime_patterns, launcher,
+#               priority, max_size_kb, requires_consent}   (→ viewers registry)
+#   converter: {from: [ext/format...], to: [ext/format...]}
+ROLES = ("library", "tool", "viewer", "converter")
+
+_ROLE_FROM_ARCHETYPE = {
+    "library": "library", "r_package": "library",
+    "cli": "tool", "mcp": "tool", "mcp_server": "tool", "pipeline": "tool",
+}
+
+
+def capability_role(cap: dict) -> str:
+    """The entry's role: explicit `role` (normalized), else derived from its
+    archetype, else 'library'. An unknown explicit role falls back to the
+    derived one — loudly, so a content typo surfaces instead of vanishing."""
+    raw = str(cap.get("role") or "").strip().lower()
+    if raw in ROLES:
+        return raw
+    derived = _ROLE_FROM_ARCHETYPE.get(
+        str(cap.get("archetype") or "").strip().lower(), "library")
+    if raw:
+        print(f"[catalog] capability {cap.get('name')!r} declares unknown "
+              f"role {raw!r} (know: {ROLES}) — treating as {derived!r}")
+    return derived
+
+
 def _visible(cap: dict, ctx: Optional[ExecContext]) -> bool:
     """A capability is visible if it is system-scope or its scope is in the
     caller's scope chain. With no ctx, everything is visible (single-user)."""
@@ -165,16 +196,21 @@ def list_capabilities(
     query: Optional[str] = None,
     tags: Optional[list[str]] = None,
     ctx: Optional[ExecContext] = None,
+    role: Optional[str] = None,
 ) -> list[dict]:
     """Return visible capabilities, optionally filtered by a substring query
-    (over name + summary + tags) and/or required domain tags."""
+    (over name + summary + tags), required domain tags, and/or role
+    (library|tool|viewer|converter — see capability_role)."""
     _ensure_seeded()
     out: list[dict] = []
     q = (query or "").lower().strip()
     want_tags = set(tags or [])
+    want_role = (role or "").strip().lower() or None
     for ent in list_entities(type_filter=CAPABILITY):
         cap = _to_capability(ent)
         if not _visible(cap, ctx):
+            continue
+        if want_role and capability_role(cap) != want_role:
             continue
         cap_tags = set(cap.get("domain_tags") or [])
         if want_tags and not (want_tags & cap_tags):
@@ -191,13 +227,32 @@ def list_capabilities(
     return out
 
 
+def converters_for(target: str, ctx: Optional[ExecContext] = None) -> list[dict]:
+    """Converter-role entries that read or produce `target` (an extension like
+    '.mesh3d' or a format name). Suffix-tolerant on extensions so multi-dot
+    forms match. Answers "what converts X?" from catalog data (#11)."""
+    t = (target or "").strip().lower()
+    if not t:
+        return []
+    out = []
+    for cap in list_capabilities(ctx=ctx, role="converter"):
+        block = cap.get("converter") or {}
+        formats = [str(x).lower() for x in
+                   (block.get("from") or []) + (block.get("to") or [])]
+        if any(t == f or t.endswith(f) or f.endswith(t) for f in formats):
+            out.append(cap)
+    return out
+
+
 def _cap_doc_text(cap: dict) -> str:
-    """Searchable text for one capability."""
+    """Searchable text for one capability (name + summary + tags + archetype +
+    role — so 'viewer'/'converter' queries surface role-tagged entries, #11)."""
     return " ".join([
         str(cap.get("name", "")),
         str(cap.get("summary", "")),
         " ".join(cap.get("domain_tags") or []),
         str(cap.get("archetype", "")),
+        capability_role(cap),
     ])
 
 

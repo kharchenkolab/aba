@@ -138,6 +138,100 @@ def _status_log_tail(e: dict) -> list[dict]:
     return log[-5:] if isinstance(log, list) else []
 
 
+def _run_outputs_summary(e: dict) -> Optional[dict]:
+    """Run (analysis) → a CHEAP keep/retention roll-up: retain-row counts
+    per state from weft's LOCAL index + the run's own metadata (outputs
+    count, retention_alert). Answers "what did this run produce and is it
+    safe" without the durable view — run_durable_view is the UI Files-panel
+    builder and does up to 50 live per-file stat round-trips, far too heavy
+    to fire on EVERY default read_entity of a run (review F2). No remote
+    I/O here: retention.retained() reads local substrate state only.
+
+    Defensive + best-effort: any failure → None (the field simply doesn't
+    surface rather than erroring the whole read)."""
+    try:
+        md = e.get("metadata") or {}
+        out: dict = {}
+        n_outputs = len(((md.get("run") or {}).get("outputs")) or [])
+        if n_outputs:
+            out["outputs"] = n_outputs
+        n_failed = (md.get("run") or {}).get("failed_steps") or 0
+        if n_failed:
+            out["failed_steps"] = n_failed
+        alert = md.get("retention_alert")
+        if alert:
+            out["retention_alert"] = alert
+        try:
+            from core.compute import retention
+            states: dict = {}
+            for row in (retention.retained(label=e["id"]) or []):
+                s = str(row.get("state") or "unknown")
+                states[s] = states.get(s, 0) + 1
+            if states:
+                out["keeps"] = states     # e.g. {"done": 3, "pinned-pending": 1}
+        except Exception:  # noqa: BLE001 — substrate down: metadata half still surfaces
+            pass
+        return out or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _dataset_drift_state(e: dict) -> Optional[str]:
+    """Dataset → a single human-readable drift line derived from the
+    `source_missing` / `source_changed` metadata keys the recheck /
+    revalidate routes record (datasets.py). Drives the same signal as
+    the UI DriftBanner. None when the source is clean (the common case),
+    so a healthy dataset shows nothing."""
+    md = e.get("metadata") or {}
+    if md.get("source_missing"):
+        home = md.get("home") or {}
+        path = home.get("path") if isinstance(home, dict) else None
+        return f"source missing ({path})" if path else "source missing"
+    if md.get("source_changed"):
+        return "source changed since registration"
+    return None
+
+
+def _thread_scope_ids(e: dict) -> list[str]:
+    """The thread_id values entities carry to signal membership in this
+    thread: its own id, plus the "default" sentinel when this is the
+    implicit default thread."""
+    ids = [e["id"]]
+    if (e.get("metadata") or {}).get("is_default"):
+        ids.append("default")
+    return ids
+
+
+def _thread_pinned_count(e: dict) -> int:
+    """Thread → count of active Result entities scoped to this thread —
+    the "N pinned" the ProjectTree shows (a Result is the wrapper the
+    user creates when they pin something). Direct thread_id membership
+    (find_entities metadata scoping), mirroring the server query."""
+    try:
+        from core.graph.entities import find_entities
+        n = 0
+        for tid in _thread_scope_ids(e):
+            n += len(find_entities(type="result", status="active",
+                                   metadata_contains={"thread_id": tid}))
+        return n
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _thread_claim_count(e: dict) -> int:
+    """Thread → count of Claim entities scoped to this thread — the
+    "N claims" the ProjectTree shows. Direct thread_id membership."""
+    try:
+        from core.graph.entities import find_entities
+        n = 0
+        for tid in _thread_scope_ids(e):
+            n += len(find_entities(type="claim", include_archived=False,
+                                   metadata_contains={"thread_id": tid}))
+        return n
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 # Field name → extractor. Lambdas for simple cases; named functions
 # above for the projecting ones.
 _PROJECTORS: dict[str, Callable[[dict], Any]] = {
@@ -146,6 +240,10 @@ _PROJECTORS: dict[str, Callable[[dict], Any]] = {
     "status":             lambda e: e.get("status"),
     "tags":               lambda e: e.get("tags") or [],
     "notes":              lambda e: e.get("notes") or "",
+    # retention-critical: a Run whose keepers could not be kept carries
+    # this alert — invisible to the agent before it was projected here
+    # (live finding: the agent read the run and IMPROVISED a wrong cause)
+    "retention_alert":    lambda e: _md(e, "retention_alert"),
     "artifact_path":      lambda e: e.get("artifact_path"),
     "exec_id":            lambda e: e.get("exec_id"),
     "artifact_kind":      lambda e: e.get("artifact_kind"),
@@ -176,6 +274,10 @@ _PROJECTORS: dict[str, Callable[[dict], Any]] = {
     "evidence_summary":   _evidence_summary,
     "advisor_notes":      _advisor_notes,
     "status_log_tail":    _status_log_tail,
+    "run_outputs_summary": _run_outputs_summary,
+    "drift_state":        _dataset_drift_state,
+    "pinned_count":       _thread_pinned_count,
+    "claim_count":        _thread_claim_count,
 }
 
 
@@ -277,7 +379,7 @@ def _resolve_view_path(path: str):
     return None
 
 
-_UNIVERSAL_FALLBACK = ["title", "status", "tags", "notes"]
+_UNIVERSAL_FALLBACK = ["title", "status", "tags", "notes", "retention_alert"]
 
 # Top-level entity columns (vs metadata fields). The HTTP PATCH route
 # (main.py: entities_patch) is the source of truth; this list mirrors
@@ -300,15 +402,14 @@ def _broadcast_member_change(result_id: str, member_id: str | None,
     """Fire an entity_updated SSE so the focused Result card re-fetches.
     Best-effort — broadcast must NEVER fail the write."""
     try:
+        from core.runtime import wire
         from core.runtime.notifications import broadcast
-        payload = {"type": "entity_updated",
-                   "entity_id": result_id,
-                   "reason": reason}
+        extra: dict = {}
         if member_id:
-            payload["member_id"] = member_id
+            extra["member_id"] = member_id
         if entity_id:
-            payload["attached_entity_id"] = entity_id
-        broadcast(payload)
+            extra["attached_entity_id"] = entity_id
+        broadcast(wire.entity_updated(entity_id=result_id, reason=reason, **extra))
     except Exception:  # noqa: BLE001
         pass
 
@@ -504,9 +605,10 @@ def register_entity_ops_tools(mcp: FastMCP) -> None:
         # Mirrors the typed-tool broadcast pattern in
         # lifecycle/promote.py:549 and lifecycle/revisions.py:408.
         try:
+            from core.runtime import wire
             from core.runtime.notifications import broadcast
-            broadcast({"type": "entity_updated", "entity_id": entity_id,
-                       "reason": "agent_update"})
+            broadcast(wire.entity_updated(entity_id=entity_id,
+                                          reason="agent_update"))
         except Exception:  # noqa: BLE001 — broadcast must NEVER fail the write
             pass
 
@@ -621,11 +723,11 @@ def register_entity_ops_tools(mcp: FastMCP) -> None:
                     f"update_result_member failed for "
                     f"{result_id}/{member_id}"}
         try:
+            from core.runtime import wire
             from core.runtime.notifications import broadcast
-            broadcast({"type": "entity_updated",
-                       "entity_id": result_id,
-                       "reason": "member_caption_updated",
-                       "member_id": member_id})
+            broadcast(wire.entity_updated(entity_id=result_id,
+                                          reason="member_caption_updated",
+                                          member_id=member_id))
         except Exception:  # noqa: BLE001 — broadcast must NEVER fail the write
             pass
         return {"status": "ok",

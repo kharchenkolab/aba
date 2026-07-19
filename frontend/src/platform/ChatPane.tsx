@@ -607,6 +607,9 @@ export default function ChatPane({
               draftKey={`chatdraft:${threadId ?? 'default'}`}
               projectId={projectId}
               threadId={threadId ?? 'default'}
+              placeholderIdle={scoped
+                ? `Ask about this ${(type_label_for(focusedEntity!.type) ?? focusedEntity!.type).toLowerCase()}… (Enter to send)`
+                : undefined}
             />
           </div>
         )}

@@ -85,8 +85,9 @@ def test_preflight_sh_invokes_apptainer_from_the_image(tmp_path):
     assert "exec" in argv and "/opt/aba/ood/aba_preflight.py" in argv
     assert "/opt/aba-venv/bin/python" in argv
     assert str(sif) in argv                                  # the SIF resolved from site.yaml
-    # binds: the staged dir + the site-config root
-    assert "--bind" in argv and f"{staged}:{staged}" in argv and "/cluster/aba:/cluster/aba" in argv
+    # binds: the staged dir + the site-config root (derived from dirname(ABA_SITE_CONFIG),
+    # NOT a hardcoded /cluster/aba — a site may root the deployment anywhere its nodes read).
+    assert "--bind" in argv and f"{staged}:{staged}" in argv and f"{tmp_path}:{tmp_path}" in argv
     # the preflight inputs are forwarded explicitly (apptainer scrubs host env)
     assert "ABA_SITE_CONFIG=" in argv and "ABA_PF_GROUP=lab1" in argv and "ABA_PF_USER=alice" in argv
 

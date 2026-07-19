@@ -9,14 +9,16 @@ import { useState } from 'react'
 import './Settings.css'
 import AgentTab from './AgentTab'
 import ModulesTab from './ModulesTab'
+import ComputeTab from './ComputeTab'
 import EnvironmentTab from './EnvironmentTab'
 
 interface Props { onClose: () => void }
 
-type TabId = 'agent' | 'modules' | 'environment'
+type TabId = 'agent' | 'modules' | 'compute' | 'environment'
 const TABS: { id: TabId; label: string }[] = [
   { id: 'agent', label: 'Agent' },
   { id: 'modules', label: 'Modules' },
+  { id: 'compute', label: 'Compute' },
   { id: 'environment', label: 'Environment' },
 ]
 
@@ -42,6 +44,7 @@ export default function Settings({ onClose }: Props) {
         <div className="settings__body">
           {tab === 'agent' ? <AgentTab />
             : tab === 'modules' ? <ModulesTab />
+            : tab === 'compute' ? <ComputeTab />
             : <EnvironmentTab />}
         </div>
       </div>

@@ -47,10 +47,11 @@ def _call(name: str, args: dict) -> dict:
 
 
 def _pid_dirs():
-    from core.config import (PROJECTS_DIR, current_project_id,
+    from core.config import (PROJECTS_DIR,
                               project_work_dir, project_data_dir,
                               ARTIFACTS_DIR)
-    pid = current_project_id()
+    from core.projects import current   # moved from core.config (burn-down #1)
+    pid = current()
     return {
         "pid": pid,
         "work": project_work_dir(pid),
@@ -185,7 +186,7 @@ def test_max_results_truncates():
     for i in range(10):
         (run / f"a_{i}.png").write_bytes(b"x")
     res = _call("find_files",
-                {"pattern": "a_*.png", "max_results": 3})
+                {"pattern": "a_*.png", "limit": 3})   # tool's cap param is `limit`
     assert len(res["matches"]) == 3
     assert res["truncated"] is True
 

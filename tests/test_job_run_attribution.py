@@ -15,46 +15,24 @@ if _BACKEND not in sys.path:
 
 
 def test_job_paths_execute_under_captured_run():
-    """Both the Slurm and local paths resolve the exec run_id as
+    """Both the weft-task and local paths resolve the exec run_id as
     `params.run_id or job_id` — the Run first, the job id only as fallback."""
-    import core.jobs.slurm_submitter as S
+    import core.jobs.weft_submitter as W
     import core.jobs.runner as R
     import core.jobs.slurm_entry as E
-    s_src = open(S.__file__).read()
+    w_src = open(W.__file__).read()
     r_src = open(R.__file__).read()
     e_src = open(E.__file__).read()
-    assert 'params.get("run_id") or job["id"]' in s_src      # Slurm spec
+    assert 'params.get("run_id") or job["id"]' in w_src      # weft task spec
     assert 'params.get("run_id") or job_id' in r_src         # local worker
-    # live job.log: unbuffered python + slurm_entry streaming
-    assert "-u -m core.jobs.slurm_entry" in s_src
+    # live job.log: unbuffered python + slurm_entry streaming (the node entry)
+    assert "-u -m core.jobs.slurm_entry" in w_src
     assert "stream=True" in e_src
 
 
-def test_sentinel_repolls_when_result_json_lags(tmp_path):
-    """`done` present but result.json not yet visible (NFS lag) on a clean exit
-    must RE-POLL (return None), not return the empty fallback that would drop the
-    job's stdout + artifacts."""
-    import os
-    import time
-    from core.jobs.slurm_submitter import SlurmSubmitter
-    sub = SlurmSubmitter()
-
-    (tmp_path / "done").write_text("0\n")              # clean exit, result.json lagging
-    assert sub._result_from_sentinel(tmp_path) is None   # re-poll, don't discard
-
-    (tmp_path / "result.json").write_text('{"returncode":0,"plots":[{"original_name":"x.png"}]}')
-    r = sub._result_from_sentinel(tmp_path)
-    assert r and r.get("plots"), r                       # full result once visible
-
-    # a real failure (rc!=0, no result.json) returns the error fallback immediately
-    j2 = tmp_path / "j2"; j2.mkdir(); (j2 / "done").write_text("1\n")
-    r2 = sub._result_from_sentinel(j2)
-    assert r2 and "error" in r2, r2
-
-    # overdue (done long ago) + still no result.json → give up with the fallback
-    j3 = tmp_path / "j3"; j3.mkdir(); (j3 / "done").write_text("0\n")
-    os.utime(j3 / "done", (time.time() - 1000, time.time() - 1000))
-    assert sub._result_from_sentinel(j3) == {"returncode": 0, "stdout": "", "stderr": ""}
+# (test_sentinel_repolls_when_result_json_lags removed — it exercised the retired
+#  sbatch lane's shared-FS `done`/result.json sentinel; the weft lane polls task
+#  state directly and reads result.json via WeftSubmitter.poll, tested elsewhere.)
 
 
 def test_manifest_refresh_targets_captured_run_not_active():

@@ -295,12 +295,18 @@ def run_nextflow(input_: dict, ctx: dict | None = None) -> dict:
     outdir = input_.get("outdir") or str(Path(scratch) / "results")
 
     from core.exec import MaterializingExecutor, Provisioning
+    from core.compute import named_envs
     ex = MaterializingExecutor()
     try:
-        env = ex.materialize(Provisioning(conda={"channel": "bioconda", "spec": "nextflow"}),
-                             cancel_token=cancel_token)
+        # Provision nextflow as a content-addressed weft tool env; its bin/ goes
+        # on the exec PATH below (weft replacement for the old micromamba install).
+        nf_prefix = named_envs.ensure_tool_env(
+            ["nextflow"], name="aba-tool-nextflow", probe="nextflow -version",
+            channels=["bioconda", "conda-forge"], timeout_s=1800)
+        env = ex.materialize(Provisioning(), cancel_token=cancel_token)
     except Exception as e:  # noqa: BLE001
-        return {"status": "error", "note": f"Could not install nextflow: {e}"}
+        return {"status": "error", "note": f"Could not provision nextflow: {e}"}
+    _nf_path = str(nf_prefix / "bin") + os.pathsep + os.environ.get("PATH", "")
 
     from core.runtime import progress
     progress.emit(f"nextflow: launching {pipeline}"
@@ -309,7 +315,8 @@ def run_nextflow(input_: dict, ctx: dict | None = None) -> dict:
     cmd = _nextflow_command(pipeline, revision=revision, profile=profile,
                             outdir=outdir, params=params,
                             extra_args=["-with-trace", str(_trace)])  # provenance: per-process containers
-    res = ex.exec(env, cmd, cwd=str(scratch), cancel_token=cancel_token, timeout_s=timeout_s)
+    res = ex.exec(env, cmd, cwd=str(scratch), cancel_token=cancel_token,
+                  timeout_s=timeout_s, env_vars={"PATH": _nf_path})
     if res.timed_out:
         return {"status": "error",
                 "note": f"nextflow run timed out ({timeout_s}s). Long pipelines should run "

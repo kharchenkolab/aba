@@ -1,21 +1,28 @@
-# ABA conda environment — the single most-important file in the Mac install.
+# ABA conda environment — the CONTROLLER/platform env (the aba backend itself).
 #
 # Fetched at install time by the create-env playbook step and fed to
-# micromamba (see helper/src/aba_installer/install.yml). Everything ABA
-# needs to run lives here: the Python + R + Node toolchains, the
-# single-cell bio stack the agent executes, the Jupyter kernels it runs
-# code in, and the backend's own runtime deps.
+# micromamba (see helper/src/aba_installer/install.yml). This holds what the aba
+# PLATFORM needs to run: the Python + Node toolchains, the Jupyter kernel-client
+# machinery, document tooling, and the backend's own runtime deps.
+#
+# It NO LONGER holds the single-cell science stack (scanpy/scvi-tools/anndata/
+# leiden/…) NOR the viewer data layer (lstar-sc/zarr/scipy): weft owns environment
+# realization now, so the agent runs analysis in weft SESSION kernels backed by
+# content-addressed packs (install/core/envs/python_bio.yaml), and the backend
+# subprocesses the SESSION python for .lstar.zarr conversion / serves stores as raw
+# bytes — it never imports the science or viewer stack in-process (W3.4 — slim
+# controller). The only heavy lib kept is pandas (+ its numpy), which the BACKEND
+# itself imports for to_markdown. R lives in its own tools env (r-environment.yml).
 #
 # Channels, in priority order:
-#   conda-forge — the C-library base + most scientific Python + R-base
-#   bioconda    — Bioconductor packages (the binary source for Bioc on Mac;
-#                 PPM has CRAN binaries but no Bioc — see mac-install.md §8.2)
+#   conda-forge — the C-library base + scientific Python + node
+#   bioconda    — kept for parity with the R tools env's Bioconductor pulls
+#                 (see r-environment.yml + mac-install.md §8.2)
 #
-# Pin policy: pin the language toolchains (python/r/node) to a minor series
-# so updates stay predictable; leave the bio stack with floors (>=) so the
-# solver can pick a mutually-compatible set per arch. Once validated on a
-# fresh arm64 + x86_64 Mac, capture the resolved versions as a locked
-# snapshot. Refresh monthly (mac-install.md §4).
+# Pin policy: pin the language toolchains (python/node) to a minor series so
+# updates stay predictable. Once validated on a fresh arm64 + x86_64 Mac,
+# capture the resolved versions as a locked snapshot. Refresh monthly
+# (mac-install.md §4).
 
 name: aba
 channels:
@@ -32,38 +39,31 @@ dependencies:
   - pip
 
   # ── native libraries + build helpers (binary; nothing compiles at install)
-  - hdf5
   - pkg-config
   - cmake
 
-  # ── scientific Python core ─────────────────────────────────────────────
-  # numba (pulled transitively by scanpy/scvi-tools) requires numpy<2.5; left
-  # unpinned the solve picks the latest numpy (2.5.x) and ships a base that fails
-  # `import numba` — which the startup self-heal then has to downgrade. Pin it so
-  # the base is numba-compatible (and the ABI anchor correct) from the first build.
+  # ── backend numeric deps ───────────────────────────────────────────────
+  # NOT the science / viewer stack (weft-owned — see header): only what the BACKEND
+  # process itself imports. pandas backs ctx_read/describe/orientation to_markdown;
+  # numpy rides with it. That is the whole heavy footprint now — scipy/lstar-sc/zarr
+  # moved to the weft python pack too (install/core/envs/python_bio.yaml). The web
+  # process subprocesses the SESSION python for .lstar.zarr conversion and serves
+  # store files as RAW bytes over HTTP Range, so it never imports scipy/zarr/lstar
+  # in-process. numpy keeps a conservative <2.5 bound (known-good for pandas) — the
+  # numba driver that set it left with scanpy/scvi.
   - numpy<2.5
   - pandas
-  - scipy
-  - matplotlib-base
-  - scikit-learn
-  - h5py
   - pyyaml          # backend: `import yaml` (config, playbook, agent specs)
   - tabulate        # pandas.DataFrame.to_markdown() backend (ctx_read + describe tools)
 
-  # ── single-cell bio stack (the agent imports these in Python kernels) ──
-  - anndata>=0.10
-  - scanpy>=1.10
-  - scvi-tools>=1.1
-  - leidenalg
-  - python-igraph
-
-  # ── Python Jupyter kernel (the agent runs Python here). R has its own
-  #    kernel in the tools env — see r-environment.yml. jupyter_client also
-  #    provides the `jupyter` CLI the R kernel registration shells out to. ──
+  # ── Jupyter kernel CLIENT only — the backend's KernelManager (jupyter_client)
+  #    that TALKS to kernels + the `jupyter kernelspec` CLI the R IRkernel
+  #    registration shells out to. The kernel PROCESS runs `ipykernel`/`r-irkernel`
+  #    from the weft SESSION python (the pack — python_bio.yaml/r_bio.yaml), NOT the
+  #    controller: W3.5 is weft-only, every kernel is a weft env, so the controller
+  #    never launches a kernel from its own interpreter. ipykernel is therefore
+  #    pack-owned; nbformat/nbconvert dropped entirely (zero backend use). ──
   - jupyter_client
-  - ipykernel
-  - nbformat
-  - nbconvert
 
   # ── document / report tooling ──────────────────────────────────────────
   - typst
@@ -90,12 +90,7 @@ dependencies:
       - python-dotenv
       - pypdfium2
       - pillow
-
-      # ── viewer data layer (CORE) ───────────────────────────────────────
-      # lstar-sc: the .lstar.zarr reader/CONVERTER (import name `lstar`). Stays in core
-      # because it PRODUCES/reads the store format independent of the browser viewer —
-      # the toggleable viewer-pagoda3 module is just the dist (misc/modules.md).
-      - lstar-sc==0.2.1     # EXACT pin — lstar moves fast + isn't in a stable channel;
-                            #   co-versioned with the lstar R package (git tag v0.2.1) and
-                            #   pagoda3 v0.2.1. Bump this + the R/pagoda3 pins together.
-      - zarr>=3.1            # lstar uses the zarr-python 3 library
+      # NB the viewer data layer (lstar-sc + zarr) is NOT here — it moved to the weft
+      # python pack (install/core/envs/python_bio.yaml). The backend converts stores by
+      # subprocessing the SESSION python and serves .lstar.zarr as raw bytes, so it
+      # needs neither in-process. The toggleable viewer-pagoda3 module is just the dist.

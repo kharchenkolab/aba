@@ -70,10 +70,76 @@ def expand_path(p: str) -> Path:
     return Path(p)
 
 
+def pack_for(spec: ModuleSpec):
+    """The declared base env pack ABSORBING this module (weft rewrite W3.4):
+    a pack whose name equals the module id (python-bio, r-bio). Pack-backed
+    modules keep the 3-state toggle but install through the compute substrate
+    (ensure+realize) instead of a shell script. None on pack-less deployments
+    (or when the substrate is offline — the shell path still works there)."""
+    try:
+        from core.compute import env_packs, status
+        if not status().get("ok"):
+            return None
+        for row in env_packs.list_packs():
+            if row.get("name") == spec.id and row.get("role") == "base":
+                return row["name"]
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def pack_env_id(spec: ModuleSpec) -> tuple[str, str] | None:
+    """For a pack-backed module (weft W3.4), the realized LOCAL weft EnvID + site to evict when
+    reclaiming disk — `(env_id, "local")`, or None if the module isn't pack-backed, the substrate
+    is offline, or the pack has no local realization to reclaim. This is what makes "Reclaim disk
+    space" actually free bytes: a pack-backed module's env lives in the weft store keyed by an
+    EnvID, NOT at the manifest's pre-weft `$TOOLS_ENV` path (which no longer exists), so reclaim
+    must `env_evict` this id rather than rmtree a dead path. The env rebuilds from its lock on
+    next use (see core.compute.named_envs)."""
+    pack = pack_for(spec)
+    if pack is None:
+        return None
+    try:
+        from core.compute import get_compute
+        w = get_compute()
+        envs = w.sync_call("list_envs")
+        rows = envs.get("envs") if isinstance(envs, dict) else envs
+        for e in (rows or []):
+            if (e.get("name") or "") == pack:
+                eid = e.get("env_id") or e.get("id")
+                if eid:
+                    return (eid, "local")
+    except Exception:  # noqa: BLE001 — substrate offline / unrealized → nothing to evict here
+        pass
+    return None
+
+
+def _pack_ready(pack: str) -> bool:
+    """Cheap store-read probe (no solve, no network): the pack's env is solved
+    AND has a ready local realization."""
+    try:
+        from core.compute import get_compute
+        w = get_compute()
+        envs = w.sync_call("list_envs")
+        rows = envs.get("envs") if isinstance(envs, dict) else envs
+        for e in (rows or []):
+            if (e.get("name") or "") == pack:
+                st = w.sync_call("env_status", e.get("env_id") or e.get("id"))
+                return any(r.get("site") == "local" and r.get("state") == "ready"
+                           for r in st.get("realizations", []))
+    except Exception:  # noqa: BLE001
+        pass
+    return False
+
+
 def probe_ready(spec: ModuleSpec) -> bool:
     """Is the module's capability present right now? Interprets the manifest's declarative
     `ready` probe (misc/modules.md) — cheap filesystem/marker checks only, never a solve
-    or network call. Unknown/empty probe → False (not ready)."""
+    or network call. Unknown/empty probe → False (not ready). Pack-backed
+    modules (W3.4) probe the substrate's store instead of the manifest."""
+    pack = pack_for(spec)
+    if pack is not None:
+        return _pack_ready(pack)
     r = spec.ready or {}
     try:
         if "base_stage" in r:

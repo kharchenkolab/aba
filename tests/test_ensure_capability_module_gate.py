@@ -33,6 +33,8 @@ from content.bio.tools.discovery import ensure_capability  # noqa: E402
 
 
 def _patch_modules(monkeypatch, resolved):
+    import _packmode
+    _packmode.enable(monkeypatch)          # W3.5: capability install needs pack-mode
     recorded = []
     monkeypatch.setattr(_mods, "modules_active", lambda: True)
     monkeypatch.setattr(_mods, "resolve", lambda name: resolved)

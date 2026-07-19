@@ -55,6 +55,9 @@ def unsubscribe(q: asyncio.Queue) -> None:
 def broadcast(event: dict) -> None:
     """Push `event` to all live subscribers. Drops on a full queue (a
     slow client should not block other clients or the producer)."""
+    # Wire-contract conformance (core/runtime/wire.py) — warn-once, never fatal.
+    from core.runtime import wire
+    wire.check(event, "notify")
     if _loop is None or not _subscribers:
         return
 

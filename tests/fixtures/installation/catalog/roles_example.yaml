@@ -1,0 +1,41 @@
+# Example role-tagged capability entries (weft rewrite #11) — documents the
+# format with DOMAIN-GENERIC entries; real catalogs ship as installation-scope
+# content (recipe pack). `role` says how an entry is USED (library | tool |
+# viewer | converter) — orthogonal to `archetype` (how it's provisioned; role
+# defaults derive from it: cli/mcp/pipeline → tool, else library).
+#
+# viewer-role entries carry a declarative `viewer:` block and project LIVE into
+# the viewers registry (core/viewers/registry.viewers_from_catalog) — an
+# external viewer's registration is catalog data, not a hand YAML row; its
+# `launcher` names a registered launcher id (core/viewers/launchers).
+# converter-role entries declare `converter: {from, to}` — the data behind
+# "what converts X?" (core.catalog.converters_for) and role-aware
+# ensure_capability responses.
+capabilities:
+  - name: scene-explorer
+    version: "1.0"
+    archetype: cli
+    role: viewer
+    domain_tags: [mesh, 3d]
+    summary: Interactive 3D scene viewer (opens exported scenes in the browser).
+    viewer:
+      mode: external            # canvas/modal rows stay in viewers.yaml (frontend components)
+      extensions: [.gltf, .scene.json]
+      launcher: scene-explorer-launcher
+      priority: 9
+    scope: system
+    status: published
+
+  - name: meshconv
+    version: "2.1"
+    archetype: library
+    role: converter
+    domain_tags: [mesh, 3d]
+    summary: Converts 3D mesh files between formats.
+    converter:
+      from: [.mesh3d, .obj]
+      to: [.gltf]
+    provisioning: {pip: [meshconv]}
+    import_name: meshconv
+    scope: system
+    status: published

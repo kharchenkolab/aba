@@ -82,13 +82,56 @@ def _viewer_from_yaml(raw: dict[str, Any]) -> Optional[Viewer]:
 
 
 def list_viewers() -> list[Viewer]:
-    return sorted(_VIEWERS.values(), key=lambda v: (-v.priority, v.id))
+    return sorted({**_VIEWERS, **{v.id: v for v in viewers_from_catalog()}}.values(),
+                  key=lambda v: (-v.priority, v.id))
+
+
+def viewers_from_catalog() -> list[Viewer]:
+    """Viewer-role capability entries projected as registry rows (weft
+    rewrite #11): an EXTERNAL viewer is real software, so its registration is
+    catalog DATA — a `role: viewer` capability with a declarative `viewer:`
+    block naming what it opens and which registered launcher serves it —
+    not a hand-maintained YAML row. (canvas/modal rows stay YAML: those are
+    frontend components, not capabilities.) Queried live so the projection
+    follows the active project's catalog; ids are namespaced `cap:<name>` so
+    they can never collide with static rows. Best-effort: no catalog (bare
+    embedder, unseeded store) → no rows, never an error."""
+    try:
+        from core.catalog import list_capabilities
+        caps = list_capabilities(role="viewer")
+    except Exception:  # noqa: BLE001
+        return []
+    out: list[Viewer] = []
+    for cap in caps:
+        if cap.get("status") not in (None, "published"):
+            continue
+        block = cap.get("viewer") or {}
+        mode = block.get("mode") or "external"
+        if mode not in MODES:
+            continue
+        out.append(Viewer(
+            id=f"cap:{cap.get('name')}",
+            mode=mode,
+            component=block.get("component"),
+            open_external=block.get("launcher"),
+            label=block.get("label") or cap.get("name"),
+            priority=int(block.get("priority", 5)),
+            entity_types=tuple(block.get("entity_types") or ()),
+            mime_patterns=tuple(block.get("mime_patterns") or ()),
+            extensions=tuple(block.get("extensions") or ()),
+            applies_any=bool(block.get("applies") == "any"),
+            max_size_kb=block.get("max_size_kb"),
+            requires_consent=bool(block.get("requires_consent", False)),
+        ))
+    return out
 
 
 def viewers_for(node: dict[str, Any]) -> list[Viewer]:
     """Pick applicable viewers for a tree node (from
     content.bio.files.tree). Returns a list sorted by descending
-    priority. The first entry is the default; the rest are alternates."""
+    priority. The first entry is the default; the rest are alternates.
+    Candidates = static rows (frontend components, YAML) + live catalog
+    projections (role-tagged external viewers, #11)."""
     entity_type = (node.get("entity_type") or "").lower()
     artifact = node.get("artifact_path") or ""
     name = node.get("name") or ""
@@ -97,7 +140,8 @@ def viewers_for(node: dict[str, Any]) -> list[Viewer]:
     ext = _ext_of(name or artifact)
 
     out: list[Viewer] = []
-    for v in _VIEWERS.values():
+    candidates = {**_VIEWERS, **{v.id: v for v in viewers_from_catalog()}}
+    for v in candidates.values():
         if v.id in _DISABLED:
             continue
         if v.max_size_kb and size_kb and size_kb > v.max_size_kb:

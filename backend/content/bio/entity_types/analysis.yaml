@@ -44,7 +44,7 @@ focus:
   # The Run's code is the aggregate across its exec records, computed on
   # demand — there's no producing_code column for the agent to read.
   agent_sees: [title, producing_params, parent_summary,
-               run_state, run_outputs_summary, tags, notes]
+               run_state, run_outputs_summary, retention_alert, tags, notes]
 
 ui:
   panel: analysis

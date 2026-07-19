@@ -71,7 +71,7 @@ import core.exec.compute_env as CE  # noqa: E402
 import content.bio.tools as BT  # noqa: E402
 import guide as GUIDE  # noqa: E402
 import core.jobs.runner as RUNNER  # noqa: E402
-from core.exec.router import LocalRouter  # noqa: E402
+from core.exec.router import decide as _route  # noqa: E402
 
 
 # ── compute_env injection ─────────────────────────────────────────────────────
@@ -174,7 +174,7 @@ def router_for(env, tool_input):
            "cores": tool_input.get("est_cores"), "mem_gb": tool_input.get("est_mem_gb"),
            "gpu": tool_input.get("est_gpu")}
     override = "background" if tool_input.get("background") else None
-    ch = LocalRouter().route(env=env, estimate=est, override=override)
+    ch = _route(env=env, estimate=est, override=override)
     return {"location": ch.location, "rationale": ch.rationale}
 
 
@@ -209,7 +209,7 @@ def run():
         routed = [{"turn": ti + 1, "code_head": (d["input"].get("code") or "")[:80],
                    "input": {k: d["input"].get(k) for k in
                              ("background", "est_gpu", "est_cores", "est_mem_gb",
-                              "estimated_runtime_min", "execution")},
+                              "estimated_runtime_min", "execution", "site", "env")},
                    "router": router_for(sc["compute_env"], d["input"])}
                   for ti, cap in ((0, cap1), (1, cap2)) for d in _exec_decisions(cap)]
         rec = {"name": sc["name"], "expected": sc["expected"], "context_line": ctx_line,

@@ -157,21 +157,32 @@ function toolRunningLabel(name: string) {
 /** Per-figure pin (a cell can hold several plots — each is its own entity).
  *  Icon-only, hover-reveal in the plot's top-right corner — same style as the
  *  message toolbar buttons. */
-function FigurePin({ entity, isPinned, onPin }: {
+export function FigurePin({ entity, isPinned, onPin }: {
   entity: Entity
   isPinned: boolean
-  onPin: (id: string, pinned: boolean) => void
+  onPin: (id: string, pinned: boolean) => void | boolean | Promise<void | boolean>
 }) {
-  // Optimistic flip on click for instant feedback; reconciles with the
-  // authoritative `isPinned` (derived from active Results that include
-  // this figure) once the server confirms. Resets when isPinned changes.
+  // Optimistic flip ONLY when pinning (fire-and-forget POST). Unpin routes
+  // through a confirm/consequence dialog — flipping optimistically there left
+  // a discordant un-red pin when the user cancelled, because `isPinned` never
+  // CHANGES in a cancelled flow so the reset effect never fired (PK
+  // 2026-07-17). The pin stays red until the unpin actually happens.
   const [opt, setOpt] = useState<boolean | null>(null)
   useEffect(() => { setOpt(null) }, [isPinned])
   const pinned = opt ?? isPinned
   return (
     <button
       className={`msg__tool msg__tool--pin ${pinned ? 'msg__tool--pinned' : 'msg__tool--hover'}`}
-      onClick={() => { setOpt(!pinned); onPin(entity.id, !pinned) }}
+      onClick={() => {
+        if (!pinned) {
+          setOpt(true)
+          // revert the optimistic red if the pin POST fails — otherwise the
+          // next click routes to unpin against a Result that never existed
+          Promise.resolve(onPin(entity.id, true))
+            .then(ok => { if (ok === false) setOpt(null) })
+            .catch(() => setOpt(null))
+        } else onPin(entity.id, false)
+      }}
       title={pinned ? 'Pinned — click to unpin' : 'Pin this figure'}
     >
       <svg viewBox="0 0 24 24" fill={pinned ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2"><path d="M12 17v5M9 3h6l-1 7 3 3H7l3-3z"/></svg>
@@ -1031,7 +1042,7 @@ interface Props {
   pinnedFigureIds?: Set<string>
   /** Keep (pin) a non-entity message as a snapshot, keyed by content. */
   keptKeys?: Set<string>
-  onKeepMessage?: (key: string, text: string, imageUrls: string[], pinned: boolean) => void
+  onKeepMessage?: (key: string, text: string, imageUrls: string[], pinned: boolean) => void | boolean | Promise<void | boolean>
   /** Map basename → {url, kind} for files written in this thread (any
    *  tool_result.plots / tables / files entry). Lets inline ` `foo.pdf` ` in
    *  agent prose render as a clickable link to /artifacts/<pid>/<hash><ext>. */
@@ -1052,7 +1063,10 @@ function msgKey(s: string): string {
 export default function Message({ message, isStreaming, collapseTools, onAnnotate, highlighting, anyDrawing, onDrawingChange, onHighlightDone, onRetry, entities, onPin, onArtifactPinned, pinnedFigureIds, keptKeys, onKeepMessage, planActive, onPlanGo, onPlanAdjust, fileMap, currentRunId }: Props) {
   const isUser = message.role === 'user'
   const [showSteps, setShowSteps] = useState(false)
-  const visibleBlocks = message.blocks
+  // a cancelled/interrupted turn can checkpoint a message with NO blocks —
+  // rendering must degrade to an empty message, not throw into the
+  // ErrorBoundary's "couldn't be displayed" banner (F4, misc/ux_findings.md)
+  const visibleBlocks = message.blocks ?? []
 
   // On past messages we collapse the tool/step indicators to keep the thread
   // tidy, but offer an eye toggle to bring them back per message.
@@ -1067,7 +1081,7 @@ export default function Message({ message, isStreaming, collapseTools, onAnnotat
   const rendered = renderBlocks(visibleBlocks, hideSteps, onRetry, entities, isUser ? undefined : onPin, isUser, planActive, onPlanGo, onPlanAdjust, isStreaming, pinnedFigureIds, fileMap, currentRunId, isUser ? undefined : onArtifactPinned)
   if (rendered.length === 0 && !isStreaming) return null
 
-  const msgText = message.blocks.filter(b => b.type === 'text').map(b => (b as { text: string }).text).join('\n').trim()
+  const msgText = visibleBlocks.filter(b => b.type === 'text').map(b => (b as { text: string }).text).join('\n').trim()
   // Phase C — auto-continuation marker. A user-role message that starts
   // with "[continuation:" was synthesized by the runner when a background
   // job finished; render it with a distinct cog avatar + soft styling so
@@ -1075,7 +1089,7 @@ export default function Message({ message, isStreaming, collapseTools, onAnnotat
   // marker into a proper messages-row metadata column; pattern-matching is
   // the MVP.
   const isContinuation = isUser && msgText.startsWith('[continuation:')
-  const imageUrls = message.blocks.filter(b => b.type === 'image').map(b => (b as { url: string }).url)
+  const imageUrls = visibleBlocks.filter(b => b.type === 'image').map(b => (b as { url: string }).url)
 
   // Figures are pinned individually in their own headers (a cell can hold
   // several). The toolbar pin handles the no-figure case: keep a text message
@@ -1089,7 +1103,12 @@ export default function Message({ message, isStreaming, collapseTools, onAnnotat
   function togglePin() {
     const next = !shownPinned
     setOptimistic(next)
-    onKeepMessage?.(key, msgText, imageUrls, next)
+    // /api/messages/pin is a content-key TOGGLE: a failed request that keeps
+    // the optimistic state makes the NEXT click toggle the wrong way (a
+    // "pin" click would archive the note) — revert on failure.
+    Promise.resolve(onKeepMessage?.(key, msgText, imageUrls, next))
+      .then(ok => { if (ok === false) setOptimistic(null) })
+      .catch(() => setOptimistic(null))
   }
 
   // Copy the message's text content to the clipboard. Briefly flips to a

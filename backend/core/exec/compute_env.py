@@ -2,10 +2,11 @@
 
 The routing-oriented description the ExecutionRouter and the `describe_compute`
 tool both read: the LOCAL node (allocation-aware cores/mem/GPU + remaining
-walltime) and, on a cluster, the live Slurm submission landscape (partitions +
-load) — falling back to the deployment-configured catalog when live queries
-aren't reachable. Mirrors core.exec.cpu's "size to the allocation, not the
-hardware" for memory + GPU + time.
+walltime) and, when a slurm-kind weft site is declared, the live cluster
+submission landscape (partitions + load) read through the weft SitePort —
+falling back to the deployment-configured catalog when live queries aren't
+reachable. Mirrors core.exec.cpu's "size to the allocation, not the hardware"
+for memory + GPU + time.
 """
 from __future__ import annotations
 
@@ -129,6 +130,11 @@ def context_line() -> str:
             line += (". Long cells run interactively (raise timeout_s if needed); use "
                      "background=True only to parallelize independent jobs or when the user "
                      "asks — it's a fresh process with no kernel state.")
+        remotes = e.get("remote_sites") or []
+        if remotes:
+            line += (f". Remote machines available: {', '.join(remotes)} — run a step there "
+                     f"with run_python/run_r site=<name> (prefer the machine holding the "
+                     f"inputs; describe_compute for capacity).")
         return line
     except Exception:  # noqa: BLE001
         return ""
@@ -152,11 +158,75 @@ def compute_env(ttl: float = 20.0) -> dict:
     return env
 
 
+def _wait_label(available: bool, load: dict) -> str:
+    """Coarse per-partition wait signal from the weft site's live load — the
+    weft-sourced analog of the retired slurm_live.wait_label. The agent reads
+    this against the speedup it expects."""
+    if not available:
+        return "unavailable"
+    if (load.get("cpus_idle") or 0) > 0:
+        return "likely quick (idle nodes free)"
+    pend = load.get("pending_jobs") or 0
+    if pend == 0:
+        return "moderate (no idle nodes, empty queue)"
+    return f"queued (~{pend} jobs pending)"
+
+
+def _cluster_landscape(site: str) -> "tuple[list, list]":
+    """The live submission landscape for a slurm-kind weft `site`: the partition
+    list (name / cpus / mem / gpu bool / wait label) + the user's access rows.
+    Sourced from the weft SitePort — sites_describe (partition capabilities),
+    site_load (live idle CPUs + queue depth, TTL-cached weft-side) and
+    site_associations (accounts/QOS the user can reach). Best-effort: any
+    substrate/scheduler hiccup degrades to ([], []) so a turn never breaks."""
+    try:
+        from core.compute import get_compute
+        ad = get_compute()
+        desc = ad.sync_call("sites_describe", site)
+    except Exception:  # noqa: BLE001
+        return [], []
+    caps = ((desc or {}).get("capabilities") or {}).get("scheduler") or {}
+    load_parts: dict = {}
+    try:
+        load_parts = (ad.sync_call("site_load", site) or {}).get("partitions") or {}
+    except Exception:  # noqa: BLE001
+        load_parts = {}
+    parts: list = []
+    for cp in caps.get("partitions") or []:
+        name = cp.get("name")
+        if not name:
+            continue
+        lp = load_parts.get(name) or {}
+        cpn = cp.get("cpus_per_node")
+        idle_cpus = lp.get("cpus_idle") or 0
+        parts.append({
+            "partition": name,
+            "cpus_per_node": cpn,
+            "mem_gb_per_node": cp.get("mem_gb_per_node"),
+            "max_walltime": cp.get("max_walltime"),
+            # weft models GPUs as structured gres:[{type:gpu,count}]; the agent
+            # cue + routing only need the bool the old sinfo parser produced.
+            "gpu": any((g or {}).get("type") == "gpu" for g in (cp.get("gres") or [])),
+            "nodes_idle": (idle_cpus // cpn) if cpn else 0,
+            "wait": _wait_label(cp.get("available", True), lp),
+        })
+    access: list = []
+    try:
+        assoc = ad.sync_call("site_associations", site)
+        for a in (assoc or {}).get("associations") or []:
+            access.append({"account": a.get("account"),
+                           "partition": a.get("partition"),
+                           "qos": a.get("allowed_qos") or []})
+    except Exception:  # noqa: BLE001
+        access = []
+    return parts, access
+
+
 def _build_compute_env() -> dict:
     from core.exec.cpu import effective_cpu_count
     from core.exec.hpc_session import session_allocation
     from core.jobs.submitter import submitter_name
-    from core.jobs import slurm_live as sl
+    from core.jobs.weft_submitter import weft_slurm_site
 
     alloc = session_allocation()
     walltime_min = slurm_time_to_min(alloc.get("time_left")) if alloc.get("on_slurm") else None
@@ -169,15 +239,14 @@ def _build_compute_env() -> dict:
         "node_gpus": node_gpus(),
         "walltime_remaining_min": walltime_min,         # None = unbounded (pure local)
     }
-    # Surface the Slurm landscape whenever it's reachable (so the agent can see
-    # what it could submit to), regardless of the configured dispatch mode.
-    if env["mode"] == "slurm" or sl.slurm_available():
-        live = sl.partitions_live()
-        if live:
-            q = sl.queue_depth()
-            for p in live:
-                p["wait"] = sl.wait_label(p, q)
-            env["partitions"] = live
+    # Surface the cluster landscape whenever a slurm-kind weft site is declared
+    # (so the agent can see what it could submit to), regardless of the configured
+    # dispatch mode — data-driven off the weft site model, not a local `sinfo`.
+    site = weft_slurm_site()
+    if site:
+        parts, access = _cluster_landscape(site)
+        if parts:
+            env["partitions"] = parts
             env["partitions_source"] = "live"
         else:
             try:
@@ -186,7 +255,7 @@ def _build_compute_env() -> dict:
                 env["partitions_source"] = "config"
             except Exception:  # noqa: BLE001
                 env["partitions"], env["partitions_source"] = [], "none"
-        env["user_access"] = sl.user_access()
+        env["user_access"] = access
     # Accelerator readiness: is a GPU both PRESENT and USABLE by our stack? A GPU node
     # is useless if the base torch is CPU-only (the scVI-on-CPU incident: right node,
     # idle GPU). Present = a local GPU or a gpu partition; usable = torch is a CUDA
@@ -194,13 +263,22 @@ def _build_compute_env() -> dict:
     # just "a GPU exists," when placing a GPU step.
     gpu_present = bool(env["node_gpus"]) or any(p.get("gpu") for p in env.get("partitions") or [])
     if gpu_present:
-        from core.exec.env_integrity import torch_cuda_build
+        from core.exec.verify import torch_cuda_build
         _cuda = torch_cuda_build()
         env["gpu_usable"] = _cuda is not None
         env["gpu_usable_reason"] = (
             f"CUDA torch ({_cuda})" if _cuda else
             "base torch is CPU-only — a GPU step would fall back to CPU (admin: set "
             "ABA_ACCELERATOR=cuda in config.env + rebuild the env)")
+    # Declared remote machines usable via run_python/run_r site= (the detached
+    # lane) — surfaced so the agent knows its placement options WITHOUT having
+    # to call describe_compute first. Named only (kind/capacity is the tool's job).
+    try:
+        from core.jobs.weft_submitter import declared_compute_sites
+        env["remote_sites"] = [s["name"] for s in declared_compute_sites()
+                               if s["name"] != "local"]
+    except Exception:  # noqa: BLE001
+        env["remote_sites"] = []
     return env
 
 

@@ -57,6 +57,9 @@ export interface FocusViewProps {
   onChange: () => void
   compact?: boolean
   onAsk?: (text: string) => void
+  /** Seed the Guide composer WITHOUT sending (reveals the peek, focuses the
+   *  cursor) — Discuss-style affordances prefer this over onAsk. */
+  onPrefill?: (text: string) => void
   onChatResult?: (label: string, thumb?: string,
                   annotation?: { image: string; note: string },
                   action?: 'chat' | 'revision' | 'revision-supersede' | 'reproduce',
@@ -176,7 +179,8 @@ function DatasetDescription({ entity, onChange }: { entity: Entity; onChange: ()
     if ((val ?? '') === (entity.notes ?? '')) return
     fetch(`/api/entities/${encodeURIComponent(entity.id)}`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ notes: val }),
-    }).then(() => onChange()).catch(() => {})
+    }).then(r => { if (r.ok) onChange() }).catch(() => {})
+    // non-ok: no onChange — `val` stays dirty in the box and the next blur retries
   }
   const ref = useRef<HTMLTextAreaElement>(null)
   const grow = () => { const t = ref.current; if (t) { t.style.height = 'auto'; t.style.height = `${t.scrollHeight}px` } }
@@ -296,7 +300,7 @@ function FigureView({ entity }: FocusViewProps) {
 }
 
 
-function DatasetView({ entity, onFocus, onChange, onChatResult, projectId }: FocusViewProps) {
+function DatasetView({ entity, onFocus, onChange, onChatResult, onPrefill, projectId }: FocusViewProps) {
   const [preview, setPreview] = useState<Preview | null>(null)
   useEffect(() => {
     setPreview(null)
@@ -310,6 +314,7 @@ function DatasetView({ entity, onFocus, onChange, onChatResult, projectId }: Foc
 
   return (
     <div className="focus__dataset">
+      <DriftBanner entity={entity} onChange={onChange} onPrefill={onPrefill} />
       <DatasetDescription entity={entity} onChange={onChange} />
       <div className="focus__rows">
         <div className="focus__row">
@@ -355,6 +360,87 @@ function DatasetView({ entity, onFocus, onChange, onChatResult, projectId }: Foc
 }
 
 
+/** §5 drift banner + verified relink (more_weft_ui.md). Renders ONLY when the
+ *  entity carries a recorded drift/missing flag (set by /recheck or at use) —
+ *  the affected entity only, never ambient chrome. Relink accepts on a content
+ *  match; a mismatch demotes to the new-version flow (via the Guide). */
+export function DriftBanner({ entity, onChange, onPrefill }: {   // exported for test
+  entity: Entity; onChange: () => void; onPrefill?: (t: string) => void
+}) {
+  const md = (entity.metadata ?? {}) as {
+    home?: { site?: string; path?: string }
+    source_changed?: boolean; source_missing?: boolean; source_checked_at?: number
+  }
+  const [relinking, setRelinking] = useState(false)
+  const [newPath, setNewPath] = useState('')
+  const [note, setNote] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  if (!md.source_changed && !md.source_missing) return null
+  const where = md.home?.path
+    ? `${md.home.path}${md.home.site && md.home.site !== 'local' ? ` on ${md.home.site}` : ''}`
+    : 'its source'
+  const checked = md.source_checked_at
+    ? ` · checked ${new Date(md.source_checked_at * 1000).toLocaleString()}` : ''
+  async function recheck() {
+    setBusy(true); setNote(null)
+    try {
+      const r = await fetch(`/api/datasets/${encodeURIComponent(entity.id)}/recheck`, { method: 'POST' })
+      const d = await r.json().catch(() => null)
+      setNote(d?.state === 'unchanged' ? 'source matches the registration again' : null)
+    } catch { setNote('re-check failed — is the machine reachable?') }
+    setBusy(false); onChange()
+  }
+  async function relink() {
+    if (!newPath.trim()) return
+    setBusy(true); setNote(null)
+    try {
+      const r = await fetch(`/api/datasets/${encodeURIComponent(entity.id)}/relink`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: newPath.trim() }),
+      })
+      if (r.status === 409) {
+        setNote('the content at that path differs — use “new version” instead')
+      } else if (!r.ok) {
+        setNote('nothing readable at that path')
+      } else {
+        setRelinking(false); setNote('relinked — same content, new home')
+      }
+    } catch { setNote('relink failed') }
+    setBusy(false); onChange()
+  }
+  return (
+    <div className="focus__drift">
+      <div>
+        ⚠ {md.source_missing
+          ? `The data at ${where} is gone or unreachable`
+          : `The data at ${where} has changed since registration`}{checked}
+      </div>
+      <div className="focus__drift-actions">
+        {md.source_changed && onPrefill && (
+          <button className="focus__drift-btn" disabled={busy}
+            onClick={() => onPrefill(`The source of dataset "${entity.title}" (entity_id="${entity.id}") changed at ${where}. Register the current contents as a NEW VERSION of this dataset (keep the old one for provenance). `)}>
+            Use as new version
+          </button>
+        )}
+        <button className="focus__drift-btn" disabled={busy}
+          onClick={() => setRelinking(v => !v)}>It moved — relink…</button>
+        <button className="focus__drift-btn" disabled={busy} onClick={recheck}>Re-check</button>
+      </div>
+      {relinking && (
+        <div className="focus__drift-relink">
+          <input value={newPath} onChange={e => setNewPath(e.target.value)}
+                 placeholder="new path of the same data…"
+                 onKeyDown={e => { if (e.key === 'Enter') relink() }} />
+          <button className="focus__drift-btn" disabled={busy || !newPath.trim()}
+                  onClick={relink}>Verify & relink</button>
+        </div>
+      )}
+      {note && <div className="focus__drift-note">{note}</div>}
+    </div>
+  )
+}
+
+
 function NoteView({ entity }: FocusViewProps) {
   return (
     <div className="focus__abstract">
@@ -376,13 +462,19 @@ function NarrativeView({ entity, onChange }: FocusViewProps) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { setText((entity.metadata?.text as string) ?? ''); setDirty(false) }, [entity.id])
 
+  const [saveErr, setSaveErr] = useState(false)
   async function save() {
     const meta = { ...(entity.metadata ?? {}), text }
-    await fetch(`/api/entities/${encodeURIComponent(entity.id)}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ notes: text.slice(0, 200), metadata: meta }),
-    })
-    setDirty(false); onChange()
+    // a non-ok PATCH must NOT claim "Saved" — the textarea only resyncs on
+    // entity change, so a silently-failed save loses the manuscript edit
+    try {
+      const r = await fetch(`/api/entities/${encodeURIComponent(entity.id)}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes: text.slice(0, 200), metadata: meta }),
+      })
+      if (!r.ok) { setSaveErr(true); return }
+    } catch { setSaveErr(true); return }
+    setSaveErr(false); setDirty(false); onChange()
   }
   return (
     <div className="focus__narrative">
@@ -396,6 +488,7 @@ function NarrativeView({ entity, onChange }: FocusViewProps) {
       <div className="focus__narrative-bar">
         {dirty ? <button className="focus__promote" onClick={save}>Save</button>
                : <span className="focus__placeholder">Saved. The Stylist reviews on focus.</span>}
+        {saveErr && <span className="focus__drift-note">save failed — your edit is still here; try again</span>}
       </div>
     </div>
   )
@@ -533,9 +626,9 @@ function FindingView({ entity, entities, onFocus, onChange }: FocusViewProps) {
 // into the args each component expects. Keeps the call-side of those
 // components unchanged.
 
-function RunViewAdapter({ entity, entities, onFocus, onChange, onAsk, onChatResult, onBrowseFiles }: FocusViewProps) {
+function RunViewAdapter({ entity, entities, onFocus, onChange, onAsk, onPrefill, onChatResult, onBrowseFiles }: FocusViewProps) {
   return <RunView run={entity} entities={entities} onFocus={onFocus} onChange={onChange}
-                  onAsk={onAsk} onChatResult={onChatResult} onBrowseFiles={onBrowseFiles} />
+                  onAsk={onAsk} onPrefill={onPrefill} onChatResult={onChatResult} onBrowseFiles={onBrowseFiles} />
 }
 
 function ResultViewAdapter({ entity, entities, onFocus, onChange, onAsk, onChatResult, onAnnotate, annotClear, highlighting, onHighlightingChange }: FocusViewProps) {

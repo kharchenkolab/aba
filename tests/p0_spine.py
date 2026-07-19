@@ -33,7 +33,7 @@ from core.graph.entities import create_entity, get_entity    # noqa: E402
 from core.graph.provenance import upstream                   # noqa: E402
 from core.data import DataHandle, ExecContext, resolve, register, promote  # noqa: E402
 from core.exec import (                                       # noqa: E402
-    LocalSubprocessExecutor, Provisioning, LocalRouter,
+    LocalSubprocessExecutor, Provisioning, decide,
 )
 from core.catalog import (                                    # noqa: E402
     register_capability, list_capabilities, resolve_capability, propose_capability,
@@ -163,11 +163,10 @@ def test_executor():
 
 
 def test_router():
-    print("exec.router: LocalRouter")
-    rt = LocalRouter()
-    c = rt.route(estimate={"ram_gb": 2, "runtime_min": 1}, data_locality="local")
+    print("exec.router: decide()")
+    c = decide(estimate={"ram_gb": 2, "runtime_min": 1})
     check("router defaults to local", c.location == "local" and not c.requires_approval)
-    c2 = rt.route(override="hpc:short")
+    c2 = decide(override="hpc:short")
     check("router records override + requires approval",
           c2.location == "hpc:short" and c2.requires_approval)
 

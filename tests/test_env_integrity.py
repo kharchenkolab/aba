@@ -1,12 +1,13 @@
-"""env_refactor.md P0 — real load-verification (Python + R).
+"""env diagnostics + base-stage marker (core.exec.env_integrity).
 
-The corruption that bit us was reported "ready" because the check was
-PathFinder.find_spec (presence), not a real import. These tests pin the
-present-but-unloadable case (ABI mismatch / partial install) that find_spec
-misses but a real import catches.
+The honest import/GPU load-verification tests moved to test_verify.py, and the
+served-base heal/repair/lock machinery + its tests were deleted with the served
+base (W3.4/W3.5 — weft owns environment realization). What remains here is the
+read-only diagnostics layer (the (i)-drawer Env tab data + per-package status)
+and the install-time base-stage marker. FS self-checks are covered in
+test_selfcheck.py.
 """
 from __future__ import annotations
-import subprocess
 import sys
 from pathlib import Path
 
@@ -15,227 +16,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
-from core.exec.env_integrity import verify_python_imports, verify_r_library  # noqa: E402
-
 pytestmark = pytest.mark.platform
-
-
-# ── Python ───────────────────────────────────────────────────────────────────
-def test_verify_python_imports_good():
-    ok, detail = verify_python_imports(["os", "sys", "json"], extra_paths=[])
-    assert ok and detail == ""
-
-
-def test_verify_python_imports_missing():
-    ok, detail = verify_python_imports(["no_such_module_xyz_123"], extra_paths=[])
-    assert not ok
-    assert "No module named" in detail or "ModuleNotFoundError" in detail
-
-
-def test_verify_python_imports_present_but_unloadable(tmp_path):
-    """The tensorflow case: a package that EXISTS (find_spec passes) but raises
-    on import. find_spec says ready; a real import does not."""
-    pkg = tmp_path / "abadummy"
-    pkg.mkdir()
-    (pkg / "__init__.py").write_text(
-        "raise ImportError('numpy.core.multiarray failed to import')\n")
-    # find_spec WOULD green-light it (the old, wrong check)
-    from importlib.machinery import PathFinder
-    assert PathFinder.find_spec("abadummy", [str(tmp_path)]) is not None
-    # the real check catches it
-    ok, detail = verify_python_imports(["abadummy"], extra_paths=[str(tmp_path)])
-    assert not ok
-    assert "multiarray" in detail
-
-
-def test_verify_python_imports_empty_is_ok():
-    assert verify_python_imports([], extra_paths=[]) == (True, "")
-
-
-def test_verify_python_imports_appends_overlay_not_prepend(tmp_path):
-    """Overlay paths must be APPENDED (base wins), matching the run_python
-    preamble — verify by shadowing a stdlib name in the overlay and confirming
-    the base copy still wins."""
-    (tmp_path / "json.py").write_text("raise RuntimeError('overlay json should not win')\n")
-    ok, _ = verify_python_imports(["json"], extra_paths=[str(tmp_path)])
-    assert ok  # base json wins because the extra path is appended, not prepended
-
-
-# ── base constraints (the numpy-drift guard) ────────────────────────────────
-def test_ensure_base_constraints_pins_numpy(tmp_path, monkeypatch):
-    import core.exec.env_integrity as ei
-    monkeypatch.setattr(ei, "base_constraints_path", lambda: tmp_path / "c.txt")
-    p = ei.ensure_base_constraints(force=True)
-    assert p is not None and p.exists()
-    lines = p.read_text().splitlines()
-    assert any(ln.lower().startswith("numpy==") for ln in lines), "base must pin numpy"
-    # only clean name==version lines (no editable/URL entries that break -c)
-    import re
-    assert all(re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]*==", ln) for ln in lines if ln.strip())
-
-
-def test_abi_anchor_pins_numpy_from_metadata(tmp_path, monkeypatch):
-    """The ABI anchor pins numpy from live METADATA — robust to a conda/local-wheel
-    base where `pip freeze` renders numpy as `numpy @ file://…` (the regression: that
-    `@`-form was dropped, the pin came up empty, and the numpy-drift guard was OFF —
-    letting overlay installs rebuild numpy, which fails on an old system toolchain)."""
-    import core.exec.env_integrity as ei
-    monkeypatch.setattr(ei, "abi_anchor_path", lambda: tmp_path / "abi.txt")
-    monkeypatch.setattr(ei, "base_constraints_path", lambda: tmp_path / "c.txt")
-    p = ei.abi_anchor_constraints(force=True)
-    assert p is not None and p.exists(), "anchor must resolve numpy from metadata"
-    assert any(ln.lower().startswith("numpy==") for ln in p.read_text().splitlines())
-
-
-def test_abi_anchor_regenerates_stale_empty_cache(tmp_path, monkeypatch):
-    """A stale/empty cached anchor file must be revalidated + regenerated (not
-    returned as-is), else a once-empty anchor pins nothing forever."""
-    import core.exec.env_integrity as ei
-    ap = tmp_path / "abi.txt"
-    monkeypatch.setattr(ei, "abi_anchor_path", lambda: ap)
-    monkeypatch.setattr(ei, "base_constraints_path", lambda: tmp_path / "c.txt")
-    ap.write_text("# stale, no pin\n")
-    p = ei.abi_anchor_constraints()               # NOT force — must detect stale + regen
-    assert p is not None
-    assert any(ln.lower().startswith("numpy==") for ln in p.read_text().splitlines())
-
-
-def test_gpu_capability_ok_maps_torch_state(monkeypatch):
-    """The GPU verify-at-use signal: torch sees a GPU → True; torch present but no
-    usable GPU (CPU-only build — the scVI-on-CPU incident) → False; torch absent →
-    None (not a torch GPU job)."""
-    import sys
-    import types
-    import core.exec.env_integrity as ei
-    fake = types.SimpleNamespace(
-        __version__="2.9.0",
-        version=types.SimpleNamespace(cuda="12.4"),
-        cuda=types.SimpleNamespace(is_available=lambda: True))
-    monkeypatch.setitem(sys.modules, "torch", fake)
-    ok, _ = ei.gpu_capability_ok()
-    assert ok is True
-    # CPU-only build: version.cuda is None and cuda.is_available() is False → the incident
-    fake.version.cuda = None
-    fake.cuda.is_available = lambda: False
-    ok, detail = ei.gpu_capability_ok()
-    assert ok is False and "is_available()=False" in detail
-    # torch not importable → not judged
-    monkeypatch.setitem(sys.modules, "torch", None)
-    ok, _ = ei.gpu_capability_ok()
-    assert ok is None
-
-
-def test_torch_cuda_build_reports_build(monkeypatch):
-    """torch_cuda_build reflects the BUILD (version.cuda), node-independently — None for
-    a CPU-only build or absent torch (the login-node signal for whether a GPU JOB could
-    use the GPU)."""
-    import sys
-    import types
-    import core.exec.env_integrity as ei
-    monkeypatch.setitem(sys.modules, "torch",
-                        types.SimpleNamespace(version=types.SimpleNamespace(cuda="12.4")))
-    assert ei.torch_cuda_build() == "12.4"
-    monkeypatch.setitem(sys.modules, "torch",
-                        types.SimpleNamespace(version=types.SimpleNamespace(cuda=None)))
-    assert ei.torch_cuda_build() is None
-    monkeypatch.setitem(sys.modules, "torch", None)   # not importable
-    assert ei.torch_cuda_build() is None
-
-
-def test_env_selfcheck_accelerator_invariant(tmp_path, monkeypatch):
-    """When the deployment declares ABA_ACCELERATOR=cuda, env_selfcheck flags a CPU-only
-    torch base (the scVI-on-CPU root cause); with no declaration, it doesn't check."""
-    import core.exec.env_integrity as ei
-    monkeypatch.setattr(ei, "abi_anchor_path", lambda: tmp_path / "abi.txt")
-    monkeypatch.setattr(ei, "base_constraints_path", lambda: tmp_path / "c.txt")
-    monkeypatch.setenv("ABA_ACCELERATOR", "cuda")
-    monkeypatch.setattr(ei, "torch_cuda_build", lambda: None)          # CPU-only base
-    rep = ei.env_selfcheck()
-    assert rep["checks"]["accelerator_cuda"]["ok"] is False and not rep["ok"]
-    monkeypatch.setattr(ei, "torch_cuda_build", lambda: "12.4")        # CUDA base
-    assert ei.env_selfcheck()["checks"]["accelerator_cuda"]["ok"] is True
-    monkeypatch.delenv("ABA_ACCELERATOR", raising=False)               # not declared → not checked
-    assert "accelerator_cuda" not in ei.env_selfcheck()["checks"]
-
-
-def test_env_selfcheck_reports_anchor_armed(tmp_path, monkeypatch):
-    """The standard env self-check catches the silent ABI-anchor-OFF state the deep
-    base-health check misses — the invariant a dev run should hold before it trusts
-    the stack."""
-    import core.exec.env_integrity as ei
-    monkeypatch.setattr(ei, "abi_anchor_path", lambda: tmp_path / "abi.txt")
-    monkeypatch.setattr(ei, "base_constraints_path", lambda: tmp_path / "c.txt")
-    rep = ei.env_selfcheck()
-    assert rep["ok"], rep
-    assert rep["checks"]["abi_anchor_armed"]["ok"]
-    assert rep["checks"]["numpy_present"]["ok"]
-
-
-def test_constraints_block_conflicting_install(tmp_path):
-    """Proof the guard works: with numpy pinned high, requesting an old numpy
-    must FAIL the resolve instead of silently downgrading the shared base."""
-    cons = tmp_path / "c.txt"
-    cons.write_text("numpy==2.4.6\n")
-    try:
-        proc = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-c", str(cons),
-             "--dry-run", "numpy==1.26.4"],
-            capture_output=True, text=True, timeout=90)
-    except subprocess.TimeoutExpired:
-        pytest.skip("pip dry-run timed out (network)")
-    out = (proc.stderr or "") + (proc.stdout or "")
-    if any(s in out for s in ("Could not fetch", "Temporary failure",
-                              "Network is unreachable", "Failed to establish")):
-        pytest.skip("no network for pip metadata")
-    assert proc.returncode != 0, f"constraint should have blocked the downgrade:\n{out[:600]}"
-
-
-# ── P6: lazy-from-lock (canonical lock + materialize-from-lock) ──────────────
-def test_canonical_lock_path(tmp_path, monkeypatch):
-    from core.exec.env_integrity import canonical_lock_path
-    monkeypatch.delenv("ABA_BASE_LOCK", raising=False)
-    assert canonical_lock_path() is None
-    lock = tmp_path / "canon.txt"
-    lock.write_text("numpy==2.4.6\n")
-    monkeypatch.setenv("ABA_BASE_LOCK", str(lock))
-    assert canonical_lock_path() == lock
-
-
-def test_ensure_base_constraints_prefers_canonical(tmp_path, monkeypatch):
-    from core.exec import env_integrity as ei
-    canon = tmp_path / "canon.txt"
-    canon.write_text("numpy==2.4.6\nscanpy==1.12.1\n")
-    monkeypatch.setenv("ABA_BASE_LOCK", str(canon))
-    assert ei.ensure_base_constraints() == canon   # shipped canonical wins
-
-
-def test_write_base_lock(tmp_path):
-    from core.exec.env_integrity import write_base_lock
-    out = write_base_lock(tmp_path / "lock.txt")
-    assert out is not None and out.exists()
-    lines = out.read_text().splitlines()
-    assert any(ln.lower().startswith("numpy==") for ln in lines)
-
-
-def test_materialize_from_lock_pins_version(tmp_path, monkeypatch):
-    """Lazy-from-lock: a lock pinning `six` to an OLD version → materialize
-    installs THAT version, not latest. Proves a minimal install grows to the
-    canonical versions."""
-    import glob
-    from core.exec import env_integrity as ei
-    lock = tmp_path / "lock.txt"
-    lock.write_text("six==1.16.0\n")
-    monkeypatch.setenv("ABA_BASE_LOCK", str(lock))
-    prefix = tmp_path / "pfx"
-    res = ei.materialize_from_lock(["six"], prefix=prefix, timeout_s=300)
-    if not res["ok"] and any(s in str(res.get("error", "")) for s in
-                             ("Could not fetch", "Temporary failure", "Network",
-                              "Failed to establish")):
-        pytest.skip("no network for the materialize")
-    assert res["ok"], res["error"]
-    assert res["lock"] == str(lock)
-    dist = glob.glob(str(prefix) + "/lib/python*/site-packages/six-*.dist-info")
-    assert any("six-1.16.0" in d for d in dist), f"expected six 1.16.0 from the lock, got {dist}"
 
 
 # ── env_layers (the (i)-drawer Env-tab data) ─────────────────────────────────
@@ -253,49 +34,14 @@ def test_env_layers_structure():
     from core.exec.env_integrity import env_layers
     d = env_layers("prjX")
     assert set(("python", "r", "project_id")) <= set(d)
-    # §11.4: just the immutable base + this project's overlay — no shared tier.
-    tiers = [L["tier"] for L in d["python"]["layers"]]
-    assert "shared overlay" not in tiers
-    base = next(L for L in d["python"]["layers"] if L["tier"].startswith("base"))
-    assert base["mutable"] is False and len(base["packages"]) > 0
-    assert "project overlay" in tiers
-    assert {"tier", "scope", "mutable", "path", "packages"} <= set(base)
-    assert d["python"]["lock"]["pins"] >= 0
-    # r structure present (packages populated only if R is provisioned)
-    assert d["r"]["layers"] and d["r"]["layers"][0]["tier"] == "base"
-
-
-# ── base self-heal + error surfacing (fix 1 + surfacing) ─────────────────────
-def test_base_health_shape():
-    from core.exec.env_integrity import base_health
-    h = base_health(deep=False)   # fast pip-check; read-only
-    assert set(("ok", "problems", "missing")) <= set(h)
-    assert isinstance(h["problems"], list) and isinstance(h["missing"], list)
-
-
-def test_missing_dep_parser():
-    from core.exec.env_integrity import _MISSING_RE
-    m = _MISSING_RE.search("pandas 2.3.3 requires six, which is not installed.")
-    assert m and m.group(1) == "six"
-
-
-def test_env_root_cause_ignores_plain_code_errors():
-    """A normal code error (not import-shaped) must pass through untouched —
-    we don't want to diagnose the base on every ValueError."""
-    from core.exec.env_integrity import env_root_cause
-    assert env_root_cause("ValueError: bad input", repair=False) is None
-    assert env_root_cause("", repair=False) is None
-
-
-def test_env_root_cause_none_when_base_healthy():
-    """Import-shaped stderr but an intact base = the user's own missing import,
-    not an env break — leave it alone (return None), don't claim the base broke."""
-    from core.exec.env_integrity import env_root_cause, base_health
-    if not base_health(deep=False)["ok"]:
-        import pytest as _pt
-        _pt.skip("base currently unhealthy on this box")
-    assert env_root_cause("ModuleNotFoundError: No module named 'totallymadeup_xyz'",
-                          repair=False) is None
+    # W3.5 weft-only: the Python env is the weft session (+ isolated envs) — no
+    # served-base venv/overlay tiers. Populated only when a python pack is declared.
+    assert isinstance(d["python"]["layers"], list)
+    assert all(L["tier"] in ("session", "isolated") for L in d["python"]["layers"])
+    assert "overlay" not in " ".join(L["tier"] for L in d["python"]["layers"])
+    # R symmetric: session/isolated tiers, populated only when an R pack is declared.
+    assert isinstance(d["r"]["layers"], list)
+    assert all(L["tier"] in ("session", "isolated") for L in d["r"]["layers"])
 
 
 # ── env diagnostics (the agent's read layer for troubleshooting) ─────────────
@@ -324,34 +70,12 @@ def test_python_package_status_present_but_broken(tmp_path):
 def test_env_overview_shape():
     from core.exec.env_integrity import env_overview
     ov = env_overview("prjX")
-    assert {"python", "shared_overlay", "project_overlay", "base_lock"} <= set(ov)
-    assert ov["project_overlay"]["project_id"] == "prjX"
-    assert "pylib_proj" in (ov["project_overlay"]["dir"] or "")
-
-
-# ── R (wrapper logic; real Rscript load is exercised in the R-scenario test) ──
-def test_verify_r_library_wraps_r_has_package(monkeypatch):
-    import core.exec.r as r
-    monkeypatch.setattr(r, "r_has_package", lambda pkg, project_id=None: pkg == "Matrix")
-    assert verify_r_library("Matrix") == (True, "")
-    ok, detail = verify_r_library("nonexistent_rpkg")
-    assert not ok and "does not load" in detail
-
-
-def test_verify_r_library_empty_is_ok():
-    assert verify_r_library("") == (True, "")
-
-
-def test_verify_r_library_real_load(monkeypatch):
-    """End-to-end Rscript library() load of a baked base package — the R analog
-    of the Python real-import test. Skips if the R runtime isn't provisioned."""
-    from core.exec.materialize import tools_env
-    if not (tools_env() / "bin" / "Rscript").exists():
-        pytest.skip("R runtime not provisioned on this box")
-    ok, _ = verify_r_library("Matrix")          # r-matrix is baked into the R base
-    assert ok, "baked base package Matrix should load"
-    ok2, detail = verify_r_library("NoSuchRPkgXyz")
-    assert not ok2 and "does not load" in detail
+    # W3.5 weft-only: the Python env is the project's weft session + the aba
+    # runtime interpreter — no served-base pip overlays / base lock.
+    assert {"python", "session"} <= set(ov)
+    assert "base_lock" not in ov          # dropped with the served base (W3.4)
+    assert ov["session"]["project_id"] == "prjX"
+    assert ov["session"]["active"] is False   # no pack declared in this bare env
 
 
 # ── lazy/staged env init (ABA_ENV_PREWARM) — lazy_env_init.md ────────────────
@@ -367,40 +91,3 @@ def test_base_stage_reads_marker(tmp_path, monkeypatch):
         assert _ei_lazy.base_stage() == v
     marker.write_text("garbage")
     assert _ei_lazy.base_stage() == "ready"           # unknown ⇒ ready (safe default)
-
-
-def test_self_heal_skips_while_staging(tmp_path, monkeypatch):
-    """The installer owns the base until `ready`; startup self-heal must NOT
-    deep-verify/repair/freeze mid-write (it would fight the in-flight env update)."""
-    site = tmp_path / "lib" / "python3.12" / "site-packages"
-    site.mkdir(parents=True)
-    monkeypatch.setattr(_ei_lazy, "_base_site_dir", lambda: site)
-    monkeypatch.setattr(_ei_lazy, "env_selfcheck",
-                        lambda: {"ok": True, "checks": {"abi_anchor_armed": {"ok": True, "detail": "ok"}}})
-    monkeypatch.setattr(_ei_lazy, "base_stage", lambda: "completing")
-    def _boom(**k):
-        raise AssertionError("must not deep-verify the base mid-staging")
-    monkeypatch.setattr(_ei_lazy, "base_health", _boom)
-    res = _ei_lazy.self_heal_base(log=lambda *_a, **_k: None)
-    assert res.get("skipped") == "staging" and res.get("stage") == "completing"
-
-
-def test_staging_import_note_paths(monkeypatch):
-    trace = "Traceback (most recent call last):\nModuleNotFoundError: No module named 'scanpy'\n"
-    # ready base → not applicable (normal env_root_cause / user-error path)
-    monkeypatch.setattr(_ei_lazy, "base_stage", lambda: "ready")
-    assert _ei_lazy.staging_import_note(trace, wait_s=0) is None
-    # non-import failure → not applicable even while completing
-    monkeypatch.setattr(_ei_lazy, "base_stage", lambda: "completing")
-    assert _ei_lazy.staging_import_note("ValueError: bad input", wait_s=0) is None
-    # completing base + missing import → 'finishing setup' note naming the module
-    note = _ei_lazy.staging_import_note(trace, wait_s=0)
-    assert note is not None and note["ready"] is False and note["module"] == "scanpy"
-    assert "finishing setup" in note["note"]
-
-
-def test_lifespan_defers_r_provision_while_staging():
-    """The backend's startup R provisioning must defer while the base is staging,
-    so it can't race the installer's complete-r-env on the same tools env."""
-    lifespan = (ROOT / "backend" / "lifespan.py").read_text()
-    assert "base_stage()" in lifespan and '!= "ready"' in lifespan

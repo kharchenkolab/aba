@@ -37,6 +37,15 @@ class CompatibilityReport:
     registries_unknown: list[str] = field(default_factory=list)
     artifacts_missing: int = 0
     artifacts_present: int = 0
+    # I4 — env registry (weft_envs.json) portability. A recovered/imported
+    # project may reference sessions + EnvIDs that don't exist in THIS
+    # deployment's weft store. Report what it references and what's
+    # unrecoverable here so the agent/UI knows before first use.
+    env_registry_present: bool = False
+    env_named: list[str] = field(default_factory=list)
+    env_named_unrecoverable: list[str] = field(default_factory=list)
+    env_default_langs: list[str] = field(default_factory=list)
+    env_store_unknown: bool = False   # substrate offline → couldn't verify
 
     def to_dict(self) -> dict:
         return {
@@ -57,6 +66,13 @@ class CompatibilityReport:
             },
             "registries_unknown": list(self.registries_unknown),
             "artifacts": {"present": self.artifacts_present, "missing": self.artifacts_missing},
+            "env_registry": {
+                "present": self.env_registry_present,
+                "named_envs": sorted(self.env_named),
+                "named_envs_unrecoverable": sorted(self.env_named_unrecoverable),
+                "default_session_languages": sorted(self.env_default_langs),
+                "store_check": "unknown" if self.env_store_unknown else "checked",
+            },
         }
 
 
@@ -185,6 +201,45 @@ def _check_artifacts(db_path: Path, project_dir: Path) -> tuple[int, int]:
     return present, missing
 
 
+# ─── env registry (I4) ──────────────────────────────────────────────────────
+def _scan_env_registry(project_dir: Path, rep: CompatibilityReport) -> None:
+    """Read weft_envs.json (if present) and record the project's env registry:
+    named ISOLATED envs — flagging any whose EnvID is absent from THIS
+    deployment's weft store (genuinely unrecoverable: their locks travelled as a
+    pointer only) — and the default-session languages (which self-heal from the
+    base pack + replayed additions on first use, so they are informational, not
+    missing). Best-effort; an offline/absent substrate marks the store check
+    'unknown' rather than fabricating a missing list."""
+    f = project_dir / "weft_envs.json"
+    if not f.exists():
+        return  # env_registry_present stays False — no customizations, or lost
+    try:
+        data = json.loads(f.read_text())
+    except Exception:
+        return
+    rep.env_registry_present = True
+    named = data.get("envs") or {}
+    rep.env_named = list(named.keys())
+    rep.env_default_langs = list((data.get("default") or {}).keys())
+    if not named:
+        return
+    # Verify each named env's EnvID against the target store (best-effort).
+    try:
+        from core.compute import adapter as _ad, named_envs as _ne  # noqa: PLC0415
+        comp = _ad.get_compute()
+    except Exception:
+        rep.env_store_unknown = True
+        return
+    for name, row in named.items():
+        eid = (row or {}).get("env_id")
+        if not eid:
+            continue
+        try:
+            _ne._sync(comp.env_status(eid))   # lock known to this store?
+        except Exception:
+            rep.env_named_unrecoverable.append(name)
+
+
 # ─── main entrypoint ────────────────────────────────────────────────────────
 def build_report(project_dir: Path, *, pid: str, db_path: Optional[Path] = None) -> CompatibilityReport:
     """Build a CompatibilityReport for an imported project and write
@@ -246,6 +301,9 @@ def build_report(project_dir: Path, *, pid: str, db_path: Optional[Path] = None)
     pres, miss = _check_artifacts(db, project_dir)
     rep.artifacts_present = pres
     rep.artifacts_missing = miss
+
+    # Env registry portability (I4)
+    _scan_env_registry(project_dir, rep)
 
     # Persist
     try:

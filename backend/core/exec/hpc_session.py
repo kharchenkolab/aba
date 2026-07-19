@@ -96,9 +96,13 @@ def aba_allocation_capacity() -> dict:
 
 
 def job_hpc_info(job: dict) -> dict:
-    """Live scheduler info for ONE job (for the Jobs tab). Uses the SlurmSubmitter
-    regardless of the active submitter, since the job records how it was run."""
-    if (job.get("params") or {}).get("submitter") == "slurm":
-        from core.jobs.slurm_submitter import SlurmSubmitter
-        return SlurmSubmitter().info(job)
+    """Live scheduler info for ONE job (for the Jobs tab). Reads it from the
+    submitter the job RECORDS it ran under: a weft-lane job (the cluster path) →
+    WeftSubmitter().info (weft task state/node/placement); else a local in-process
+    job. (The legacy sbatch lane is retired — an old `submitter=='slurm'` record
+    just reads as local now.)"""
+    submitter = (job.get("params") or {}).get("submitter")
+    if submitter == "weft":
+        from core.jobs.weft_submitter import WeftSubmitter
+        return WeftSubmitter().info(job)
     return {"submitter": "local"}

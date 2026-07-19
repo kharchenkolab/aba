@@ -22,6 +22,7 @@ from core.runtime.llm_runtime_direct import (
 )
 from core.manifest.assembler import build_manifest, render_focus_preamble
 from core.hooks.dispatcher import dispatch
+from core.runtime import wire
 from core.runtime.turn import Turn, TurnState, gen_run_id
 from core.runtime.checkpoint import checkpoint
 from core.runtime.content_pack import active_pack
@@ -290,6 +291,26 @@ def _assemble_active_tools(tools_all: list, spec) -> list:
     if spec is not None:
         active = filter_tools_by_allowlist(active, spec.tool_allowlist)
     return active
+
+
+def _summary_budget(spec) -> int | None:
+    """Tier-2 summary budget precedence: the DEDICATED override knob
+    (ABA_HISTORY_SUMMARY_BUDGET_OVERRIDE_CHARS, >0) is explicit operator/
+    harness intent and wins over the spec's class default (grounded_guide
+    pins 100k), which wins over the global default (None →
+    effective_history falls through to HISTORY_SUMMARY_THRESHOLD_CHARS).
+    Deliberately a DIFFERENT env var from the global threshold: reusing it
+    made tuning the fall-through default silently clobber every spec pin
+    (review F5); and before any knob existed, harness overrides were
+    silently inert against pinned specs (vacuous compaction-study round)."""
+    try:
+        from core.config import HISTORY_SUMMARY_BUDGET_OVERRIDE
+        ov = int(HISTORY_SUMMARY_BUDGET_OVERRIDE.get() or 0)
+        if ov > 0:
+            return ov
+    except Exception:  # noqa: BLE001 — a broken knob must not break turns
+        pass
+    return spec.summary_budget_chars if spec else None
 
 
 def _resolve_turn_spec(thread_id: str | None, spec_override: str | None):
@@ -699,23 +720,38 @@ async def stream_response(
     # this is a UI-only stream.
     # Manifest also carries run_id so the frontend knows what to cancel
     # when the user hits Stop (no separate "stream started" event needed).
-    yield sse({"type": "manifest", "manifest": manifest.to_dict(), "run_id": turn.run_id})
+    yield sse(wire.manifest(manifest=manifest.to_dict(), run_id=turn.run_id))
 
     try:
+        _empty_retry_done = False       # degenerate-empty turn defense (below)
+        _turn_produced_output = False   # ANY generation this turn spoke/acted
         while True:
             # Cancellation check at the iteration boundary. The user may
             # have hit Stop while we were processing the previous turn's
             # tool results, or even before sending. Bail before paying
             # for another LLM call.
             if cancel_token.cancelled:
-                yield sse({"type": "cancelled", "reason": cancel_token.reason,
-                           "run_id": turn.run_id})
+                yield sse(wire.cancelled(reason=cancel_token.reason,
+                                         run_id=turn.run_id))
                 turn.transition(TurnState.FAILED)
                 turn.error = {"type": "Cancelled", "message": cancel_token.reason}
+                # durable stop marker: the thread must RECORD the stop — for
+                # the user after a reload (an empty turn reads as a glitch,
+                # ux_findings F4 follow-up) and for the agent's own history
+                # (later turns should know this one was interrupted)
+                try:
+                    append_message("assistant",
+                                   [{"type": "text",
+                                     "text": "*(stopped by user)*"}],
+                                   entity_id=entity_id,
+                                   focus_entity_id=focus_entity_id,
+                                   thread_id=store_tid)
+                except Exception:  # noqa: BLE001 — marker never blocks the bail
+                    pass
                 checkpoint(turn)
-                yield sse({"type": "usage", "input": usage_in, "output": usage_out,
-                           "cache_read": usage_cr, "cache_write": usage_cw})
-                yield sse({"type": "done"})
+                yield sse(wire.usage(input=usage_in, output=usage_out,
+                                     cache_read=usage_cr, cache_write=usage_cw))
+                yield sse(wire.done())
                 return
             turn.transition(TurnState.GENERATING); checkpoint(turn)
             # Request-time safety net for middle-orphan history (assistant
@@ -734,7 +770,7 @@ async def stream_response(
             llm_history = _ensure_tool_pair_completeness(
                 await asyncio.to_thread(
                     effective_history, store_tid, history,
-                    (spec.summary_budget_chars if spec else None),
+                    _summary_budget(spec),
                     (spec.summary_tail_keep    if spec else None),
                 )
             )
@@ -802,9 +838,9 @@ async def stream_response(
                       f"with role={llm_history[-1].get('role')!r} — nothing to "
                       f"answer (see #13/#15)", flush=True)
                 turn.transition(TurnState.DONE); checkpoint(turn)
-                yield sse({"type": "usage", "input": usage_in, "output": usage_out,
-                           "cache_read": usage_cr, "cache_write": usage_cw})
-                yield sse({"type": "done"})
+                yield sse(wire.usage(input=usage_in, output=usage_out,
+                                     cache_read=usage_cr, cache_write=usage_cw))
+                yield sse(wire.done())
                 return
 
             # Per-turn phase: open the model stream + dispatch tools
@@ -899,9 +935,7 @@ async def stream_response(
                         "note": _note,
                         "concerns": [c.to_dict() for c in plan.concerns],
                         "_runtime_halt_after": "plan",
-                        "_emit_sse_post": {"type": "plan",
-                                           "entity_id": plan_eid,
-                                           **_plan_dict},
+                        "_emit_sse_post": wire.plan(entity_id=plan_eid, **_plan_dict),
                     }
 
                 # ask_clarification: question validate, ack envelope.
@@ -911,10 +945,9 @@ async def stream_response(
                     if not question:
                         return {"status": "error",
                                 "note": "ask_clarification needs a non-empty `question`."}
-                    _post = {"type": "clarification_pending",
-                             "question": question,
-                             "tool_use_id": tool_use_id,
-                             "run_id": turn.run_id}
+                    _post = wire.clarification_pending(question=question,
+                                                       tool_use_id=tool_use_id,
+                                                       run_id=turn.run_id)
                     # Option 1 enable-flow (misc/modules.md): when the question is about a
                     # turned-off module, carry structured Enable options so the UI renders
                     # one-click buttons (the USER enables — the agent never can). The turn
@@ -955,12 +988,10 @@ async def stream_response(
                     summary = _summarize_tool_input(name, tool_input)
                     return {
                         "_runtime_halt_before": "approval",
-                        "_emit_sse_at_halt": {"type": "approval_pending",
-                                              "tool_name": name,
-                                              "summary": summary,
-                                              "tool_use_id": tool_use_id,
-                                              "run_id": turn.run_id,
-                                              "policy": policy},
+                        "_emit_sse_at_halt": wire.approval_pending(
+                            tool_name=name, summary=summary,
+                            tool_use_id=tool_use_id, run_id=turn.run_id,
+                            policy=policy),
                     }
 
                 # Background run_python: submit job, return queued
@@ -979,22 +1010,37 @@ async def stream_response(
                     # via the SAME helper the non-intercept run_python path uses. Before
                     # this, the intercept dropped the estimate, so a GPU-flagged job
                     # (est_gpu=true) couldn't be GPU-placed (prj_6d986f40).
-                    job = submit_python_job(
-                        code=tool_input.get("code", ""),
-                        title=tool_input.get("title") or "Background analysis",
-                        focus_entity_id=focus_entity_id,
-                        project_id=str(_pid),
-                        thread_id=str(store_tid),
-                        run_id=_arid_ctx.get("active_run_id"),
-                        **bg_submit_kwargs(tool_input, _pid),
-                    )
+                    # Submission runs OFF the main loop: it may block (sbatch
+                    # I/O; in pack mode a session snapshot+realize for the
+                    # job's frozen env — W3.4).
+                    import functools as _ft
+                    try:
+                        job = await asyncio.get_running_loop().run_in_executor(
+                            None, _ft.partial(
+                                submit_python_job,
+                                code=tool_input.get("code", ""),
+                                title=tool_input.get("title") or "Background analysis",
+                                focus_entity_id=focus_entity_id,
+                                project_id=str(_pid),
+                                thread_id=str(store_tid),
+                                run_id=_arid_ctx.get("active_run_id"),
+                                **bg_submit_kwargs(tool_input, _pid)))
+                    except Exception as e:  # noqa: BLE001
+                        # same hardening as run_exec's own background branch:
+                        # an unknown site / substrate error must come back as
+                        # a TOOL result the agent can act on, not crash the
+                        # turn (the row, if created, is marked failed by
+                        # submit.py's _mark_submit_failed)
+                        return {"status": "error",
+                                "note": f"background submit failed: "
+                                        f"{getattr(e, 'detail', None) or e}"}
                     return {
                         "job_id": job["id"],
                         "status": "queued",
                         "note": "Submitted as a background job. Figures "
                                 "will register when it finishes; watch "
                                 "the Queues panel.",
-                        "_emit_sse_pre": {"type": "job_submitted", "job": job},
+                        "_emit_sse_pre": wire.job_submitted(job=job),
                     }
 
                 # Normal dispatch: ensure stream buffer, run in
@@ -1080,7 +1126,7 @@ async def stream_response(
                         _tool_name_by_id[ev.tool_use_id] = ev.tool_name
 
                 if isinstance(ev, TextDelta):
-                    yield sse({"type": "delta", "text": ev.text})
+                    yield sse(wire.delta(text=ev.text))
                 elif isinstance(ev, ToolUseStart):
                     # Emit tool_start as soon as the model issues the
                     # tool_use block so the UI renders the running chip
@@ -1090,15 +1136,15 @@ async def stream_response(
                     # _emitted_tool_start) for halt-before paths that
                     # never reach a normal ToolResult.
                     if ev.tool_use_id not in _emitted_tool_start:
-                        yield sse({"type": "tool_start", "name": ev.tool_name,
-                                   "input": ev.input,
-                                   "tool_use_id": ev.tool_use_id})
+                        yield sse(wire.tool_start(name=ev.tool_name,
+                                                  input=ev.input,
+                                                  tool_use_id=ev.tool_use_id))
                         _emitted_tool_start.add(ev.tool_use_id)
                 elif isinstance(ev, _RetryNotice):
                     print(f"[guide] transient API error (attempt {ev.attempt}/{ev.max_retries}), "
                           f"retrying in {ev.backoff_s}s: {ev.error}")
-                    yield sse({"type": "notice",
-                               "text": f"Model is busy — retrying ({ev.attempt}/{ev.max_retries})…"})
+                    yield sse(wire.notice(
+                        text=f"Model is busy — retrying ({ev.attempt}/{ev.max_retries})…"))
                 elif isinstance(ev, _ToolProgress):
                     _tname = _tool_name_by_id.get(ev.tool_use_id, "")
                     payload = ev.payload if isinstance(ev.payload, dict) else {}
@@ -1111,17 +1157,17 @@ async def stream_response(
                             bytes_total=payload.get("bytes_total", 0),
                             elapsed_s=payload.get("elapsed_s", 0.0),
                         )
-                        yield sse({"type": "tool_chunk",
-                                   "tool_use_id": ev.tool_use_id,
-                                   "stream": payload.get("stream", "stdout"),
-                                   "text": payload.get("text", ""),
-                                   "bytes_total": payload.get("bytes_total", 0),
-                                   "elapsed_s": payload.get("elapsed_s", 0.0)})
+                        yield sse(wire.tool_chunk(
+                            tool_use_id=ev.tool_use_id,
+                            stream=payload.get("stream", "stdout"),
+                            text=payload.get("text", ""),
+                            bytes_total=payload.get("bytes_total", 0),
+                            elapsed_s=payload.get("elapsed_s", 0.0)))
                     else:
-                        yield sse({"type": "tool_progress", "name": _tname,
-                                   "tool_use_id": ev.tool_use_id,
-                                   "message": payload.get("message"),
-                                   "phase": payload.get("phase")})
+                        yield sse(wire.tool_progress(
+                            name=_tname, tool_use_id=ev.tool_use_id,
+                            message=payload.get("message"),
+                            phase=payload.get("phase")))
                     await asyncio.sleep(0)
                 elif isinstance(ev, _StreamCompleted):
                     final_msg = ev.final_msg
@@ -1163,11 +1209,26 @@ async def stream_response(
                             f"⚠ The {_names} call was cut off by the per-turn output cap. The agent "
                             "has been told to break the content into smaller writes — ask it to retry."
                         )
-                        yield sse({"type": "notice", "text": ui_note})
-                    append_message("assistant", _assistant_blocks,
-                                   entity_id=entity_id,
-                                   focus_entity_id=focus_entity_id,
-                                   thread_id=store_tid)
+                        yield sse(wire.notice(text=ui_note))
+                    # Degenerate-empty generation (observed live: a 5-token
+                    # emission with no text and no tool_use) must not land
+                    # an empty assistant message in history — that's the
+                    # blocks-less shape the renderer's F4 guard degrades,
+                    # and it poisons later turns' history shape. Whitespace-
+                    # only text counts as empty (review F4: a "\n\n" block
+                    # otherwise persists AND dead-ends the retry on the
+                    # trailing-assistant guard).
+                    _gen_has_output = any(
+                        b.get("type") == "tool_use"
+                        or (b.get("type") == "text"
+                            and (b.get("text") or "").strip())
+                        for b in _assistant_blocks)
+                    if _gen_has_output:
+                        _turn_produced_output = True
+                        append_message("assistant", _assistant_blocks,
+                                       entity_id=entity_id,
+                                       focus_entity_id=focus_entity_id,
+                                       thread_id=store_tid)
                     text_out = "".join(b["text"] for b in _assistant_blocks
                                        if b["type"] == "text")
                     log_context_assembly(
@@ -1225,9 +1286,10 @@ async def stream_response(
                     # in the closure have had their say. Idempotent
                     # via _emitted_tool_start guard.
                     if ev.tool_use_id not in _emitted_tool_start:
-                        yield sse({"type": "tool_start", "name": ev.tool_name,
-                                   "input": _tool_input_by_id.get(ev.tool_use_id, {}),
-                                   "tool_use_id": ev.tool_use_id})
+                        yield sse(wire.tool_start(
+                            name=ev.tool_name,
+                            input=_tool_input_by_id.get(ev.tool_use_id, {}),
+                            tool_use_id=ev.tool_use_id))
                         _emitted_tool_start.add(ev.tool_use_id)
                     # on_post_tool hook + entity_registered emit.
                     hook_ctx = {
@@ -1242,7 +1304,7 @@ async def stream_response(
                     }
                     dispatch("on_post_tool", hook_ctx)
                     for _ent in hook_ctx["new_entities"]:
-                        yield sse({"type": "entity_registered", "entity": _ent})
+                        yield sse(wire.entity_registered(entity=_ent))
                     # create_scenario surfaces its entity outside the
                     # artifact registrar path.
                     if (ev.tool_name == "create_scenario"
@@ -1251,15 +1313,15 @@ async def stream_response(
                         from core.graph.entities import get_entity as _ge
                         _ent = _ge(_envelope["scenario"]["id"])
                         if _ent:
-                            yield sse({"type": "entity_registered", "entity": _ent})
+                            yield sse(wire.entity_registered(entity=_ent))
                     # Mark live-tail buffer done so TTL drops to 5min.
                     try:
                         from core.runtime import tool_stream_buffer as _tsb
                         _tsb.mark_done(turn.run_id, ev.tool_use_id)
                     except Exception:  # noqa: BLE001
                         pass
-                    yield sse({"type": "tool_result", "name": ev.tool_name,
-                               "result": _envelope, "tool_use_id": ev.tool_use_id})
+                    yield sse(wire.tool_result(name=ev.tool_name, result=_envelope,
+                                               tool_use_id=ev.tool_use_id))
                     # Vision-blocks envelope (view_figure, etc.):
                     # passthrough as the tool_result's `content`.
                     if (isinstance(_envelope, dict)
@@ -1296,13 +1358,11 @@ async def stream_response(
                                 __import__("datetime").timezone.utc).isoformat(),
                             "timeout_s": int(ev.detail.get("timeout_s") or 0) or None,
                         }
-                        yield sse({
-                            "type": "deferred_tool_pending",
-                            "tool_name": ev.detail.get("tool_name"),
-                            "deferred_id": ev.detail.get("deferred_id"),
-                            "tool_use_id": ev.detail.get("tool_use_id"),
-                            "run_id": turn.run_id,
-                        })
+                        yield sse(wire.deferred_tool_pending(
+                            tool_name=ev.detail.get("tool_name"),
+                            deferred_id=ev.detail.get("deferred_id"),
+                            tool_use_id=ev.detail.get("tool_use_id"),
+                            run_id=turn.run_id))
                         if _tool_result_blocks:
                             append_message("user", _tool_result_blocks,
                                            entity_id=entity_id,
@@ -1310,9 +1370,9 @@ async def stream_response(
                                            thread_id=store_tid)
                         turn.transition(TurnState.AWAITING_TOOL_RESULT)
                         checkpoint(turn)
-                        yield sse({"type": "usage", "input": usage_in, "output": usage_out,
-                                   "cache_read": usage_cr, "cache_write": usage_cw})
-                        yield sse({"type": "done"})
+                        yield sse(wire.usage(input=usage_in, output=usage_out,
+                                             cache_read=usage_cr, cache_write=usage_cw))
+                        yield sse(wire.done())
                         return
                     elif ev.reason == 'cancelled':
                         # Cancel path — the outer-loop top will see
@@ -1325,13 +1385,13 @@ async def stream_response(
                         # rendered an empty message ("couldn't be displayed").
                         _d = ev.detail if isinstance(ev.detail, dict) else {}
                         _raw = _d.get("message") or "The model call failed."
-                        yield sse({"type": "error", "text": _raw, "detail": _d.get("type") or ""})
+                        yield sse(wire.error(text=_raw, detail=_d.get("type") or ""))
                         turn.transition(TurnState.FAILED)
                         turn.error = {"type": _d.get("type") or "ModelError", "message": _raw}
                         checkpoint(turn)
-                        yield sse({"type": "usage", "input": usage_in, "output": usage_out,
-                                   "cache_read": usage_cr, "cache_write": usage_cw})
-                        yield sse({"type": "done"})
+                        yield sse(wire.usage(input=usage_in, output=usage_out,
+                                             cache_read=usage_cr, cache_write=usage_cw))
+                        yield sse(wire.done())
                         return
                 elif isinstance(ev, TurnDone):
                     # Phase ended; do nothing here (we already
@@ -1352,15 +1412,43 @@ async def stream_response(
             history = get_messages(entity_id, thread_id=store_tid)
             # End-of-turn break: no tool_use means the model is done.
             if _stop_reason != "tool_use":
+                # Degenerate-empty defense: a TURN that produced no output
+                # at all (no tool_use, no non-whitespace text in ANY
+                # generation — observed live 2026-07-19: user asked for a
+                # pin, model emitted 5 tokens of nothing, turn ended in
+                # silence) gets ONE fresh retry; a second emptiness lands
+                # an honest marker — the user must never get wordless
+                # silence. A turn that DID speak or run tools earlier and
+                # merely closed on an empty generation is normal (the
+                # empty close is simply not persisted) — no retry, no
+                # marker (review F3: the marker would be a lie there).
+                if not _turn_produced_output:
+                    if not _empty_retry_done:
+                        _empty_retry_done = True
+                        continue
+                    try:
+                        append_message(
+                            "assistant",
+                            [{"type": "text",
+                              "text": "*(I produced no response — "
+                                      "please ask that again.)*"}],
+                            entity_id=entity_id,
+                            focus_entity_id=focus_entity_id,
+                            thread_id=store_tid)
+                        yield sse(wire.notice(
+                            text="The agent produced an empty response; "
+                                 "ask again to retry."))
+                    except Exception:  # noqa: BLE001
+                        pass
                 break
             # Halt-signal break-out (same shape as legacy 1217+).
             if _pending_halt_signal:
                 turn.transition(TurnState.AWAITING_USER)
                 turn.pending_user_signal = _pending_halt_signal
                 checkpoint(turn)
-                yield sse({"type": "usage", "input": usage_in, "output": usage_out,
-                           "cache_read": usage_cr, "cache_write": usage_cw})
-                yield sse({"type": "done"})
+                yield sse(wire.usage(input=usage_in, output=usage_out,
+                                     cache_read=usage_cr, cache_write=usage_cw))
+                yield sse(wire.done())
                 return
             continue   # next outer iteration
 
@@ -1386,9 +1474,8 @@ async def stream_response(
                 trigger="end_of_session",
                 suggestion=stop_ctx["suggestion"],
             )
-            yield sse({"type": "suggestion_logged",
-                       "trigger": "end_of_session",
-                       "entity_type": focus_type})
+            yield sse(wire.suggestion_logged(trigger="end_of_session",
+                                             entity_type=focus_type))
 
         if turn.state != TurnState.AWAITING_USER:
             turn.transition(TurnState.DONE)
@@ -1396,10 +1483,11 @@ async def stream_response(
             # #160: if this turn was driving a plan's execution, mark the
             # plan completed. Idempotent + safe on a missing entity.
             if turn.plan_entity_id:
-                dispatch("on_plan_complete", {"plan_entity_id": turn.plan_entity_id})
-        yield sse({"type": "usage", "input": usage_in, "output": usage_out,
-                   "cache_read": usage_cr, "cache_write": usage_cw})
-        yield sse({"type": "done"})
+                dispatch("on_plan_complete", {"plan_entity_id": turn.plan_entity_id,
+                                              "thread_id": getattr(turn, "thread_id", None)})
+        yield sse(wire.usage(input=usage_in, output=usage_out,
+                             cache_read=usage_cr, cache_write=usage_cw))
+        yield sse(wire.done())
 
     except Exception as e:
         print(f"[guide] stream_response failed: {type(e).__name__}: {e}")
@@ -1408,11 +1496,16 @@ async def stream_response(
         checkpoint(turn)
         if turn.plan_entity_id:
             dispatch("on_plan_failed", {"plan_entity_id": turn.plan_entity_id})
-        yield sse({"type": "error", "text": _friendly_error(e),
-                   "detail": f"{type(e).__name__}: {e}"})
-        yield sse({"type": "usage", "input": usage_in, "output": usage_out,
-                   "cache_read": usage_cr, "cache_write": usage_cw})
-        yield sse({"type": "done"})
+        # Turn-end reconciliation must run on the FAILED path too — a turn that
+        # crashed AFTER producing outputs is exactly when the durable keep
+        # matters (on_stop only fires on the success branch).
+        dispatch("on_turn_failed", {"thread_id": getattr(turn, "thread_id", None),
+                                    "plan_entity_id": turn.plan_entity_id})
+        yield sse(wire.error(text=_friendly_error(e),
+                             detail=f"{type(e).__name__}: {e}"))
+        yield sse(wire.usage(input=usage_in, output=usage_out,
+                             cache_read=usage_cr, cache_write=usage_cw))
+        yield sse(wire.done())
     finally:
         # Always release the cancel token — leaking it would keep stale
         # interrupters reachable and (via the registry) a re-entrant

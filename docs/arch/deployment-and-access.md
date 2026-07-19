@@ -15,9 +15,9 @@ without the planes knowing which target they run on or who is acting. Four imper
   to what runs on an OOD cluster. A target difference is only ever a **compute-config or ABI
   fact** — which job submitter, which torch build — resolved at the compute seam, **never a
   branch in business logic.** Prevents the N-codepaths-→-N×-the-bugs trap where a laptop fix
-  never reaches the cluster. (The only `platform.system()` reads in the tree pick a micromamba
-  binary for the arch — `core/exec/mamba.py:29` — and stamp a bug-report line — a compute/ABI
-  and a diagnostic concern, not business logic.)
+  never reaches the cluster. (The only `platform.system()`/`platform.machine()` reads in the
+  tree stamp a bug-report line — `content/bio/tools/feedback.py:215` — and pick the arch's
+  micromamba binary in the installer — a compute/ABI and a diagnostic concern, not business logic.)
 - **Config is driven, not hardcoded — and declared in one enforced place.** Every mutable-state
   root and every operational toggle is a **typed setting declared once** in `core/config.py`'s
   registry (`setting(...)`), read through a single accessor (`config.settings.<name>.get()`) that
@@ -50,7 +50,7 @@ Three things compose, all pivoting on a **deployment-agnostic core**:
   │ cluster-personal / OOD│──▶│ config.env  (operational │──▶│  RUNTIME_DIR + lazy tiers│
   │ share install/core    │   │   toggles + creds; admin)│   │ core/web/deps.py         │
   └───────────────────────┘   │ bundle settings.yaml     │   │  require_project (gate)  │
-                              │   (deployment policy)    │   │ core/runtime/actor.py    │
+                              │   (deployment policy)    │   │ core/graph/actor.py    │
                               │ hpc.yaml (compute-topo   │   │  current_actor (who)     │
                               │   OVERRIDE, not a toggle)│   │ core/projects.py         │
                               └──────────────────────────┘   │  per-project DB binding  │
@@ -123,10 +123,11 @@ logic — both are config the core reads at its seams.
 **Target-conditionals live at the compute seam, and only there.** Exactly two facts differ
 by target, both resolved from `config.env`, never from a `if target==…`:
 
-- **`ABA_BATCH_SUBMITTER`** (`local|slurm`) selects the `BatchSubmitter` implementation
-  (`core/jobs/submitter.py:48`, `core/exec/modules.py:71`). The routing *policy* — interactive
-  vs. background, when a job sbatches — is identical everywhere; only the ABI behind the
-  protocol changes. Owned by [`jobs-and-hpc.md`](jobs-and-hpc.md).
+- **`ABA_BATCH_SUBMITTER`** (`local|slurm|worker`) selects the background-job lane
+  (`core/jobs/submitter.py`, `core/exec/modules.py`): a local-site weft task, a weft task on the
+  declared Slurm-kind site, or the in-process worker fallback. The routing *policy* — interactive
+  vs. background, when a job goes to the cluster — is identical everywhere; only the lane behind
+  the `BatchSubmitter` protocol changes. Owned by [`jobs-and-hpc.md`](jobs-and-hpc.md).
 - **`ABA_ACCELERATOR`** (`cpu|cuda`) selects the base torch build at install. A deployment-
   conditional *ABI* choice, applied by `install/core/inject-accelerator.sh`. Owned by
   [`envs.md`](envs.md).
@@ -175,6 +176,43 @@ registry's **`deploy_injected`** surface (`config.deploy_injected_keys()`, = `ab
 (or vice-versa) and CI fails. This closes the "add a var, forget to forward it" desync the
 fat-SIF work kept hitting across `script.sh.erb`/`before.sh.erb`/`after.sh.erb`.
 
+## Shared-artifact layout (`$ABA_SHARE`)
+
+A multi-user / OOD deployment keeps its heavy, read-mostly artifacts on one shared,
+node-readable tree — `$ABA_SHARE` (the directory `ABA_SITE_CONFIG`'s `site.yaml` lives in) —
+that every session and compute node reads; per-user **state** stays under `$ABA_HOME`. The
+tree holds two kinds of thing: **versioned artifacts** (a `releases/<ver>/` dir + an atomic
+`current` symlink + a `prev` pointer) and **accumulating data stores** (plain dirs). They
+upgrade on **independent cadences** — that decoupling is the point (a recipe fix never
+rebuilds an image; a dependency bump never reships the app):
+
+| artifact | shape | upgrades when | mechanism |
+|---|---|---|---|
+| **app image** | `app/releases/<ver>/aba.sif` + `current` + `prev` | aba code changes | build → drop `releases/<ver>` → atomic flip `current` (`core/release.py`) |
+| **compute env images** | one line per stack (`releases/<ver>/image.sqfs` + `current`) | a stack's deps change | weft re-solves → publishes an `image.sqfs` keyed by EnvID (`core/compute/seeding.py` → weft publish/adopt) |
+| **recipe/rules bundle** | `installation/` (optionally versioned) | recipes/policy edit | refresh the dir (`aba update`) — no image rebuild |
+| **shared refs** | `refs/` (data store) | curator adds data | append; not a release |
+
+**Pin-on-launch.** A session/job resolves `current` → a concrete release **once** at start
+(`resolve_current` / `active_release_id`, `core/release.py`; the OOD launcher's
+`resolve_release_image`), so flipping `current` never mutates a running job's tree — new work
+picks up the new release, in-flight work stays on the one it started with. Rollback = flip
+`current` back to `prev`.
+
+**The weft profile (the default).** The controller's own runtime is baked **into the app
+image** (a small ~375 MB controller-only SIF); the *only* on-disk envs are the weft-published
+compute stacks, mounted read-only on the node via the site's `ro_roots` (the deployment's
+published env tree — `ABA_WEFT_PUBLISH_TREE` / `site.yaml` `envs.publish_tree`; consumers
+`env_adopt` by name, no solve — the adapter injects the tree into every site's `ro_roots` at
+registration). There is no separate controller-env-on-FS or content-addressed `components/`
+tier here (that machinery belongs to the legacy slim model — see `misc/slim_sif_deploy.md`).
+
+**`site.yaml` is not release-specific.** It points at the release *root* (`app/`); the
+`current` symlink inside does per-release selection at launch. It changes only when the
+*deployment* changes (paths, policy, queue), and sits **above** releases. A **cluster-personal**
+install has no `site.yaml` at all — each user's `config.env` points directly at these same
+read-only artifacts.
+
 ## The access seam (identity, gating, scope)
 
 Access attaches at two boundaries and nowhere else, so business logic never carries an
@@ -196,7 +234,7 @@ Exemptions are limited to genuinely-global endpoints (project lifecycle, server-
 defaults its `actor` from `current_actor()` when a caller doesn't pass one
 (`core/graph/entities.py:109`), so a human HTTP action is attributed for free. The agent path
 attributes `agent:<run_id>` **explicitly** rather than via the contextvar, because the
-contextvar can't cross FastMCP's tool-dispatch task boundary (`core/runtime/actor.py:5-13`,
+contextvar can't cross FastMCP's tool-dispatch task boundary (`core/graph/actor.py:5-13`,
 `core/runtime/tool_ctx.py:9-13`; exec-born creates resolve it from the exec's run_id,
 `agent_actor_for_exec`). The actor string is *descriptive* provenance — its meaning and use
 are owned by [`provenance.md`](provenance.md); here it is the *who* half of the access seam.
@@ -236,7 +274,7 @@ credential/access scope.
 | `aba settings [--deploy-env]` (`install/…/cli.py`) | operator view of the full declared surface (value/source/`weft_fate`/`reduction`) + unknown-var drift; or just the launcher-forwarded keys |
 | `core/web/deps.py` | `require_project` — per-request project pin (412 on no-context) + ambient `human:local` |
 | `tests/test_project_pinning_coverage.py` | the access-gate CI invariant: every mutating route pinned or justified-exempt |
-| `core/runtime/actor.py` · `core/runtime/tool_ctx.py` | ambient actor contextvar; why the agent path attributes explicitly across the MCP boundary |
+| `core/graph/actor.py` · `core/runtime/tool_ctx.py` | ambient actor contextvar; why the agent path attributes explicitly across the MCP boundary |
 | `core/graph/derivation.py` | `human_actor(uid="local")` / `agent_actor(run_id)` — the reserved `human:<uid>` seam |
 | `core/projects.py` | per-project SQLite registry; `set_current`/`bind` (contextvar DB isolation); `SINGLE` mode |
 | `core/bundle/scope_resolver.py` | startup identity/group/site.yaml resolution → the ordered scope chain |
@@ -263,9 +301,10 @@ credential/access scope.
   only caught where a specific `doctor` check exists (accelerator-vs-base, submitter-vs-Slurm).
   Enum enforcement is advisory in the mechanical pass to preserve behavior; tightening it to
   hard-reject is a reduction-wave follow-up.
-- **Fat SIF is a frozen, read-only target — everything must be baked EAGER.** The modules +
-  lazy-env systems default to first-use/deferred install, which cannot work against a read-only
-  image. A fat SIF (`install/sif/build.sh --profile fat`) bakes the full python base, the R
+- **The legacy fat SIF is a frozen, read-only target — everything must be baked EAGER.** (The
+  default is now the small weft profile above; `fat`/`slim` are legacy.) The modules + lazy-env
+  systems default to first-use/deferred install, which cannot work against a read-only image. A
+  fat SIF (`install/sif/build.sh --profile fat`) bakes the full python base, the R
   tools env, pagoda3 dist, **and the module manifests** (`/opt/aba/install/core/modules`, else
   the registry is empty), and wires three knobs so the runtime reads the baked artifacts as
   ready instead of re-installing: `ABA_TOOLS_DIR` / `ABA_PAGODA3_DIST` (module readiness probes

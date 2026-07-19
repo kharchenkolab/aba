@@ -59,6 +59,16 @@ _D_EXECUTION = (
     "With background=True only: 'slurm' (default on a cluster) queues an sbatch job; 'local' "
     "runs it in ABA's own allocation with no queue wait, good when it fits here; 'auto' decides "
     "from the estimate.")
+_D_SITE = (
+    "Run this step ON a declared remote machine (names from describe_compute); overrides "
+    "`execution`. WITHOUT background: synchronous, in a PERSISTENT session on that machine — "
+    "variables and loaded objects survive between your site= calls (multi-step work needs no "
+    "reload-from-disk each step; pass fresh=true for a clean one-shot process). Read paths "
+    "valid on that machine; small outputs come back automatically, large ones stay there "
+    "kept-addressable. WITH background=True: a deferred job for LONG steps — you're resumed "
+    "when it finishes; do NOT poll. Prefer the machine that already holds the inputs over "
+    "transferring data. Isolated envs travel: realized on the site, re-locked for its "
+    "platform automatically.")
 
 
 def register_run_exec_tools(mcp: FastMCP) -> None:
@@ -78,6 +88,7 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
                    title: str | None = None,
                    env: str | None = None,
                    execution: Annotated[str | None, Field(description=_D_EXECUTION)] = None,
+                   site: Annotated[str | None, Field(description=_D_SITE)] = None,
                    aba_ctx_id: str | None = None) -> dict:
         """Run Python in the project's scratch workspace. State persists
         across calls within a thread (interactive kernel); pass
@@ -105,13 +116,39 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
           `execution` (with background=True): `'slurm'` (default on a cluster) submits an
           sbatch job; `'local'` runs it in-place in ABA's OWN allocation — no queue wait —
           when it fits (good for a quick background job); `'auto'` decides from the estimate.
+          `site` runs the step ON a declared remote machine (data gravity:
+          prefer the machine holding the inputs); it overrides `execution`.
+          A short step: `site` alone — synchronous, in a PERSISTENT session
+          there (state survives between site= calls; fresh=true for a clean
+          one-shot). A long step: `site` + `background=True` —
+          deferred; you're resumed when it finishes (don't poll). Never claim
+          work ran on a machine unless the job actually executed there — the
+          result names where it ran.
+          KEEPING BACKGROUND OUTPUTS: a background job's output files are
+          inventoried to the open Run but NOT durably kept by themselves —
+          they sit at-risk in the job's working dir until a keep records
+          them. When the user wants an output kept safe (especially a large
+          file on a remote site), call `keep_outputs(keep=[...])` after the
+          job lands (in-place on the site — no copy home). Never tell the
+          user an output is "kept" or "safe" before a keep/retain has
+          actually recorded it.
 
         ENVIRONMENT: omit `env` (or `env='default'`) for the project's
         normal environment. Pass `env='name'` to run inside an isolated
         environment you created with `make_isolated_env(name='name')` —
         used when a package conflicts with the base. `env` combines with
         `background=True`: a long job runs IN that env (its own python),
-        as a Slurm job on a compute node when on a cluster.
+        as a Slurm job on a compute node when on a cluster. On a REMOTE
+        step (`site=`), `env='system'` runs on the node's own interpreter
+        with NO environment realization — right for a STATELESS one-shot
+        whose code imports nothing beyond the stdlib: a download/transfer,
+        file listing/checksum, quick count or existence check. Don't build
+        a multi-GB environment on a cold machine for a stdlib one-liner.
+        CAVEAT: `env='system'` runs OUTSIDE the persistent session — each
+        call is a fresh process; objects from earlier steps do NOT carry
+        over. For steps that build on each other in the remote session, or
+        any code importing scientific libraries, keep the default env (it
+        realizes once per machine, cached afterwards).
 
         INSTALLING PACKAGES: to use a library that isn't already in the
         sandbox, call `ensure_capability(name)` FIRST — NEVER `pip install`,
@@ -140,6 +177,7 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
                 "estimated_runtime_min": estimated_runtime_min,
                 "est_cores": est_cores, "est_mem_gb": est_mem_gb, "est_gpu": est_gpu,
                 "fresh": fresh, "title": title, "env": env, "execution": execution,
+                "site": site,
             }, ctx)
 
     @mcp.tool()
@@ -153,6 +191,7 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
               title: str | None = None,
               env: str | None = None,
               execution: Annotated[str | None, Field(description=_D_EXECUTION)] = None,
+              site: Annotated[str | None, Field(description=_D_SITE)] = None,
               aba_ctx_id: str | None = None) -> dict:
         """Execute R in the thread's persistent R (IRkernel) session.
         Shares the working dir with run_python so the two can hand
@@ -184,7 +223,9 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
         than this node has or might exceed the remaining walltime, sized with
         est_cores/est_mem_gb/est_gpu/estimated_runtime_min. Do NOT shell out to
         Rscript via `run_python(subprocess.run(['Rscript', ...]))` —
-        background=True IS the supported path for long R work.
+        background=True IS the supported path for long R work. `site` runs the
+        step ON a declared remote machine — same rules as run_python's `site`
+        (alone = synchronous fresh process there; + background for long steps).
 
         ROUTING NOTE: When the goal is a MODIFIED VERSION of an existing
         focused figure/table (cairo_pdf of a current figure, ggsave with
@@ -202,6 +243,7 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
         with in_tool_ctx(aba_ctx_id) as ctx:
             return _impl({"code": code, "timeout_s": timeout_s,
                           "background": background, "execution": execution,
+                          "site": site,
                           "estimated_runtime_min": estimated_runtime_min,
                           "est_cores": est_cores, "est_mem_gb": est_mem_gb,
                           "est_gpu": est_gpu,

@@ -10,6 +10,7 @@ import shutil
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel
 
 from core.web.deps import require_project
 from core.data.paths import unique_path as _unique_path
@@ -40,6 +41,73 @@ def _dataset_bytes_and_count(bundle: Path) -> tuple[int, int]:
                 pass
             count += 1
     return (total, count)
+
+
+@router.post("/api/datasets/{did}/recheck")
+def dataset_recheck(did: str, _pid: str = Depends(require_project)):
+    """§5 drift banner [Re-check]: revalidate the durable home now and record
+    the outcome on the entity (source_changed / source_missing + checked_at),
+    so the banner and the ledger render from RECORDED state (freshness
+    discipline: this is the on-demand check, never a render-time probe)."""
+    import time
+    ent = get_entity(did)
+    if not ent or ent.get("type") != "dataset":
+        raise HTTPException(404, f"no dataset {did}")
+    md = dict(ent.get("metadata") or {})
+    from core.data.datasets import revalidate
+    out = revalidate(md)
+    state = out.get("state")
+    md.pop("source_changed", None)
+    md.pop("source_missing", None)
+    if state == "drifted":
+        md["source_changed"] = True
+    elif state == "missing":
+        md["source_missing"] = True
+    md["source_checked_at"] = int(time.time())
+    update_entity(did, metadata=md)
+    return {"state": state, "checked_at": md["source_checked_at"]}
+
+
+class _RelinkBody(BaseModel):
+    path: str
+    site: str | None = None
+
+
+@router.post("/api/datasets/{did}/relink")
+def dataset_relink(did: str, body: _RelinkBody, _pid: str = Depends(require_project)):
+    """§5 verified relink ("it moved"): accept ONLY on a content match
+    (names+sizes, mtimes excluded — see core.data.datasets.relink). On match:
+    the home repoints, the fingerprint refreshes, the move is noted on the
+    entity. On mismatch: 409 with both shapes — the UI demotes to the
+    new-version flow; we never silently repoint at different content."""
+    ent = get_entity(did)
+    if not ent or ent.get("type") != "dataset":
+        raise HTTPException(404, f"no dataset {did}")
+    md = dict(ent.get("metadata") or {})
+    from core.data.datasets import relink
+    out = relink(md, (body.path or "").strip(), site=body.site)
+    if out.get("state") == "no_home":
+        raise HTTPException(400, "this dataset has no durable home to relink")
+    if out.get("state") == "missing":
+        raise HTTPException(404, out.get("detail") or "nothing at the new path")
+    if not out.get("ok"):
+        raise HTTPException(409, {"state": "mismatch",
+                                  "new_shape": out.get("new_shape"),
+                                  "old_shape": out.get("old_shape"),
+                                  "hint": "content differs — register it as a "
+                                          "new version instead"})
+    import time
+    old_home = md.get("home")
+    md["home"] = out["home"]
+    md["fingerprint"] = out["fingerprint"]
+    md.pop("source_changed", None)
+    md.pop("source_missing", None)
+    md["source_checked_at"] = int(time.time())
+    moves = list(md.get("moves") or [])
+    moves.append({"from": old_home, "to": out["home"], "at": md["source_checked_at"]})
+    md["moves"] = moves
+    update_entity(did, metadata=md)
+    return {"ok": True, "home": out["home"]}
 
 
 @router.get("/api/datasets/{did}/tree")

@@ -2,9 +2,9 @@
 
 Drives a real out-of-process IPython kernel: state persists across execute()
 calls, Stop maps to SIGINT (interrupt) leaving state intact, and crashes are
-isolated from the backend. The session runs in the same environment as the
-stateless run_python (pylib overlay on sys.path, conda tools bin on PATH,
-DATA_DIR injected) via a setup cell run once at startup.
+isolated from the backend. The kernel IS a weft env (an isolated named env or
+the project's default base-pack session) — standalone, with DATA_DIR injected
+via a setup cell run once at startup.
 """
 from __future__ import annotations
 import os
@@ -25,13 +25,8 @@ _CANCEL_GRACE_S = config.settings.kernel_cancel_grace_s.get()
 
 from core.config import DATA_DIR, ARTIFACTS_DIR
 from core.exec.base import ExecResult
-from core.exec.materialize import pylib_paths, project_pylib_paths, tools_env
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
-_SPEC_NAME = "aba_py"
-_R_SPEC_NAME = "aba_r"          # private R spec we own (not the clobberable 'ir')
-_spec_ready = False
-_r_spec_ready = False
 # P1: hard deadlines for the otherwise-unbounded startup steps. get_or_start()
 # holds the pool lock across the whole constructor, so a startup that BLOCKS (vs
 # raises) under resource pressure wedges every other kernel request behind it.
@@ -41,147 +36,133 @@ _START_CHANNELS_TIMEOUT_S = 30   # open the zmq channels
 _WAIT_READY_TIMEOUT_S = 60       # kernel-ready handshake
 
 
-def _ensure_python_kernelspec() -> str:
-    """Register a kernelspec pointing at THIS interpreter (the .venv python, so
-    the kernel has scanpy/pydeseq2/etc.). Idempotent; userspace (--user)."""
-    global _spec_ready
-    if _spec_ready:
-        return _SPEC_NAME
-    import subprocess
-    try:
-        from jupyter_client.kernelspec import KernelSpecManager
-        if _SPEC_NAME in KernelSpecManager().find_kernel_specs():
-            _spec_ready = True
-            return _SPEC_NAME
-    except Exception:  # noqa: BLE001
-        pass
-    subprocess.run(
-        [sys.executable, "-m", "ipykernel", "install", "--user",
-         "--name", _SPEC_NAME, "--display-name", "ABA Python"],
-        capture_output=True, text=True, timeout=120,
-    )
-    _spec_ready = True
-    return _SPEC_NAME
-
-
 _env_specs_ready: set = set()
 
 
-def _ensure_env_python_kernelspec(env_name: str) -> str:
-    """Register a kernelspec whose interpreter is the ISOLATED env's python (so a
-    kernel launched from it sees that env's packages, standalone — §11.3).
-    Installs ipykernel into the env on first use. Idempotent. Returns spec name.
-    The spec name includes the project id so two projects' same-named envs can't
-    cross-wire to the wrong python (§11.6 project-scoped)."""
+def _ensure_base_python_kernelspec() -> str:
+    """W3.0/W3.4 (weft rewrite): the DEFAULT python kernel runs the PROJECT's
+    session over the base pack — a live env, so ensure_capability installs are
+    importable in the running kernel without a restart. The pack MUST bake
+    ipykernel (session clones inherit it). The spec name is keyed by SESSION id
+    (a rebuilt/reset session re-registers; live installs mutate the same
+    prefix, so the running kernel keeps working). Caller ensures the session
+    BEFORE the pool lock."""
     import re as _re
     import subprocess
-    from core.exec import isolated_env as iso
     from core import projects
-    pid = projects.current() or "_none"
-    py = iso.env_python(env_name)          # resolves project-scoped (current project)
-    if not py.exists():
-        raise RuntimeError(f"isolated env {env_name!r} does not exist")
-    spec_name = _re.sub(r"[^a-z0-9._-]", "-", f"aba-env-{pid}-{env_name}".lower())
+    from core.compute import project_env
+    pid = str(projects.current() or "_none")
+    sess = project_env.ensure(pid, "python")
+    py = sess["prefix"] / "bin" / "python"
+    spec_name = _re.sub(r"[^a-z0-9._-]", "-",
+                        f"aba-proj-{pid}-{sess['session_id'][-12:]}".lower())
     if spec_name in _env_specs_ready:
         return spec_name
-    # ipykernel must live IN the env (the kernel runs as the env's python).
     if subprocess.run([str(py), "-c", "import ipykernel"],
                       capture_output=True).returncode != 0:
-        ins = subprocess.run([str(py), "-m", "pip", "install", "-q", "ipykernel"],
-                             capture_output=True, text=True, timeout=600)
-        if ins.returncode != 0:
-            raise RuntimeError(f"could not install ipykernel into env {env_name!r}: "
-                               f"{(ins.stderr or ins.stdout or '')[-400:]}")
+        from core.compute import base_env
+        raise RuntimeError(
+            f"base pack {base_env.pack_name('python')!r} has no ipykernel — "
+            f"a python base pack must include `ipykernel` in its spec "
+            f"(the project session clones it; nothing is installed here)")
+    subprocess.run(
+        [str(py), "-m", "ipykernel", "install", "--user",
+         "--name", spec_name, "--display-name", "ABA Python (base pack)"],
+        capture_output=True, text=True, timeout=120)
+    _env_specs_ready.add(spec_name)
+    return spec_name
+
+
+def _ensure_base_r_kernelspec() -> str:
+    """W3.0/W3.4: the DEFAULT R kernel from the PROJECT's session over the R
+    base pack (must bake r-irkernel). Registered per-session; standalone — no
+    tools-env, no module shell machinery (the pack's MODULE TOGGLE still
+    gates: OFF refuses with the enable prompt inside project_env.ensure)."""
+    import re as _re
+    import subprocess
+    from core import projects
+    from core.compute import project_env, base_env
+    pid = str(projects.current() or "_none")
+    sess = project_env.ensure(pid, "r")
+    rs = sess["prefix"] / "bin" / "Rscript"
+    spec_name = _re.sub(r"[^a-z0-9._-]", "-",
+                        f"aba-proj-r-{pid}-{sess['session_id'][-12:]}".lower())
+    if spec_name in _env_specs_ready:
+        return spec_name
+    import os
+    env = os.environ.copy()
+    # IRkernel::installspec shells out to `jupyter kernelspec install`; the
+    # jupyter CLI lives in the backend env, so put it on PATH (same trick as
+    # the tools-env spec below).
+    env["PATH"] = os.path.dirname(sys.executable) + os.pathsep + env.get("PATH", "")
+    proc = subprocess.run(
+        [str(rs), "-e",
+         f'IRkernel::installspec(name="{spec_name}", displayname="ABA R (base pack)", user=TRUE)'],
+        capture_output=True, text=True, timeout=300, env=env)
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"base pack {base_env.pack_name('r')!r} could not register its "
+            f"IRkernel spec — an R base pack must include `r-irkernel`. "
+            f"Detail: {(proc.stderr or proc.stdout or '')[-400:]}")
+    _env_specs_ready.add(spec_name)
+    return spec_name
+
+
+def _base_r_setup_code(cwd: str) -> str:
+    """First cell for a base-PACK R kernel: standalone env (its own library —
+    no .libPaths() juggling; R additions layer via extends_env), keeping the
+    CRAN repo default, plot DPI, and harvest helpers."""
+    from core.exec.r import cran_repo, _ppm_ua_expr
+    repoline = f'options(repos=c(CRAN={cran_repo()!r})); {_ppm_ua_expr()}\n'
+    try:
+        _res = max(40, config.settings.r_plot_res.get())
+    except ValueError:
+        _res = 120
+    data_dir, _ = _project_data_artifacts()
+    return (f"{repoline}options(repr.plot.res={_res})\n"
+            f"DATA_DIR <- {str(data_dir)!r}\n"
+            f"WORK_DIR <- {str(cwd)!r}\nsetwd({str(cwd)!r})\n"
+            + _harvest_helpers_r())
+
+
+def _ensure_env_python_kernelspec(env_name: str) -> str:
+    """Register a kernelspec whose interpreter is the ISOLATED (weft) env's
+    python (so a kernel launched from it sees that env's packages, standalone —
+    §11.3). ipykernel is BAKED into every named python env at solve time
+    (core/compute/named_envs._spec_for) — weft envs are frozen, nothing is ever
+    installed into one here. Realization happens on first use (this call may
+    build the prefix). Idempotent. The spec name includes the project id so two
+    projects' same-named envs can't cross-wire to the wrong python."""
+    import re as _re
+    import subprocess
+    from core.compute import named_envs
+    from core import projects
+    pid = str(projects.current() or "_none")
+    row = named_envs.resolve(pid, env_name)
+    if row is None:
+        raise RuntimeError(f"isolated env {env_name!r} does not exist")
+    py = named_envs.ensure_realized(row["env_id"]) / "bin" / "python"
+    if not py.exists():
+        raise RuntimeError(f"isolated env {env_name!r} realized without a python "
+                           f"interpreter (env {row['env_id']})")
+    # Spec name is per-project AND per-EnvID: extending the env moves the handle
+    # to a NEW EnvID, and the kernelspec must follow it (a stale spec would keep
+    # launching the pre-extension prefix).
+    spec_name = _re.sub(r"[^a-z0-9._-]", "-",
+                        f"aba-env-{pid}-{env_name}-{row['env_id'][-12:]}".lower())
+    if spec_name in _env_specs_ready:
+        return spec_name
+    if subprocess.run([str(py), "-c", "import ipykernel"],
+                      capture_output=True).returncode != 0:
+        raise RuntimeError(
+            f"env {env_name!r} has no ipykernel — recreate it with "
+            f"make_isolated_env (named python envs bake ipykernel in)")
     subprocess.run(
         [str(py), "-m", "ipykernel", "install", "--user",
          "--name", spec_name, "--display-name", f"ABA env {env_name}"],
         capture_output=True, text=True, timeout=120)
     _env_specs_ready.add(spec_name)
     return spec_name
-
-
-def _r_spec_points_into(spec_name: str, tenv: Path) -> bool:
-    """True iff kernelspec `spec_name` exists and its R binary (argv[0]) is a real
-    file inside our tools env. Guards against a stale/foreign spec that points at a
-    wiped or wrong R — the exact failure where an e2e test left a global 'ir' spec
-    pointing at a /tmp env that was later deleted, DOA-ing all live run_r."""
-    import os.path
-    from jupyter_client.kernelspec import KernelSpecManager
-    try:
-        spec = KernelSpecManager().get_kernel_spec(spec_name)
-    except Exception:  # noqa: BLE001 — NoSuchKernel or a malformed spec
-        return False
-    argv = spec.argv or []
-    if not argv or not argv[0]:
-        return False
-    r_bin = os.path.realpath(argv[0])
-    tenv_r = os.path.realpath(str(tenv))
-    return os.path.exists(r_bin) and (r_bin == tenv_r or r_bin.startswith(tenv_r + os.sep))
-
-
-def _ensure_r_kernelspec() -> str:
-    """Ensure a *private* IRkernel kernelspec (`aba_r`) pointing at OUR conda
-    tools-env R. We register under our own name — never the generic, clobberable
-    'ir' — and validate argv[0] points into the tools env each time, so a stale or
-    foreign spec can't hijack run_r. Installs r-irkernel into the tools env on
-    first use (slow once — a Bioconductor-scale conda solve); cached thereafter."""
-    global _r_spec_ready
-    if _r_spec_ready:
-        return _R_SPEC_NAME
-    # R is the r-bio module (misc/modules.md). OFF → refuse (the user must enable it).
-    # Otherwise install the toolchain INLINE, streaming progress to the turn — exactly
-    # like ensure_capability — instead of a "retry later" back-off, then proceed.
-    try:
-        from core.modules import registry as _mr, manager as _mm
-        _spec = _mr.get("r-bio")
-        _not_ready = _spec is not None and _mm.actual_state(_spec) != "ready"
-    except Exception:  # noqa: BLE001 — module wiring must never break R
-        _spec, _not_ready = None, False
-    if _not_ready:
-        if _mm.mode(_spec) == "off":
-            raise RuntimeError("The R toolchain (r-bio module) is turned OFF. Ask the user to "
-                               "enable it by calling ask_clarification(question=\"…\", "
-                               "enable_module=\"r-bio\") — that shows one-click Enable buttons "
-                               "(On / First use). Don't paste Settings instructions.")
-        from core.modules.reconciler import install_and_wait
-        try:
-            from core.runtime import progress as _prog
-            _on_prog = lambda m: _prog.emit(m, phase="conda")
-        except Exception:  # noqa: BLE001
-            _on_prog = None
-        _ok, _err = install_and_wait("r-bio", timeout_s=1800, on_progress=_on_prog)
-        if not _ok:
-            raise RuntimeError(f"R toolchain install failed: {_err}")
-    from core.exec.materialize import tools_env
-    tenv = tools_env()
-    if _r_spec_points_into(_R_SPEC_NAME, tenv):
-        _r_spec_ready = True
-        return _R_SPEC_NAME
-    import subprocess
-    from core.exec.mamba import run_micromamba, installed_packages
-    if "r-irkernel" not in installed_packages(tenv):
-        verb = "install" if (tenv / "conda-meta").exists() else "create"
-        run_micromamba([verb, "-y", "-p", str(tenv), "-c", "conda-forge", "r-irkernel"])
-    # Register the spec under OUR name, in the user dir, pointing at THIS env's R +
-    # IRkernel (installspec writes argv[0] = R.home()/bin/R of the running Rscript).
-    # IRkernel::installspec shells out to `jupyter kernelspec install`, and
-    # `jupyter` lives in the backend's own env, NOT the tools env — so put it on
-    # PATH or installspec exits 127 ("jupyter-client has to be installed"),
-    # writes nothing, and run_r later dies with "No such kernel named aba_r".
-    import os, sys
-    env = os.environ.copy()
-    env["PATH"] = os.path.dirname(sys.executable) + os.pathsep + env.get("PATH", "")
-    proc = subprocess.run(
-        [str(tenv / "bin" / "Rscript"), "-e",
-         f'IRkernel::installspec(name="{_R_SPEC_NAME}", displayname="ABA R", user=TRUE)'],
-        capture_output=True, text=True, timeout=300, env=env)
-    # Verify it actually landed — don't mark ready on a silent failure.
-    if proc.returncode != 0 or not _r_spec_points_into(_R_SPEC_NAME, tenv):
-        raise RuntimeError(
-            "R kernel registration failed (IRkernel::installspec): "
-            + ((proc.stderr or proc.stdout or "").strip()[-500:] or "no kernelspec written"))
-    _r_spec_ready = True
-    return _R_SPEC_NAME
 
 
 def _project_data_artifacts() -> tuple[Path, Path]:
@@ -193,41 +174,6 @@ def _project_data_artifacts() -> tuple[Path, Path]:
     if pid:
         return project_data_dir(pid), project_artifacts_dir(pid)
     return DATA_DIR, ARTIFACTS_DIR
-
-
-def _r_setup_code(cwd: str) -> str:
-    """First cell for an R session: project R library ahead of the shared base
-    on .libPaths() (r_provisioning.md), then cwd + DATA_DIR (parallel to the
-    Python one). The project lib is where on-demand `r_package` installs land,
-    so a freshly-installed package is importable in the next cell.
-
-    Also defaults the session's CRAN repo to ABA's PPM snapshot + sets the binary
-    User-Agent — so even a hand-rolled `install.packages("pagoda2")` in run_r gets
-    a PPM BINARY (source-compiling only when no binary exists), instead of the
-    slow source build a bare `install.packages(..., repos='cloud.r-project.org')`
-    triggers. `type='source'` still forces a source build on demand."""
-    import os as _os
-    from core import projects
-    from core.exec.r import libpaths_expr, cran_repo, _ppm_ua_expr
-    libline = libpaths_expr(projects.current() or "default")
-    libline = (libline + "\n") if libline else ""
-    repoline = f'options(repos=c(CRAN={cran_repo()!r})); {_ppm_ua_expr()}\n'
-    # Pin IRkernel's plot DPI so harvested PNGs have a consistent pixel
-    # size across sessions. IRkernel's default `repr.plot.res` varies by
-    # version (72 in older, 120 in newer) — that variation translated into
-    # huge-vs-normal fonts in chat depending on which session you were in,
-    # because the chat scales each PNG to a fixed CSS width and a 504-px
-    # plot gets upscaled much more than a 960-px one. ABA_R_PLOT_RES
-    # overrides for the rare case where a project wants different defaults.
-    try:
-        _res = max(40, config.settings.r_plot_res.get())
-    except ValueError:
-        _res = 120
-    plotline = f"options(repr.plot.res={_res})\n"
-    data_dir, _ = _project_data_artifacts()
-    return (f"{libline}{repoline}{plotline}DATA_DIR <- {str(data_dir)!r}\n"
-            f"WORK_DIR <- {str(cwd)!r}\nsetwd({str(cwd)!r})\n"
-            + _harvest_helpers_r())
 
 
 def _harvest_helpers_r() -> str:
@@ -259,60 +205,14 @@ def _harvest_helpers_r() -> str:
     )
 
 
-def _setup_code(cwd: str) -> str:
-    """First cell: replicate the run_python environment in the kernel namespace.
-
-    Also injects the Stage 6 harvest helpers (`harvest_table`) so recipes/
-    agents can explicitly tag a DataFrame for pinning without manually
-    composing a `df.to_csv(...)` line. See `_harvest_helpers_py` below.
-    """
-    data_dir, _ = _project_data_artifacts()
-    # sys.path (§11.4): base .venv (immutable) → THIS project's overlay PREPENDED,
-    # so the project's own package version WINS over the base (R-parity). The
-    # shared install-wide overlay is gone (folded into the base); numpy/the ABI
-    # core stay pinned via the anchor constraint, so a project override can't
-    # shadow-break the compiled stack, and one project can't pollute another.
-    from core import projects as _projects
-    _pid = _projects.current()
-    # §11.4: the project overlay is prepended via PYTHONPATH at kernel launch (see
-    # JupyterKernelSession.__init__), so it wins even over packages jupyter imports
-    # at boot — no in-cell sys.path manipulation needed.
-    pylib_appends = ""
-    # Ad-hoc-install containment (env_refactor.md P5, pulled forward): point any
-    # bare `pip install` the agent runs in a cell at the project overlay +
-    # base-constraints via PIP_PREFIX / PIP_CONSTRAINT — so a reflexive
-    # `!pip install foo` (or subprocess pip) lands CONTAINED + CONSTRAINED
-    # instead of mutating the shared base .venv. pip honors these env vars for
-    # every invocation style, so no fragile interception. (R is already
-    # contained: its preamble puts the project lib first on .libPaths().)
-    from core.exec.materialize import project_pylib_dir, PYLIB_DIR
-    from core.exec.env_integrity import abi_anchor_constraints
-    _pip_prefix = project_pylib_dir(_pid) if _pid else PYLIB_DIR
-    _cons = abi_anchor_constraints()   # §11.4: ad-hoc pip overrides allowed; numpy pinned
-    pip_guard = f"_os.environ['PIP_PREFIX'] = {str(_pip_prefix)!r}\n"
-    if _cons:
-        pip_guard += f"_os.environ['PIP_CONSTRAINT'] = {str(_cons)!r}\n"
-    return (
-        "import sys as _sys, os as _os\n"
-        f"{pylib_appends}"
-        f"{pip_guard}"
-        f"_os.environ['PATH'] = {str(tools_env() / 'bin')!r} + _os.pathsep + _os.environ.get('PATH','')\n"
-        "_os.environ.setdefault('MPLBACKEND', 'Agg')\n"
-        f"DATA_DIR = {str(data_dir)!r}\n"
-        f"WORK_DIR = {str(cwd)!r}\n"
-        + _harvest_helpers_py()
-    )
-
-
 def _env_setup_code(cwd: str) -> str:
-    """First cell for an ISOLATED-env kernel (§11.3). Unlike `_setup_code`, it does
-    NOT append the shared/project overlays or set PIP_PREFIX — the env is
-    standalone (its own site-packages; a bare `pip install` lands in the env). Just
-    DATA_DIR / WORK_DIR / headless mpl / the tools-env PATH + harvest helpers."""
+    """First cell for a weft-env kernel (isolated env OR base-pack session). The env
+    is STANDALONE (its own site-packages + bin — the interpreter is the env's own,
+    so its bin/ is already the active PATH); no overlay, no PIP_PREFIX, no tools-env
+    injection. Just DATA_DIR / WORK_DIR / headless mpl + harvest helpers."""
     data_dir, _ = _project_data_artifacts()
     return (
         "import sys as _sys, os as _os\n"
-        f"_os.environ['PATH'] = {str(tools_env() / 'bin')!r} + _os.pathsep + _os.environ.get('PATH','')\n"
         "_os.environ.setdefault('MPLBACKEND', 'Agg')\n"
         f"DATA_DIR = {str(data_dir)!r}\n"
         f"WORK_DIR = {str(cwd)!r}\n"
@@ -411,9 +311,16 @@ def _kernel_env(lang: str, cwd: str) -> dict:
                 "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "BLIS_NUM_THREADS"):
         env[var] = nthreads
     if lang == "r":
-        tenv = tools_env()
-        env["LD_LIBRARY_PATH"] = str(tenv / "lib") + os.pathsep + env.get("LD_LIBRARY_PATH", "")
-        env["PATH"] = str(tenv / "bin") + os.pathsep + env.get("PATH", "")
+        # The base-PACK R kernel is self-contained (conda env layout — its own
+        # lib/ resolves .so deps via rpath). Point PATH/LD_LIBRARY_PATH at the
+        # project's weft R session prefix; the pack is REQUIRED (no tools-env R).
+        from core.compute import base_env as _be
+        from core import projects as _pj
+        from core.compute import project_env as _pe
+        _be.require("r")
+        _prefix = _pe.prefix(str(_pj.current() or "_none"), "r")
+        env["LD_LIBRARY_PATH"] = str(_prefix / "lib") + os.pathsep + env.get("LD_LIBRARY_PATH", "")
+        env["PATH"] = str(_prefix / "bin") + os.pathsep + env.get("PATH", "")
         # R `future` defaults (Seurat/IntegrateLayers etc.): sequential plan + a
         # generous globals ceiling. future's 500 MiB future.globals.maxSize default
         # trips on real single-cell objects (IntegrateLayers ships the layered object
@@ -437,25 +344,25 @@ class JupyterKernelSession:
         self.alive = False
         self._cancel_grace_s = _CANCEL_GRACE_S
         Path(cwd).mkdir(parents=True, exist_ok=True)
+        # W3.5 weft-only: every kernel is a weft env — an isolated named env, or
+        # the project's default SESSION over the bundle-declared base pack. There
+        # is no served-base kernel; a deployment that runs a language MUST declare
+        # its base pack (require → loud, structured error, not a silent fallback).
+        from core.compute import base_env as _base
         if lang == "r":
-            kernel_name, setup, setup_to = _ensure_r_kernelspec(), _r_setup_code(cwd), 60
+            _base.require("r")
+            kernel_name, setup, setup_to = _ensure_base_r_kernelspec(), _base_r_setup_code(cwd), 60
         elif env_name:  # §11.3 isolated-env kernel: the env's python, standalone setup
             kernel_name, setup, setup_to = _ensure_env_python_kernelspec(env_name), _env_setup_code(cwd), 60
-        else:
-            kernel_name, setup, setup_to = _ensure_python_kernelspec(), _setup_code(cwd), 30
+        else:           # base-pack python kernel: the pack's python, standalone setup
+            _base.require("python")
+            kernel_name, setup, setup_to = _ensure_base_python_kernelspec(), _env_setup_code(cwd), 60
         self._km = KernelManager(kernel_name=kernel_name)
         kenv = _kernel_env(lang, cwd)
-        # §11.4: the default python kernel gets the project overlay on PYTHONPATH so
-        # it's prepended at interpreter STARTUP — before jupyter imports anything —
-        # so a project's overridden package version wins even over a base package
-        # the kernel itself imports. (Isolated env kernels are standalone; R N/A.)
-        if lang != "r" and not env_name:
-            from core.exec.materialize import project_pylib_paths
-            from core import projects as _pj
-            _ov = [str(p) for p in project_pylib_paths(_pj.current())]
-            if _ov:
-                kenv["PYTHONPATH"] = os.pathsep.join(
-                    _ov + ([kenv["PYTHONPATH"]] if kenv.get("PYTHONPATH") else []))
+        # Every kernel is now a weft env (isolated or base-pack session) — always
+        # STANDALONE: a pack's additions layer via extends_env / session_install,
+        # never PYTHONPATH stacking. The served-base project-overlay-on-PYTHONPATH
+        # is gone with the served base.
         # P1: bound the startup. These library calls take no timeout and run while
         # the pool lock is held — if one BLOCKS under resource pressure it wedges
         # all kernel acquisition. Cap each so a bad startup fails fast (releasing

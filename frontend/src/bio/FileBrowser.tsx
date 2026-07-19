@@ -24,8 +24,17 @@ export type TreeNode = FileNode & {
 export interface FileActions {
   onPromote?: (node: TreeNode) => void
   /** Toggle pin. `pinned` is the NEW state (true=pin, false=unpin). */
-  onPin?: (node: TreeNode, pinned: boolean) => void
+  /** Returns success — `false` (sync or via promise) REVERTS the optimistic
+   *  glyph flip, so a failed pin/unpin can't leave a phantom pinned state. */
+  onPin?: (node: TreeNode, pinned: boolean) => void | boolean | Promise<void | boolean>
   onDiscuss?: (node: TreeNode) => void
+  /** Durably retain a not-yet-kept file (at-risk / in-sandbox) — the §6.2 late-pin. */
+  onKeep?: (node: TreeNode) => void
+  /** §8e.3 Local copy — download the file to the user's machine (a plain copy,
+   *  theirs to manage). Rendered only when the file is servable from here. */
+  onLocalCopy?: (node: TreeNode) => void
+  /** §8e.3 Register as dataset — outputs are born here; promote one in place. */
+  onRegister?: (node: TreeNode) => void
 }
 
 interface Props {
@@ -244,11 +253,14 @@ export default function FileBrowser({
         {actions.onPin && (
           <button className={`files__action files__action--pin ${isPinned ? 'files__action--pinned' : ''}`}
                   title={isPinned ? 'Unpin from the thread' : 'Pin to the thread'} aria-label={isPinned ? 'Unpin' : 'Pin'}
-                  onClick={e => {
+                  onClick={async e => {
                     e.stopPropagation()
                     const next = !isPinned
                     setPinned(s => { const n = new Set(s); next ? n.add(node.path) : n.delete(node.path); return n })
-                    actions.onPin!(node, next)
+                    const ok = await Promise.resolve(actions.onPin!(node, next)).catch(() => false)
+                    if (ok === false) {   // server said no — revert the flip
+                      setPinned(s => { const n = new Set(s); next ? n.delete(node.path) : n.add(node.path); return n })
+                    }
                   }}>
             <PinGlyph filled={isPinned} />
           </button>
@@ -259,13 +271,52 @@ export default function FileBrowser({
             <ChatGlyph />
           </button>
         )}
+        {actions.onKeep && (node.state === 'at-risk' || node.state === 'in-sandbox') && (
+          <button className="files__action files__action--keep" title="Keep — retain this file durably before the sandbox is swept"
+                  aria-label="Keep file" onClick={e => { e.stopPropagation(); actions.onKeep!(node) }}>
+            <KeepGlyph />
+          </button>
+        )}
         {actions.onPromote && node.ephemeral && (
           <button className="files__action files__action--promote" title="Promote to a dataset (keep it)"
                   aria-label="Promote to dataset" onClick={e => { e.stopPropagation(); actions.onPromote!(node) }}>
             <PromoteGlyph />
           </button>
         )}
+        {actions.onRegister && node.state !== 'cleared' && !isImage(node) && (
+          <button className="files__action files__action--promote" title="Register as a dataset (usable as an input to further work)"
+                  aria-label="Register as dataset" onClick={e => { e.stopPropagation(); actions.onRegister!(node) }}>
+            <PromoteGlyph />
+          </button>
+        )}
+        {actions.onLocalCopy && node.state !== 'cleared' && node.artifact_path && (
+          <button className="files__action files__action--copy" title="Local copy — download to your machine (a plain copy, yours to manage)"
+                  aria-label="Local copy" onClick={e => { e.stopPropagation(); actions.onLocalCopy!(node) }}>
+            <DownloadGlyph />
+          </button>
+        )}
       </>
+    )
+  }
+
+  // Per-file durability pill — §8c two-axis vocabulary (more_weft_ui.md): the pill
+  // says PROTECTION (kept ✓ / keeping… / temporary / discarded), plus location only
+  // when the bytes aren't simply here (`· on <site>`). State KEYS drive styling and
+  // the Keep shield, unchanged. An unkept file in an OPEN run arrives with an EMPTY
+  // badge (temporary-by-absence — backend rule) → no pill at all.
+  function duraBadge(node: TreeNode): React.ReactNode {
+    const st = node.state
+    if (!st) return null
+    if ((st === 'at-risk' || st === 'in-sandbox') && node.badge === '') return null
+    const short = st === 'retained' ? (node.site && node.site !== 'local' ? `kept ✓ · on ${node.site}` : 'kept ✓')
+      : st === 'saving' ? 'keeping…'
+      : st === 'in-store' ? 'temporary'
+      : st === 'at-risk' ? 'temporary'
+      : st === 'in-sandbox' ? 'temporary'
+      : st === 'cleared' ? 'discarded' : st
+    return (
+      <span className={`files__badge files__badge--dura files__badge--${st}`}
+            title={node.badge || st}>{short}</span>
     )
   }
 
@@ -296,6 +347,7 @@ export default function FileBrowser({
           <span className="files__name-main">{isFile ? node.name : `${node.name}/`}</span>
           {parent && <span className="files__name-path">{parent}</span>}
         </button>
+        {isFile && duraBadge(node)}
         <span className="files__type">{typeLabel}</span>
         <span className="files__size">{isFile ? fmtSize(node.size ?? null) : <span className="files__size--dash">—</span>}</span>
         {rowActions(node, isFile)}
@@ -339,6 +391,7 @@ export default function FileBrowser({
           <span className="files__icon">{leafIcon(node)}</span>
           <button className="files__name files__name--clickable" onClick={() => activate(node)}
                   title={isReadme ? node.path : `${node.entity_type ?? ''} · ${node.entity_id ?? ''}`}>{node.name}</button>
+          {duraBadge(node)}
           <span className="files__type">{fileTypeLabel(node)}</span>
           <span className="files__size">{fmtSize(node.size ?? null)}</span>
           {rowActions(node, true)}
@@ -367,7 +420,7 @@ export default function FileBrowser({
                   onClick={() => hasEntity && node.entity_id && onFocus?.(node.entity_id)}
                   title={node.title || node.name}>{node.name}/</span>
             {node.ephemeral && (
-              <span className="files__badge files__badge--scratch" title={node.note || 'Scratch — not kept unless promoted'}>scratch</span>
+              <span className="files__badge files__badge--scratch" title={node.note || 'Temporary — not kept unless promoted'}>temporary</span>
             )}
             <span className="files__type">{folderTypeLabel(node)}</span>
             <span className="files__size files__size--dash">—</span>
@@ -470,6 +523,10 @@ function DownloadGlyph() {
 }
 function PromoteGlyph() {
   return <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 10.5v-8" /><path d="M4.5 6L8 2.5 11.5 6" /><path d="M3 13.5h10" /></svg>
+}
+/** Shield-check — "keep this safe" (durable retain). */
+function KeepGlyph() {
+  return <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 1.5l5 2v4c0 3.2-2.1 5.4-5 6.5-2.9-1.1-5-3.3-5-6.5v-4l5-2z" /><path d="M5.8 8l1.6 1.6L10.4 6.6" /></svg>
 }
 function PinGlyph({ filled }: { filled?: boolean }) {
   return <svg width="13" height="13" viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 17v5M9 3h6l-1 7 3 3H7l3-3z" /></svg>

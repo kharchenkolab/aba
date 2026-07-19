@@ -62,6 +62,13 @@ refs:
   group: /groups/{group}/aba/refs
   # institution: /cluster/aba/refs        # optional; curator writes, everyone reads
 
+# Compute-site management. On a SHARED deployment users should not add/reconfigure
+# their own compute machines — set self_service:false so Settings → Compute shows the
+# deployment's machines READ-ONLY, the /api/compute management endpoints 403, and the
+# Guide's site tools refuse to connect one. Omit (or true) for a self-managed install.
+# compute:
+#   self_service: false
+
 group_resolution:
   source: ood_form
   fallback: unix_primary_group

@@ -21,7 +21,7 @@ from core.graph._schema import init_db   # noqa: E402
 init_db()
 import content.bio  # noqa: E402,F401 — registry + edge rules
 from core.graph.entities import create_entity, get_entity   # noqa: E402
-from core.runtime.actor import acting_as   # noqa: E402
+from core.graph.actor import acting_as   # noqa: E402
 from content.bio.lifecycle.promote import (   # noqa: E402
     promote_figure_to_result, promote_results_to_finding,
 )

@@ -26,6 +26,9 @@ interface Props {
   compact?: boolean
   /** Hand a request to the Guide (e.g. a Run's Re-run / Discuss → chat). */
   onAsk?: (text: string) => void
+  /** Seed the Guide composer WITHOUT sending (reveals the chat peek, focuses
+   *  the cursor) — the Discuss-style hook: user confirms with Enter. */
+  onPrefill?: (text: string) => void
   /** "Chat" gesture on a run output / focus surface — brings the plot (with
    *  its image) into chat. The optional `action` parameter (Stage 5 of
    *  misc/exec_records_and_versioning.md) switches the composer prefill
@@ -49,7 +52,7 @@ type PromoteMode =
   | { kind: 'figure-to-claim' }
   | { kind: 'scenario' }
 
-export default function FocusCanvas({ entity, entities, onChange, onFocus, onSelectThread, onAnnotate, annotClear, compact, onAsk, onChatResult, onBrowseFiles, projectId, highlighting, onHighlightingChange }: Props) {
+export default function FocusCanvas({ entity, entities, onChange, onFocus, onSelectThread, onAnnotate, annotClear, compact, onAsk, onPrefill, onChatResult, onBrowseFiles, projectId, highlighting, onHighlightingChange }: Props) {
   const [promote, setPromote] = useState<PromoteMode | null>(null)
   const [compareOn, setCompareOn] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -164,7 +167,7 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus, onSel
           ? renderCompareBody(entity, baseline)
           : entity.type === 'figure' && onAnnotate
           ? <AnnotatedFigure entity={entity} onAttach={onAnnotate} clearSignal={annotClear} />
-          : renderRegistryView(entity, entities, onFocus, onChange, compact, onAsk, onChatResult, onBrowseFiles, projectId, onAnnotate, annotClear, highlighting, onHighlightingChange)}
+          : renderRegistryView(entity, entities, onFocus, onChange, compact, onAsk, onChatResult, onBrowseFiles, projectId, onAnnotate, annotClear, highlighting, onHighlightingChange, onPrefill)}
       </div>
       <div className="focus__meta">
         <span title={entity.id}>id {entity.id}</span>
@@ -436,6 +439,7 @@ function renderRegistryView(
   annotClear?: number,
   highlighting?: boolean,
   onHighlightingChange?: (on: boolean) => void,
+  onPrefill?: (text: string) => void,
 ) {
   const View = focus_view_for(e.type)
   if (!View) {
@@ -448,6 +452,7 @@ function renderRegistryView(
     onChange={onChange}
     compact={compact}
     onAsk={onAsk}
+    onPrefill={onPrefill}
     onChatResult={onChatResult}
     onBrowseFiles={onBrowseFiles}
     projectId={projectId}

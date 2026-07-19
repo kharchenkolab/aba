@@ -197,9 +197,12 @@ def set_current(pid: str) -> None:
     # liveness guard inside reap_stale_turns is the belt to this suspenders.
     if pid not in _reaped_pids:
         _reaped_pids.add(pid)
+        # First-open lifecycle event. The turn reaper (Reasoning plane,
+        # core/runtime/checkpoint.py) registers for this — the waist fires
+        # the event, it never imports upward (plane lint, W0.2).
         try:
-            from core.runtime.checkpoint import reap_stale_turns
-            reap_stale_turns()
+            from core.hooks.dispatcher import dispatch
+            dispatch("on_project_first_open", {"pid": pid})
         except Exception:  # noqa: BLE001
             pass
     # Content-side project-open hooks (display-path backfill, etc.) run
@@ -248,9 +251,10 @@ def ensure_opened(pid: str) -> None:
     init_db()
     if pid not in _reaped_pids:
         _reaped_pids.add(pid)
+        # See set_current: the turn reaper subscribes to this event.
         try:
-            from core.runtime.checkpoint import reap_stale_turns
-            reap_stale_turns()
+            from core.hooks.dispatcher import dispatch
+            dispatch("on_project_first_open", {"pid": pid})
         except Exception:  # noqa: BLE001
             pass
     # Phase 2 (modularity_audit2 §2D): backfill typed derivations for
@@ -390,6 +394,15 @@ def delete_project(pid: str) -> None:
     with _locked_registry() as reg:
         reg[:] = [p for p in reg if p["id"] != pid]
         survivors = list(reg)
+    # Free the project's live weft sessions before dropping the DB — otherwise
+    # the shared substrate leaks the deleted project's default-env prefixes (up
+    # to GBs each) with nothing left to reclaim them by name. Best-effort; the
+    # per-project dir + weft_envs.json intentionally STAY for recovery (I4).
+    try:
+        from core.compute import project_env  # noqa: PLC0415
+        project_env.stop_all_sessions(pid)
+    except Exception:  # noqa: BLE001 — substrate wiring must never block delete
+        pass
     f = _db_file(pid)
     if f.exists():
         f.unlink()
