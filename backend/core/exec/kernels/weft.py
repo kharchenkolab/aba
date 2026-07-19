@@ -94,21 +94,39 @@ def _slurm_time_s(t: str) -> int | None:
 
 
 def _fit_walltime(e) -> str | None:
-    """A walltime that fits the site's partitions, out of a
-    site.capability_violation's hints — the PartitionTimeLimit fence for
+    """A walltime that fits the partition the job will ACTUALLY land on, out
+    of a site.capability_violation's hints — the PartitionTimeLimit fence for
     interactive kernels (a capped partition refuses the default 8h hold).
-    Returns the ROOMIEST partition cap as H:MM:SS, or None when walltime
-    was not the problem (nothing to clamp) or no cap would help."""
+
+    Weft submits kernel allocations without --partition (bug4), so slurm
+    routes them to the cluster DEFAULT partition — clamping to the roomiest
+    partition's cap produced a job slurm ACCEPTS but never starts (2h ask on
+    a 1h default partition pends forever with PartitionTimeLimit while the
+    node idles; chunk-A regression, 2026-07-19). Order of preference:
+    the default partition (sinfo marks its name with '*', which weft passes
+    through verbatim), else a single available partition, else the SMALLEST
+    cap ≥10 min (runnable anywhere; tiny debug partitions excluded), else
+    None (nothing safe to clamp to)."""
     if getattr(e, "code", "") != "site.capability_violation":
         return None
     hints = getattr(e, "hints", None) or {}
     pinfo = hints.get("partitions") or {}
     parts = pinfo.get("available") or []
-    caps = [s for s in (_slurm_time_s(str(p.get("max_walltime") or ""))
-                        for p in parts) if s]
-    if not caps:
+
+    def _cap(p):
+        return _slurm_time_s(str(p.get("max_walltime") or ""))
+
+    best = None
+    default = [p for p in parts if str(p.get("name") or "").endswith("*")]
+    if default:
+        best = _cap(default[0])
+    elif len(parts) == 1:
+        best = _cap(parts[0])
+    else:
+        floors = [c for c in (_cap(p) for p in parts) if c and c >= 600]
+        best = min(floors) if floors else None
+    if not best:
         return None
-    best = max(caps)
     asked = _slurm_time_s(str((pinfo.get("asked") or {}).get("walltime")
                               or ""))
     if asked is not None and asked <= best:

@@ -36,20 +36,31 @@ C_ROOT = "/users/peter.kharchenko/aba-mn-cbe-weft"  # ON cbe.next (real slurm)
 CBE_OK = False                                    # set in main() if reachable+registered
 
 
+def _ssh_run(argv: list, timeout: int):
+    """subprocess.run that DEGRADES on timeout instead of raising — a dark
+    machine must read as unreachable (rc 124, empty stdout), never crash the
+    whole suite at bootstrap (long_arc died to a transient 2-min mendel
+    sshd throttle, 2026-07-19)."""
+    import subprocess
+    try:
+        return subprocess.run(argv, capture_output=True, text=True,
+                              timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(argv, 124, stdout="",
+                                           stderr="ssh timeout")
+
+
 def mssh(cmd: str):
     """Run a command ON mendel (the real second remote site)."""
-    import subprocess
-    return subprocess.run(["ssh", "-o", "BatchMode=yes", "mendel", cmd],
-                          capture_output=True, text=True, timeout=120)
+    return _ssh_run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20",
+                     "mendel", cmd], 120)
 
 
 def cssh(cmd: str):
     """Run a command ON cbe.next (the real slurm cluster; ProxyJump via
     ~/.ssh/config, so latency is jump-host-shaped — keep calls few)."""
-    import subprocess
-    return subprocess.run(["ssh", "-o", "BatchMode=yes",
-                           "-o", "ConnectTimeout=20", "cbe.next", cmd],
-                          capture_output=True, text=True, timeout=180)
+    return _ssh_run(["ssh", "-o", "BatchMode=yes",
+                     "-o", "ConnectTimeout=20", "cbe.next", cmd], 180)
 
 
 def _cluster_conn():
@@ -65,14 +76,12 @@ def _cluster_conn():
 
 def hssh(cmd: str):
     """Run a command ON the hpc fixture (the detached node)."""
-    import subprocess
     conn = _cluster_conn()
-    return subprocess.run(
+    return _ssh_run(
         ["ssh", "-i", f"{conn['keydir']}/id_ed25519",
          "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
          "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
-         "-p", str(conn["port"]), "physicist@127.0.0.1", cmd],
-        capture_output=True, text=True, timeout=120)
+         "-p", str(conn["port"]), "physicist@127.0.0.1", cmd], 120)
 
 
 def _run_by_title(frag):
