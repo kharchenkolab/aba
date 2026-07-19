@@ -27,9 +27,10 @@ Content layers into four **scopes**, broadest first — each overrides the last:
 | **user** | `/groups/<lab>/aba/users/<user>/` | the scientist | — |
 
 Environments are **per-user** (`…/users/<user>/envs` — the global + per-project
-growth), over a **shared read-only base** (baked into a fat image, or mounted from
-shared storage for a slim image). The base is the only env artifact shared across a
-lab.
+growth), over a **shared read-only base**. In the default weft profile that base is a
+**weft-published env image** adopted read-only on the node (a legacy fat image bakes it
+in-image; a legacy slim image mounts it from shared storage). The base is the only env
+artifact shared across a lab.
 
 ## What you'll customize
 
@@ -57,23 +58,27 @@ default*, the platform code, or the base packages.
 
 `install/sif/build.sh` builds from the same `install/core` specs as the other
 installers, **baking the recipe pack** (and the OOD `aba_preflight.py`, at
-`/opt/aba/ood/`) into both profiles:
+`/opt/aba/ood/`) into every profile. The **`weft` profile is the standard**:
 
 ```bash
 export APPTAINER=…/apptainer/bin/apptainer APPTAINER_TMPDIR=…/tmp
-export MICROMAMBA=…/bin/micromamba            # fat only — builds the conda + R base
 ABA_RECIPES_SRC=/path/to/aba-recipe-pack \
-  ./install/sif/build.sh --profile fat        # or slim
+  ./install/sif/build.sh --profile weft       # DEFAULT (fat / slim are legacy)
 ```
 
-- **fat** — bakes the conda venv + R/Bioconductor base + backend + frontend +
-  recipes. One self-contained artifact (~1.5 GB); nothing to mount.
-- **slim** — bakes backend + frontend + recipes (~40 MB); the conda + R base are
-  **mounted** from shared storage at run time. Smaller image, env updates without a
-  full rebuild — but you stage the base once on the cluster FS.
+- **weft** *(default)* — a small (~375 MB) **controller-only** image: backend +
+  frontend + recipes + the weft substrate. The science python + R come from
+  **weft-published env images adopted read-only on the node** at run time (via the
+  deployment's published env tree, `site.yaml` `envs.publish_tree`), so a stack
+  update reships an env image, not the app.
+- **fat** *(legacy)* — bakes the conda venv + R/Bioconductor base + backend +
+  frontend + recipes. One self-contained artifact (~1.5 GB); nothing to mount.
+- **slim** *(legacy)* — bakes backend + frontend + recipes (~40 MB); the conda + R
+  base are **mounted** from shared storage at run time (`export MICROMAMBA=…` builds
+  that base).
 
-Both bake CA certs + micromamba so the agent can install packages into the
-per-user growth env at run time.
+All profiles bake CA certs so the agent can provision packages into the per-user
+growth env at run time.
 
 ### ⚠️ Match the base image's glibc to your compute nodes
 The image base (`--base` / `ABA_SIF_BASE`, default `oraclelinux:7`) supplies the root
@@ -244,16 +249,18 @@ ABA auto-sizes BLAS/OpenMP threads to the Slurm allocation, no config needed.
 - **Site-wide recipes or policy** without a rebuild → edit `/cluster/aba/installation`.
 - **A lab's recipes or policy** → edit that lab's `bundle/`.
 
-### Versioned, zero-downtime upgrades (slim, optional)
+### Versioned, zero-downtime upgrades (optional)
 
-A slim deploy can run in **release mode**: each deploy stages an immutable, versioned release and
+A deploy can run in **release mode**: each deploy stages an immutable, versioned release and
 flips a `current` pointer **atomically**, so upgrades don't disturb running sessions and you can
 roll back instantly. Enable it by setting `image.release_root` in `site.yaml` (to your shared
-`/cluster/aba`) and deploying with `RELEASE_MODE=1`.
+`/cluster/aba`) and deploying with `RELEASE_MODE=1`. The OOD preflight resolves the app image
+from the promoted tree (`release_root/current/sif/*.sif` or `*.sqfs`) and runs inside it.
 
-Why it matters for a fast-moving deploy: a release is a set of **content-addressed components** (the
-image, the conda/R base, tools). A **code-only** upgrade re-links the *unchanged* base — it does
-**not** re-copy the multi-GB env; the base is restaged only when its package lockfile changes.
+Why it matters for a fast-moving deploy: a release stages the app image alongside the
+**weft-published env images** (or, on a legacy slim deploy, the mounted conda/R base). A
+**code-only** upgrade re-links the *unchanged* env images — it does **not** re-copy the multi-GB
+stacks; an env image is restaged only when its lockfile changes.
 
 Operate releases with the release CLI (run against the deployed backend; site tooling such as
 aba-vbc wraps it as `./aba-release`):

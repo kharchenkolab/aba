@@ -39,8 +39,8 @@ below derives from a few invariants:
   place → run. Local mode never auto-backgrounds a cell (relocating a
   state-dependent cell into a fresh process silently loses its objects).
 
-The **environment** a run executes in (immutable base + per-project overlay,
-isolated envs, `ensure_capability`, the ABI anchor) is owned by
+The **environment** a run executes in (the shared base pack, the per-project
+weft session, isolated envs, `ensure_capability`) is owned by
 [`envs.md`](envs.md) — this doc consumes it and does not re-explain it.
 Run-**later** (background jobs, Slurm/OOD submission, continuation) is owned by
 [`jobs-and-hpc.md`](jobs-and-hpc.md). The **exec record** each run emits is owned
@@ -88,10 +88,10 @@ run_python/run_r ─► LocalRouter.decide() ─► "local"  ─► KernelPool.g
   survives); a crash is isolated from the backend.
 - **The stateless one-shot** — `run_python_code`/`run_r_code`
   (`core/exec/run.py:22`) write a self-contained `script.py`/`script.R` and run
-  it via `MaterializingExecutor` (base venv + tools-env PATH, killpg
-  cancellation). This is the `fresh=true` lane and the body of every background
-  job, so a backgrounded run inherits the same overlay, harvest, and cancellation
-  as run-now.
+  it via `MaterializingExecutor` (the runtime venv as launch harness + the run's
+  resolved weft env interpreter, killpg cancellation). This is the `fresh=true`
+  lane and the body of every background job, so a backgrounded run inherits the
+  same env, harvest, and cancellation as run-now.
 - **`harvest_artifacts`** (`core/exec/run.py:307`) — the single harvester both
   lanes call.
 

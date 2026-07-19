@@ -123,10 +123,11 @@ logic — both are config the core reads at its seams.
 **Target-conditionals live at the compute seam, and only there.** Exactly two facts differ
 by target, both resolved from `config.env`, never from a `if target==…`:
 
-- **`ABA_BATCH_SUBMITTER`** (`local|slurm`) selects the `BatchSubmitter` implementation
-  (`core/jobs/submitter.py:48`, `core/exec/modules.py:71`). The routing *policy* — interactive
-  vs. background, when a job sbatches — is identical everywhere; only the ABI behind the
-  protocol changes. Owned by [`jobs-and-hpc.md`](jobs-and-hpc.md).
+- **`ABA_BATCH_SUBMITTER`** (`local|slurm|worker`) selects the background-job lane
+  (`core/jobs/submitter.py`, `core/exec/modules.py`): a local-site weft task, a weft task on the
+  declared Slurm-kind site, or the in-process worker fallback. The routing *policy* — interactive
+  vs. background, when a job goes to the cluster — is identical everywhere; only the lane behind
+  the `BatchSubmitter` protocol changes. Owned by [`jobs-and-hpc.md`](jobs-and-hpc.md).
 - **`ABA_ACCELERATOR`** (`cpu|cuda`) selects the base torch build at install. A deployment-
   conditional *ABI* choice, applied by `install/core/inject-accelerator.sh`. Owned by
   [`envs.md`](envs.md).
@@ -198,11 +199,13 @@ rebuilds an image; a dependency bump never reships the app):
 picks up the new release, in-flight work stays on the one it started with. Rollback = flip
 `current` back to `prev`.
 
-**Fully-weft profile.** The controller's own runtime is baked **into the app image**; the
-*only* on-disk envs are the weft-published compute stacks, mounted read-only on the node via
-the site's `ro_roots` (consumers `env_adopt` by name — no solve). There is no separate
-controller-env-on-FS or content-addressed `components/` tier in this profile (that machinery
-belongs to the older slim model — see `misc/slim_sif_deploy.md`).
+**The weft profile (the default).** The controller's own runtime is baked **into the app
+image** (a small ~375 MB controller-only SIF); the *only* on-disk envs are the weft-published
+compute stacks, mounted read-only on the node via the site's `ro_roots` (the deployment's
+published env tree — `ABA_WEFT_PUBLISH_TREE` / `site.yaml` `envs.publish_tree`; consumers
+`env_adopt` by name, no solve — the adapter injects the tree into every site's `ro_roots` at
+registration). There is no separate controller-env-on-FS or content-addressed `components/`
+tier here (that machinery belongs to the legacy slim model — see `misc/slim_sif_deploy.md`).
 
 **`site.yaml` is not release-specific.** It points at the release *root* (`app/`); the
 `current` symlink inside does per-release selection at launch. It changes only when the
@@ -298,9 +301,10 @@ credential/access scope.
   only caught where a specific `doctor` check exists (accelerator-vs-base, submitter-vs-Slurm).
   Enum enforcement is advisory in the mechanical pass to preserve behavior; tightening it to
   hard-reject is a reduction-wave follow-up.
-- **Fat SIF is a frozen, read-only target — everything must be baked EAGER.** The modules +
-  lazy-env systems default to first-use/deferred install, which cannot work against a read-only
-  image. A fat SIF (`install/sif/build.sh --profile fat`) bakes the full python base, the R
+- **The legacy fat SIF is a frozen, read-only target — everything must be baked EAGER.** (The
+  default is now the small weft profile above; `fat`/`slim` are legacy.) The modules + lazy-env
+  systems default to first-use/deferred install, which cannot work against a read-only image. A
+  fat SIF (`install/sif/build.sh --profile fat`) bakes the full python base, the R
   tools env, pagoda3 dist, **and the module manifests** (`/opt/aba/install/core/modules`, else
   the registry is empty), and wires three knobs so the runtime reads the baked artifacts as
   ready instead of re-installing: `ABA_TOOLS_DIR` / `ABA_PAGODA3_DIST` (module readiness probes

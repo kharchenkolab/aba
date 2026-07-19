@@ -3,210 +3,233 @@
 How ABA provides the software a run executes in — Python and R — and how it adds
 packages on demand without corrupting shared state.
 
-> Status: **substantially superseded by the weft migration** (see `misc/weft_rewrite.md`).
-> The body below describes the *pre-weft* served-base + project-overlay + ABI-anchor model.
-> Under weft, environments are content-addressed and realized in weft SESSIONS / packs; the
-> served base and its self-heal / ABI-anchor / base-lock machinery are **removed** (W3.4/W3.5),
-> the science stack is weft-owned (not in the controller `environment.yml`), and the honest
-> load/GPU probes moved to `core/exec/verify.py`. The `env_integrity`/`verify` code-map row
-> below is current; the rest needs a weft-era rewrite (tracked).
+> Status: current as of 2026-07. This is the **maintained** reference.
 
 ## Aims & principles
 
 The scientific stack is **ABI-fragile**: every compiled package (numpy, scipy, scanpy,
-numba, torch…) is built against one numpy ABI. A single unpinned install can move numpy
+numba, torch…) is built against one numpy ABI, and a single unpinned install can move numpy
 and silently break `import` for unrelated code. So the model is **integrity-safe by
-construction**:
+construction** — and the way that safety is achieved is that ABA *describes* environments
+while **weft realizes them**, content-addressed and locked:
 
-- **Never mutate shared state unpinned/unverified/in-place.** Installs are pinned to the
-  base ABI, verified by a real import (not just "is it present"), and land in a
-  session-writable layer — never the shared foundation.
-- **Give the agent real control** (add packages, isolate a conflict) **without** letting
-  one project's install corrupt another or the base.
-- **Fail loud, not silent.** A broken or unguarded environment is surfaced (startup
-  self-check, `env_root_cause`), never left as a latent landmine.
+- **ABA describes; weft realizes — through one doorway.** An environment is a **spec** ABA
+  hands to the compute substrate; weft solves it to a locked, content-addressed **EnvID** and
+  materializes the on-disk prefix. Every environment operation goes through
+  `core/compute/ports.py` (`env_ensure` / `env_evict` / `env_status` / `session_*`), and the
+  *only* `import weft` in the tree is `core/compute/adapter.py:105`. So the realization
+  strategy (a local directory, a squashfs image mounted read-only on a cluster node, a remote
+  site) can change without touching a caller. See [`compute-sites.md`](compute-sites.md) for
+  the site/adapter surface this shares.
+- **Never mutate a *shared* environment in place.** A base is **immutable and shared**
+  (content-addressed — nobody can shadow-break it); a project's live installs land in that
+  project's **own** weft session; an isolated env is **frozen** and grows only by solving a
+  *new* EnvID. One project can't corrupt another or the base.
+- **The lock is the durable truth; the prefix is a rebuildable cache.** An EnvID names a
+  solved lock. The materialized prefix is disposable — evicted or garbage-collected, it
+  rebuilds from the lock on next use. This is what makes reclaiming disk safe and what makes
+  the *same* env reproducible on a second machine.
+- **Verify by loading, and fail loud.** A capability is confirmed by actually importing it
+  (not `find_spec`); a broken or missing env is surfaced (startup self-check,
+  `gpu_capability_ok`), never left as a latent landmine.
 
 ## The model
 
-**Python — two tiers + an escape hatch.**
-- **base (immutable)** — the baked scientific stack (the install-wide foundation). Made
-  read-only at runtime so nothing can mutate it; self-heals at startup (see Guards).
-- **project overlay** (`ENVS_DIR/pylib_proj/<pid>` — `project_pylib_dir`, `materialize.py:95`) — the only session-writable layer,
-  **prepended** so a project's package version wins over base, with **numpy + the ABI
-  core pinned** (`abi-anchor.txt`) so an override can't shadow-break the compiled stack.
-  Per-project: one project can't pollute another or the base.
-- **isolated envs** (`ENVS_DIR/isolated/proj/<pid>/<name>` — `isolated_env.py:139`) — the escape hatch for a hard
-  conflict; a full separate env with its own persistent kernel, reproducible from a
-  per-env lock.
+Environments are realized by weft and identified by **EnvID** (weft's content-addressed
+identity). ABA keeps per-project `name → EnvID` handles in `PROJECTS_DIR/<pid>/weft_envs.json`
+(three namespaces: `envs`, `active`, `default`). Three tiers, all Python **and** R:
 
-**R — parity.** A per-project library (`r_libs/prj_<id>`) is prepended to `.libPaths()`;
-base R lives in the conda tools env. Same integrity aims.
+```
+ bundle envs/ facet (role: base) ─► env_packs.pack_spec ─► env_ensure ─► EnvID
+                                                                            │
+   base pack (base_env) ───clone──► project default (project_env)          │
+   immutable, shared,               a weft SESSION, per-project:           │
+   content-addressed                · kernels + local one-shot runs        │
+   (adopt a published image,        · ensure_capability → session_install  │
+    else solve locally)               (installs land LIVE, in place)       │
+                                     · session_snapshot → a frozen EnvID    │
+                                       for background jobs / exports        │
+                                                                            │
+   named / isolated envs (named_envs) ── extend ──► a NEW EnvID ───────────┘
+   frozen; extend never installs into a frozen env
+   the ONE weft doorway: core/compute/adapter.py → core/compute/ports.py
+```
 
-**Conda tools env** (`ENVS_DIR/tools`) — CLI tools (samtools, STAR, r-base…) installed via
-micromamba, exposed to runs via **PATH only**. NB: this is for *executables*, not for
-importable Python libraries (see Known gaps).
+- **Base pack** (`core/compute/base_env.py`) — the shared scientific foundation, declared as
+  a bundle `envs/` facet with `role: base`, a per-language `languages:` list, and a verbatim
+  weft `spec:` block (plus optional `import_names`). `require(language)` resolves it — there is
+  **no served-base/micromamba fallback**: a deployment that runs a language **must** declare a
+  `role: base` env pack (a missing one is a loud, structured misconfiguration). `env_id()`
+  **adopts** an EnvID from a published catalog when one exists (the managed-cluster path —
+  `seeding.publish_base_packs` / `adopt_env_id`), else solves the spec locally.
+- **Project default env — a weft session cloned from the base pack** (`core/compute/project_env.py`).
+  The per-project default is a **session** off the base: interactive kernels and local
+  one-shot runs execute the session's prefix, and `ensure_capability` installs land **live**
+  in it (`session_install`). Because a live session is mutable, background jobs and exports
+  don't run it directly — they run a `session_snapshot` **EnvID** (a frozen, dirty-cached
+  point-in-time), so a job's env can't shift under it mid-flight. The registry is the `default`
+  key of `weft_envs.json`.
+- **Named / isolated envs** (`core/compute/named_envs.py`) — the escape hatch for a hard
+  conflict or a deliberately-pinned stack: a fully separate, **frozen** EnvID. `create(...)`
+  solves a fresh one; `extend(name, packages)` adds packages as an `extends_env` layer over the
+  current EnvID → a **new** EnvID the handle then points at — it **never installs into a frozen
+  env**. Each named env carries its own persistent kernel and its own reproducible lock.
 
-## Provisioning (adding a capability on demand)
+CLI tools that are *executables*, not importable libraries (samtools, STAR, nextflow), are a
+content-addressed **tool env** of their own (`named_envs.ensure_tool_env`), exposed to runs via
+PATH — the weft successor to the old micromamba tools env.
 
-Agent calls `ensure_capability(name)` (`discovery.py:702`) → resolves a capability record (the
-catalog entity and its bundle composition are owned by [`bundle-and-content.md`](bundle-and-content.md))
-→ `materialize()` (`materialize.py:155`) dispatches by provisioning kind:
-- **pip** (`_pip_install`, `materialize.py:202`) → installs into the project overlay via
-  `pip --prefix`, **`--prefer-binary`** (`materialize.py:242` — prefer a prebuilt wheel over a
-  newer sdist; never source-build on an old system toolchain when a wheel exists for some
-  version), **constrained to the ABI anchor** (numpy pinned to the base version). Two-phase:
-  fast `--prefix`, then an `--ignore-installed` retry (`materialize.py:255`) if the read-only
-  base blocks an override.
-- **conda** (`_conda_install`, `materialize.py:182`) → micromamba into the shared tools env (CLI tools on PATH).
+## Provisioning — adding a capability on demand
 
-The **ABI anchor** is the crux of pip safety: `abi_anchor_constraints()` (`env_integrity.py:141`)
-pins numpy to the base's installed version so an overlay install reuses the prebuilt base numpy instead of
-pulling/rebuilding it. The version is read from **live package metadata** (robust to a
-conda-forge / local-wheel base, where `pip freeze` renders packages as `name @ file://…`
-rather than `name==version`). A full base freeze (`ensure_base_constraints` → `_freeze_pins` — `env_integrity.py:285`/`:241`,
-also metadata-based) or a shipped canonical lock (`$ABA_BASE_LOCK`) backs the legacy
-shared path.
+The agent calls `ensure_capability(name)` (`content/bio/tools/discovery.py:884`); it resolves
+the capability record (the catalog entity + bundle composition are owned by
+[`bundle-and-content.md`](bundle-and-content.md)) and provisions by target lane:
+
+- **Default lane → the project session.** A pip/library capability installs **live** into the
+  project's default weft session via `project_env.install(...)` (`session_install`). Nothing is
+  shadow-stacked on a frozen base: the session is a single coherent weft-solved environment, so an
+  install is re-solved against the whole set.
+- **Named lane → a frozen env.** A request scoped to a named env routes to
+  `named_envs.create` / `extend`, which solve a new EnvID rather than mutating one.
+
+`core/exec/materialize.py` is now only the **subprocess run harness**: `MaterializingExecutor`
+supplies the ABA-runtime venv that *launches* a one-shot script (`_base_env`), while the
+science interpreter comes from the weft env. Its old `materialize()` provisioning dispatch
+(pip-into-overlay, conda, container) **raises `NotImplementedError`** — conda and tool envs are
+weft's now.
+
+The local run lane selects its interpreter accordingly (`core/exec/run.py:44-72`):
+`env=<name>` → `named_envs.interpreter()`; a pre-resolved job-spec snapshot → that EnvID's
+python; else the default → `base_env.require("python")` + `project_env.interpreter()`.
 
 ## Platform membership (multi-site envs)
 
-An env lock's **platform set is part of its identity** (weft: adding a
-platform yields a NEW EnvID solved for all members). aba's specs
-(`named_envs._spec_for`, pack specs) lock for the CONTROLLER's platform by
-default; the detached compute lane re-locks **lazily at first remote use**
-(`named_envs.ensure_platform`), triggered by weft's `env.platform_mismatch`
-at realize. The re-lock replays the env **as built**: the registry row
-persists the create-time `base_spec` (python_version pin included) and each
-`extend()` layer's package list; `ensure_platform` re-solves the base spec
-+ platforms (`env_ensure(update=True)`), then re-applies layers as
-`extends_env` links — reconstruction from the flat package list silently
-re-locked a pinned env to the default python and flattened the layering. Solve cost and
-platform-availability failures land on the remote attempt, never on local
-work — a package with no build for the site's platform fails THAT submission
-with a named cause. See misc/detached_compute.md + jobs-and-hpc.md.
+An env lock's **platform set is part of its identity**: adding a platform yields a **new**
+EnvID solved for all members. ABA's specs lock for the **controller's** platform by default;
+when a run targets a site with a different OS/arch, weft surfaces a typed
+`env.platform_mismatch` at realize time and ABA re-locks **lazily, once**, then transparently
+retries:
 
-## Integrity guards
+- **Named env** — `named_envs.ensure_platform(project_id, name, platform_str)` re-solves from
+  the row's **persisted `base_spec`** (its `python_version` pin included) and replays each
+  `extend()` layer as an `extends_env` link, adding the target platform (`env_ensure(update=True)`).
+  Replaying *as built* is load-bearing: reconstructing from a flattened package list once
+  silently re-locked a pinned-3.10 env to the default 3.12 and dropped the layering.
+- **Base / project default** — `base_env.ensure_platform(language, platform_str)` re-solves the
+  verbatim pack spec for the added platform → a new EnvID (a live session's dirty extras don't
+  travel — the same trade the snapshot lane makes).
 
-- **Read-only base + startup self-heal** (`self_heal_base`, `env_integrity.py:781`): `pip check`
-  + a deep import of the lazy workflow deps; repairs the missing closure from the lock; re-freezes read-only.
-- **ABI-anchor pin** on every overlay install (above) — an incompatible-numpy override
-  fails the resolve instead of shadow-breaking the stack.
-- **`env_selfcheck()`** (`env_integrity.py:164`) — a fast standard check (ABI anchor armed +
-  numpy resolvable) run at startup; catches the *silent* config gap the deep closure check misses (e.g. the anchor
-  being unresolved). Also a CI invariant (`tests/test_env_integrity.py`).
-- **Real-import verification** (`verify_python_imports`, `env_integrity.py:26`) — capabilities are
-  confirmed by importing, not by `find_spec`; a present-but-unloadable (ABI-mismatched) package
-  is caught, not reported ready.
-- **Background jobs** ([`jobs-and-hpc.md`](jobs-and-hpc.md)) run on the same base + overlay; the
-  submitted job script clears `PYTHONHOME` + pins `PYTHONPATH` (`slurm_submitter.py:113`) so a
+Callers wire the retry-once in three places, at parity: the one-shot detached submit and its
+poll-side resubmit (`core/jobs/weft_submitter.py`), and the interactive remote kernel lane
+(`core/exec/kernels/weft.py`). Solve cost and platform-availability failures land on the remote
+attempt, never on local work — a package with no build for the site's platform fails **that**
+submission with a named cause. See [`jobs-and-hpc.md`](jobs-and-hpc.md) and
+[`compute-sites.md`](compute-sites.md).
+
+**`env='system'`.** The detached lane also carries an explicit lever for pure download/transfer
+steps: `env='system'` (or `'none'`) skips pack realization entirely and runs the node's own
+`python3` off PATH — right for a step a 1.5 GB scientific env would serve nothing. Such a run is
+graded `env_grade: node-system` on its exec record ([`provenance.md`](provenance.md)).
+
+## Integrity, verification & disk reclaim
+
+- **Real-import verification** (`verify_python_imports`, `core/exec/verify.py:22`) — a
+  capability is confirmed by importing it, not by `find_spec`; a present-but-unloadable
+  (ABI-mismatched) package is caught, not reported ready.
+- **Content-addressing *is* the ABI guard.** There is no per-install version-pinning step because
+  there is no incremental mutation of a shared base to guard: a named env is a single frozen solve,
+  a session install re-solves the project's own env, and the base is immutable and shared by EnvID.
+- **Read-only diagnostics** (`core/exec/env_integrity.py`) — `env_overview` / `env_layers` /
+  `python_package_status` probe the **weft session** (the (i)-drawer Env tab);
+  `ensure_sys_executable` recovers an empty `sys.executable` at startup.
+- **Safe disk reclaim via eviction** (`core/modules/reconciler.py`). Because the lock is the
+  durable truth, reclaiming a pack-backed module's bytes is `env_evict(env_id, site)` — the env
+  rebuilds from its lock on next use (`ensure_realized` / `_run_realize_task` with `force=True`
+  bypass weft's memo so an evicted prefix actually rebuilds). If weft refuses because a
+  session/kernel/job holds the env, ABA stops **only kernel-less session holders** and retries
+  once; live kernels and jobs are surfaced honestly, never killed. (Pre-weft, "reclaim disk"
+  rmtree'd a dead `$TOOLS_ENV` path and silently did nothing — the bug this closes.)
+- **Background-job env parity** ([`jobs-and-hpc.md`](jobs-and-hpc.md)) — a job runs the same
+  base/session env as an interactive run (as a `session_snapshot` EnvID, or a named env's EnvID),
+  realized on the node by weft; `slurm_entry` reads the activated env off `$CONDA_PREFIX`, so a
   cluster `module load` can't shadow the interpreter.
 
 ## GPU / accelerator (target hardware)
 
 A step's *hardware-variant* need (a CUDA build of torch vs the CPU build) is a distinct axis
-from its *library* needs, and lives in a different tier:
+from its *library* needs, and lives at the **base** tier, not the library tier:
 
-- **Hardware variant → the base, chosen at install** (deployment-conditional). `torch` comes
-  in transitively via `scvi-tools`; conda-forge's default is the **CPU-only** build. A GPU
-  deployment builds a **CUDA** base instead. The decision is one toggle in
-  `$ABA_HOME/config.env` — `ABA_ACCELERATOR=cpu|cuda` (+ optional `ABA_CUDA_VERSION`) —
-  written by `install/linux/setup.sh:217` (auto-detects a `gpu` Slurm partition; admin-overridable)
-  and applied by `install/core/inject-accelerator.sh:29`, which injects a `pytorch-gpu` pin into
-  the copied `environment.yml` at `create-env` (single source — no duplicate GPU env file). A
+- **Hardware variant → the base, chosen at install** (deployment-conditional). `torch` arrives
+  transitively via `scvi-tools`, and conda-forge's default is the **CPU-only** build; a GPU
+  deployment builds a **CUDA** base instead. The choice is one toggle in `$ABA_HOME/config.env`
+  — `ABA_ACCELERATOR=cpu|cuda` (+ optional `ABA_CUDA_VERSION`) — written by the linux/cluster
+  installer (which auto-detects a `gpu` Slurm partition) and applied by
+  `install/core/inject-accelerator.sh`, which injects a CUDA `torch` pin into the base spec. A
   CUDA torch is a **superset**: it uses a GPU when present and falls back to CPU on the login
-  node / CPU jobs, so one base serves both. Non-GPU deployments (laptops) build the CPU base.
-  The base is **built on the GPU-less login node** (there is no build-time access to a GPU
-  node): conda-forge `pytorch=*=cuda*` builds require the `__cuda` virtual package, which
-  micromamba only detects from a host driver, so `create-env` exports `CONDA_OVERRIDE_CUDA`
-  (`install.yml:97`; default `11.8`, `ABA_CUDA_VERSION` overrides) to spoof it — this both unblocks the solve and
-  selects the CUDA major (`12.x`→`cuda12x`, `11.8`→`cuda118`). `11.8` is the widest-compat
-  default: it runs on any driver ≥450.80 and covers GPUs sm_60 (P100)…sm_90 (H100). A `12.x`
-  runtime needs a CUDA-12 driver (≥R525); it *does* run on an older 12.x driver via CUDA
-  minor-version compatibility (verified: cuda126 runs on our R535/CUDA-12.2 P100 nodes), but
-  not on R450–R520 clusters — so `11.8` keeps the widest driver floor without relying on
-  minor-version compat. The build is node-independent; the real GPU is confirmed at job time.
-- **Non-torch GPU frameworks → overlays / isolated envs** (jax[cuda], RAPIDS) — the library
-  axis, not the base.
+  node / CPU jobs, so one base serves both. The base builds on the GPU-less login node — there
+  is no build-time GPU — so the installer exports `CONDA_OVERRIDE_CUDA` to let the solver accept
+  the CUDA build (and select the CUDA major); `11.8` is the widest-compat default (driver
+  ≥450.80, GPUs P100…H100). **Non-torch GPU frameworks** (jax[cuda], RAPIDS) are the library
+  axis — a session install or an isolated env, not the base.
+- **Certainty across nodes = discover-once + verify-at-use** (ABA runs on a CPU login node; a
+  job runs on a GPU node ABA can't observe):
+  - **`gpu_usable`** — a node-independent readiness hint in the agent's per-turn cue
+    (`core/exec/compute_env.py`), true when a GPU is present *and* the base torch is a CUDA
+    build (`torch_cuda_build`, `verify.py:96` — a property of the build, not of runtime GPU
+    visibility). If a GPU exists but the base is CPU-only, the cue **warns** so the agent runs
+    on CPU / tells the user instead of submitting a job that silently falls back.
+  - **Verify-at-use** — a GPU-requested job is preflighted on the compute node via
+    `gpu_capability_ok()` (`verify.py:72`, called in `core/jobs/slurm_entry.py`); no usable GPU
+    → it **fails fast** rather than training on CPU on an idle allocated GPU (the scVI-on-CPU
+    incident: right placement, CPU base).
+  - **`aba doctor` / startup self-check** — a deployment declaring `ABA_ACCELERATOR=cuda` with a
+    CPU-only base is flagged, with the fix named (set the toggle + rebuild the env).
 
-**Certainty across nodes = discover-once + verify-at-use** (ABA runs on a CPU login node; a
-job runs on a GPU node ABA can't observe):
-- **`gpu_usable`** (`compute_env.py:197`) — a *node-independent* readiness hint in the agent's
-  per-turn cue: a GPU is present (local or a `gpu` partition) **and** the base torch is a CUDA
-  build (`torch_cuda_build`, `env_integrity.py:225` = `torch.version.cuda`, a property of the build, not of runtime
-  GPU visibility). If a GPU exists but the base is CPU-only, the cue **warns** so the agent
-  runs on CPU / tells the user instead of submitting a job that silently falls back.
-- **Verify-at-use** (`slurm_entry.py:44`) — a GPU-requested job (`estimate.gpu`) is preflighted on
-  the compute node via `gpu_capability_ok()` (`env_integrity.py:201`); if no usable GPU, it **fails fast** rather than
-  training on CPU on an idle allocated GPU (the scVI-on-CPU incident: right placement, CPU base).
-- **`env_selfcheck` invariant + `aba doctor`** — a deployment declaring `ABA_ACCELERATOR=cuda`
-  must have a CUDA-build torch; a CPU-only base is flagged at startup / by `doctor`, which
-  names the fix (set the toggle + rebuild the env).
-- **ENVS_DIR shared-FS gate (finding F6b)** — under a Slurm submitter the provisioning dir MUST be on
-  shared storage, or a background job on another node can't import an `ensure_capability`'d overlay
-  package (`ModuleNotFoundError`, no obvious cause). Classified **empirically** by mount fstype
-  (`_fs_type_for_path` → `/proc/self/mountinfo`), not path prefix — so the `/workspace` default trap is
-  caught. **Install-time is the hard gate** (`aba doctor`: fstype check + a definitive token/`sbatch`
-  probe read back from a compute node); **runtime is a loud-but-boot startup self-check**
-  (`check_envs_dir_shared`) surfaced on `/api/health` (`degraded`+`warnings[]`) and `/api/admin/selfcheck`.
-  **Under a SIF/OOD deploy** the install-time gate doesn't run (the image is built once, launched per
-  session), so the **runtime self-check is the guard**. It works because apptainer preserves a bind's
-  underlying fstype in the container's `/proc/self/mountinfo` (a shared NFS/beegfs bind reads as
-  `nfs`/`beegfs` → shared; an `ENVS_DIR` left inside the read-only image reads as `overlay`/`squashfs`
-  → node-local → fires; a node-local bind reads as the local fstype → fires). Verified on a real fat SIF.
-- **BASE reachability under Slurm (`check_base_dir_shared`)** — the deeper rule: the Slurm `job.sh` runs
-  **bare** on the compute node (`slurm_submitter.py:117`: `sys.executable -u -m core.jobs.slurm_entry`,
-  no `apptainer exec` re-entry), so the base venv must be on **shared FS**, reachable by that bare job.
-  This makes the documented constraint enforceable: **Slurm offload requires
-  a slim SIF** (base on shared FS via `image.base_dir`) **or a native shared install**. A **fat SIF bakes
-  the base in-image** (`sys.executable=/opt/aba-venv/...` → `overlay`/`squashfs` → node-local) — a bare
-  compute-node job can't even find the interpreter, so `check_base_dir_shared` **fires under a `slurm`
-  submitter**. Fat is therefore **single-node / local-submitter only** (jobs run inline in ABA's own
-  allocation). Gap: no SIF-aware *deploy-time* probe (the definitive `sbatch` probe is native-install
-  only) — a SIF probe would `apptainer exec` the image on a compute node.
-
-**Config topology (no floating vars):** the accelerator toggle is a `config.env` line
-(installer-written, admin-editable), exactly like `ABA_BATCH_SUBMITTER`. `hpc.yaml` stays
-compute-topology (its `gpu: true` partitions are *detection input*, not a second home for the
-toggle). The base spec (`environment.yml`) lives in the repo.
+**Shared-FS reachability under Slurm** (`env_integrity.check_envs_dir_shared` /
+`check_base_dir_shared`). A background job on a compute node must be able to *reach* the env the
+controller provisioned, and *how* it reaches it depends on the delivery mode: with **bare
+offload** (a native install or a slim SIF) the node runs the interpreter directly, so the env
+area **and** base must sit on **shared FS**, classified empirically by mount fstype
+(`/proc/self/mountinfo`), not path prefix; with **wrapped offload** (`ABA_JOB_WRAP=sif`, a fat or
+weft SIF) the job re-enters the image via `apptainer exec`, so an in-image base is correct, not a
+defect. Under the default **weft SIF profile** the image bakes only the slim controller runtime —
+the science envs are **weft images adopted read-only on the node** (via the site's `ro_roots`,
+the deployment's published env tree) — so an offloaded job reaches its interpreter either way.
+Install-time is a hard gate (`aba doctor` + a definitive `sbatch` probe on a native install); a
+loud-but-boot **runtime self-check** surfaces the rest on `/api/health` (`degraded` +
+`warnings[]`) and `/api/admin/selfcheck` — the guard that still fires under a SIF/OOD deploy where
+the install-time probe can't run.
 
 ## Key implementation references
 
 | Where | What |
 |---|---|
-| `core/config.py` | `RUNTIME_DIR`, `ENVS_DIR` (mutable-state roots + resolution) |
-| `core/exec/materialize.py` | `materialize()` dispatch (pip/conda); `_pip_install` (overlay + constraints); `_conda_install` (tools env); `PYLIB_DIR`, `project_pylib_dir` |
-| `core/exec/env_integrity.py` · `core/exec/verify.py` | **Current (W3.4):** `env_integrity` keeps read-only env diagnostics (`env_overview`, `env_layers`, `python_package_status`), the `.aba-base-stage` read (`base_stage`), `ensure_sys_executable`, and the Slurm shared-FS self-checks (`check_envs_dir_shared`/`check_base_dir_shared`). The honest load/GPU probes — `verify_python_imports`, `gpu_capability_ok`, `torch_cuda_build` — moved to `verify.py`. The served-base heal/ABI-anchor/base-lock machinery (`self_heal_base`/`repair_base`/`base_health`, `abi_anchor_constraints`, `ensure_base_constraints`/`_freeze_pins`, `canonical_lock_path`) was **deleted** (W3.4/W3.5 — weft owns realization). |
-| `core/jobs/slurm_entry.py` | background-job entry; GPU verify-at-use preflight + numpy canary |
-| `install/core/inject-accelerator.sh` · `install/linux/setup.sh` · `install/sif/build.sh` · `aba-vbc/build.sh` | deployment-conditional base: `ABA_ACCELERATOR` → CPU vs CUDA torch pin — applied by the installer, the SIF build (fat bakes the venv; slim's mounted base too), and the aba-vbc pipeline (`versions.env`); the fat image records it in `%labels` (`org.aba.accelerator`) |
-| `core/runtime/selfcheck.py` · `env_integrity.check_envs_dir_shared`/`envs_dir_fs_kind`/`_fs_type_for_path` | startup self-check registry (`{name,ok,severity,detail}`) → `/api/health` (`degraded`+`warnings[]`) + `/api/admin/selfcheck`; the ENVS_DIR shared-FS gate is its first tenant. Install-time hard gate + `sbatch` probe live in `aba_installer/cli.py` (`_fs_kind_for_path`, `_probe_envs_visible_on_compute_node`) |
-| `core/exec/isolated_env.py` | isolated env build/run + per-env lock |
-| `content/bio/tools/discovery.py` | agent surface: `ensure_capability`, `propose_capability`, `search_bioconda`/`search_pypi` |
-| `core/exec/kernels/` · `core/exec/run.py` (run_python preamble) | assembles the run's `sys.path`: base + project overlay (see [`compute-execution.md`](compute-execution.md)) |
+| `core/compute/adapter.py` · `ports.py` | the **one** weft doorway (`from weft.api import Weft`, `:105`) + the abstract compute port (`env_ensure`/`env_evict`/`env_status`/`session_*`/`task_*`) |
+| `core/compute/env_packs.py` | bundle `envs/` facet → weft `EnvSpec` → `env_ensure` → EnvID; `pack_spec`, `import_names` maps |
+| `core/compute/base_env.py` | the shared base pack: `require(language)` (no served-base fallback), `env_id()` (adopt-or-solve), `ensure_platform`, `interpreter`/`prefix` |
+| `core/compute/project_env.py` | the per-project **default env as a weft session**: `ensure`, `install` (live `session_install`), `snapshot` (frozen EnvID for jobs/exports), `stop_all_sessions`, `reset` |
+| `core/compute/named_envs.py` | named/isolated **frozen** EnvIDs: `create`/`extend` (extend→new EnvID), `ensure_ready`/`ensure_realized`, `ensure_platform`, `ensure_tool_env` (CLI tools) |
+| `core/compute/seeding.py` | managed-cluster catalog: `publish_base_packs` / `adopt_env_id` (published `image.sqfs` keyed by EnvID) |
+| `core/exec/verify.py` | the honest runtime probes: `verify_python_imports`, `gpu_capability_ok`, `torch_cuda_build` |
+| `core/exec/env_integrity.py` | read-only diagnostics (`env_overview`/`env_layers`/`python_package_status`), `ensure_sys_executable`, the Slurm shared-FS self-checks (`check_envs_dir_shared`/`check_base_dir_shared`) |
+| `core/modules/reconciler.py` · `manager.py` | disk reclaim via `env_evict(env_id, site)` (rebuild-from-lock), stop-kernel-less-holders-and-retry |
+| `core/exec/run.py` (`:44-72`) · `core/exec/kernels/weft.py` | run-lane interpreter selection (named / snapshot / base+session); the remote kernel platform re-lock |
+| `content/bio/tools/discovery.py` | agent surface: `ensure_capability` → `project_env.install` / `named_envs`, `propose_capability`, `search_bioconda`/`search_pypi` |
+| `install/core/inject-accelerator.sh` · `install/linux/setup.sh` | deployment-conditional base torch: `ABA_ACCELERATOR` → CPU vs CUDA pin (+ `CONDA_OVERRIDE_CUDA`), auto-detected |
 
 ## Known gaps
 
-- **Packages with NO wheel at all.** `--prefer-binary` + the ABI anchor handle the common
-  old-toolchain case (a wheel exists for *some* version, or numpy would be rebuilt). But a
-  package that ships **only** an sdist for this platform/Python still source-builds and can
-  fail on an old cluster GCC. For such a library available prebuilt on **conda-forge**, there
-  is no importable route today: conda provisioning targets the CLI tools env (PATH only), so
-  a conda-forge *library* isn't importable by `run_python`. (Planned: a conda path that lands
-  the lib in an importable layer, pinned to the base numpy ABI.)
-
-- **Heterogeneous cluster: the install node isn't the compute node.** Install/build runs on
-  the CPU login node, but the software runs on partition-specific hardware (GPU, big-mem, a
-  different CPU microarch). Today we sidestep this for the *solve* — conda artifacts are
-  prebuilt and declarative, so `CONDA_OVERRIDE_CUDA` lets the login node *assert* the target's
-  capability without being there — and per-job `gpu_capability_ok` verifies at run time. Two
-  things genuinely need a target node and are only partially covered:
-  - **Install-time verify.** We assert `__cuda` at build; we don't yet *confirm at install*
-    that the built CUDA runtime actually initializes on the GPU partition (driver new enough).
-    Planned: a post-`create-env` step that `sbatch`es a one-shot `torch.cuda.is_available()`
-    probe to each GPU partition class (from `hpc.yaml`) and **fails loud** on a mismatch
-    (e.g. built `cuda126` but the driver caps at 12.4 → rebuild with `ABA_CUDA_VERSION=…`),
-    instead of deferring the discovery to the first GPU job. (`aba doctor` gets the same probe.)
-    NB: such a job must write results to **shared FS**, not node-local `/tmp`.
-  - **Build-on-target.** For artifacts that must compile against the node's actual CUDA/driver
-    or CPU arch (source-only wheels, `-march=native`, CUDA extensions like flash-attn), the
-    login-node build is wrong hardware. Provisioning would dispatch the build *into a job* on
-    the target partition (via the existing `slurm_submitter`) and cache the wheel per
-    node-class. Not built today; the wheel/pkg cache would key by partition class.
+- **Accelerator selection is an install-time base fact, not yet a weft site fact.** The
+  `ABA_ACCELERATOR` toggle (`weft_fate="move:site"`) drives the installer's base build today; its
+  intended home is per-**site** weft config, so that one controller could dispatch CUDA work to a
+  GPU site and CPU work elsewhere from a single base description. That migration is not built —
+  the CPU/CUDA choice is still a per-deployment base variant.
+- **Install-time GPU verify & build-on-target.** Per-job `gpu_capability_ok` verifies at *run*
+  time, but ABA does not yet confirm at *install* that the built CUDA runtime initializes on each
+  GPU partition (driver new enough), nor build node-arch-specific artifacts (source-only wheels,
+  `-march=native`, CUDA extensions) on the target partition. The login-node build is the wrong
+  hardware for those; a per-partition build-into-a-job + wheel cache is designed, unbuilt.
+- **Stale in-code docstrings.** `content/bio/tools/discovery.py`'s `ensure_capability` docstring
+  still says "wipeable overlay" and `core/exec/materialize.py`'s module header still describes the
+  `ENVS_DIR/pylib` overlay — both pre-weft text; the code routes to `session_install` / raises.
+  Trust the behavior described above, not those headers.

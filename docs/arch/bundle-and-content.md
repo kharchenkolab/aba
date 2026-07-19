@@ -137,9 +137,9 @@ the seed can't run at import (no project DB yet) — see the projection seam bel
 process-global capability bundles (e.g. biomni), searchable without being seeded as entities
 so a large catalogue doesn't bloat every project DB.
 
-Capability **provisioning mechanics** (pip into the project overlay, the ABI anchor, conda
-tools env, GPU variants) are owned by [`envs.md`](envs.md) — this doc owns only the
-*catalog entity and its bundle composition*.
+Capability **provisioning mechanics** (installing into the project's default weft session,
+named/isolated envs, the tool env, GPU variants) are owned by [`envs.md`](envs.md) — this doc
+owns only the *catalog entity and its bundle composition*.
 
 ## The projection seam
 

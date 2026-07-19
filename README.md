@@ -22,14 +22,18 @@ left it. It's built for long-running research, not one-off questions.
 - **Work with results, not files.** Datasets, analyses, and figures are first-class
   entities you can pin, revisit, and connect — organized by project, not scattered across
   folders.
-- **Trust what you get.** Every result carries an execution record — the code, inputs, and
-  environment that produced it — so any figure is reproducible and reviewable.
+- **Trust what you get.** Every result carries an execution record — the code, inputs,
+  environment, and the machine it ran on — so any figure is reproducible and reviewable.
 - **Explore interactively.** Rich built-in viewers open your results (e.g. single-cell
   data in the pagoda3 viewer) directly from a link.
-- **Run heavy pipelines on HPC.** Launch large workflow pipelines — including
-  **Nextflow / nf-core** — as batch jobs on a **Slurm/HPC** cluster, with results flowing
-  back into your project. Work locally on a Mac or Linux machine, or offload the compute to
-  a cluster without changing how you work.
+- **Run where the compute is.** ABA works on your own machine and on any compute you
+  connect to it — a lab workstation or server reached over **SSH**, or a **Slurm/HPC**
+  cluster — added through a short **Settings → Compute** flow. Short steps run interactively
+  on a live kernel; long or heavy steps run as background jobs (an `sbatch` job on a
+  cluster), including large workflow pipelines such as **Nextflow / nf-core**. Results flow
+  back into your project, and their outputs are kept durably wherever they ran — bring a
+  copy back into your workspace with a click. Offload the compute without changing how you
+  work.
 
 ABA's analysis know-how is organized as a library of **recipes** that Guide draws on, so
 its capabilities grow over time without changing the core application.
