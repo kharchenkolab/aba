@@ -436,9 +436,25 @@ def s_drift(client, pid, tid):
                       "And now? Please check 'Drift Cohort' again.")
     caps = [cap1, cap2]
     txt1, txt2 = cap1["text"].lower(), cap2["text"].lower()
+    # RESULT (check_import_tool returns {stale, reason}): assert the freshness
+    # tool's OWN verdict per turn, not the agent's paraphrase — a wrong "still
+    # current" tool result with a hedging reply must fail. cap1 = after the
+    # source grew (changed); cap2 = after it was deleted (missing).
+    changed_verdict = any(
+        (t.get("result") or {}).get("stale") is True
+        and (t.get("result") or {}).get("reason") == "changed"
+        for t in tools_named([cap1], "check_import"))
+    missing_verdict = any(
+        (t.get("result") or {}).get("stale") is True
+        and (t.get("result") or {}).get("reason") == "missing"
+        for t in tools_named([cap2], "check_import"))
     return caps, [
         ("agent used check_import (not a fs walk)",
          len(tools_named(caps, "check_import")) >= 2),
+        ("check_import's OWN verdict is stale/changed on the mutated source",
+         changed_verdict),
+        ("check_import's OWN verdict is stale/missing after deletion",
+         missing_verdict),
         ("drift reported in plain language",
          any(w in txt1 for w in ("changed", "stale", "modified", "not current",
                                  "out of date"))),
@@ -508,9 +524,19 @@ def s_keep_reuse(client, pid, tid):
     regenerated = any("is_prime" in (t["input"].get("code") or "")
                       or "sympy" in (t["input"].get("code") or "")
                       for t in reuse_runs)
+    # pair the input-only "read the file" check with the reuse step's result
+    # envelope (rec #1): a local session run carries returncode, so a clean
+    # finish proves the reuse code actually executed, not just was chosen.
+    # TODO(strengthen): also assert "111587" in that step's result["stdout"] —
+    # SKIPPED (prompt says "tell me the value", not "print", so the sum may be
+    # a cell repr / return rather than captured stdout).
+    reuse_ran_clean = any((t.get("result") or {}).get("returncode") == 0
+                          for t in reuse_runs)
     return caps, [
         ("dataset registered in thread 1", ent is not None),
         ("thread 2 read the registered file", used_dataset),
+        ("thread 2's reuse step ran clean (rc=0 result envelope)",
+         reuse_ran_clean),
         ("thread 2 did not regenerate primes", not regenerated),
         ("correct sum reported", "111587" in cap2["text"].replace(",", "")),
     ]
@@ -530,6 +556,23 @@ def s_keep_triage(client, pid, tid):
     triage = tools_named(caps, "keep_outputs")
     dropped = any("big_intermediate" in json.dumps(t["input"])
                   for t in triage)
+    # SUBSTRATE (sibling mn_status_surfaces reads /api/runs/{rid}/durable?flat=1;
+    # keep_outputs_tool returns the run_id): the keep INPUT can name
+    # big_intermediate while still KEEPING it (or erroring). Resolve the run
+    # from the keep call's OWN result, then read the per-file durable STATES —
+    # summary.txt must be durably kept and big_intermediate.bin must NOT be.
+    rid = next(((t.get("result") or {}).get("run_id")
+                for t in triage if (t.get("result") or {}).get("run_id")), None)
+    dv = client.get(f"/api/runs/{rid}/durable?flat=1") if rid else None
+    files = dv.json().get("files", []) if dv and dv.status_code == 200 else []
+    # weft durability only (retained/saving) — NOT "in-store" (aba's serving
+    # cache, which small harvested files get regardless of the keep decision),
+    # so the check proves the KEEP took effect, not mere harvesting.
+    KEPT = ("retained", "saving")
+    summary_kept = any(f.get("rel", "").endswith("summary.txt")
+                       and f.get("state") in KEPT for f in files)
+    inter_kept = any(f.get("rel", "").endswith("big_intermediate.bin")
+                     and f.get("state") in KEPT for f in files)
     cap2 = drive_turn(client, pid, tid,
                       "Where exactly does summary.txt live now, and is it "
                       "safe / will it survive cleanup?")
@@ -542,6 +585,9 @@ def s_keep_triage(client, pid, tid):
     return caps, [
         ("keep triage used (big intermediate dropped)",
          bool(triage) and dropped),
+        ("summary.txt is durably kept (substrate durable view)", summary_kept),
+        ("big_intermediate.bin is NOT kept (substrate durable view)",
+         not inter_kept),
         ("whereabouts answered with a real path", grounded),
         ("safety stated in plain language", safe_lang and not jargon),
     ]
@@ -624,9 +670,19 @@ def s_garbage(client, pid, tid):
         r"clean\w*)\D{0,60}\b2[01]\b"
         r"|\b2[01]\b\D{0,60}(?:skip\w*|drop\w*|exclud\w*|invalid|non.numeric|"
         r"missing|malformed|entries|rows|values)", txt, re.I))
+    # SUBSTRATE (sibling url_register checks the minted entity's dref ref): the
+    # bare "register_dataset was invoked" check proves intent, not effect —
+    # pair it with the actual entity + content ref (rec #1). TODO(strengthen):
+    # also assert the sum in a run_python result["stdout"] — SKIPPED because
+    # this prompt never asks the step to PRINT, so the value may live only in a
+    # cell repr / return, not captured stdout (would false-fail).
+    ent = dataset_by_title("Messy readings")
+    reg_entity = bool(str(((ent or {}).get("metadata") or {})
+                          .get("ref", "")).startswith("dref:"))
     return caps, [
         ("dataset registered", any(t["name"] == "register_dataset"
                                    for t in cap["tools"])),
+        ("dataset entity minted with a content ref (substrate)", reg_entity),
         ("reported sum is the TRUE computable sum (no fabrication)", ok_sum),
         ("agent discloses the messy entries", mentions_skips),
         ("skip-count is the true count (20, +1 if ragged row dropped)",
@@ -651,9 +707,15 @@ def s_odd_format(client, pid, tid):
         f"Register {url} as a dataset called 'EU export' and compute the sum "
         f"of the val column. Tell me the sum and how many rows there are.")
     txt = cap["text"].replace(",", "")
+    # SUBSTRATE (sibling url_register): pair the bare register invocation with
+    # the actual minted entity + content ref (rec #1).
+    ent = dataset_by_title("EU export")
+    reg_entity = bool(str(((ent or {}).get("metadata") or {})
+                          .get("ref", "")).startswith("dref:"))
     return [cap], [
         ("dataset registered", any(t["name"] == "register_dataset"
                                    for t in cap["tools"])),
+        ("dataset entity minted with a content ref (substrate)", reg_entity),
         ("sum correct despite ; delimiter + Latin-1 + CRLF",
          str(expected) in txt),
         ("row count correct", "150" in txt),

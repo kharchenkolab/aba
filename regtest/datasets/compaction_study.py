@@ -31,6 +31,7 @@ import study  # noqa: E402 — throwaway home, oauth bridge, portal, harness
 from study import (  # noqa: E402
     URL, drive_turn, run_scenario, scenario, RESULTS, tools_named,
 )
+from core.graph.entities import find_entities, get_entity  # noqa: E402
 
 
 @scenario("compaction_survival")
@@ -65,9 +66,24 @@ def compaction_survival(client, pid, tid):
         n_sum = 0
     from core.summarize.budget_summary import tier2_diag
     print(f"    [tier2 diag] {tier2_diag()}")
+    # SUBSTRATE: inspect the pinned Result ENTITY itself — the claim is
+    # "answered from the DURABLE model, not the collapsed transcript", yet the
+    # recalled number could come from the Tier-2 summary (a compressed form of
+    # that very transcript). Fail fast if the pin is hollow: the exact total
+    # must be recorded on the 'Signal total' Result entity. (Same pinned-Result
+    # inspection mn_long_arc uses on its Result entities.)
+    import json as _json
+    pinned = [get_entity(e["id"]) or {}
+              for e in find_entities(type="result", not_deleted=True)
+              if "signal total" in (e.get("title") or "").lower()]
+    pin_records_number = any(
+        str(expected) in _json.dumps(r, default=str).replace(",", "")
+        for r in pinned)
     return caps, [
         ("Tier-2 compaction actually FIRED (thread_summaries row exists)",
          n_sum > 0),
+        ("pinned Result entity actually records the total (durable model, "
+         "not transcript)", pin_records_number),
         ("dataset recalled by name after compaction",
          "signal table" in final.lower()),
         ("pinned total recalled exactly (durable model, not transcript)",

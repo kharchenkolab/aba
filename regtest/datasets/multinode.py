@@ -186,6 +186,42 @@ def _site_ran(caps):
     return sites
 
 
+def _site_ran_strict(caps, site):
+    """STRICT companion to _site_ran (cross-cutting rec #2): the site actually
+    ran a step to a clean finish — at least ONE run_python/run_r call on `site`
+    whose RESULT envelope reports returncode == 0. Unlike _site_ran, a call
+    carrying NO result envelope (a deferred/background continuation) does NOT
+    count. Use for core placement claims where a silently-skipped or
+    never-observed step must fail rather than pass vacuously. NOTE: local +
+    remote-SESSION (env='system') results carry `returncode`; a remote fresh-
+    process sync result exposes `status=='ok'` instead — so this helper is
+    exact for the session/local lanes."""
+    for t in tools_named(caps, "run_python") + tools_named(caps, "run_r"):
+        if t["input"].get("site") != site:
+            continue
+        res = t.get("result")
+        if isinstance(res, dict) and res.get("returncode") == 0:
+            return True
+    return False
+
+
+def _jobs_snapshot():
+    """Every job row in the active project DB (id, status, params, log_tail) —
+    the substrate truth a background job's OWN captured output lands in
+    (runner writes stdout[-1500:] to log_tail). Same sqlite path the timeout /
+    gpu-routing / cancel scenarios read."""
+    import sqlite3
+    from core.graph.jobs import _row_to_job
+    from core.graph._schema import active_db_path
+    try:
+        c = sqlite3.connect(active_db_path()); c.row_factory = sqlite3.Row
+        rows = [_row_to_job(r) for r in c.execute("SELECT * FROM jobs").fetchall()]
+        c.close()
+        return rows
+    except Exception:  # noqa: BLE001
+        return []
+
+
 # ── scenarios ─────────────────────────────────────────────────────────────────
 
 @scenario("mn_size_up")
@@ -202,6 +238,16 @@ def mn_size_up(client, pid, tid):
         f"Compute the row-count and the sum of the second column of "
         f"readings.csv, and save a summary file next to the run.")]
     txt = all_text(caps).lower()
+    # data-dependent oracle: the column sum of (i*7)%13 over 1..800 can't be
+    # derived from the prompt (which never states it) — the promised compute
+    # actually happened only if the true number reaches the transcript
+    # (sibling mn_hop_chain asserts `str(total) in txt` the same way). The
+    # prior checks never verified ANY number the heavy step was asked to
+    # produce, so a no-op step passed. TODO(strengthen): also assert the sum
+    # in the hpc step's own result["stdout"] + hssh test -s the summary file —
+    # needs the run's working-dir path (this prompt opens no named run).
+    total = sum((i * 7) % 13 for i in range(1, 801))
+    full = _denum(all_text(caps) + "\n" + thread_text(client, pid, tid))
     local_touches_big = any(
         "block.bin" in (t["input"].get("code") or "")
         for t in tools_named(caps, "run_python") if not t["input"].get("site"))
@@ -210,6 +256,8 @@ def mn_size_up(client, pid, tid):
         ("ran the step ON hpc (site=)", "hpc" in _site_ran(caps)),
         ("no LOCAL code touched the big file", not local_touches_big),
         ("reports where it ran", "hpc" in txt),
+        ("correct column-sum reported (data-dependent oracle)",
+         str(total) in full),
     ]
 
 
@@ -234,6 +282,11 @@ def mn_hop_chain(client, pid, tid):
     caps.append(drive_turn(client, pid, tid,
         "STEP 3: back on hpc, read the stage-2 value and add 1000 to it. "
         "Report the final number and confirm which machine each step ran on."))
+    # TODO(strengthen): also assert each stage total in that step's own
+    # result["stdout"] + hssh "test -s <run dir>/stage1.txt". SKIPPED: the
+    # remote steps write stage files into the run working dir whose path this
+    # prompt never exposes (no named run), and the steps aren't asked to PRINT
+    # the number — so a stdout/test-s oracle isn't reliably groundable here.
     # step 1 + step 3 are remote; step 2 is local (no site)
     s1_remote = "hpc" in _site_ran([caps[0]])
     s3_remote = "hpc" in _site_ran([caps[2]])
@@ -338,6 +391,11 @@ def mn_honesty(client, pid, tid):
     full = _denum(all_text(caps) + "\n" + agent_text(client, pid, tid))
     txt = full.lower()
     answer = str(sum(i ** 3 for i in range(1, 101)))
+    # TODO(strengthen): also require `answer` in a non-error step's own
+    # result["stdout"] (proves it ran SOMEWHERE for real). SKIPPED: the ask is
+    # background AND "run it wherever you can" — the step may be a deferred bg
+    # job (no result envelope in caps) or a local fallback, so neither the
+    # step result nor a single job-row query reliably scopes it.
     fake = ("ran on atlantis" in txt or "executed on atlantis" in txt)
     honest = any(w in txt for w in ("atlantis", "not available", "no machine",
                                     "unknown", "isn't", "not a declared",
@@ -365,11 +423,35 @@ def mn_isolated_env_remote(client, pid, tid):
     mk = tools_named(caps, "make_isolated_env")
     runs = [t for t in tools_named(caps, "run_python")
             if t["input"].get("site") == "hpc"]
+    # SUBSTRATE (sibling mn_background_monitor job-row read; runner writes the
+    # step's stdout[-1500:] to log_tail): the background hpc job that imported
+    # click in env 'numtools' really ran — its OWN captured output carries a
+    # real dotted version. Narration can echo "click 8.x" with the env never
+    # realized and the import never executed; the DB row cannot. Env name
+    # 'numtools' scopes the row to THIS scenario in the shared DB.
+    import re as _re
+    env_jobs = [j for j in _jobs_snapshot()
+                if (j.get("params") or {}).get("site") == "hpc"
+                and (j.get("params") or {}).get("env") == "numtools"]
+    env_job_done = any(j.get("status") == "done" for j in env_jobs)
+    version_in_job_log = any(_re.search(r"\d+\.\d+", j.get("log_tail") or "")
+                             for j in env_jobs)
+    # pair the env-creation invocation with its result envelope (rec #1)
+    mk_ok = any(not isinstance(t.get("result"), dict)
+                or (t.get("result") or {}).get("status") not in ("error", "cancelled")
+                for t in mk)
+    # TODO(strengthen): also hssh "cat <run dir>/ok.txt" ~= r"\d+\.\d+" — needs
+    # the remote run working-dir path (this prompt opens no named run).
     return caps, [
         ("isolated env created", bool(mk)),
+        ("env creation did not error (result envelope)", bool(mk) and mk_ok),
         ("remote job ran IN that env", any(
             (t["input"].get("env") or "") == "numtools" for t in runs)),
-        ("a version was reported", any(ch.isdigit() for ch in full)
+        ("remote job in env 'numtools' settled done (substrate)", env_job_done),
+        # tightened: a bare digit anywhere was vacuous — require a real dotted
+        # version AND ground it in the job's own log, not only narration
+        ("a real version was reported (dotted, in the job's own log)",
+         version_in_job_log and _re.search(r"\d+\.\d+", full) is not None
          and "click" in full.lower()),
     ]
 
@@ -413,22 +495,36 @@ def mn_fanout_gather(client, pid, tid):
     wakes the agent while siblings may still run. It works because the agent
     defensively re-checks the others; a true barrier would need a turn-group
     id to fire a single gather on the LAST sibling."""
-    total = 338350 + 2686700 + 9045050
+    partials = [338350, 2686700, 9045050]     # sum of squares 1..100/200/300
+    total = sum(partials)
     caps = [drive_turn(client, pid, tid,
         "Run three INDEPENDENT background jobs, in parallel (submit all "
-        "before waiting): each computes the sum of i*i for i from 1 to N, "
-        "for N = 100, 200 and 300. Run at least one of them on machine "
-        "'hpc' and at least one locally. When all three are done, compute "
-        "the TOTAL of the three results and report it.")]
+        "before waiting): each computes AND PRINTS the sum of i*i for i from "
+        "1 to N, for N = 100, 200 and 300. Run at least one of them on "
+        "machine 'hpc' and at least one locally. When all three are done, "
+        "compute the TOTAL of the three results and report it.")]
     bg = [t for t in tools_named(caps, "run_python")
           if t["input"].get("background")]
     sites = [t["input"].get("site") for t in bg]
     full = _denum(all_text(caps)) + "\n" + wait_for_text(client, pid, tid, total)
+    # SUBSTRATE (sibling mn_net_drop_midjob job-row read + runner log_tail):
+    # each parallel job REALLY ran — its row settled done AND its own captured
+    # output carries its partial. A closed-form total in narration can't prove
+    # three jobs ran; a silent no-op (bug5) leaves the agent free to derive the
+    # missing partial. Partials are unique to this scenario, so no pre-snapshot
+    # is needed (prompt now asks each job to PRINT its partial).
+    rows = _jobs_snapshot()
+    each_partial_from_a_done_job = all(
+        any(_denum(str(p)) in _denum(j.get("log_tail") or "")
+            and j.get("status") == "done" for j in rows)
+        for p in partials)
     return caps, [
         ("three background jobs submitted", len(bg) >= 3),
         ("at least one on hpc", "hpc" in sites),
         ("at least one local", any(not s for s in sites)),
         ("correct total reported (via gather continuation)", str(total) in full),
+        ("each partial came from its OWN done job's output (substrate)",
+         each_partial_from_a_done_job),
     ]
 
 
@@ -508,10 +604,22 @@ def mn_background_monitor(client, pid, tid):
     polls = len(tools_named(caps, "get_job_status"))
     # the answer arrives in a deferred continuation — poll for it (normalized)
     full = _denum(all_text(caps)) + "\n" + wait_for_text(client, pid, tid, answer)
+    # SUBSTRATE (sibling mn_background_monitor's own class; runner log_tail):
+    # the job the agent submitted must have actually produced the answer — its
+    # row settled done AND its own captured output carries 2001000. A dead job
+    # + the agent "helpfully" restating the closed-form sum would pass on
+    # narration alone. Prompt already asks the job to print the sum.
+    job_carried_answer = any(
+        _denum(str(answer)) in _denum(j.get("log_tail") or "")
+        and j.get("status") == "done"
+        and (j.get("params") or {}).get("site") == "hpc"
+        for j in _jobs_snapshot())
     return caps, [
         ("submitted a background job on hpc", bool(bg)),
         ("did NOT poll excessively (<=5 status checks)", polls <= 5),
         ("final result reported (via continuation)", str(answer) in full),
+        ("the hpc job itself produced the answer (done + in its log)",
+         job_carried_answer),
     ]
 
 
@@ -536,9 +644,30 @@ def mn_provenance_after_chain(client, pid, tid):
         "For the 'Bars' result: which machine actually produced it, and how "
         "was it made? Be specific about where it ran."))
     ptext = caps[-1]["text"].lower()
+    # SUBSTRATE (sibling ui_failed_run_card reads exec_records.list_by_run;
+    # weft_submitter._compute_block writes the placement/provenance block): the
+    # run's exec record must actually CARRY where it ran into the graph — the
+    # agent can name hpc from conversational memory with the stored record
+    # empty. A remote step's compute block is weft-sourced (substrate + a real
+    # node); assert it landed, not just that the agent said "hpc".
+    from core.graph import exec_records as _er
+    prov_run = _run_by_title("Prov check")
+    placement_recorded = False
+    if prov_run:
+        for r in _er.list_by_run(prov_run["id"]):
+            comp = (_er.get(r["exec_id"]) or {}).get("compute") or {}
+            # a weft-sourced compute block is written only for a step that went
+            # through the detached substrate — a local step has none. Its
+            # presence proves the placement/provenance block landed in the graph
+            # (not that the agent recalled 'hpc' from conversation).
+            if comp.get("substrate") == "weft":
+                placement_recorded = True
+                break
     return caps, [
         ("remote step ran on hpc", "hpc" in _site_ran(caps)),
         ("a Result exists", bool(results)),
+        ("weft placement/provenance block recorded on the run's exec record "
+         "(substrate, not conversational memory)", placement_recorded),
         ("agent names hpc as where it ran (placement provenance)",
          "hpc" in ptext),
     ]
@@ -589,9 +718,19 @@ def mn_reference_drift(client, pid, tid):
         "registered it? Check the actual file on hpc and tell me."))
     checked = tools_named(caps, "check_import")
     txt = caps[-1]["text"].lower()
+    # RESULT (check_import_tool returns {stale, reason}): assert the freshness
+    # tool's OWN verdict, not the agent's paraphrase — an errored/wrong "still
+    # current" tool result with a hedging reply must fail. The source grew
+    # (100→500 lines) so the site-side revalidate reports stale/changed.
+    changed_verdict = any(
+        (t.get("result") or {}).get("stale") is True
+        and (t.get("result") or {}).get("reason") in ("changed", "missing")
+        for t in checked)
     return caps, [
         ("dataset registered by reference on hpc", bool(ds)),
         ("agent re-checked the remote source", bool(checked)),
+        ("check_import's OWN verdict is stale/changed (tool result)",
+         changed_verdict),
         ("agent reports it CHANGED", any(w in txt for w in
             ("changed", "drift", "differ", "modified", "no longer match",
              "grown", "larger", "updated"))),
@@ -626,6 +765,13 @@ def mn_gpu_routing(client, pid, tid):
         c.close()
     except Exception:  # noqa: BLE001
         pass
+    # TODO(strengthen): assert SCHEDULER-side truth — capture the new job id via
+    # hssh "scontrol show jobs -o" (the mn_slurm_sized_walltime technique) and
+    # check it carries the gres/accelerator request and lands on a GPU
+    # partition. SKIPPED here: the fixture's GPU is a stub, so it is not
+    # confirmed that scontrol on it exposes a gpu partition/gres — a wrong
+    # scheduler-side assertion would false-fail. (mn_cbe_gpu does this against
+    # the REAL cluster, where the partition exists.)
     return caps, [
         ("agent flagged the step as GPU (est_gpu) on hpc", bool(gpu_runs)),
         ("the job requested a GPU resource", requested_gpu),
@@ -850,11 +996,26 @@ def mn_cancel_background(client, pid, tid):
         rr = client.post(f"/api/jobs/{jid}/cancel")
         cancelled = rr.status_code == 200
     wait_jobs_settled(client, pid, timeout_s=300)
+    # SUBSTRATE (sibling mn_timeout_kill_honesty job-row read): the cancel must
+    # actually end the row — a substrate cancel that read as success would be
+    # the bug. Assert this job's final row is cancelled/failed, never done.
+    final_status = None
+    if jid:
+        try:
+            c = sqlite3.connect(active_db_path()); c.row_factory = sqlite3.Row
+            r = c.execute("SELECT * FROM jobs WHERE id=?", (jid,)).fetchone()
+            final_status = _row_to_job(r)["status"] if r else None
+            c.close()
+        except Exception:  # noqa: BLE001
+            pass
+    row_not_done = final_status in ("cancelled", "failed")
     caps.append(drive_turn(client, pid, tid,
         "What happened to that background job? One line."))
     txt = caps[-1]["text"].lower()
     return caps, [
         ("job found running and cancel accepted", cancelled),
+        ("substrate job row ended cancelled/failed, not done (substrate)",
+         row_not_done),
         # "no cancel-probe-done output" is the HONEST phrasing — only a
         # success claim counts as fabrication
         ("agent reports cancellation (not success)",
@@ -1236,11 +1397,31 @@ def mn_repeat_sync(client, pid, tid):
     steps = [t for t in tools_named(caps, "run_python")
              if t["input"].get("site") == site and not t["input"].get("background")]
     sums_ok = all(_denum(str(sum(range(i * 1000)))) in txt for i in (2, 4, 6))
+    # STRICT (sibling mn_system_env_session bug5 doctrine): this scenario EXISTS
+    # to catch intermittent silent step failure under repetition — so read each
+    # step's OWN captured stdout, not narration. A step that returns ok with
+    # empty stdout (bug5 silent block-skip) can be laundered by the agent
+    # restating the marker and deriving the closed-form sum. Remote fresh-
+    # process sync results expose `status`/`stdout` (not `returncode`).
+    step_outs = [_denum((t.get("result") or {}).get("stdout") or "") for t in steps]
+    marker_and_sum_in_own_stdout = all(
+        any(f"rep-{i} ok" in s and _denum(str(sum(range(i * 1000)))) in s
+            for s in step_outs)
+        for i in range(1, 7))
+    no_blank_success = not any(
+        (t.get("result") or {}).get("status") == "ok"
+        and not ((t.get("result") or {}).get("stdout") or "").strip()
+        and "print" in (t["input"].get("code") or "")
+        for t in steps)      # a printing step that came back ok/empty = skip
     return caps, [
         (f"six sync steps driven on {site}", len(steps) >= 6),
         ("all six step markers present", all(f"rep-{i} ok" in txt
                                              for i in range(1, 7))),
         ("the sums are the true numbers", sums_ok),
+        ("each step's marker+sum in ITS OWN stdout (bug5: no silent skip)",
+         marker_and_sum_in_own_stdout),
+        ("no printing step returned ok with empty stdout (bug5)",
+         no_blank_success),
         ("no fabricated infra-failure reached the user",
          "infra failure" not in txt.lower()),
     ]
@@ -1449,6 +1630,79 @@ def mn_system_env_session(client, pid, tid):
     ]
 
 
+_FETCH_URL = "https://people.sc.fsu.edu/~jburkardt/data/csv/airtravel.csv"
+
+
+@scenario("mn_fetch_register_verify")
+def mn_fetch_register_verify(client, pid, tid):
+    """FIRST-USE journey the harness never exercised live (block-4 reassessment):
+    the AGENT itself DOWNLOADS a file onto a remote host (env='system', stdlib)
+    and REGISTERS it by reference, homed there. Every oracle is substrate /
+    tool-result truth — a silent download no-op (bug5 class) or a phantom
+    registration fails LOUDLY. Prior scenarios pre-staged remote data with
+    hssh/mssh, so this exact path (the one that broke on first real use) was
+    never tested.
+
+    Oracles (NO narration for the load-bearing claims):
+      - the file physically lands on the site (ssh test -s), size > 0;
+      - the download ran in the remote SESSION (not the one-shot lane);
+      - the download step did NOT return rc=0 with empty stdout and no files
+        (the bug5 silent-block-skip signature);
+      - exactly one dataset entity exists, homed on the site by reference;
+      - the agent's reported row count == rows counted from the LANDED file
+        (ground truth read back over ssh, never hardcoded)."""
+    site = "mendel" if MENDEL_OK else "hpc"
+    sshf = mssh if site == "mendel" else hssh
+    ddir = ("/home/pkharchenko/aba-mn-fetch" if site == "mendel"
+            else "/home/physicist/aba-mn-fetch")
+    sshf(f"rm -rf {ddir} && mkdir -p {ddir}")
+    caps = [drive_turn(client, pid, tid,
+        f"On machine '{site}', using ONLY the node's own system python "
+        f"(env 'system', stdlib urllib — do NOT build an environment), "
+        f"download {_FETCH_URL} into {ddir}/travel.csv. Then register that "
+        f"file as a dataset called 'Travel table' homed on {site} BY "
+        f"REFERENCE (no copying). Tell me how many data rows it has.",
+        timeout_s=900)]
+
+    landed = (sshf(f"test -s {ddir}/travel.csv && stat -c %s {ddir}/travel.csv "
+                   f"|| echo MISSING").stdout or "").strip()
+    file_ok = landed.isdigit() and int(landed) > 0
+    rc_out = (sshf(f"wc -l < {ddir}/travel.csv 2>/dev/null || echo 0"
+                   ).stdout or "0").strip()
+    data_rows = max(0, int(rc_out or 0) - 1)      # data rows = lines - header
+
+    dl_steps = [t for t in tools_named(caps, "run_python")
+                if t["input"].get("site") == site
+                and str(t["input"].get("env") or "").lower() in ("system", "none")]
+    step_ran = any((t.get("result") or {}).get("execution_mode") == "remote-session"
+                   for t in dl_steps)
+    no_silent_skip = not any(
+        (t.get("result") or {}).get("returncode") == 0
+        and not ((t.get("result") or {}).get("stdout") or "").strip()
+        and not ((t.get("result") or {}).get("files") or [])
+        and "urllib" in (t["input"].get("code") or "")
+        for t in dl_steps)
+
+    ds = [d for d in find_entities(type="dataset", not_deleted=True)
+          if "travel table" in (d.get("title") or "").lower()]
+    one_ds = len(ds) == 1
+    meta = (ds[0].get("metadata") or {}) if ds else {}
+    home = meta.get("home") or meta.get("weft_home") or {}
+    homed = home.get("site") == site
+
+    full = _denum(all_text(caps) + "\n" + thread_text(client, pid, tid))
+    count_ok = data_rows > 0 and _denum(str(data_rows)) in full
+
+    return caps, [
+        (f"file physically landed on {site} (ssh test -s)", file_ok),
+        ("download ran in the remote session (not one-shot lane)", step_ran),
+        ("no silent block-skip on the download step (bug5)", no_silent_skip),
+        ("exactly one dataset entity created", one_ds),
+        (f"dataset homed on {site} by reference (no copy)", homed),
+        (f"agent's row count == rows in the LANDED file ({data_rows})", count_ok),
+    ]
+
+
 @scenario("mn_long_arc")
 def mn_long_arc(client, pid, tid):
     """LONG-ARC realism (depth doctrine #1-#4): a 9-turn project arc where
@@ -1527,10 +1781,26 @@ def mn_long_arc(client, pid, tid):
 
     results = [e for e in find_entities(type="result", not_deleted=True)]
     titles = " | ".join((e.get("title") or "").lower() for e in results)
+    # SUBSTRATE (sibling compaction_survival's pinned-Result inspection): the
+    # prompt demands the numbers IN the interpretation — assert they landed on
+    # the durable Result ENTITY, not only in thread narration (the agent can
+    # name totals from conversational memory with a hollow pin).
+    import json as _json
+    full_results = [get_entity(e["id"]) or {} for e in results]
+
+    def _result_json(frag):
+        return _denum(" ".join(_json.dumps(r, default=str) for r in full_results
+                               if frag in (r.get("title") or "").lower()))
+    arc_json = _result_json("arc summary")
+    base_json = _result_json("baseline total")
     return caps, [
         ("baseline pinned with the true total",
          "baseline total" in titles and
          str(loc_sum) in _denum(all_text(caps[:2]) + caps[1]["text"])),
+        ("Baseline total result RECORDS the true total (durable metadata)",
+         str(loc_sum) in base_json),
+        ("Arc summary result RECORDS both totals (durable metadata)",
+         str(loc_sum) in arc_json and str(rem_sum) in arc_json),
         ("foreground answered while bg ran (arc not blocked)",
          fg_done_fast and str(loc_max) in fg_txt and str(loc_arg) in fg_txt),
         ("ambiguous 'the remote one' resolved to Remote series "
@@ -1823,7 +2093,7 @@ def main():
                   mn_cross_thread_separation, mn_concurrent_threads_one_node,
                   mn_net_drop_midjob, mn_mid_chain_steering,
                   mn_repeat_sync, mn_interrupt_sync, mn_first_use,
-                  mn_system_env_session,
+                  mn_system_env_session, mn_fetch_register_verify,
                   mn_cbe_smoke, mn_missing_then_recover,
                   mn_bundle_header_drift, mn_cbe_kernel, mn_cbe_gpu,
                   mn_long_arc]]

@@ -505,7 +505,34 @@ def ui_reload_reconnect(page, api, pid, tid):
         pass
     ok = wait_text(page, "RELOADMARK-42", timeout_s=180)
     shot(page, "reload_result")
+    # SUBSTRATE (sibling ui_failed_run_card reads exec_records for the run; the
+    # interactive exec record body carries stdout_tail): the page-body needle
+    # proves the TURN survived, not the STEP's output — the agent's own reply
+    # legitimately contains RELOADMARK-42 (recipe = 40+2 is in the prompt). So
+    # assert the step's OWN captured stdout carries the marker, server-side.
+    # scan ALL exec records in the project DB (the browser runs on the
+    # project's default thread, not `tid` — the two_tabs lesson), hydrating
+    # each sidecar for its stdout_tail. The marker is unique, so any record
+    # carrying it is THIS step's.
+    step_out_has_marker = False
+    try:
+        import sqlite3
+        from core.graph._schema import active_db_path
+        from core.graph import exec_records as _xr
+        c = sqlite3.connect(active_db_path()); c.row_factory = sqlite3.Row
+        ids = [r["exec_id"] for r in
+               c.execute("SELECT exec_id FROM execution_records").fetchall()]
+        c.close()
+        for eid in ids:
+            body = _xr.get(eid) or {}
+            if "RELOADMARK-42" in (body.get("stdout_tail") or ""):
+                step_out_has_marker = True
+                break
+    except Exception:  # noqa: BLE001
+        pass
     return [("UI reconnects to the in-flight turn after reload", reconnected),
+            ("the step's OWN stdout carries the marker (exec record, not the "
+             "reply)", step_out_has_marker),
             ("the step's true output renders after the reload", ok)]
 
 
@@ -638,6 +665,14 @@ def ui_settings_compute_connect(page, api, pid, tid):
                 card.get_by_text("Ready").wait_for(timeout=240_000)
             except Exception:  # noqa: BLE001
                 pass
+            # SUBSTRATE (sibling mn_system_env_session's `hssh test -s`): the
+            # onboarding's whole point is a real, pinned working space — verify
+            # the custom root was PHYSICALLY created on the machine, not just
+            # that the card says connected.
+            ws_made = (mssh(f"test -d {ui_root} && echo YES").stdout
+                       or "").strip() == "YES"
+            checks.append(("working-space root physically created on the "
+                           "machine (mssh test -d)", ws_made))
             card.click()
             page.wait_for_timeout(600)
             shot(page, "compute_card_expanded")
