@@ -761,11 +761,11 @@ def ui_unknown_retention_chip(page, api, pid, tid):
         return [("hpc fixture available", False)]
     pre = _snap("analysis")
     ui_turn(page,
-            "Open an analysis run titled 'Outage probe'. Run a quick step ON "
-            "machine 'hpc' that writes probe_out.txt containing the number "
-            "314159 into the run's working directory; keep it IN PLACE on "
-            "hpc as the run's kept output (keep_outputs, no copy here). "
-            "Then close the run.", timeout_s=420)
+            "Open an analysis run titled 'Outage probe'. Run a BACKGROUND "
+            "job ON machine 'hpc' that writes a ~60 MB file probe_out.bin "
+            "(60*1024*1024 bytes) into the run's working directory; keep it "
+            "IN PLACE on hpc as the run's kept output (keep_outputs, no "
+            "copy here — it's big). Then close the run.", timeout_s=420)
     from multinode import wait_jobs_settled
     wait_jobs_settled(api, pid)
     runs = _new_entities("analysis", pre, "outage probe")
@@ -776,17 +776,22 @@ def ui_unknown_retention_chip(page, api, pid, tid):
     deadline = time.time() + 240
     while time.time() < deadline and not kept:
         dv = api.get(f"/api/runs/{rid}/durable?flat=1").json()
-        kept = any((f.get("rel") or "").endswith("probe_out.txt")
+        kept = any((f.get("rel") or "").endswith("probe_out.bin")
                    and f.get("state") == "retained"
                    for f in dv.get("files", []))
         time.sleep(6)
     from core.compute import retention as _ret
     orig_ret, orig_inv = _ret.retained, _ret.inventory
+    orig_stat = _ret.file_stat
 
     def _boom(*a, **k):  # noqa: ANN001
         raise RuntimeError("injected retention outage (ui_study)")
+    # ALL retention truth channels dark (first run patched retained+
+    # inventory only; file_stat still answered and the file fell into the
+    # live/at-risk branch instead of unknown)
     _ret.retained = _boom
     _ret.inventory = _boom
+    _ret.file_stat = _boom
     try:
         dv2 = api.get(f"/api/runs/{rid}/durable?flat=1").json()
         page.goto(f"{BASE['url']}/p/{pid}/e/{rid}",
@@ -801,11 +806,12 @@ def ui_unknown_retention_chip(page, api, pid, tid):
     finally:
         _ret.retained = orig_ret
         _ret.inventory = orig_inv
+        _ret.file_stat = orig_stat
     row2 = next((f for f in dv2.get("files", [])
-                 if (f.get("rel") or "").endswith("probe_out.txt")), None)
+                 if (f.get("rel") or "").endswith("probe_out.bin")), None)
     # recovery: the outage lifted → the kept truth must come back
     dv3 = api.get(f"/api/runs/{rid}/durable?flat=1").json()
-    kept_again = any((f.get("rel") or "").endswith("probe_out.txt")
+    kept_again = any((f.get("rel") or "").endswith("probe_out.bin")
                      and f.get("state") == "retained"
                      for f in dv3.get("files", []))
     return [
