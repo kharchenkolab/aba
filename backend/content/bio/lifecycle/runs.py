@@ -479,6 +479,8 @@ def _retain_run_outputs(run_id: str, run_metadata: dict) -> None:
     per_target = ({targets[0]: cumulative} if len(targets) == 1
                   else _attribute_keepers(arts, targets, cumulative))
     errors: list = []
+    missing: list = []           # (target, include, error) — maybe-benign
+    ok_rels: set = set()         # rels a target accepted without raising
     for t in targets:
         include = per_target.get(t) or []
         if not include:
@@ -486,6 +488,7 @@ def _retain_run_outputs(run_id: str, run_metadata: dict) -> None:
         try:
             retention.retain(t, include=include, label=run_id,
                              layout="label", background=True)
+            ok_rels.update(include)
         except Exception as e:  # noqa: BLE001 — logged + surfaced, never blocks the turn
             from core.compute.errors import ComputeError
             if isinstance(e, ComputeError) and e.code == "retain.no_durable":
@@ -493,8 +496,22 @@ def _retain_run_outputs(run_id: str, run_metadata: dict) -> None:
                 if err:
                     errors.append(err)
                 continue
+            if isinstance(e, ComputeError) and e.code == "data.missing":
+                # a multi-target run's unknown-producer fallback sends a rel
+                # to EVERY target; the ones that never held it refuse with
+                # data.missing. That is only a problem if NO target holds it
+                # — defer the verdict to after the loop.
+                missing.append((t, set(include), e))
+                continue
             _log.warning("retain failed for run %s target %s: %s", run_id, t, e)
             errors.append(f"{t}: {e}")
+    for t, inc, e in missing:
+        uncovered = inc - ok_rels
+        if uncovered:
+            errors.append(f"{t}: {e}")
+        else:
+            _log.info("retain: %s had none of %s — covered by another "
+                      "target, no alert", t, sorted(inc))
     _note_retention_alert(run_id, run_metadata, "; ".join(errors) if errors else None)
 
 
@@ -510,7 +527,14 @@ def _attribute_keepers(arts: list, targets: list, cumulative: list) -> dict:
     def _target_of(exec_id):
         if exec_id not in _cache:
             try:
-                _cache[exec_id] = (exec_records.get(exec_id) or {}).get("weft_target")
+                rec = exec_records.get(exec_id) or {}
+                # kernel-lane records stamp weft_target; BACKGROUND-job
+                # records carry the same identity as compute.job_id only —
+                # without this fallback every bg-job keeper attributed to
+                # ALL targets, spraying data.missing retains at kernel
+                # sandboxes that never held the file (live badges finding)
+                _cache[exec_id] = (rec.get("weft_target")
+                                   or (rec.get("compute") or {}).get("job_id"))
             except Exception:  # noqa: BLE001
                 _cache[exec_id] = None
         return _cache[exec_id]

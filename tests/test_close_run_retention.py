@@ -264,5 +264,67 @@ def _standalone() -> int:
     return rc
 
 
+def test_attribution_falls_back_to_compute_job_id(monkeypatch):
+    """A BACKGROUND job's exec record has no `weft_target` — the same identity
+    lives at compute.job_id. Attribution must use it: without the fallback a
+    bg-job keeper went to ALL targets and kernel sandboxes got data.missing
+    retains (live ui_remote_run_badges finding, 2026-07-19)."""
+    import core.exec.artifacts as artmod
+    import core.compute.retention as retmod
+    import core.graph.exec_records as ermod
+    monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [
+        {"original_name": "big.bin", "exec_id": "ex_job"},
+        {"original_name": "peek.txt", "exec_id": "ex_krn"},
+    ])
+    monkeypatch.setattr(ermod, "get", lambda eid: {
+        "ex_job": {"compute": {"job_id": "jb_b"}},          # bg job shape
+        "ex_krn": {"weft_target": "krn_a"},                 # kernel shape
+    }.get(eid))
+    monkeypatch.setattr(retmod, "retained", lambda **kw: [])
+    calls = []
+    monkeypatch.setattr(retmod, "retain",
+                        lambda target, **kw: calls.append((target, kw)))
+    runsmod._retain_run_outputs("run-1", {"weft_targets": ["krn_a", "jb_b"]})
+    got = {t: kw["include"] for t, kw in calls}
+    assert got.get("jb_b") == ["big.bin"]
+    assert got.get("krn_a") == ["peek.txt"]
+
+
+def test_data_missing_on_covered_rel_is_not_an_alert(monkeypatch):
+    """Unknown-producer fallback sends a rel to every target; targets that
+    never held it refuse with data.missing. If ANOTHER target accepted the
+    rel, that refusal is noise, not an alert — the file IS being kept."""
+    import core.exec.artifacts as artmod
+    import core.compute.retention as retmod
+    import core.graph.exec_records as ermod
+    from core.compute.errors import ComputeError
+    monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [
+        {"original_name": "big.bin", "exec_id": "ex_unknown"},
+    ])
+    monkeypatch.setattr(ermod, "get", lambda eid: {})       # producer unknown
+    monkeypatch.setattr(retmod, "retained", lambda **kw: [])
+
+    def _retain(target, **kw):
+        if target == "krn_a":
+            raise ComputeError("data.missing",
+                               "selection matched no files", stage="staging")
+
+    monkeypatch.setattr(retmod, "retain", _retain)
+    alerts = []
+    monkeypatch.setattr(runsmod, "_note_retention_alert",
+                        lambda rid, md, msg: alerts.append(msg))
+    runsmod._retain_run_outputs("run-1", {"weft_targets": ["krn_a", "jb_b"]})
+    assert alerts == [None]      # jb_b accepted big.bin → no alert
+
+    # …but when NO target holds it, the alert must still fire
+    def _retain_all_missing(target, **kw):
+        raise ComputeError("data.missing",
+                           "selection matched no files", stage="staging")
+    monkeypatch.setattr(retmod, "retain", _retain_all_missing)
+    alerts.clear()
+    runsmod._retain_run_outputs("run-1", {"weft_targets": ["krn_a", "jb_b"]})
+    assert alerts and alerts[0] and "data.missing" in alerts[0]
+
+
 if __name__ == "__main__":
     raise SystemExit(_standalone())
