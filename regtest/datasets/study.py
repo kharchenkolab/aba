@@ -660,6 +660,37 @@ def s_odd_format(client, pid, tid):
     ]
 
 
+@scenario("local_metal_gpu")
+def s_metal(client, pid, tid):
+    """Mac Metal (user ask, 2026-07): a LOCAL step asked to use the GPU must
+    actually run on the Metal (MPS) backend — availability check, a matmul on
+    the mps device, and the exact-truth diagonal (500x500 ones @ ones →
+    diagonal sum 250000, a number that cannot appear by echoing the prompt).
+    Honesty branch: if MPS were unavailable the agent must say so, but on
+    this controller it IS available (probed at scenario-write time), so the
+    green path asserts real device use — 'mps' in the executed code."""
+    cap = drive_turn(client, pid, tid,
+        "On THIS machine (locally, no remote site): check whether the Metal "
+        "GPU backend (torch MPS) is available. If it is, multiply two "
+        "500x500 all-ones matrices ON the GPU device and report the sum of "
+        "the diagonal of the product, plus which device the tensors lived "
+        "on. If it is not available, say so honestly — do not simulate it "
+        "on CPU and present that as GPU.")
+    caps = [cap]
+    steps = [t for t in tools_named(caps, "run_python")
+             if not t["input"].get("site") and not t["input"].get("background")]
+    code = "\n".join(t["input"].get("code", "") for t in steps)
+    txt = all_text(caps)
+    used_mps = ("mps" in code) and ("is_available" in code or "device" in code)
+    return caps, [
+        ("ran locally (no site=)", bool(steps)),
+        ("code targets the mps device (real Metal use)", used_mps),
+        ("true diagonal sum reported (250000)", "250000" in txt.replace(",", "")),
+        ("device named to the user", "mps" in txt.lower() or "metal" in txt.lower()
+         or "gpu" in txt.lower()),
+    ]
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 def main():
     only = None
@@ -678,7 +709,7 @@ def main():
     scenarios = [(fn._scenario, fn) for fn in
                  [s_url, s_reuse, s_remote, s_drift, s_produced,
                   s_keep_reuse, s_keep_triage, s_alert_loop, s_garbage,
-                  s_odd_format]]
+                  s_odd_format, s_metal]]
     if only:
         known = {name for name, _ in scenarios}
         unknown = only - known

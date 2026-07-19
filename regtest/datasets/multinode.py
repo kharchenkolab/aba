@@ -1031,6 +1031,62 @@ def mn_cross_thread_separation(client, pid, tid):
     ]
 
 
+@scenario("mn_concurrent_threads_one_node")
+def mn_concurrent_threads_one_node(client, pid, tid):
+    """Several threads share ONE remote node at the same time (user ask,
+    2026-07-19): three threads each submit a background job on the same
+    machine back-to-back so the jobs OVERLAP on the node (and, when the env
+    is cold, race its realization), while a sync step runs there mid-flight
+    on the job-vs-kernel lane seam. Each thread must get ITS OWN number back
+    (no cross-thread bleed), every job row must settle done (no stuck/failed
+    residue from a weft-side race), and the post-scenario truth sweep — which
+    compares every row against the substrate — must stay clean."""
+    site = "mendel" if MENDEL_OK else "hpc"
+    r0 = client.get(f"/api/jobs?project_id={pid}")
+    pre_jobs = {j.get("id") for j in ((r0.json() if isinstance(r0.json(), list)
+                else r0.json().get("jobs", [])) if r0.status_code == 200 else [])}
+    tidB = client.post("/api/threads",
+                       json={"project_id": pid, "title": "conc B"}).json()["id"]
+    tidC = client.post("/api/threads",
+                       json={"project_id": pid, "title": "conc C"}).json()["id"]
+    lanes = [(tid, 1111), (tidB, 2222), (tidC, 3333)]
+    oracles = {t: sum(range(1, n + 1)) for t, n in lanes}   # 617716 / 2469753 / 5556111
+    caps = []
+    for t, n in lanes:
+        caps.append(drive_turn(client, pid, t,
+            f"Run a BACKGROUND job on machine '{site}' (it's a longer step): "
+            f"sleep 45 seconds, then compute and print the sum of 1..{n}. "
+            f"Submit it and end your turn — I'll wait for the announcement."))
+    # while the three jobs overlap on the node, a sync step shares the site
+    sync_true = sum(range(1, 445))                          # 98790
+    caps.append(drive_turn(client, pid, tid,
+        f"While that runs: directly (NOT background) on '{site}', "
+        f"print the sum of 1..444."))
+    fulls = {t: wait_for_text(client, pid, t, oracles[t], timeout_s=900)
+             for t, _ in lanes}
+    bg = [c for c in tools_named(caps, "run_python")
+          if c["input"].get("background") and c["input"].get("site") == site]
+    # cross-thread bleed: another thread's oracle has NO legitimate path into
+    # this thread's transcript — its presence means results crossed wires
+    bleed = [(a, b) for a, _ in lanes for b, _ in lanes if a != b
+             and _denum(str(oracles[b])) in fulls[a]]
+    r = client.get(f"/api/jobs?project_id={pid}")
+    rows = (r.json() if isinstance(r.json(), list)
+            else r.json().get("jobs", [])) if r.status_code == 200 else []
+    bad_rows = [j for j in rows
+                if j.get("id") not in pre_jobs and j.get("status") != "done"]
+    return caps, [
+        (f"three background jobs submitted on {site}", len(bg) >= 3),
+        ("thread A announced its own number", _denum(str(oracles[tid])) in fulls[tid]),
+        ("thread B announced its own number", _denum(str(oracles[tidB])) in fulls[tidB]),
+        ("thread C announced its own number", _denum(str(oracles[tidC])) in fulls[tidC]),
+        ("sync step mid-flight returned its true value",
+         _denum(str(sync_true)) in _denum(all_text(caps) + fulls[tid])),
+        ("no cross-thread result bleed", not bleed),
+        ("all job rows settled done (no race residue)", not bad_rows),
+    ]
+
+
 @scenario("mn_mid_chain_steering")
 def mn_mid_chain_steering(client, pid, tid):
     """Multi-turn steering: a chain starts on hpc, then the user RETARGETS the
