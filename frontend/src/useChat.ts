@@ -773,6 +773,10 @@ export function useChat(
               setStreamMsg(null)
               setStreaming(false)
               currentRunIdRef.current = null
+              // the durable "*(stopped by user)*" marker is appended
+              // SERVER-side just after this stream closes — refetch once
+              // so the recorded stop replaces the transient notice
+              window.setTimeout(() => { void loadMessages() }, 1200)
               // Steer path: this cancel was preceded by enqueue(text);
               // send the queued message now. Plain Stop path: drop the
               // queue. The distinction is the steerFlushRef flag set
