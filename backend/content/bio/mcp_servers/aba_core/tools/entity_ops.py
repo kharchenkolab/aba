@@ -138,6 +138,81 @@ def _status_log_tail(e: dict) -> list[dict]:
     return log[-5:] if isinstance(log, list) else []
 
 
+def _run_outputs_summary(e: dict) -> Optional[dict]:
+    """Run (analysis) → the compact `summary` roll-up from the durable
+    view: counts per state + retention_alert + missing_declared +
+    retain_failed. NOT the per-file tree — the agent gets the honest
+    shape of "what this run produced and whether it's safe", the same
+    numbers the UI Files panel summarizes, without the full listing
+    (which is UI-only and never injected into agent context).
+
+    Defensive + best-effort: any failure → None (the field simply
+    doesn't surface rather than erroring the whole read)."""
+    try:
+        from content.bio.lifecycle.runs import run_durable_view
+        dv = run_durable_view(e["id"])
+        summary = (dv or {}).get("summary")
+        return summary if isinstance(summary, dict) and summary else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _dataset_drift_state(e: dict) -> Optional[str]:
+    """Dataset → a single human-readable drift line derived from the
+    `source_missing` / `source_changed` metadata keys the recheck /
+    revalidate routes record (datasets.py). Drives the same signal as
+    the UI DriftBanner. None when the source is clean (the common case),
+    so a healthy dataset shows nothing."""
+    md = e.get("metadata") or {}
+    if md.get("source_missing"):
+        home = md.get("home") or {}
+        path = home.get("path") if isinstance(home, dict) else None
+        return f"source missing ({path})" if path else "source missing"
+    if md.get("source_changed"):
+        return "source changed since registration"
+    return None
+
+
+def _thread_scope_ids(e: dict) -> list[str]:
+    """The thread_id values entities carry to signal membership in this
+    thread: its own id, plus the "default" sentinel when this is the
+    implicit default thread."""
+    ids = [e["id"]]
+    if (e.get("metadata") or {}).get("is_default"):
+        ids.append("default")
+    return ids
+
+
+def _thread_pinned_count(e: dict) -> int:
+    """Thread → count of active Result entities scoped to this thread —
+    the "N pinned" the ProjectTree shows (a Result is the wrapper the
+    user creates when they pin something). Direct thread_id membership
+    (find_entities metadata scoping), mirroring the server query."""
+    try:
+        from core.graph.entities import find_entities
+        n = 0
+        for tid in _thread_scope_ids(e):
+            n += len(find_entities(type="result", status="active",
+                                   metadata_contains={"thread_id": tid}))
+        return n
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _thread_claim_count(e: dict) -> int:
+    """Thread → count of Claim entities scoped to this thread — the
+    "N claims" the ProjectTree shows. Direct thread_id membership."""
+    try:
+        from core.graph.entities import find_entities
+        n = 0
+        for tid in _thread_scope_ids(e):
+            n += len(find_entities(type="claim", include_archived=False,
+                                   metadata_contains={"thread_id": tid}))
+        return n
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 # Field name → extractor. Lambdas for simple cases; named functions
 # above for the projecting ones.
 _PROJECTORS: dict[str, Callable[[dict], Any]] = {
@@ -180,6 +255,10 @@ _PROJECTORS: dict[str, Callable[[dict], Any]] = {
     "evidence_summary":   _evidence_summary,
     "advisor_notes":      _advisor_notes,
     "status_log_tail":    _status_log_tail,
+    "run_outputs_summary": _run_outputs_summary,
+    "drift_state":        _dataset_drift_state,
+    "pinned_count":       _thread_pinned_count,
+    "claim_count":        _thread_claim_count,
 }
 
 

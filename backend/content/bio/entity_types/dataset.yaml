@@ -44,7 +44,7 @@ allowed_edges:
 
 focus:
   agent_sees: [title, artifact_path, layout_hint, source, organism,
-               size_bytes, file_count, description, tags, notes]
+               size_bytes, file_count, description, drift_state, tags, notes]
   # Metadata edits the agent can land via update_entity_fields.
   # artifact_path / size_bytes / file_count stay read-only — those
   # describe the bundle on disk and change only via add_files /

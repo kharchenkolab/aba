@@ -45,7 +45,7 @@ focus:
   # in Phase C.3) renders the per-thread firehose (pinned figures,
   # claims, open questions).
   agent_sees: [title, question, lifecycle, open_questions,
-               pinned_count, claim_count, recent_outputs]
+               pinned_count, claim_count]
 
 ui:
   panel: thread
