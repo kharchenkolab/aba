@@ -720,6 +720,7 @@ async def stream_response(
     yield sse(wire.manifest(manifest=manifest.to_dict(), run_id=turn.run_id))
 
     try:
+        _empty_retry_done = False   # degenerate-empty turn defense (below)
         while True:
             # Cancellation check at the iteration boundary. The user may
             # have hit Stop while we were processing the previous turn's
@@ -1205,10 +1206,16 @@ async def stream_response(
                             "has been told to break the content into smaller writes — ask it to retry."
                         )
                         yield sse(wire.notice(text=ui_note))
-                    append_message("assistant", _assistant_blocks,
-                                   entity_id=entity_id,
-                                   focus_entity_id=focus_entity_id,
-                                   thread_id=store_tid)
+                    # Degenerate-empty generation (observed live: a 5-token
+                    # emission with no text and no tool_use) must not land
+                    # an empty assistant message in history — that's the
+                    # blocks-less shape the renderer's F4 guard degrades,
+                    # and it poisons later turns' history shape.
+                    if _assistant_blocks:
+                        append_message("assistant", _assistant_blocks,
+                                       entity_id=entity_id,
+                                       focus_entity_id=focus_entity_id,
+                                       thread_id=store_tid)
                     text_out = "".join(b["text"] for b in _assistant_blocks
                                        if b["type"] == "text")
                     log_context_assembly(
@@ -1392,6 +1399,35 @@ async def stream_response(
             history = get_messages(entity_id, thread_id=store_tid)
             # End-of-turn break: no tool_use means the model is done.
             if _stop_reason != "tool_use":
+                # Degenerate-empty defense: a generation that produced NO
+                # output at all (no tool_use, no non-whitespace text —
+                # observed live 2026-07-19: user asked for a pin, model
+                # emitted 5 tokens of nothing, turn ended in silence) gets
+                # ONE fresh retry; a second emptiness lands an honest
+                # marker — the user must never get wordless silence.
+                _has_output = any(
+                    b.get("type") == "tool_use"
+                    or (b.get("type") == "text"
+                        and (b.get("text") or "").strip())
+                    for b in _assistant_blocks)
+                if not _has_output:
+                    if not _empty_retry_done:
+                        _empty_retry_done = True
+                        continue
+                    try:
+                        append_message(
+                            "assistant",
+                            [{"type": "text",
+                              "text": "*(I produced no response — "
+                                      "please ask that again.)*"}],
+                            entity_id=entity_id,
+                            focus_entity_id=focus_entity_id,
+                            thread_id=store_tid)
+                        yield sse(wire.notice(
+                            text="The agent produced an empty response; "
+                                 "ask again to retry."))
+                    except Exception:  # noqa: BLE001
+                        pass
                 break
             # Halt-signal break-out (same shape as legacy 1217+).
             if _pending_halt_signal:
