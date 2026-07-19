@@ -1381,9 +1381,15 @@ def mn_system_env_session(client, pid, tid):
     """4a decoupling live: env='system' on a remote step gets a PERSISTENT
     bare kernel — the node's own interpreter, NO environment realized — with
     state carried between steps like any other session (env choice is
-    orthogonal to execution mode). Ground truths: the steps rode the remote
-    SESSION (not the one-shot lane), the site's weft env store did not grow,
-    and the cross-step number is exact."""
+    orthogonal to execution mode).
+
+    ALSO the block-integrity guard (bug5, misc/bug5_weft_nonatomic_write.md):
+    a remote step that PRINTS a token and WRITES a file must actually do BOTH —
+    the earlier non-atomic write_file race let the driver read a half-written
+    code block, exec nothing, and return rc=0 with empty stdout and no side
+    effect (a silently skipped step reported as success). So we assert on the
+    STEP'S OWN tool-result stdout + a file it wrote, NOT the agent's narration
+    (which can launder a lost print via a silent retry)."""
     sdir = "/home/physicist/aba-mn-sysenv"
     hssh(f"rm -rf {sdir} && mkdir -p {sdir} && (echo n; seq 4 9) "
          f"> {sdir}/nums.csv")
@@ -1397,8 +1403,9 @@ def mn_system_env_session(client, pid, tid):
         f"(env 'system' — do not build or ship any environment), run two "
         f"quick steps directly (not background), IN SEQUENCE: (1) read "
         f"{sdir}/nums.csv with the stdlib csv module, keep the numbers in "
-        f"memory as a list, and print how many there are; (2) WITHOUT "
-        f"re-reading the file — reuse the in-memory list from step 1 — "
+        f"memory as a list, print exactly COUNT=<how many>, and also write a "
+        f"file {sdir}/step1.out containing that same COUNT line; (2) WITHOUT "
+        f"re-reading nums.csv — reuse the in-memory list from step 1 — "
         f"print exactly SYSTOTAL=<sum of squares of those numbers>. Then "
         f"tell me the total.", timeout_s=900)]
     full = _denum(all_text(caps) + "\n" + thread_text(client, pid, tid))
@@ -1408,6 +1415,21 @@ def mn_system_env_session(client, pid, tid):
              in ("system", "none")]
     session_used = any((t.get("result") or {}).get("execution_mode")
                        == "remote-session" for t in steps)
+    # BLOCK-INTEGRITY: the step's OWN captured stdout must carry its print —
+    # a skipped block (bug5) returns rc=0 with empty stdout. Read the tool
+    # result, not narration.
+    step_stdouts = [_denum((t.get("result") or {}).get("stdout") or "")
+                    for t in steps]
+    token_in_step_stdout = any("COUNT=" in s or "SYSTOTAL=" in s
+                               for s in step_stdouts)
+    no_blank_success = not any(
+        (t.get("result") or {}).get("returncode") == 0
+        and not ((t.get("result") or {}).get("stdout") or "").strip()
+        and (t["input"].get("code") or "").count("print(") >= 1
+        for t in steps)      # a printing step that came back rc=0/empty = skip
+    # SIDE-EFFECT: the file the step wrote must exist on the site
+    file_written = (hssh(f"test -s {sdir}/step1.out && echo YES"
+                         ).stdout or "").strip() == "YES"
     n1 = _envs_count()
     return caps, [
         ("two sequential steps carried env='system' on the site",
@@ -1415,6 +1437,12 @@ def mn_system_env_session(client, pid, tid):
         ("bare PERSISTENT session used (4a: kernel lane, not one-shot)",
          session_used),
         (f"no environment realized on the site (envs {n0}→{n1})", n1 <= n0),
+        ("step's OWN stdout captured its print (bug5: no silent block skip)",
+         token_in_step_stdout),
+        ("no printing step returned rc=0 with empty stdout (bug5)",
+         no_blank_success),
+        ("a file WRITTEN by a remote step actually landed on the site",
+         file_written),
         ("the exact cross-step total reported",
          f"SYSTOTAL={expected}" in full.replace(" ", "")
          or str(expected) in full),
