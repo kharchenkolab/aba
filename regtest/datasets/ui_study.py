@@ -674,6 +674,167 @@ def ui_settings_compute_connect(page, api, pid, tid):
     return checks
 
 
+@ui_scenario("ui_zero_byte_output")
+def ui_zero_byte_output(page, api, pid, tid):
+    """EMPTY-OUTPUT rendering (release_test_plan 'UI error/empty states'):
+    a run keeps a ZERO-byte output — a legitimate shape (empty filter
+    result, marker files). The durable panel must render it as a kept
+    0 B row — not blank, not NaN, not a crash."""
+    pre = _snap("analysis")
+    ui_turn(page,
+            "Open an analysis run titled 'Empty artifact'. In it run a quick "
+            "local python step that writes TWO files in the run's working "
+            "directory: empty_marker.dat with NOTHING in it (exactly zero "
+            "bytes) and counts.txt containing the number 741. Keep BOTH as "
+            "the run's outputs (keep_outputs), then close the run.",
+            timeout_s=420)
+    from multinode import wait_jobs_settled
+    wait_jobs_settled(api, pid)
+    runs = _new_entities("analysis", pre, "empty artifact")
+    if not runs:
+        return [("run created", False)]
+    rid = runs[0]["id"]
+    zero_row = None
+    deadline = time.time() + 180
+    while time.time() < deadline and zero_row is None:
+        dv = api.get(f"/api/runs/{rid}/durable?flat=1").json()
+        for f in dv.get("files", []):
+            if (f.get("rel") or "").endswith("empty_marker.dat") \
+                    and f.get("state") == "retained":
+                zero_row = f
+        time.sleep(6)
+    page.goto(f"{BASE['url']}/p/{pid}/e/{rid}", wait_until="domcontentloaded")
+    time.sleep(5)
+    shot(page, "zero_byte_run")
+    body_txt = ""
+    try:
+        body_txt = page.locator("body").inner_text()
+    except Exception:  # noqa: BLE001
+        pass
+    return [
+        ("run created", True),
+        ("durable view retains the zero-byte file", zero_row is not None),
+        ("durable size is 0 (not null/garbage)",
+         (zero_row or {}).get("size") == 0),
+        ("row renders on the card", "empty_marker.dat" in body_txt),
+        ("size renders as 0 B (not blank/NaN)", "0 B" in body_txt),
+        ("no crash banner", "couldn't be displayed" not in body_txt
+         and "couldn’t be displayed" not in body_txt),
+    ]
+
+
+@ui_scenario("ui_unknown_retention_chip")
+def ui_unknown_retention_chip(page, api, pid, tid):
+    """OUTAGE honesty (ux lesson L1 — surface parity; ops-realism axis):
+    with the substrate UP but the retention index unreachable, kept files
+    must read 'unknown — retention unreachable' — never 'discarded — it was
+    not kept' (that would be a lie about durably-kept bytes). Injected at
+    the real seam: the in-process uvicorn imports the same
+    core.compute.retention module object, so patching retained/inventory to
+    raise IS the outage, end to end through the API and the browser."""
+    if not HPC["ok"]:
+        return [("hpc fixture available", False)]
+    pre = _snap("analysis")
+    ui_turn(page,
+            "Open an analysis run titled 'Outage probe'. Run a quick step ON "
+            "machine 'hpc' that writes probe_out.txt containing the number "
+            "314159 into the run's working directory; keep it IN PLACE on "
+            "hpc as the run's kept output (keep_outputs, no copy here). "
+            "Then close the run.", timeout_s=420)
+    from multinode import wait_jobs_settled
+    wait_jobs_settled(api, pid)
+    runs = _new_entities("analysis", pre, "outage probe")
+    if not runs:
+        return [("run created", False)]
+    rid = runs[0]["id"]
+    kept = False
+    deadline = time.time() + 240
+    while time.time() < deadline and not kept:
+        dv = api.get(f"/api/runs/{rid}/durable?flat=1").json()
+        kept = any((f.get("rel") or "").endswith("probe_out.txt")
+                   and f.get("state") == "retained"
+                   for f in dv.get("files", []))
+        time.sleep(6)
+    from core.compute import retention as _ret
+    orig_ret, orig_inv = _ret.retained, _ret.inventory
+
+    def _boom(*a, **k):  # noqa: ANN001
+        raise RuntimeError("injected retention outage (ui_study)")
+    _ret.retained = _boom
+    _ret.inventory = _boom
+    try:
+        dv2 = api.get(f"/api/runs/{rid}/durable?flat=1").json()
+        page.goto(f"{BASE['url']}/p/{pid}/e/{rid}",
+                  wait_until="domcontentloaded")
+        time.sleep(5)
+        shot(page, "unknown_retention_outage")
+        body_txt = ""
+        try:
+            body_txt = page.locator("body").inner_text()
+        except Exception:  # noqa: BLE001
+            pass
+    finally:
+        _ret.retained = orig_ret
+        _ret.inventory = orig_inv
+    row2 = next((f for f in dv2.get("files", [])
+                 if (f.get("rel") or "").endswith("probe_out.txt")), None)
+    # recovery: the outage lifted → the kept truth must come back
+    dv3 = api.get(f"/api/runs/{rid}/durable?flat=1").json()
+    kept_again = any((f.get("rel") or "").endswith("probe_out.txt")
+                     and f.get("state") == "retained"
+                     for f in dv3.get("files", []))
+    return [
+        ("kept on hpc before the outage", kept),
+        ("during outage the row reads unknown (not discarded)",
+         (row2 or {}).get("state") == "unknown"),
+        ("chip renders the unknown state",
+         "unknown — retention unreachable" in body_txt),
+        ("no 'discarded' lie about the kept file",
+         "it was not kept" not in body_txt),
+        ("truth returns after the outage", kept_again),
+    ]
+
+
+@ui_scenario("ui_failed_run_card")
+def ui_failed_run_card(page, api, pid, tid):
+    """FAILED-RUN card state (release_test_plan 'UI error/empty states'):
+    a run whose only step raises must render an HONEST failed state on the
+    entity card — an error-marked step, no eternal spinner, no crash
+    banner. Marker computed (60+13) so it can't come from the prompt."""
+    pre = _snap("analysis")
+    ui_turn(page,
+            "Open an analysis run titled 'Doomed run'. In it run ONE local "
+            "python step that computes 60+13 and then raises "
+            "RuntimeError('doomed-' followed by that number). Do NOT retry "
+            "or work around it — close the run noting that it failed.",
+            timeout_s=420)
+    from multinode import wait_jobs_settled
+    wait_jobs_settled(api, pid)
+    runs = _new_entities("analysis", pre, "doomed")
+    if not runs:
+        return [("run created", False)]
+    rid = runs[0]["id"]
+    page.goto(f"{BASE['url']}/p/{pid}/e/{rid}", wait_until="domcontentloaded")
+    time.sleep(5)
+    shot(page, "failed_run_card")
+    card = page.locator(".runview")
+    ctxt = ""
+    try:
+        ctxt = (card.first.inner_text() if card.count()
+                else page.locator("body").inner_text())
+    except Exception:  # noqa: BLE001
+        pass
+    lower = ctxt.lower()
+    return [
+        ("run created", True),
+        ("failure marked on the card",
+         "error" in lower or "failed" in lower or "✗" in ctxt),
+        ("no eternal running spinner", "running…" not in lower),
+        ("no crash banner", "couldn't be displayed" not in ctxt
+         and "couldn’t be displayed" not in ctxt),
+    ]
+
+
 def _register_hpc() -> None:
     """Best-effort: the dockerized slurm fixture (multinode's), for the
     remote-truth UI scenarios. Skipped cleanly when absent."""
