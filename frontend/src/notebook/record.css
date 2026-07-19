@@ -403,3 +403,15 @@ input { font: inherit; }
 .op__sig { font-family: var(--sans); font-size: 11.5px; color: var(--ink-3); margin: 14px 0 30px; }
 .op__appendix h2 { font-size: 14px; font-family: var(--sans); text-transform: uppercase; letter-spacing: 0.1em; color: var(--ink-2); }
 .op__sedline { font-family: var(--sans); font-size: 12.5px; color: var(--ink-2); padding: 3px 0; }
+
+/* ------------------------------------------------ print (the one-pager IS a
+   deliverable: "print and take it to the meeting") */
+@media print {
+  .rec, .rec--bench { display: block; height: auto; }
+  .toc, .bench, .doc__viewbar, .fig__actions, .addendum__actions,
+  .trail__ask, .trail__nudge, .nsec__methods, .wnew, .btn { display: none !important; }
+  .doc { overflow: visible; padding: 0; height: auto; }
+  .doc > * { max-width: none; }
+  body { background: #fff; }
+  .sed__line:hover { background: transparent; }
+}

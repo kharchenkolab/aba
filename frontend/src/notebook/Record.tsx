@@ -400,7 +400,8 @@ export default function Record() {
   const [openSed, setOpenSed] = useState<Set<string>>(new Set(['run_qc']))
   const [ratified, setRatified] = useState<Set<string>>(new Set())
   const [drafted, setDrafted] = useState<Set<string>>(new Set())
-  const [view, setView] = useState<'record' | 'onepager'>('record')
+  const [view, setView] = useState<'record' | 'onepager'>(
+    () => new URLSearchParams(window.location.search).get('view') === 'onepager' ? 'onepager' : 'record')
   const [newOpen, setNewOpen] = useState(false)
   const [q, setQ] = useState('')
   const [scope, setScope] = useState<'story' | 'noticed' | 'everything'>('everything')
@@ -628,7 +629,9 @@ export default function Record() {
       </main>
 
       {/* ---------- margin bench ---------- */}
-      {benchFor && <MarginBench target={benchFor} onClose={() => setBenchFor(null)} />}
+      {/* keyed by anchor: each element's margin conversation is its own —
+          switching targets must never carry the previous exchange along */}
+      {benchFor && <MarginBench key={benchFor.id} target={benchFor} onClose={() => setBenchFor(null)} />}
     </div>
   )
 }
