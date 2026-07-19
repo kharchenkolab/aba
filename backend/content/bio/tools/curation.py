@@ -1275,6 +1275,26 @@ def keep_outputs_tool(input_: dict, ctx: dict | None = None) -> dict:
     s = out.get("summary") or {}
     note = (f"Keep decision applied. retained={s.get('retained', 0)} saving={s.get('saving', 0)} "
             f"at_risk={s.get('at_risk', 0)}. Excluded won't be retained at run-close either.")
+    # Honesty guard (found live: a keep naming an unharvested file silently
+    # covered 1 of 2 — the user was told "kept" while the file sat outside
+    # the tracked inventory). A LITERAL include that matches nothing in the
+    # run's tracked outputs is surfaced, never swallowed.
+    try:
+        from core.exec.artifacts import artifacts_for_run
+        tracked = {(a.get("original_name") or "").strip()
+                   for a in artifacts_for_run(rid)}
+        unmatched = [p.strip() for p in keep
+                     if p and p.strip() and not any(c in p for c in "*?[")
+                     and p.strip() not in tracked]
+        if unmatched:
+            out["unmatched_includes"] = unmatched
+            note += (" NOT COVERED: " + ", ".join(unmatched) +
+                     " — not in the run's tracked outputs (harvest collects "
+                     "known extensions only), so this keep does NOT protect "
+                     "them yet. Tell the user; do not describe these files "
+                     "as kept.")
+    except Exception:  # noqa: BLE001 — the guard must never break the keep
+        pass
     return {"status": "ok", **out, "note": note}
 
 

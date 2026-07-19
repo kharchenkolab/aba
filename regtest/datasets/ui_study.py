@@ -896,12 +896,17 @@ def ui_two_tabs(page, api, pid, tid):
                 pass
             time.sleep(3)
         time.sleep(5)
-        # thread truth via API (the surface both tabs render from)
-        r = api.get(f"/api/messages?thread_id={tid}&project_id={pid}")
-        raw = r.text if r.status_code == 200 else ""
-        raw_n = raw.replace(",", "")
-        ran1 = str(m1) in raw_n
-        ran2 = str(m2) in raw_n
+        # THREAD TRUTH from the pages, not from `tid`: the browser lands on
+        # the project's DEFAULT thread, not the API-created scenario thread
+        # — first live run asserted against a thread nobody typed into
+        # (both markers were in the real thread; checks read the empty one)
+        pre_reload = ""
+        try:
+            pre_reload = page.locator("body").inner_text().replace(",", "")
+        except Exception:  # noqa: BLE001
+            pass
+        ran1 = str(m1) in pre_reload
+        ran2 = str(m2) in pre_reload
         body2 = ""
         try:
             body2 = page2.locator("body").inner_text()
@@ -926,10 +931,15 @@ def ui_two_tabs(page, api, pid, tid):
         # turn indisputably ran); m2's presence must agree across tabs.
         converged = (str(m1) in b1) and (str(m1) in b2) and \
                     ((str(m2) in b1) == (str(m2) in b2))
+        # dup guard (found live: tab-2's Enter landed TWICE — two user rows,
+        # two overlapping assistant turns whose tool calls interrupted each
+        # other): the tab-2 prompt must appear exactly once in the thread
+        dup2 = b1.count("Compute 83*59 with a quick local python step") > 1
         return [
             ("tab-1 turn completed with the true number", ran1),
             ("tab-2 not silently lost (ran OR visible notice)",
              ran2 or notice2),
+            ("tab-2 message not duplicated (single user row)", not dup2),
             ("no crash banner in either tab",
              "couldn't be displayed" not in b1 + b2
              and "couldn’t be displayed" not in b1 + b2),

@@ -18,6 +18,7 @@ import './RunView.css'
 
 export interface RunMeta {
   executor?: string; status?: string; where?: string; queue?: string; scheduler_job_id?: string
+  failed_steps?: number
   /** distinct REMOTE sites this run's steps executed on (backend-stamped) */
   sites?: string[]
   resources?: { cores?: number; mem?: string; walltime?: string }
@@ -428,6 +429,15 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onPre
       {active && status === 'running' && <span className="run-pill__dot" />}{STATUS_LABEL[status] ?? status}
     </span>
   )
+  // A closed run whose steps raised must SAY so on its card — the thread
+  // shows the failed step, but the entity card read as a clean success
+  // (found live 2026-07-19). Stamped server-side at close.
+  const failedSteps = m.failed_steps ?? 0
+  const failChip = failedSteps > 0 ? (
+    <span className="run-pill run-pill--failed" title="steps that raised an error during this run">
+      ✗ {failedSteps} failed step{failedSteps > 1 ? 's' : ''}
+    </span>
+  ) : null
 
   return (
     <div className="runview">
@@ -441,6 +451,7 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onPre
           <h1 className="runview__title" onClick={() => setEditing(true)} title="Click to rename">{run.title}</h1>
         )}
         {pill}
+        {failChip}
         <EntityMenu entity={run} onChange={onChange} />
       </div>
 

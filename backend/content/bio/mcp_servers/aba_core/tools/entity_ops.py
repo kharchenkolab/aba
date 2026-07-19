@@ -155,6 +155,9 @@ def _run_outputs_summary(e: dict) -> Optional[dict]:
         n_outputs = len(((md.get("run") or {}).get("outputs")) or [])
         if n_outputs:
             out["outputs"] = n_outputs
+        n_failed = (md.get("run") or {}).get("failed_steps") or 0
+        if n_failed:
+            out["failed_steps"] = n_failed
         alert = md.get("retention_alert")
         if alert:
             out["retention_alert"] = alert

@@ -266,6 +266,22 @@ def close_run(thread_id: str) -> Optional[str]:
     # (we do NOT stop the shared kernel; misc/output_durability.md §6.3).
     _retain_run_outputs(rid, md)
     from core.graph.entities import patch_metadata
+    # Failure visibility (found live: a run whose only step raised rendered
+    # with NO failure indication on its card — the thread showed the error,
+    # the entity card claimed nothing): count failed exec records at close
+    # and stamp them into run metadata, so the card (and the agent's
+    # run_outputs_summary projection) can say "closed, N failed steps".
+    try:
+        from core.graph.exec_records import list_by_run as _lbr
+        n_failed = sum(1 for r in _lbr(rid)
+                       if (r.get("status") or "") not in ("ok", ""))
+        if n_failed:
+            cur = get_entity(rid)   # fresh — retain/auto-pin patch run md too
+            run_md = dict(((cur or {}).get("metadata") or {}).get("run") or {})
+            run_md["failed_steps"] = n_failed
+            patch_metadata(rid, {"run": run_md})
+    except Exception:  # noqa: BLE001 — the stamp must never block a close
+        pass
     patch_metadata(rid, {"run_state": "closed"})   # single-key: no blob race
     return rid
 
