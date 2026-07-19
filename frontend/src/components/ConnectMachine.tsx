@@ -253,6 +253,14 @@ export default function ConnectMachine({ knownNames, onDone, onCancel }: Props) 
               ? 'Looking at the machine — this takes a few seconds…'
               : 'Adding the machine…'}
           </p>
+          {step === 'connecting' && (
+            <p className="cmp-dim">
+              First-time setup installs aba's small helper on the machine —
+              usually under a minute. (The first analysis there also builds
+              its environment once — that can take a few minutes; it's cached
+              afterwards.)
+            </p>
+          )}
           <ul className="cmp-narration">
             {narration.map(n => <li key={n}>{n}</li>)}
           </ul>

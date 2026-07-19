@@ -713,6 +713,19 @@ async def stream_response(
                                          run_id=turn.run_id))
                 turn.transition(TurnState.FAILED)
                 turn.error = {"type": "Cancelled", "message": cancel_token.reason}
+                # durable stop marker: the thread must RECORD the stop — for
+                # the user after a reload (an empty turn reads as a glitch,
+                # ux_findings F4 follow-up) and for the agent's own history
+                # (later turns should know this one was interrupted)
+                try:
+                    append_message("assistant",
+                                   [{"type": "text",
+                                     "text": "*(stopped by user)*"}],
+                                   entity_id=entity_id,
+                                   focus_entity_id=focus_entity_id,
+                                   thread_id=store_tid)
+                except Exception:  # noqa: BLE001 — marker never blocks the bail
+                    pass
                 checkpoint(turn)
                 yield sse(wire.usage(input=usage_in, output=usage_out,
                                      cache_read=usage_cr, cache_write=usage_cw))

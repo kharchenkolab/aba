@@ -454,6 +454,9 @@ def ui_cancel_midrun(page, api, pid, tid):
     # never the ErrorBoundary's failure banner
     render_ok = page.get_by_text("couldn’t be displayed").count() == 0 and \
         page.get_by_text("couldn't be displayed").count() == 0
+    # durable stop marker (F4 follow-up): the stop is RECORDED in the
+    # thread, not just an absence
+    marker_ok = page.get_by_text("stopped by user", exact=False).count() > 0
     followup_ok = True
     try:
         ui_turn(page, "Just tell me: what is 6*7? Answer with the number.",
@@ -466,6 +469,7 @@ def ui_cancel_midrun(page, api, pid, tid):
             ("no fabricated completion after cancel", not fabricated),
             ("cancelled turn renders (no ErrorBoundary banner — F4)",
              render_ok),
+            ("durable '(stopped by user)' marker recorded", marker_ok),
             ("thread usable after cancel (follow-up turn works)", followup_ok)]
 
 

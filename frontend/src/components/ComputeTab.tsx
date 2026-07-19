@@ -74,6 +74,7 @@ export default function ComputeTab() {
   const [status, setStatus] = useState<{ ok: boolean; detail: string; self_service?: boolean } | null>(null)
   const [sel, setSel] = useState<string | null>(null)
   const [connecting, setConnecting] = useState(false)
+  const [tabNote, setTabNote] = useState<string | null>(null)
   const [advanced, setAdvanced] = useState(false)
 
   useEffect(() => {
@@ -142,12 +143,19 @@ export default function ComputeTab() {
           onCancel={() => setConnecting(false)} />
       )}
 
+      {tabNote && <div className="cmp-note">{tabNote}</div>}
       <ul className="mod-list">
         {sites.map(s => (
           <SiteCard key={s.name} site={s} open={sel === s.name} advanced={advanced}
             selfService={status?.self_service !== false}
             onToggle={() => setSel(sel === s.name ? null : s.name)}
-            onChanged={load} />
+            onChanged={load}
+            onGone={msg => {
+              // the card unmounts with the site — the loop-closing
+              // confirmation has to outlive it at the tab level
+              setTabNote(msg)
+              window.setTimeout(() => setTabNote(null), 10_000)
+            }} />
         ))}
       </ul>
 
@@ -163,9 +171,9 @@ export default function ComputeTab() {
 
 // ── one machine: card + expandable manage detail (§6) ────────────────────────
 
-function SiteCard({ site, open, advanced, selfService, onToggle, onChanged }: {
+function SiteCard({ site, open, advanced, selfService, onToggle, onChanged, onGone }: {
   site: ComputeSite; open: boolean; advanced: boolean; selfService: boolean
-  onToggle: () => void; onChanged: () => void
+  onToggle: () => void; onChanged: () => void; onGone?: (msg: string) => void
 }) {
   const s = site
   const isLocal = s.name === 'local'
@@ -199,7 +207,7 @@ function SiteCard({ site, open, advanced, selfService, onToggle, onChanged }: {
           )}
         </p>
       )}
-      {open && <SiteDetail site={s} advanced={advanced} selfService={selfService} onChanged={onChanged} />}
+      {open && <SiteDetail site={s} advanced={advanced} selfService={selfService} onChanged={onChanged} onGone={onGone} />}
     </li>
   )
 }
@@ -210,8 +218,9 @@ const USE_FOR_ALL: { key: string; label: string }[] = [
   { key: 'gpu', label: 'GPU work' },
 ]
 
-function SiteDetail({ site, advanced, selfService, onChanged }: {
-  site: ComputeSite; advanced: boolean; selfService: boolean; onChanged: () => void
+function SiteDetail({ site, advanced, selfService, onChanged, onGone }: {
+  site: ComputeSite; advanced: boolean; selfService: boolean
+  onChanged: () => void; onGone?: (msg: string) => void
 }) {
   const s = site
   const isLocal = s.name === 'local'
@@ -493,7 +502,11 @@ function SiteDetail({ site, advanced, selfService, onChanged }: {
           files there{footprint != null && footprint > 0 ? ` (${fmtGB(footprint)})` : ''} stay.
           <div className="cmp-actions">
             <button className="cmp-btn cmp-btn--danger" disabled={busy !== null}
-              onClick={() => act('disconnect', () => computeApi.disconnect(s.name))}>
+              onClick={() => act('disconnect', async () => {
+                await computeApi.disconnect(s.name)
+                onGone?.(`${s.name} disconnected — aba forgot the machine; `
+                  + 'nothing on it was deleted')
+              })}>
               Disconnect
             </button>
             <button className="cmp-btn" onClick={() => setConfirmDisconnect(false)}>Keep it</button>
