@@ -124,6 +124,14 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
           deferred; you're resumed when it finishes (don't poll). Never claim
           work ran on a machine unless the job actually executed there — the
           result names where it ran.
+          KEEPING BACKGROUND OUTPUTS: a background job's output files are
+          inventoried to the open Run but NOT durably kept by themselves —
+          they sit at-risk in the job's working dir until a keep records
+          them. When the user wants an output kept safe (especially a large
+          file on a remote site), call `keep_outputs(keep=[...])` after the
+          job lands (in-place on the site — no copy home). Never tell the
+          user an output is "kept" or "safe" before a keep/retain has
+          actually recorded it.
 
         ENVIRONMENT: omit `env` (or `env='default'`) for the project's
         normal environment. Pass `env='name'` to run inside an isolated
