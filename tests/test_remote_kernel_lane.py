@@ -155,19 +155,19 @@ import content.bio.tools.run_exec as rex  # noqa: E402
 
 
 def test_pool_remote_uses_weft_never_jupyter():
+    starts0, execs0 = len(FAKE.kernel_starts), len(FAKE.execs)
     pool = poolm.KernelPool()
     s = pool.get_or_start("thr@mendel", "python", cwd=_TMP, env_name=None,
                           site="mendel")
     check("weft session built for the remote site",
           type(s).__name__ == "WeftKernelSession", type(s).__name__)
-    check("kernel_start received the site",
-          FAKE.kernel_starts and FAKE.kernel_starts[0]["site"] == "mendel",
-          str(FAKE.kernel_starts))
+    st = FAKE.kernel_starts[starts0]
+    check("kernel_start received the site", st["site"] == "mendel", str(st))
     check("frozen snapshot env attached",
-          FAKE.kernel_starts[0].get("env_id") == "env_snapshot_1",
-          str(FAKE.kernel_starts[0]))
+          st.get("env_id") == "env_snapshot_1", str(st))
     check("remote setup binds DATA_DIR to the sandbox, not a controller path",
-          FAKE.execs and "getcwd()" in FAKE.execs[0] and _TMP not in FAKE.execs[0])
+          len(FAKE.execs) > execs0 and "getcwd()" in FAKE.execs[execs0]
+          and _TMP not in FAKE.execs[execs0])
     s.shutdown()
 
 
@@ -230,8 +230,8 @@ def test_start_failure_falls_back_to_one_shot():
         FAKE.fail_start = False
 
 
-def test_system_env_skips_kernel_and_realization():
-    # P2 lever: env='system' = node interpreter, no pack realization, no kernel
+def test_system_env_detached_keeps_node_interpreter():
+    # detached (background) lane unchanged: env='system' = node interpreter
     import core.jobs.weft_submitter as ws
     sub = ws.WeftSubmitter(site="mendel")
     env_id, env_name = sub._detached_env({"env": "system"}, _PID, "python")
@@ -239,18 +239,78 @@ def test_system_env_skips_kernel_and_realization():
           env_id is None and env_name is None, f"{env_id!r},{env_name!r}")
     env_id2, _ = sub._detached_env({"env": "None"}, _PID, "python")
     check("'none' spelling accepted too", env_id2 is None)
-    sent = {}
-    orig_sync, orig_kern = rex._run_remote_sync, rex._run_remote_kernel
-    rex._run_remote_sync = lambda *a, **k: (sent.update(hit=True), {"status": "ok"})[1]
-    rex._run_remote_kernel = lambda *a, **k: (_failures.append("kernel lane entered for env=system"), None)[1]
+
+
+def test_bare_session_invariant():
+    # 4a decoupling: a kernel attaches to a frozen env OR a live session OR
+    # NEITHER (bare, env='system'); both at once is the only invalid shape.
+    try:
+        weftk.WeftKernelSession("k", "python", env_id="e1", session_id="s1")
+        check("env_id + session_id together rejected", False)
+    except ValueError:
+        check("env_id + session_id together rejected", True)
+    s = weftk.WeftKernelSession("kbare", "python", site="mendel")
+    st = FAKE.kernel_starts[-1]
+    check("bare start sends NEITHER env_id nor session_id",
+          "env_id" not in st and "session_id" not in st, str(st))
+    s.shutdown()
+
+
+def test_system_env_gets_persistent_bare_kernel():
+    """4a: env='system' on a remote step is a PERSISTENT session like any
+    env — just bare (no realization, node interpreter). It must never touch
+    named-env resolution/realization, and state must persist across calls."""
+    import core.compute.named_envs as ne
+    touched = []
+    orig_resolve, orig_ready = ne.resolve, ne.ensure_ready
+    ne.resolve = lambda *a, **k: (touched.append("resolve"), None)[1]
+    ne.ensure_ready = lambda *a, **k: touched.append("ensure_ready")
+    starts0 = len(FAKE.kernel_starts)
+    try:
+        ctx = {"thread_id": "thrSys"}
+        r1 = rex._run_remote_kernel({"code": "n = 1", "env": "system"},
+                                    ctx, _PID, "thrSys", "mendel")
+        r2 = rex._run_remote_kernel({"code": "print(n+1)", "env": "system"},
+                                    ctx, _PID, "thrSys", "mendel")
+    finally:
+        ne.resolve, ne.ensure_ready = orig_resolve, orig_ready
+    check("both system-env calls ok",
+          (r1 or {}).get("returncode") == 0 and (r2 or {}).get("returncode") == 0,
+          f"{str(r1)[:120]} / {str(r2)[:120]}")
+    check("ONE bare kernel serves both calls (state persists)",
+          len(FAKE.kernel_starts) - starts0 == 1,
+          str(FAKE.kernel_starts[starts0:]))
+    st = FAKE.kernel_starts[starts0]
+    check("kernel started BARE (no env_id / session_id attached)",
+          "env_id" not in st and "session_id" not in st, str(st))
+    check("no named-env resolution or realization happened",
+          touched == [], str(touched))
+    check("result labeled env=system", (r1 or {}).get("env") == "system",
+          str((r1 or {}).get("env")))
+
+
+def test_system_env_dispatch_enters_kernel_lane_with_one_shot_fallback():
+    """run_python(site=…, env='system') routes through the kernel lane; a
+    site with no kernel still degrades to the one-shot fresh-process lane."""
+    hit = {}
+    orig_sync = rex._run_remote_sync
+    rex._run_remote_sync = lambda *a, **k: (hit.update(sync=True), {"status": "ok"})[1]
+    FAKE.fail_start = True
     try:
         r = rex.run_python({"code": "x=1", "site": "mendel", "env": "system"},
-                           {"thread_id": "tS"})
+                           {"thread_id": "tSfb"})
     finally:
         rex._run_remote_sync = orig_sync
-        rex._run_remote_kernel = orig_kern
-    check("env=system routes straight to the one-shot lane",
-          sent.get("hit") is True and (r or {}).get("status") == "ok", str(r))
+        FAKE.fail_start = False
+    check("kernel-less site degrades to one-shot for env=system",
+          hit.get("sync") is True and (r or {}).get("status") == "ok", str(r))
+
+
+def test_system_env_local_step_refused_clearly():
+    r = rex.run_python({"code": "x=1", "env": "system"}, {"thread_id": "tSloc"})
+    check("local env='system' refused with a placement hint",
+          (r or {}).get("status") == "error"
+          and "site" in (r or {}).get("note", ""), str(r)[:200])
 
 
 def test_snapshot_platform_mismatch_relocks_base_pack():

@@ -74,7 +74,10 @@ run_python/run_r ─► LocalRouter.decide() ─► "local"  ─► KernelPool.g
   lang, env_id=…)`, scope key `thread@site`). A remote kernel attaches a
   FROZEN env id (a named env's id, else the project snapshot — the same
   identity a detached job runs under), pre-realized on the site via
-  `ensure_ready(site=…)`; a platform mismatch there re-locks once and
+  `ensure_ready(site=…)` — or, with `env='system'`, attaches BARE (neither
+  env id nor session: the node's own interpreter, nothing realized — env
+  choice is orthogonal to execution mode, so stdlib-only steps still get a
+  persistent session); a platform mismatch there re-locks once and
   retries — the named env re-solves its spec, the DEFAULT env re-locks the
   BASE pack (session extras don't travel), exactly the one-shot lane's
   trade (`ensure_ready` surfaces the realize task's typed

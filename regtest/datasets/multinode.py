@@ -1376,6 +1376,51 @@ def mn_first_use(client, pid, tid):
     ]
 
 
+@scenario("mn_system_env_session")
+def mn_system_env_session(client, pid, tid):
+    """4a decoupling live: env='system' on a remote step gets a PERSISTENT
+    bare kernel — the node's own interpreter, NO environment realized — with
+    state carried between steps like any other session (env choice is
+    orthogonal to execution mode). Ground truths: the steps rode the remote
+    SESSION (not the one-shot lane), the site's weft env store did not grow,
+    and the cross-step number is exact."""
+    sdir = "/home/physicist/aba-mn-sysenv"
+    hssh(f"rm -rf {sdir} && mkdir -p {sdir} && (echo n; seq 4 9) "
+         f"> {sdir}/nums.csv")
+    expected = sum(i * i for i in range(4, 10))          # 271
+    def _envs_count():
+        out = hssh("ls /home/physicist/.weft/envs 2>/dev/null | wc -l")
+        return int((out.stdout or "0").strip() or 0)
+    n0 = _envs_count()
+    caps = [drive_turn(client, pid, tid,
+        f"On machine 'hpc', using ONLY the node's own system python "
+        f"(env 'system' — do not build or ship any environment), run two "
+        f"quick steps directly (not background), IN SEQUENCE: (1) read "
+        f"{sdir}/nums.csv with the stdlib csv module, keep the numbers in "
+        f"memory as a list, and print how many there are; (2) WITHOUT "
+        f"re-reading the file — reuse the in-memory list from step 1 — "
+        f"print exactly SYSTOTAL=<sum of squares of those numbers>. Then "
+        f"tell me the total.", timeout_s=900)]
+    full = _denum(all_text(caps) + "\n" + thread_text(client, pid, tid))
+    steps = [t for t in tools_named(caps, "run_python")
+             if t["input"].get("site") == "hpc"
+             and str(t["input"].get("env") or "").lower()
+             in ("system", "none")]
+    session_used = any((t.get("result") or {}).get("execution_mode")
+                       == "remote-session" for t in steps)
+    n1 = _envs_count()
+    return caps, [
+        ("two sequential steps carried env='system' on the site",
+         len(steps) >= 2),
+        ("bare PERSISTENT session used (4a: kernel lane, not one-shot)",
+         session_used),
+        (f"no environment realized on the site (envs {n0}→{n1})", n1 <= n0),
+        ("the exact cross-step total reported",
+         f"SYSTOTAL={expected}" in full.replace(" ", "")
+         or str(expected) in full),
+    ]
+
+
 @scenario("mn_long_arc")
 def mn_long_arc(client, pid, tid):
     """LONG-ARC realism (depth doctrine #1-#4): a 9-turn project arc where
@@ -1750,6 +1795,7 @@ def main():
                   mn_cross_thread_separation, mn_concurrent_threads_one_node,
                   mn_net_drop_midjob, mn_mid_chain_steering,
                   mn_repeat_sync, mn_interrupt_sync, mn_first_use,
+                  mn_system_env_session,
                   mn_cbe_smoke, mn_missing_then_recover,
                   mn_bundle_header_drift, mn_cbe_kernel, mn_cbe_gpu,
                   mn_long_arc]]
