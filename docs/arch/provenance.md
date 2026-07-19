@@ -186,6 +186,13 @@ is still the live `reproduce_from_exec` check. Design: `misc/provenance2.md`.
   path that isn't a registered dataset, and a full content hash of inputs (that stays deferred
   to `export_bundle`, on demand). So drift-vs-inputs still isn't bit-checkable, but "what
   dataset did this use?" now answers.
+- **Placement provenance (WHERE it ran) is on both lanes.** Both writers stamp a `compute`
+  block: `_write_exec_record_for_job` from the substrate manifest (`weft_submitter._compute_block`
+  — `job_id`, `node`, `env_id`, `placement`), and `_write_exec_record` (interactive/sync) from
+  the live session (`substrate`, `site`, `kernel_id`). So a Result produced by a *synchronous*
+  remote step traces back to its machine from the graph alone, not the ephemeral conversation
+  (a sync remote step previously left only the opaque `weft_target` kernel id — the site was
+  unrecoverable; fixed in the block-4 reassessment, guarded by `mn_provenance_after_chain`).
 - **`execution_records` has no `actor` column.** Run-level attribution rides on `run_id`
   (→ `agent:<run_id>`) and the produced entity's own `actor`; a first-class actor on the
   exec row is deferred.

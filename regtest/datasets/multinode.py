@@ -1415,8 +1415,11 @@ def mn_repeat_sync(client, pid, tid):
         for t in steps)      # a printing step that came back ok/empty = skip
     return caps, [
         (f"six sync steps driven on {site}", len(steps) >= 6),
-        ("all six step markers present", all(f"rep-{i} ok" in txt
-                                             for i in range(1, 7))),
+        # NOTE: the old "all six markers echoed in narration" check was removed
+        # (block-4): it read agent prose, which legitimately SUMMARIZES ("all six
+        # ran; sums are …") instead of reprinting every `rep-i ok`, so it
+        # false-failed on correct behavior. Execution is now proven by the step's
+        # OWN stdout oracle below — the authoritative surface.
         ("the sums are the true numbers", sums_ok),
         ("each step's marker+sum in ITS OWN stdout (bug5: no silent skip)",
          marker_and_sum_in_own_stdout),

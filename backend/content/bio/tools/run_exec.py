@@ -563,6 +563,20 @@ def _write_exec_record(*, lang: str, ctx: dict | None, code: str, cwd,
                 # retention, even on a single-turn Run where active_run_id was still
                 # None when the cell executed (misc/output_durability.md §A2).
                 "weft_target": getattr(sess, "kernel_id", None),
+                # PLACEMENT PROVENANCE (provenance.md): record WHERE this cell ran
+                # into the graph, so a Result traces back to its machine WITHOUT
+                # relying on the ephemeral conversation. The background/detached
+                # lane already writes a `compute` block (weft_submitter._compute_block);
+                # the interactive/sync lane must too, else a synchronous remote step
+                # leaves only an opaque kernel id and the site is unrecoverable
+                # (found by mn_provenance_after_chain, block-4 reassessment).
+                "compute": {
+                    "substrate": ("weft" if type(sess).__name__ == "WeftKernelSession"
+                                  else "local"),
+                    "site": getattr(sess, "site", "local"),
+                    **({"kernel_id": sess.kernel_id}
+                       if getattr(sess, "kernel_id", None) else {}),
+                },
                 "kind": "script",
                 "language": lang,
                 "language_version": lang_ver,
