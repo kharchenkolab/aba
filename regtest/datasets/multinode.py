@@ -1063,18 +1063,16 @@ def mn_net_drop_midjob(client, pid, tid):
     must not fabricate a terminal state (the row's last truth is queued/
     running; 'it finished'/'it failed' would be invention); after reconnection
     the poll loop must settle the row done with the TRUE result. hpc fixture
-    only (we cut its docker bridge; real machines can't be cut safely).
+    only (we kill sshd inside the container via docker exec — a control
+    channel that needs no network; real machines can't be cut safely).
     MUST run in an exclusive slot — the cut breaks every concurrent hpc
-    scenario. Reconnect is in a finally + verified, so a crash can't leave
+    scenario. Restore is in a finally + verified, so a crash can't leave
     the fixture dark."""
     ps = _docker("ps --format {{.Names}}")
     cname = next((n for n in (ps.stdout or "").split()
                   if n.startswith("aba-mn-")), None)
     if not cname:
         return [], [("fixture container found", False)]
-    net = (_docker(
-        "inspect -f {{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}} "
-        + cname).stdout or "").strip() or "bridge"
     r0 = client.get(f"/api/jobs?project_id={pid}")
     pre_jobs = {j.get("id") for j in ((r0.json() if isinstance(r0.json(), list)
                 else r0.json().get("jobs", [])) if r0.status_code == 200 else [])}
@@ -1088,7 +1086,12 @@ def mn_net_drop_midjob(client, pid, tid):
           if t["input"].get("background") and t["input"].get("site") == "hpc"]
     if not bg:
         return caps, [("background job submitted on hpc", False)]
-    _docker(f"network disconnect {net} {cname}")
+    # Cut = kill sshd INSIDE the container via docker exec (a control
+    # channel that doesn't need the network). First live run used
+    # `docker network disconnect/connect` — that permanently breaks the
+    # published-port forward (docker-proxy keeps NATing to the old
+    # container IP) and required a container restart to recover.
+    _docker(f"exec {cname} pkill -x sshd")
     reconnected = False
     try:
         time.sleep(15)                                 # outage settles in
@@ -1097,10 +1100,11 @@ def mn_net_drop_midjob(client, pid, tid):
             "around for it."))
         outage_txt = caps[-1]["text"].lower()
     finally:
-        r = _docker(f"network connect {net} {cname}")
+        r = _docker(f"exec {cname} /usr/sbin/sshd")
         reconnected = r.returncode == 0
         for _ in range(10):                            # verified, not assumed
             if hssh("echo back").stdout.strip() == "back":
+                reconnected = True
                 break
             time.sleep(3)
         else:

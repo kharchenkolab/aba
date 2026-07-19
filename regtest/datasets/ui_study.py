@@ -676,20 +676,31 @@ def ui_settings_compute_connect(page, api, pid, tid):
 
 @ui_scenario("ui_zero_byte_output")
 def ui_zero_byte_output(page, api, pid, tid):
-    """EMPTY-OUTPUT rendering (release_test_plan 'UI error/empty states'):
-    a run keeps a ZERO-byte output — a legitimate shape (empty filter
-    result, marker files). The durable panel must render it as a kept
-    0 B row — not blank, not NaN, not a crash."""
+    """EMPTY-OUTPUT + KEEP-HONESTY (release_test_plan 'UI error/empty
+    states'). Two separate dimensions, first live run conflated them:
+    (a) SIZE — a zero-byte file with a HARVESTED extension (.txt) must
+    render as a kept 0 B row, not blank/NaN/crash; (b) EXTENSION — a file
+    outside the harvest allowlist (.dat) is invisible to the tracked
+    inventory, and a keep naming it must DISCLOSE the gap (the tool's
+    NOT-COVERED guard), never silently count 1 of 2."""
     pre = _snap("analysis")
     ui_turn(page,
             "Open an analysis run titled 'Empty artifact'. In it run a quick "
             "local python step that writes TWO files in the run's working "
-            "directory: empty_marker.dat with NOTHING in it (exactly zero "
-            "bytes) and counts.txt containing the number 741. Keep BOTH as "
-            "the run's outputs (keep_outputs), then close the run.",
+            "directory: empty_marker.txt with NOTHING in it (exactly zero "
+            "bytes) and blob_probe.dat containing 200 bytes of anything. "
+            "Keep BOTH as the run's outputs (keep_outputs), then close the "
+            "run and tell me exactly what ended up protected.",
             timeout_s=420)
     from multinode import wait_jobs_settled
     wait_jobs_settled(api, pid)
+    # capture the CHAT surface before navigating away — the browser talks
+    # to the project's default thread, not `tid` (the two_tabs lesson)
+    chat_txt = ""
+    try:
+        chat_txt = page.locator("body").inner_text().lower()
+    except Exception:  # noqa: BLE001
+        pass
     runs = _new_entities("analysis", pre, "empty artifact")
     if not runs:
         return [("run created", False)]
@@ -699,7 +710,7 @@ def ui_zero_byte_output(page, api, pid, tid):
     while time.time() < deadline and zero_row is None:
         dv = api.get(f"/api/runs/{rid}/durable?flat=1").json()
         for f in dv.get("files", []):
-            if (f.get("rel") or "").endswith("empty_marker.dat") \
+            if (f.get("rel") or "").endswith("empty_marker.txt") \
                     and f.get("state") == "retained":
                 zero_row = f
         time.sleep(6)
@@ -711,17 +722,27 @@ def ui_zero_byte_output(page, api, pid, tid):
         body_txt = page.locator("body").inner_text()
     except Exception:  # noqa: BLE001
         pass
+    # (b): the agent must have DISCLOSED the .dat gap to the user (the
+    # keep tool now reports NOT COVERED literals; read from the chat
+    # surface captured above)
+    disclosed = ("blob_probe.dat" in chat_txt
+                 and any(w in chat_txt for w in
+                         ("not covered", "not protected", "wasn't kept",
+                          "was not kept", "couldn't be kept",
+                          "could not be kept", "not in the run's tracked",
+                          "not tracked")))
     return [
         ("run created", True),
-        ("durable view retains the zero-byte file", zero_row is not None),
+        ("zero-byte .txt is retained in the durable view",
+         zero_row is not None),
         ("durable size is 0 (not null/garbage)",
          (zero_row or {}).get("size") == 0),
-        ("row renders on the card", "empty_marker.dat" in body_txt),
-        # review F6: bind "0 B" to THIS row — any stray "0 B" on the page
-        # must not satisfy the check
+        ("row renders on the card", "empty_marker.txt" in body_txt),
         ("size renders as 0 B next to the row (not blank/NaN)",
          (lambda i: i >= 0 and "0 B" in body_txt[max(0, i - 200):i + 200])
-         (body_txt.find("empty_marker.dat"))),
+         (body_txt.find("empty_marker.txt"))),
+        ("uncovered .dat keep DISCLOSED to the user (not silent)",
+         disclosed),
         ("no crash banner", "couldn't be displayed" not in body_txt
          and "couldn’t be displayed" not in body_txt),
     ]
