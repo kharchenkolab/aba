@@ -1217,6 +1217,99 @@ def mn_first_use(client, pid, tid):
     ]
 
 
+@scenario("mn_long_arc")
+def mn_long_arc(client, pid, tid):
+    """LONG-ARC realism (depth doctrine #1-#4): a 9-turn project arc where
+    later turns depend on earlier state — local data registered and pinned,
+    a BACKGROUND remote job interleaved with foreground work, an AMBIGUOUS
+    follow-up ('do the same for the remote one') that must resolve to the
+    right object, a mid-arc failing ask recovered by a steer, a synthesis
+    pin, and a fresh-thread re-entry naming the numbers. Exact truths at
+    every depth; local max/argmax differ from remote so reference
+    resolution is PROVEN by the numbers, never by phrasing."""
+    # ground truths (verified out-of-band):
+    loc_sum, loc_max, loc_arg = 1594, 16, 11        # (i*3)%17, i in 0..199
+    rem_sum, rem_max, rem_arg = 3289, 22, 13        # (i*7)%23, i in 0..299
+    loc_gt10 = 70
+    ratio = round(loc_sum / loc_gt10, 2)            # 22.77
+    from study import URL
+    rdir = R_DATA + "-arc"
+    hssh(f"mkdir -p {rdir} && (echo idx,reading; seq 0 299 | "
+         f"awk '{{print $1\",\"($1*7)%23}}') > {rdir}/readings.csv")
+
+    caps = [drive_turn(client, pid, tid,
+        f"Register {URL} as a dataset called 'Baseline series' "
+        f"(an id,value table).")]
+    caps.append(drive_turn(client, pid, tid,
+        "Open a run called 'Arc study'. Compute the total of the value "
+        "column of Baseline series and pin it as a Result titled "
+        "'Baseline total' with the exact number in the interpretation."))
+    caps.append(drive_turn(client, pid, tid,
+        f"The file {rdir}/readings.csv on machine 'hpc' is a related series "
+        f"(idx,reading). Register it by reference as 'Remote series', then "
+        f"start a BACKGROUND job on hpc that sleeps 20 seconds and then "
+        f"computes the total of its reading column. Don't wait for it."))
+    # FOREGROUND while the bg job runs — the arc must not block
+    t_fg = time.time()
+    caps.append(drive_turn(client, pid, tid,
+        "While that runs: for the LOCAL Baseline series, what is the "
+        "maximum value and at which id does it first occur?"))
+    fg_txt = _denum(caps[-1]["text"])
+    fg_done_fast = (time.time() - t_fg) < 120
+    # ambiguous follow-up — 'the same' + 'the remote one' must resolve to
+    # Remote series (max 22 @ 13, provably ≠ local 16 @ 11)
+    caps.append(drive_turn(client, pid, tid,
+        "Now do the same for the remote one (once its background total is "
+        "in, tell me that too)."))
+    amb_txt = _denum(caps[-1]["text"] + "\n" +
+                     wait_for_text(client, pid, tid, str(rem_sum),
+                                   timeout_s=300))
+    # mid-arc failing ask → honest surface → steer → recovery
+    caps.append(drive_turn(client, pid, tid,
+        "Divide the Baseline total by the count of local values greater "
+        "than 100 and give me the ratio."))
+    fail_txt = caps[-1]["text"].lower()
+    honest_empty = any(w in fail_txt for w in
+                       ("no values", "zero", "none", "empty", "no rows",
+                        "division", "undefined", "cannot", "can't"))
+    caps.append(drive_turn(client, pid, tid,
+        "Sorry — I meant greater than 10."))
+    steer_txt = _denum(caps[-1]["text"])
+    caps.append(drive_turn(client, pid, tid,
+        "Pin a Result titled 'Arc summary' recording: the baseline total, "
+        "the remote total, and that ratio — numbers in the interpretation."))
+    # fresh-thread re-entry: the durable model must carry the arc
+    tid2 = client.post("/api/threads",
+                       json={"project_id": pid, "title": "arc-reentry"}
+                       ).json()["id"]
+    caps.append(drive_turn(client, pid, tid2,
+        "I'm back after a break — what results does this project have, "
+        "with their key numbers?"))
+    re_txt = _denum(caps[-1]["text"])
+
+    results = [e for e in find_entities(type="result", not_deleted=True)]
+    titles = " | ".join((e.get("title") or "").lower() for e in results)
+    return caps, [
+        ("baseline pinned with the true total",
+         "baseline total" in titles and
+         str(loc_sum) in _denum(all_text(caps[:2]) + caps[1]["text"])),
+        ("foreground answered while bg ran (arc not blocked)",
+         fg_done_fast and str(loc_max) in fg_txt and str(loc_arg) in fg_txt),
+        ("ambiguous 'the remote one' resolved to Remote series "
+         "(its max/argmax, not local's)",
+         str(rem_max) in amb_txt and str(rem_arg) in amb_txt),
+        ("background total delivered", str(rem_sum) in amb_txt),
+        ("empty-filter ask surfaced honestly (no invented ratio)",
+         honest_empty),
+        ("steer recovered with the true ratio",
+         str(ratio) in steer_txt or "22.77" in steer_txt
+         or "22.8" in steer_txt),
+        ("synthesis result pinned", "arc summary" in titles),
+        ("fresh-thread re-entry names both totals",
+         str(loc_sum) in re_txt and str(rem_sum) in re_txt),
+    ]
+
+
 @scenario("mn_cbe_kernel")
 def mn_cbe_kernel(client, pid, tid):
     """Interactive SESSION on the real cluster: two sequential direct steps
@@ -1492,7 +1585,8 @@ def main():
                   mn_cross_thread_separation, mn_mid_chain_steering,
                   mn_repeat_sync, mn_interrupt_sync, mn_first_use,
                   mn_cbe_smoke, mn_missing_then_recover,
-                  mn_bundle_header_drift, mn_cbe_kernel, mn_cbe_gpu]]
+                  mn_bundle_header_drift, mn_cbe_kernel, mn_cbe_gpu,
+                  mn_long_arc]]
     # --only must NAME REAL scenarios: an unmatched filter ran ZERO scenarios
     # and printed ALL PASS vacuously (the exact bug class this study hunts)
     if only:
