@@ -1121,7 +1121,14 @@ def promote_to_result_tool(input_: dict, ctx: dict | None = None) -> dict:
     try:
         rid = promote_figure_to_result(fid, interp, input_.get("title"))
     except ValueError as e:
-        return {"error": str(e)}
+        # actionable path, not just a verdict (observed live: handed an
+        # exec id, the agent got "not found" and wandered through
+        # list_entities/pin_cell guesses for a full turn)
+        return {"error": str(e),
+                "hint": "figures become entities only when PINNED — pin the "
+                        "producing cell first (pin_cell), then promote the "
+                        "resulting FIGURE id (fig_…); exec/cell ids can't be "
+                        "promoted directly"}
     try:    # fire the Skeptic review off-thread (mirrors the UI endpoint)
         import threading
         from content.bio.advisors.runner import skeptic_review
