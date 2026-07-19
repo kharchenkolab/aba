@@ -582,9 +582,20 @@ def s_keep_triage(client, pid, tid):
     safe_lang = any(w in txt2.lower() for w in
                     ("kept", "safe", "retained", "survive", "protected"))
     jargon = "dref:" in txt2 or " cas " in txt2.lower()
+    # RESULT oracle (block-4 finding F11): the keep must actually APPLY, not
+    # just be invoked. In the "quick utility, no plan" flow the agent often
+    # doesn't open a run, and keep_outputs then returns {"error": "no open
+    # run …"} — so NOTHING is kept and "big not kept" passes VACUOUSLY while
+    # the user's "keep the summary" intent is silently dropped. Read the tool's
+    # own result so this fails precisely at the cause.
+    keep_applied = any((t.get("result") or {}).get("status") == "ok"
+                       and not (t.get("result") or {}).get("error")
+                       for t in triage)
     return caps, [
         ("keep triage used (big intermediate dropped)",
          bool(triage) and dropped),
+        ("keep_outputs actually APPLIED (no 'no open run' error) — F11",
+         keep_applied),
         ("summary.txt is durably kept (substrate durable view)", summary_kept),
         ("big_intermediate.bin is NOT kept (substrate durable view)",
          not inter_kept),
