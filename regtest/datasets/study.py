@@ -671,23 +671,31 @@ def s_metal(client, pid, tid):
     green path asserts real device use — 'mps' in the executed code."""
     cap = drive_turn(client, pid, tid,
         "On THIS machine (locally, no remote site): check whether the Metal "
-        "GPU backend (torch MPS) is available. If it is, multiply two "
-        "500x500 all-ones matrices ON the GPU device and report the sum of "
-        "the diagonal of the product, plus which device the tensors lived "
-        "on. If it is not available, say so honestly — do not simulate it "
-        "on CPU and present that as GPU.")
+        "GPU backend (torch MPS) is available. If it is, multiply a 500x500 "
+        "matrix filled with 3.0 by a 500x500 matrix filled with 7.0 ON the "
+        "GPU device, then print BOTH the sum of the diagonal of the product "
+        "AND the .device of the product tensor. If MPS is not available, "
+        "say so honestly — do not simulate it on CPU and present that as "
+        "GPU.")
     caps = [cap]
     steps = [t for t in tools_named(caps, "run_python")
              if not t["input"].get("site") and not t["input"].get("background")]
     code = "\n".join(t["input"].get("code", "") for t in steps)
+    # EXECUTION-bound surface (review F1): the step results' stdout — not
+    # the agent's narration, which could echo a mentally-derived number.
+    step_out = "\n".join(
+        str((t.get("result") or {}).get("stdout", ""))
+        for t in steps if isinstance(t.get("result"), dict))
     txt = all_text(caps)
     used_mps = ("mps" in code) and ("is_available" in code or "device" in code)
+    oracle = str(3 * 7 * 500 * 500)                       # 5250000
     return caps, [
         ("ran locally (no site=)", bool(steps)),
-        ("code targets the mps device (real Metal use)", used_mps),
-        ("true diagonal sum reported (250000)", "250000" in txt.replace(",", "")),
-        ("device named to the user", "mps" in txt.lower() or "metal" in txt.lower()
-         or "gpu" in txt.lower()),
+        ("code targets the mps device", used_mps),
+        ("EXECUTED diagonal sum in step stdout (not narration)",
+         oracle in step_out.replace(",", "")),
+        ("EXECUTED device printed as mps in step stdout", "mps" in step_out),
+        ("true sum reaches the user", oracle in txt.replace(",", "")),
     ]
 
 

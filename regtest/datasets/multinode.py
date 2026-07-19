@@ -1075,6 +1075,9 @@ def mn_net_drop_midjob(client, pid, tid):
     net = (_docker(
         "inspect -f {{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}} "
         + cname).stdout or "").strip() or "bridge"
+    r0 = client.get(f"/api/jobs?project_id={pid}")
+    pre_jobs = {j.get("id") for j in ((r0.json() if isinstance(r0.json(), list)
+                else r0.json().get("jobs", [])) if r0.status_code == 200 else [])}
     n = 4000
     answer = sum(range(1, n + 1))                      # 8002000
     caps = [drive_turn(client, pid, tid,
@@ -1102,14 +1105,22 @@ def mn_net_drop_midjob(client, pid, tid):
             time.sleep(3)
         else:
             reconnected = False
-    fabricated = any(p in outage_txt for p in
-                     ("has finished", "is done", "completed successfully",
-                      "job failed", "it failed"))
+    # review F3: phrase-list was trivially bypassed ("the job completed").
+    # Regex over terminal-state CLAIMS about the job, present/past tense;
+    # future-tense hedges ("when it's done I'll…") stay legal.
+    import re as _re
+    fabricated = bool(_re.search(
+        r"(job|it)\s+(has\s+|is\s+|was\s+)?"
+        r"(finish\w*|complet\w*|done|succeed\w*|fail\w*|wrapped)",
+        outage_txt))
     full = wait_for_text(client, pid, tid, answer, timeout_s=600)
     r = client.get(f"/api/jobs?project_id={pid}")
     rows = (r.json() if isinstance(r.json(), list)
             else r.json().get("jobs", [])) if r.status_code == 200 else []
-    settled = any(j.get("status") == "done" for j in rows)
+    # review F3: scope to THIS scenario's job — a pre-existing done row
+    # must not satisfy the recovery check
+    settled = any(j.get("status") == "done" for j in rows
+                  if j.get("id") not in pre_jobs)
     return caps, [
         ("background job submitted on hpc", True),
         ("network reconnected and verified (harness invariant)", reconnected),

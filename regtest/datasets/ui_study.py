@@ -717,7 +717,11 @@ def ui_zero_byte_output(page, api, pid, tid):
         ("durable size is 0 (not null/garbage)",
          (zero_row or {}).get("size") == 0),
         ("row renders on the card", "empty_marker.dat" in body_txt),
-        ("size renders as 0 B (not blank/NaN)", "0 B" in body_txt),
+        # review F6: bind "0 B" to THIS row — any stray "0 B" on the page
+        # must not satisfy the check
+        ("size renders as 0 B next to the row (not blank/NaN)",
+         (lambda i: i >= 0 and "0 B" in body_txt[max(0, i - 200):i + 200])
+         (body_txt.find("empty_marker.dat"))),
         ("no crash banner", "couldn't be displayed" not in body_txt
          and "couldn’t be displayed" not in body_txt),
     ]
@@ -825,11 +829,21 @@ def ui_failed_run_card(page, api, pid, tid):
     except Exception:  # noqa: BLE001
         pass
     lower = ctxt.lower()
+    # review F5: POSITIVE ground truth first — the run's own exec records
+    # must carry the failed step (substring matches on page chrome can't
+    # prove THIS run failed).
+    exec_failed = False
+    try:
+        from core.graph import exec_records as _xr
+        exec_failed = any((r.get("status") or "") not in ("ok", "")
+                          for r in _xr.list_by_run(rid))
+    except Exception:  # noqa: BLE001
+        pass
     return [
         ("run created", True),
+        ("GROUND TRUTH: a failed exec record on this run", exec_failed),
         ("failure marked on the card",
          "error" in lower or "failed" in lower or "✗" in ctxt),
-        ("no eternal running spinner", "running…" not in lower),
         ("no crash banner", "couldn't be displayed" not in ctxt
          and "couldn’t be displayed" not in ctxt),
     ]
@@ -893,9 +907,12 @@ def ui_two_tabs(page, api, pid, tid):
             body2 = page2.locator("body").inner_text()
         except Exception:  # noqa: BLE001
             pass
+        # review F2: "wait"/"error" appear in ordinary page chrome — a
+        # silently-lost message would false-pass. Only SPECIFIC concurrency
+        # notices count as "the user was told".
         notice2 = any(w in body2.lower() for w in
-                      ("another turn", "in progress", "busy", "wait",
-                       "queued", "error"))
+                      ("another turn", "in progress", "busy", "queued",
+                       "turn is running", "already running"))
         shot(page2, "two_tabs_tab2_after")
         # convergence: reload BOTH tabs — same thread truth in each
         page.reload(wait_until="domcontentloaded"); _enter_project(page)
@@ -904,8 +921,11 @@ def ui_two_tabs(page, api, pid, tid):
         b1 = page.locator("body").inner_text().replace(",", "")
         b2 = page2.locator("body").inner_text().replace(",", "")
         shot(page, "two_tabs_tab1_reloaded")
-        converged = (str(m1) in b1) == (str(m1) in b2) and \
-                    (str(m2) in b1) == (str(m2) in b2)
+        # review F4: boolean-equality counted mutual TOTAL LOSS as
+        # "converged". Tab-1's marker must be PRESENT in both tabs (its
+        # turn indisputably ran); m2's presence must agree across tabs.
+        converged = (str(m1) in b1) and (str(m1) in b2) and \
+                    ((str(m2) in b1) == (str(m2) in b2))
         return [
             ("tab-1 turn completed with the true number", ran1),
             ("tab-2 not silently lost (ran OR visible notice)",
