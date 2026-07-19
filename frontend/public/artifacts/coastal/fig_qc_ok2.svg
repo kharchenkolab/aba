@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 420" font-family="system-ui,sans-serif">
+<rect width="640" height="420" fill="white"/>
+<line x1="56" y1="102" x2="620" y2="102" stroke="#e8ebef"/>
+<line x1="56" y1="170" x2="620" y2="170" stroke="#e8ebef"/>
+<line x1="56" y1="238" x2="620" y2="238" stroke="#e8ebef"/>
+<line x1="56" y1="306" x2="620" y2="306" stroke="#e8ebef"/>
+<line x1="56" y1="34" x2="56" y2="374" stroke="#5f6b7a" stroke-width="1.2"/>
+<line x1="56" y1="374" x2="620" y2="374" stroke="#5f6b7a" stroke-width="1.2"/>
+<text x="56" y="20" font-size="15" font-weight="600" fill="#3c4757">Sensor 05 — response distribution</text>
+<text x="338" y="408" font-size="12" fill="#5f6b7a" text-anchor="middle">value (binned)</text>
+<text x="16" y="204" font-size="12" fill="#5f6b7a" text-anchor="middle" transform="rotate(-90 16 204)">count</text>
+<rect x="57.0" y="374.0" width="29.3" height="0.0" fill="#4a6fa5" opacity="0.8"/><rect x="88.3" y="363.6" width="29.3" height="10.4" fill="#4a6fa5" opacity="0.8"/><rect x="119.7" y="332.3" width="29.3" height="41.7" fill="#4a6fa5" opacity="0.8"/><rect x="151.0" y="280.2" width="29.3" height="93.8" fill="#4a6fa5" opacity="0.8"/><rect x="182.3" y="280.2" width="29.3" height="93.8" fill="#4a6fa5" opacity="0.8"/><rect x="213.7" y="200.2" width="29.3" height="173.8" fill="#4a6fa5" opacity="0.8"/><rect x="245.0" y="165.5" width="29.3" height="208.5" fill="#4a6fa5" opacity="0.8"/><rect x="276.3" y="85.5" width="29.3" height="288.5" fill="#4a6fa5" opacity="0.8"/><rect x="307.7" y="116.8" width="29.3" height="257.2" fill="#4a6fa5" opacity="0.8"/><rect x="339.0" y="61.2" width="29.3" height="312.8" fill="#4a6fa5" opacity="0.8"/><rect x="370.3" y="155.0" width="29.3" height="219.0" fill="#4a6fa5" opacity="0.8"/><rect x="401.7" y="193.3" width="29.3" height="180.7" fill="#4a6fa5" opacity="0.8"/><rect x="433.0" y="262.8" width="29.3" height="111.2" fill="#4a6fa5" opacity="0.8"/><rect x="464.3" y="314.9" width="29.3" height="59.1" fill="#4a6fa5" opacity="0.8"/><rect x="495.7" y="349.7" width="29.3" height="24.3" fill="#4a6fa5" opacity="0.8"/><rect x="527.0" y="363.6" width="29.3" height="10.4" fill="#4a6fa5" opacity="0.8"/><rect x="558.3" y="374.0" width="29.3" height="0.0" fill="#4a6fa5" opacity="0.8"/><rect x="589.7" y="374.0" width="29.3" height="0.0" fill="#4a6fa5" opacity="0.8"/>
+
+</svg>

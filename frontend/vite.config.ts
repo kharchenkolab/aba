@@ -21,13 +21,19 @@ const proxyAgent = new http.Agent({
   maxFreeSockets: 256,
 })
 
+// altui2 (living-notebook prototype): the Record app (/notebook.html) is fully
+// client-side — fixture module + static assets under public/ — so the dev
+// server needs no backend. Set ABA_PROXY=1 to restore the /api + /artifacts
+// proxy for running the original app against a real backend on :8000.
+const withProxy = process.env.ABA_PROXY === '1'
+
 export default defineConfig({
   // Normally served at root ("/"). For an Open OnDemand build we bake a
   // placeholder prefix that the app's script.sh rewrites to /rnode/<host>/<port>/
   // at session start (set ABA_OOD_BASE=/__OOD_PREFIX__/ for `npm run build`).
   base: process.env.ABA_OOD_BASE || '/',
   plugins: [react()],
-  server: {
+  server: withProxy ? {
     proxy: {
       '/api': {
         target: 'http://localhost:8000',
@@ -40,5 +46,5 @@ export default defineConfig({
         agent: proxyAgent,
       },
     }
-  }
+  } : {}
 })

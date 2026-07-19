@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 420" font-family="system-ui,sans-serif">
+<rect width="640" height="420" fill="white"/>
+<line x1="56" y1="102" x2="620" y2="102" stroke="#e8ebef"/>
+<line x1="56" y1="170" x2="620" y2="170" stroke="#e8ebef"/>
+<line x1="56" y1="238" x2="620" y2="238" stroke="#e8ebef"/>
+<line x1="56" y1="306" x2="620" y2="306" stroke="#e8ebef"/>
+<line x1="56" y1="34" x2="56" y2="374" stroke="#5f6b7a" stroke-width="1.2"/>
+<line x1="56" y1="374" x2="620" y2="374" stroke="#5f6b7a" stroke-width="1.2"/>
+<text x="56" y="20" font-size="15" font-weight="600" fill="#3c4757">Batch 7 — completeness by day</text>
+<text x="338" y="408" font-size="12" fill="#5f6b7a" text-anchor="middle">value (binned)</text>
+<text x="16" y="204" font-size="12" fill="#5f6b7a" text-anchor="middle" transform="rotate(-90 16 204)">count</text>
+<rect x="57.0" y="370.4" width="29.3" height="3.6" fill="#6a9d7c" opacity="0.8"/><rect x="88.3" y="363.1" width="29.3" height="10.9" fill="#6a9d7c" opacity="0.8"/><rect x="119.7" y="344.9" width="29.3" height="29.1" fill="#6a9d7c" opacity="0.8"/><rect x="151.0" y="301.3" width="29.3" height="72.7" fill="#6a9d7c" opacity="0.8"/><rect x="182.3" y="264.9" width="29.3" height="109.1" fill="#6a9d7c" opacity="0.8"/><rect x="213.7" y="206.7" width="29.3" height="167.3" fill="#6a9d7c" opacity="0.8"/><rect x="245.0" y="221.2" width="29.3" height="152.8" fill="#6a9d7c" opacity="0.8"/><rect x="276.3" y="119.4" width="29.3" height="254.6" fill="#6a9d7c" opacity="0.8"/><rect x="307.7" y="61.2" width="29.3" height="312.8" fill="#6a9d7c" opacity="0.8"/><rect x="339.0" y="104.8" width="29.3" height="269.2" fill="#6a9d7c" opacity="0.8"/><rect x="370.3" y="97.6" width="29.3" height="276.4" fill="#6a9d7c" opacity="0.8"/><rect x="401.7" y="170.3" width="29.3" height="203.7" fill="#6a9d7c" opacity="0.8"/><rect x="433.0" y="217.6" width="29.3" height="156.4" fill="#6a9d7c" opacity="0.8"/><rect x="464.3" y="290.3" width="29.3" height="83.7" fill="#6a9d7c" opacity="0.8"/><rect x="495.7" y="312.2" width="29.3" height="61.8" fill="#6a9d7c" opacity="0.8"/><rect x="527.0" y="355.8" width="29.3" height="18.2" fill="#6a9d7c" opacity="0.8"/><rect x="558.3" y="374.0" width="29.3" height="0.0" fill="#6a9d7c" opacity="0.8"/><rect x="589.7" y="374.0" width="29.3" height="0.0" fill="#6a9d7c" opacity="0.8"/>
+
+</svg>
