@@ -22,8 +22,12 @@ _pf_expand() {   # substitute {group}/{user}/{home} — mirrors aba_preflight.ex
                          -e "s#{home}#${ABA_PF_HOME:-}#g"
 }
 _pf_yaml1() {    # first scalar value of key $1 (any parent: image:/envs:/...)
+  # strip the key, then a YAML inline comment (' #…'), then quotes/space. The comment
+  # cut MUST precede whitespace removal, or a commented path (release_root: /p  # note)
+  # gloms the comment onto the value. PyYAML (inside the SIF) does this right; this
+  # dependency-free reader must match it.
   grep -E "^[[:space:]]*$1:" "${ABA_SITE_CONFIG}" 2>/dev/null \
-    | head -1 | sed -E 's/^[^:]*:[[:space:]]*//; s/[[:space:]"]//g' | tr -d "'"
+    | head -1 | sed -E 's/^[^:]*:[[:space:]]*//; s/[[:space:]]+#.*$//; s/[[:space:]"]//g' | tr -d "'"
 }
 # The share root holds site.yaml (+ image/release, skeleton, bundle). Derive it from
 # ABA_SITE_CONFIG rather than assuming /cluster/aba, so a site can root the deployment
