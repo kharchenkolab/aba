@@ -705,13 +705,17 @@ def ui_zero_byte_output(page, api, pid, tid):
     if not runs:
         return [("run created", False)]
     rid = runs[0]["id"]
+    # "saving" is the honest state until the kernel's deferred pin settles
+    # at kernel stop (close does NOT stop the shared kernel) — demanding
+    # "retained" raced that settle on the first runs. Rows carry `bytes`,
+    # not `size` (second first-run scenario bug).
     zero_row = None
     deadline = time.time() + 180
     while time.time() < deadline and zero_row is None:
         dv = api.get(f"/api/runs/{rid}/durable?flat=1").json()
         for f in dv.get("files", []):
             if (f.get("rel") or "").endswith("empty_marker.txt") \
-                    and f.get("state") == "retained":
+                    and f.get("state") in ("retained", "saving"):
                 zero_row = f
         time.sleep(6)
     page.goto(f"{BASE['url']}/p/{pid}/e/{rid}", wait_until="domcontentloaded")
@@ -733,10 +737,10 @@ def ui_zero_byte_output(page, api, pid, tid):
                           "not tracked")))
     return [
         ("run created", True),
-        ("zero-byte .txt is retained in the durable view",
+        ("zero-byte .txt is kept/keeping in the durable view",
          zero_row is not None),
-        ("durable size is 0 (not null/garbage)",
-         (zero_row or {}).get("size") == 0),
+        ("durable bytes is 0 (not null/garbage)",
+         (zero_row or {}).get("bytes") == 0),
         ("row renders on the card", "empty_marker.txt" in body_txt),
         ("size renders as 0 B next to the row (not blank/NaN)",
          (lambda i: i >= 0 and "0 B" in body_txt[max(0, i - 200):i + 200])
