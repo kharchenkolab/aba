@@ -305,10 +305,16 @@ def mn_status_surfaces(client, pid, tid):
                        str((frow or {}).get("badge", "")).startswith("kept ✓")
                        and "hpc" in (frow or {}).get("badge", "")))
         bb = client.post(f"/api/runs/{eid}/bring-back")
-        time.sleep(8)
-        dv2 = _durable(client, eid)
-        checks.append(("big file servable locally after bring-back", any(
-            f.get("url") for f in dv2["files"] if f["rel"].endswith("big.bin"))))
+        # 60 MB over ssh takes longer than one breath — poll (the fixed 8s
+        # sleep failed the check while the pull was still in flight)
+        served = False
+        bb_deadline = time.time() + 180
+        while time.time() < bb_deadline and not served:
+            time.sleep(8)
+            dv2 = _durable(client, eid)
+            served = any(f.get("url") for f in dv2["files"]
+                         if f["rel"].endswith("big.bin"))
+        checks.append(("big file servable locally after bring-back", served))
     caps.append(drive_turn(client, pid, tid,
         "Where does the big file live now, and is it safe? One line."))
     atxt = caps[-1]["text"].lower()
