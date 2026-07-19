@@ -294,19 +294,22 @@ def _assemble_active_tools(tools_all: list, spec) -> list:
 
 
 def _summary_budget(spec) -> int | None:
-    """Tier-2 summary budget precedence: an EXPLICITLY SET env var
-    (ABA_HISTORY_SUMMARY_THRESHOLD_CHARS) is operator intent and wins over
-    the spec's class default (grounded_guide pins 100k), which wins over the
-    global default (None → effective_history falls through to
-    HISTORY_SUMMARY_THRESHOLD_CHARS). Before this, the env knob was silently
-    inert whenever a spec pinned a budget — an operator (or a study harness)
-    setting it saw no effect and got a vacuous run."""
-    env = os.environ.get("ABA_HISTORY_SUMMARY_THRESHOLD_CHARS")
-    if env:
-        try:
-            return int(env)
-        except ValueError:
-            pass
+    """Tier-2 summary budget precedence: the DEDICATED override knob
+    (ABA_HISTORY_SUMMARY_BUDGET_OVERRIDE_CHARS, >0) is explicit operator/
+    harness intent and wins over the spec's class default (grounded_guide
+    pins 100k), which wins over the global default (None →
+    effective_history falls through to HISTORY_SUMMARY_THRESHOLD_CHARS).
+    Deliberately a DIFFERENT env var from the global threshold: reusing it
+    made tuning the fall-through default silently clobber every spec pin
+    (review F5); and before any knob existed, harness overrides were
+    silently inert against pinned specs (vacuous compaction-study round)."""
+    try:
+        from core.config import HISTORY_SUMMARY_BUDGET_OVERRIDE
+        ov = int(HISTORY_SUMMARY_BUDGET_OVERRIDE.get() or 0)
+        if ov > 0:
+            return ov
+    except Exception:  # noqa: BLE001 — a broken knob must not break turns
+        pass
     return spec.summary_budget_chars if spec else None
 
 
@@ -720,7 +723,8 @@ async def stream_response(
     yield sse(wire.manifest(manifest=manifest.to_dict(), run_id=turn.run_id))
 
     try:
-        _empty_retry_done = False   # degenerate-empty turn defense (below)
+        _empty_retry_done = False       # degenerate-empty turn defense (below)
+        _turn_produced_output = False   # ANY generation this turn spoke/acted
         while True:
             # Cancellation check at the iteration boundary. The user may
             # have hit Stop while we were processing the previous turn's
@@ -1210,8 +1214,17 @@ async def stream_response(
                     # emission with no text and no tool_use) must not land
                     # an empty assistant message in history — that's the
                     # blocks-less shape the renderer's F4 guard degrades,
-                    # and it poisons later turns' history shape.
-                    if _assistant_blocks:
+                    # and it poisons later turns' history shape. Whitespace-
+                    # only text counts as empty (review F4: a "\n\n" block
+                    # otherwise persists AND dead-ends the retry on the
+                    # trailing-assistant guard).
+                    _gen_has_output = any(
+                        b.get("type") == "tool_use"
+                        or (b.get("type") == "text"
+                            and (b.get("text") or "").strip())
+                        for b in _assistant_blocks)
+                    if _gen_has_output:
+                        _turn_produced_output = True
                         append_message("assistant", _assistant_blocks,
                                        entity_id=entity_id,
                                        focus_entity_id=focus_entity_id,
@@ -1399,18 +1412,17 @@ async def stream_response(
             history = get_messages(entity_id, thread_id=store_tid)
             # End-of-turn break: no tool_use means the model is done.
             if _stop_reason != "tool_use":
-                # Degenerate-empty defense: a generation that produced NO
-                # output at all (no tool_use, no non-whitespace text —
-                # observed live 2026-07-19: user asked for a pin, model
-                # emitted 5 tokens of nothing, turn ended in silence) gets
-                # ONE fresh retry; a second emptiness lands an honest
-                # marker — the user must never get wordless silence.
-                _has_output = any(
-                    b.get("type") == "tool_use"
-                    or (b.get("type") == "text"
-                        and (b.get("text") or "").strip())
-                    for b in _assistant_blocks)
-                if not _has_output:
+                # Degenerate-empty defense: a TURN that produced no output
+                # at all (no tool_use, no non-whitespace text in ANY
+                # generation — observed live 2026-07-19: user asked for a
+                # pin, model emitted 5 tokens of nothing, turn ended in
+                # silence) gets ONE fresh retry; a second emptiness lands
+                # an honest marker — the user must never get wordless
+                # silence. A turn that DID speak or run tools earlier and
+                # merely closed on an empty generation is normal (the
+                # empty close is simply not persisted) — no retry, no
+                # marker (review F3: the marker would be a lie there).
+                if not _turn_produced_output:
                     if not _empty_retry_done:
                         _empty_retry_done = True
                         continue

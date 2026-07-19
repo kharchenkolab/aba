@@ -23,8 +23,10 @@ _TMP = tempfile.mkdtemp(prefix="aba_p14_")
 os.environ["ABA_RUNTIME_DIR"] = _TMP
 os.environ["ABA_DB_PATH"] = str(Path(_TMP) / "p14.db")
 _FIXTURE = Path(_TMP) / "empty_then_text.jsonl"
+# whitespace-only text — the LIVE shape (a "5-token nothing" streams as
+# newlines, not as a structurally block-less message; review F4)
 _FIXTURE.write_text(
-    '{"blocks": []}\n'
+    '{"blocks": [{"type": "text", "text": "\\n\\n"}]}\n'
     '{"blocks": [{"type": "text", "text": "Recovered: the answer is '
     'forty-two."}]}\n')
 os.environ["ABA_FAKE_SESSION"] = str(_FIXTURE)
@@ -83,10 +85,35 @@ def test_double_empty_lands_honest_marker():
         f"no honest marker after double-empty: {[_texts(m) for m in msgs]}"
 
 
+def test_productive_turn_with_empty_close_gets_no_marker():
+    """Review F3: a turn that spoke and ran tools, then closed on an empty
+    generation, is NORMAL — the empty close is dropped, but no retry-marker
+    lies about the turn having produced nothing."""
+    fake._Cursor.reset_for_testing([
+        {"blocks": [{"type": "text", "text": "Checking the folder."},
+                    {"type": "tool_use", "name": "list_data_files",
+                     "input": {}}]},
+        {"blocks": [{"type": "text", "text": "  \n"}]},
+    ])
+    pre = len(_assistant_msgs())
+    asyncio.run(_drive("list what is in the data folder"))
+    msgs = _assistant_msgs()
+    new = msgs[pre:]
+    assert any("Checking the folder" in _texts(m) for m in new), \
+        f"productive content missing: {[_texts(m) for m in new]}"
+    assert not any("produced no response" in _texts(m) for m in new), \
+        "marker landed on a turn that produced real output"
+    assert not [m for m in new if not _texts(m).strip()
+                and not any(isinstance(b, dict) and b.get("type") == "tool_use"
+                            for b in (m.get("content") or []))], \
+        "whitespace-only assistant message persisted"
+
+
 def main() -> int:
     failed = []
     for t in [test_empty_generation_retries_once_and_recovers,
-              test_double_empty_lands_honest_marker]:
+              test_double_empty_lands_honest_marker,
+              test_productive_turn_with_empty_close_gets_no_marker]:
         try:
             t()
             print(f"  [PASS] {t.__name__}")

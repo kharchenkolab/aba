@@ -1,6 +1,6 @@
 """Tier-2 summary-budget precedence (release_test_plan queue item 6).
 
-An EXPLICITLY SET ABA_HISTORY_SUMMARY_THRESHOLD_CHARS must override a
+An EXPLICITLY SET ABA_HISTORY_SUMMARY_BUDGET_OVERRIDE_CHARS must override a
 spec's pinned summary_budget_chars — before the fix the env knob was
 silently inert for any spec that pinned a budget (grounded_guide pins
 100k), which produced a vacuous compaction-study round: the operator set
@@ -26,15 +26,15 @@ _UNPINNED = SimpleNamespace(summary_budget_chars=None)
 
 
 def _with_env(val, fn):
-    old = os.environ.pop("ABA_HISTORY_SUMMARY_THRESHOLD_CHARS", None)
+    old = os.environ.pop("ABA_HISTORY_SUMMARY_BUDGET_OVERRIDE_CHARS", None)
     try:
         if val is not None:
-            os.environ["ABA_HISTORY_SUMMARY_THRESHOLD_CHARS"] = val
+            os.environ["ABA_HISTORY_SUMMARY_BUDGET_OVERRIDE_CHARS"] = val
         return fn()
     finally:
-        os.environ.pop("ABA_HISTORY_SUMMARY_THRESHOLD_CHARS", None)
+        os.environ.pop("ABA_HISTORY_SUMMARY_BUDGET_OVERRIDE_CHARS", None)
         if old is not None:
-            os.environ["ABA_HISTORY_SUMMARY_THRESHOLD_CHARS"] = old
+            os.environ["ABA_HISTORY_SUMMARY_BUDGET_OVERRIDE_CHARS"] = old
 
 
 def test_env_set_overrides_spec_pin():

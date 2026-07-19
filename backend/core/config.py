@@ -716,6 +716,20 @@ HISTORY_SUMMARY_THRESHOLD_CHARS = setting(
     doc="Layer-B trigger: summarize when pruned history still exceeds this many chars.",
 ).get()
 
+# Setting OBJECT (lazy .get() at the call site), not a frozen constant: the
+# override is an operator/harness escape hatch that must be readable at turn
+# time. DISTINCT from the global-threshold var above — reusing that key made
+# an operator tuning the fall-through default silently clobber every agent
+# spec's pinned budget (review F5, 2026-07-19).
+HISTORY_SUMMARY_BUDGET_OVERRIDE = setting(
+    "history_summary_budget_override_chars",
+    env="ABA_HISTORY_SUMMARY_BUDGET_OVERRIDE_CHARS", type="int", default=0,
+    category="tuning", weft_fate="keep", reduction="merge:history",
+    doc="When >0, overrides EVERY agent spec's pinned Tier-2 summary budget "
+        "(explicit operator/harness intent). 0 = no override: the spec pin, "
+        "else the global threshold, applies.",
+)
+
 # Live-tail of run_r/run_python output: chunks emitted from the kernel are
 # coalesced before being forwarded as `tool_chunk` SSE events, so a chatty
 # cell (R progress bars, install logs, tqdm) doesn't flood the wire AND the

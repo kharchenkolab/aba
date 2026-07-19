@@ -139,20 +139,36 @@ def _status_log_tail(e: dict) -> list[dict]:
 
 
 def _run_outputs_summary(e: dict) -> Optional[dict]:
-    """Run (analysis) → the compact `summary` roll-up from the durable
-    view: counts per state + retention_alert + missing_declared +
-    retain_failed. NOT the per-file tree — the agent gets the honest
-    shape of "what this run produced and whether it's safe", the same
-    numbers the UI Files panel summarizes, without the full listing
-    (which is UI-only and never injected into agent context).
+    """Run (analysis) → a CHEAP keep/retention roll-up: retain-row counts
+    per state from weft's LOCAL index + the run's own metadata (outputs
+    count, retention_alert). Answers "what did this run produce and is it
+    safe" without the durable view — run_durable_view is the UI Files-panel
+    builder and does up to 50 live per-file stat round-trips, far too heavy
+    to fire on EVERY default read_entity of a run (review F2). No remote
+    I/O here: retention.retained() reads local substrate state only.
 
-    Defensive + best-effort: any failure → None (the field simply
-    doesn't surface rather than erroring the whole read)."""
+    Defensive + best-effort: any failure → None (the field simply doesn't
+    surface rather than erroring the whole read)."""
     try:
-        from content.bio.lifecycle.runs import run_durable_view
-        dv = run_durable_view(e["id"])
-        summary = (dv or {}).get("summary")
-        return summary if isinstance(summary, dict) and summary else None
+        md = e.get("metadata") or {}
+        out: dict = {}
+        n_outputs = len(((md.get("run") or {}).get("outputs")) or [])
+        if n_outputs:
+            out["outputs"] = n_outputs
+        alert = md.get("retention_alert")
+        if alert:
+            out["retention_alert"] = alert
+        try:
+            from core.compute import retention
+            states: dict = {}
+            for row in (retention.retained(label=e["id"]) or []):
+                s = str(row.get("state") or "unknown")
+                states[s] = states.get(s, 0) + 1
+            if states:
+                out["keeps"] = states     # e.g. {"done": 3, "pinned-pending": 1}
+        except Exception:  # noqa: BLE001 — substrate down: metadata half still surfaces
+            pass
+        return out or None
     except Exception:  # noqa: BLE001
         return None
 

@@ -313,16 +313,18 @@ def test_walltime_clamped_to_partition_cap():
         FAKE.walltime_cap = None
 
 
-def test_walltime_clamps_to_default_partition_not_roomiest():
+def test_walltime_clamps_conservative_not_roomiest():
     """PartitionTimeLimit wedge (chunk-A regression 2026-07-19): weft submits
     kernel allocations WITHOUT --partition (bug4), so slurm routes them to
     the cluster DEFAULT partition — clamping to the roomiest partition (gpu
     2h) produced a 2h ask on the 1h default partition: slurm ACCEPTS it and
-    pends it forever while the node idles. The clamp must target the
-    DEFAULT partition's cap (sinfo stars its name)."""
+    pends it forever while the node idles. Weft's hints carry NO default
+    marker today (sinfo %R — bare names), so the clamp must fall back to
+    the SMALLEST ≥10-min cap (guaranteed to start wherever slurm routes),
+    never the roomiest, and tiny debug partitions must not poison it."""
     FAKE.walltime_cap = "1:00:00"
     FAKE.partitions_hint = [
-        {"name": "standard*", "max_walltime": "1:00:00"},
+        {"name": "standard", "max_walltime": "1:00:00"},
         {"name": "short", "max_walltime": "1:00"},
         {"name": "gpu", "max_walltime": "2:00:00"},
     ]
@@ -330,10 +332,32 @@ def test_walltime_clamps_to_default_partition_not_roomiest():
         pool = poolm.KernelPool()
         s = pool.get_or_start("thr_defpart@hpc", "python", cwd=_TMP,
                               env_name=None, site="hpc")
-        check("session started after default-partition clamp",
+        check("session started after conservative clamp",
               type(s).__name__ == "WeftKernelSession", type(s).__name__)
-        check("clamp targets the DEFAULT partition cap (1h), not gpu's 2h",
+        check("clamp is the smallest viable cap (1h), not gpu's 2h nor 1min",
               FAKE.kernel_starts[-1].get("walltime") == "01:00:00",
+              str(FAKE.kernel_starts[-1]))
+        s.shutdown()
+    finally:
+        FAKE.walltime_cap = None
+        FAKE.partitions_hint = None
+
+
+def test_walltime_explicit_default_flag_wins():
+    """Future-proof: when weft ships a `default: true` partition marker
+    (requested in the bug4 handoff), the clamp targets ITS cap even when a
+    smaller viable partition exists."""
+    FAKE.walltime_cap = "2:00:00"
+    FAKE.partitions_hint = [
+        {"name": "standard", "max_walltime": "1:00:00"},
+        {"name": "batch", "max_walltime": "2:00:00", "default": True},
+    ]
+    try:
+        pool = poolm.KernelPool()
+        s = pool.get_or_start("thr_defflag@hpc", "python", cwd=_TMP,
+                              env_name=None, site="hpc")
+        check("clamp follows the flagged default partition (2h)",
+              FAKE.kernel_starts[-1].get("walltime") == "02:00:00",
               str(FAKE.kernel_starts[-1]))
         s.shutdown()
     finally:

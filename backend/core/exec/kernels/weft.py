@@ -102,11 +102,16 @@ def _fit_walltime(e) -> str | None:
     routes them to the cluster DEFAULT partition — clamping to the roomiest
     partition's cap produced a job slurm ACCEPTS but never starts (2h ask on
     a 1h default partition pends forever with PartitionTimeLimit while the
-    node idles; chunk-A regression, 2026-07-19). Order of preference:
-    the default partition (sinfo marks its name with '*', which weft passes
-    through verbatim), else a single available partition, else the SMALLEST
-    cap ≥10 min (runnable anywhere; tiny debug partitions excluded), else
-    None (nothing safe to clamp to)."""
+    node idles; chunk-A regression, 2026-07-19). Weft's partition hints do
+    NOT currently say which partition is the default (sinfo is probed with
+    %R — bare names, no '*'; the flag is requested in the bug4 handoff), so:
+    an explicit `default: true` on a partition record wins when present
+    (future weft), else a single available partition, else the SMALLEST cap
+    ≥10 min — the only ask guaranteed to START no matter which partition
+    slurm routes to (conservative: it may truncate the hold on clusters
+    whose default is roomy; weft's own doctrine prefers short holds +
+    restart). Tiny debug partitions (<10 min) are excluded. None when
+    nothing safe exists or walltime wasn't the problem."""
     if getattr(e, "code", "") != "site.capability_violation":
         return None
     hints = getattr(e, "hints", None) or {}
@@ -117,7 +122,7 @@ def _fit_walltime(e) -> str | None:
         return _slurm_time_s(str(p.get("max_walltime") or ""))
 
     best = None
-    default = [p for p in parts if str(p.get("name") or "").endswith("*")]
+    default = [p for p in parts if p.get("default") is True]
     if default:
         best = _cap(default[0])
     elif len(parts) == 1:
