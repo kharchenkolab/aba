@@ -140,15 +140,14 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
         `background=True`: a long job runs IN that env (its own python),
         as a Slurm job on a compute node when on a cluster. On a REMOTE
         step (`site=`), `env='system'` runs on the node's own interpreter
-        with NO environment realization — right for a STATELESS one-shot
-        whose code imports nothing beyond the stdlib: a download/transfer,
-        file listing/checksum, quick count or existence check. Don't build
-        a multi-GB environment on a cold machine for a stdlib one-liner.
-        CAVEAT: `env='system'` runs OUTSIDE the persistent session — each
-        call is a fresh process; objects from earlier steps do NOT carry
-        over. For steps that build on each other in the remote session, or
-        any code importing scientific libraries, keep the default env (it
-        realizes once per machine, cached afterwards).
+        with NO environment realization — right for stdlib-only work: a
+        download/transfer, file listing/checksum, quick count or existence
+        check. Don't build a multi-GB environment on a cold machine for a
+        stdlib one-liner. It gets the same persistent session as any env
+        (state carries across your env='system' calls on that site), but
+        ONLY the stdlib is importable and `ensure_capability` cannot
+        install there — for code using scientific libraries, use the
+        default env (realizes once per machine, cached afterwards).
 
         INSTALLING PACKAGES: to use a library that isn't already in the
         sandbox, call `ensure_capability(name)` FIRST — NEVER `pip install`,

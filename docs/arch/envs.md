@@ -126,10 +126,15 @@ attempt, never on local work — a package with no build for the site's platform
 submission with a named cause. See [`jobs-and-hpc.md`](jobs-and-hpc.md) and
 [`compute-sites.md`](compute-sites.md).
 
-**`env='system'`.** The detached lane also carries an explicit lever for pure download/transfer
-steps: `env='system'` (or `'none'`) skips pack realization entirely and runs the node's own
-`python3` off PATH — right for a step a 1.5 GB scientific env would serve nothing. Such a run is
-graded `env_grade: node-system` on its exec record ([`provenance.md`](provenance.md)).
+**`env='system'`.** An explicit lever for stdlib-only steps (downloads/transfers, listings,
+checksums): `env='system'` (or `'none'`) skips pack realization entirely and runs the machine's
+own `python3` off PATH — right for a step a 1.5 GB scientific env would serve nothing. Env choice
+is orthogonal to execution mode: a synchronous `site=` step gets the same **persistent session**
+as any env, just attached bare (`WeftKernelSession` with neither `env_id` nor `session_id`;
+weft's `kernel_start` default), so state carries between calls; a detached job runs one-shot on
+the node interpreter and is graded `env_grade: node-system` on its exec record
+([`provenance.md`](provenance.md)). Nothing is installable into a bare kernel — `ensure_capability`
+targets the project session, not the node's interpreter.
 
 ## Integrity, verification & disk reclaim
 

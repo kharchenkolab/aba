@@ -737,7 +737,9 @@ def _run_remote_kernel(input_: dict, ctx: dict | None, project_id: str,
         from core.compute.named_envs import get_active
         env = get_active(project_id, "python")
     env_name = None if _is_default_env(env) else str(env).strip()
-    if env_name:
+    if env_name and env_name.lower() in ("system", "none"):
+        env_name = "system"   # bare kernel: node interpreter, no realization
+    elif env_name:
         from core.compute.named_envs import resolve as _env_resolve
         if _env_resolve(project_id, env_name) is None:
             return {"status": "error", "env": env_name,
@@ -773,6 +775,9 @@ def _run_remote_kernel(input_: dict, ctx: dict | None, project_id: str,
                                    if fetch_dir else ([], [], [], []))
     note = (f"ran on {site} in a persistent session there — variables persist "
             f"for your next run_python(site={site!r}) call")
+    if env_name == "system":
+        note += (" (env='system': the node's own interpreter, stdlib only — "
+                 "no environment realized, nothing installable)")
     if res.returncode == 0 and not (res.stdout or "").strip():
         # known substrate issue (weft kernel capture race, see
         # misc/bug2_weft_kernel_stdout.md): a block's stdout is intermittently
@@ -974,10 +979,7 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
         # falls back to the one-shot fresh-process lane, never to local.
         site = str(input_["site"]).strip()
         if (site and site != "local" and KERNEL_ENABLED
-                and not input_.get("fresh") and not input_.get("_kernel_fallback")
-                # env='system' = transfer-step lever: one-shot on the node's
-                # interpreter, no env realization — a kernel serves nothing
-                and str(input_.get("env") or "").lower() not in ("system", "none")):
+                and not input_.get("fresh") and not input_.get("_kernel_fallback")):
             out = _run_remote_kernel(input_, ctx, str(project_id),
                                      str(thread_id), site)
             if out is not None:
@@ -996,6 +998,15 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
         from core.compute.named_envs import get_active
         env = get_active(project_id, "python")
     env_name = None if _is_default_env(env) else env.strip()
+    if env_name and env_name.lower() in ("system", "none"):
+        # env='system' = a machine's BARE interpreter — meaningful for a
+        # placed step (site=...); the local served stack IS this machine's
+        # python, so a local bare run would only lose the project's packages.
+        return {"status": "error", "env": "system",
+                "note": "env='system' applies to placed steps (site=...): it "
+                        "runs on that machine's own interpreter with no "
+                        "environment realized. For a local step, omit env — "
+                        "the project environment is already here."}
     if env_name:
         from core.compute import named_envs
         from core.compute.errors import ComputeError

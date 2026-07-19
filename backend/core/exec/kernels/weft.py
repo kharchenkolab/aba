@@ -143,9 +143,10 @@ def _fit_walltime(e) -> str | None:
 def for_pool(scope_key: str, lang: str, *, cwd: str, env_name: str | None,
              site: str = _LOCAL_SITE):
     """Build a WeftKernelSession for the pool, or return None to fall back to the
-    jupyter transport. W-K1a handles the ISOLATED-env lane (a frozen named EnvID);
-    the default lane (env_name=None → a live project session) is W-K1b and returns
-    None for now. The env is realized by the caller before the pool lock.
+    jupyter transport. Three lanes: ISOLATED (a frozen named EnvID, W-K1a),
+    DEFAULT (env_name=None → a live project session, W-K1b), and BARE
+    (env_name='system' → no env at all, the machine's own interpreter). A
+    named env is realized by the caller before the pool lock.
 
     `site` != local (P1, misc/bug1.md): a persistent interpreter ON that
     machine, held by weft — same peek-streamed execute path. The kernel
@@ -155,6 +156,25 @@ def for_pool(scope_key: str, lang: str, *, cwd: str, env_name: str | None,
     at start re-locks a NAMED env once (job-lane parity)."""
     from core import projects
     pid = str(projects.current() or "_none")
+    if env_name and env_name.lower() == "system":
+        # BARE lane (ledger 4a): the machine's own interpreter, NO env
+        # realization — env choice is orthogonal to execution mode, so
+        # env='system' gets the same persistent session as any env. No
+        # ensure_ready / platform re-lock (nothing is realized); the
+        # PartitionTimeLimit clamp still applies — kernel_start submits a
+        # walltimed job on a Slurm site regardless of what it activates.
+        from core.compute.errors import ComputeError
+        setup = _weft_setup_code(lang, remote=(site != _LOCAL_SITE))
+        try:
+            return WeftKernelSession(scope_key, lang, site=site,
+                                     setup_code=setup, label=f"aba:{scope_key}")
+        except ComputeError as e:
+            wall = _fit_walltime(e)
+            if wall:
+                return WeftKernelSession(scope_key, lang, site=site,
+                                         setup_code=setup, walltime=wall,
+                                         label=f"aba:{scope_key}")
+            raise
     if site and site != _LOCAL_SITE:
         from core.compute.errors import ComputeError
         from core.compute import named_envs
@@ -237,23 +257,31 @@ def for_pool(scope_key: str, lang: str, *, cwd: str, env_name: str | None,
 class WeftKernelSession:
     """A persistent weft kernel behind the `KernelSession` interface.
 
-    Attaches to EITHER a frozen realized `env_id` (has `.weft-ready` on `site`)
-    OR a live `session_id` — exactly one. The session attach is what the default
-    interactive lane wants: a `session_install` (live `ensure_capability`) lands
-    in the running kernel and is visible to the next block, no restart — matching
-    today's jupyter session-kernel UX. Frozen `env_id` is for isolated named
-    envs (immutable identity). `site` is a registered weft site ("local" or a
-    declared remote); the env/session→handle resolution is the caller's job
-    (the pool wiring), so the transport stays testable on its own.
+    Attaches in one of THREE modes — at most one of `env_id` / `session_id`:
+    a frozen realized `env_id` (has `.weft-ready` on `site`), a live
+    `session_id`, or NEITHER — a BARE kernel on the machine's own interpreter
+    (weft's env_id=None default: no activation, `python3`/`Rscript` from PATH).
+    The session attach is what the default interactive lane wants: a
+    `session_install` (live `ensure_capability`) lands in the running kernel
+    and is visible to the next block, no restart — matching today's jupyter
+    session-kernel UX. Frozen `env_id` is for isolated named envs (immutable
+    identity). Bare is the `env='system'` lever: env choice is orthogonal to
+    execution mode, so a stdlib-only step gets the same persistent session as
+    any env — just with nothing realized (and nothing installable: a bare
+    kernel has no session to `session_install` into). `site` is a registered
+    weft site ("local" or a declared remote); the env/session→handle
+    resolution is the caller's job (the pool wiring), so the transport stays
+    testable on its own.
     """
 
     def __init__(self, scope_key: str, lang: str, *, env_id: str | None = None,
                  session_id: str | None = None, site: str = _LOCAL_SITE,
                  setup_code: str | None = None, walltime: str = "08:00:00",
                  resources: dict | None = None, label: str = ""):
-        if bool(env_id) == bool(session_id):
-            raise ValueError("exactly one of env_id / session_id is required "
-                             "(a kernel attaches to a frozen env OR a live session)")
+        if env_id and session_id:
+            raise ValueError("at most one of env_id / session_id "
+                             "(frozen env OR live session; neither = bare "
+                             "kernel on the machine's own interpreter)")
         self.scope_key = scope_key
         self.lang = lang
         self.site = site
@@ -267,7 +295,8 @@ class WeftKernelSession:
         self.kernel_id: Optional[str] = None
 
         self.work_dir: Optional[str] = None
-        attach = {"session_id": session_id} if session_id else {"env_id": env_id}
+        attach = ({"session_id": session_id} if session_id
+                  else {"env_id": env_id} if env_id else {})
         r = self._call("kernel_start", site, lang, walltime=walltime,
                        resources=resources or {}, label=label, **attach)
         self.kernel_id = r["kernel_id"]
