@@ -293,6 +293,23 @@ def _assemble_active_tools(tools_all: list, spec) -> list:
     return active
 
 
+def _summary_budget(spec) -> int | None:
+    """Tier-2 summary budget precedence: an EXPLICITLY SET env var
+    (ABA_HISTORY_SUMMARY_THRESHOLD_CHARS) is operator intent and wins over
+    the spec's class default (grounded_guide pins 100k), which wins over the
+    global default (None → effective_history falls through to
+    HISTORY_SUMMARY_THRESHOLD_CHARS). Before this, the env knob was silently
+    inert whenever a spec pinned a budget — an operator (or a study harness)
+    setting it saw no effect and got a vacuous run."""
+    env = os.environ.get("ABA_HISTORY_SUMMARY_THRESHOLD_CHARS")
+    if env:
+        try:
+            return int(env)
+        except ValueError:
+            pass
+    return spec.summary_budget_chars if spec else None
+
+
 def _resolve_turn_spec(thread_id: str | None, spec_override: str | None):
     """Resolve the agent spec + model for this turn (Item 2B extraction).
 
@@ -748,7 +765,7 @@ async def stream_response(
             llm_history = _ensure_tool_pair_completeness(
                 await asyncio.to_thread(
                     effective_history, store_tid, history,
-                    (spec.summary_budget_chars if spec else None),
+                    _summary_budget(spec),
                     (spec.summary_tail_keep    if spec else None),
                 )
             )

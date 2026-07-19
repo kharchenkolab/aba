@@ -122,7 +122,10 @@ It is a two-tier funnel and **operates on a copy** — the durable message log i
 
 The `lean` primary spec passes a tighter `budget_chars` + `tail_keep` to demand much earlier
 Tier-2 summarization inside a small vLLM window; `None` preserves production behavior
-bit-for-bit. The prior workspace-keyed agent-voice summarizer is **deleted** (it caused a
+bit-for-bit. Budget precedence (`guide._summary_budget`): an explicitly set
+`ABA_HISTORY_SUMMARY_THRESHOLD_CHARS` (operator/harness intent) > the spec's pinned
+`summary_budget_chars` (grounded_guide pins 100K) > the global default — guarded by
+`tests/test_summary_budget_precedence.py`. The prior workspace-keyed agent-voice summarizer is **deleted** (it caused a
 voice-mimicry loop); `rolling.py` is now just the funnel.
 
 ## Memory-wipe recovery
