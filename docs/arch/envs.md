@@ -3,7 +3,7 @@
 How ABA provides the software a run executes in — Python and R — and how it adds
 packages on demand without corrupting shared state.
 
-> Status: current as of 2026-07. This is the **maintained** reference.
+> The maintained reference for how environments work.
 
 ## Aims & principles
 
