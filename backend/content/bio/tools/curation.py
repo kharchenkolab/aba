@@ -1300,16 +1300,32 @@ def keep_outputs_tool(input_: dict, ctx: dict | None = None) -> dict:
         from core.exec.artifacts import artifacts_for_run
         tracked = {(a.get("original_name") or "").strip()
                    for a in artifacts_for_run(rid)}
+        # F10 disk truth: a literal include that EXISTS on disk (local sandbox
+        # or a target's inventory) IS covered — the keeper set carries it and
+        # the retain matches it in place, tracked-or-not. Only a literal that
+        # is in NEITHER the tracked outputs NOR the real listing is unmatched.
+        disk_seen = set(out.get("disk_seen") or [])
         unmatched = [p.strip() for p in keep
                      if p and p.strip() and not any(c in p for c in "*?[")
-                     and p.strip() not in tracked]
+                     and p.strip() not in tracked
+                     and p.strip() not in disk_seen]
         if unmatched:
             out["unmatched_includes"] = unmatched
             note += (" NOT COVERED: " + ", ".join(unmatched) +
-                     " — not in the run's tracked outputs (harvest collects "
-                     "known extensions only), so this keep does NOT protect "
-                     "them yet. Tell the user; do not describe these files "
-                     "as kept.")
+                     " — found neither in the run's tracked outputs nor on "
+                     "disk in its working area, so this keep does NOT protect "
+                     "them. Check the path; tell the user; do not describe "
+                     "these files as kept.")
+        for g in (out.get("size_gated") or []):
+            note += (f" SIZE GATE: '{g['glob']}' matched {g['files']} "
+                     f"untracked file(s) totaling {g['bytes'] / 1e9:.1f} GB — "
+                     f"NOT auto-kept (too large for a silent commitment). "
+                     f"Name specific files to keep them, or confirm with the "
+                     f"user and keep the largest ones explicitly.")
+        if out.get("disk_kept"):
+            note += (" Also kept (disk-truth glob matches outside tracked "
+                     "outputs): " + ", ".join(out["disk_kept"][:6])
+                     + ("…" if len(out["disk_kept"]) > 6 else "") + ".")
     except Exception:  # noqa: BLE001 — the guard must never break the keep
         pass
     return {"status": "ok", **out, "note": note}

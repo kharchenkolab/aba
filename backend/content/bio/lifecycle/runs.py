@@ -450,7 +450,81 @@ def _jobdir_store_dirs(run_id: str) -> set:
     return out
 
 
-def _retain_run_outputs(run_id: str, run_metadata: dict) -> None:
+def _disk_truth_includes(run_id: str, run_metadata: dict, includes,
+                         produced: set) -> tuple[set, set, list]:
+    """F10 (PK-approved, 2026-07-20): EXPLICIT keep = DISK TRUTH. The automatic
+    harvest allowlist (`_FILE_EXTS`) decides what gets TRACKED, never what CAN
+    be kept. Literal named includes already enter the keeper set (`_keeper_set`
+    adds agent-named literals); this closes the two remaining gaps:
+      * GLOB includes resolve against the run's REAL on-disk listing (local
+        sandbox walk + each weft target's inventory), so `keep=['out/*.dat']`
+        works even though `.dat` is not a harvested extension. Matches that are
+        already tracked cost nothing; UNTRACKED matches are added as concrete
+        rels — gated by total size (FETCH_GUARDRAIL_BYTES, the same "never a
+        silent multi-GB commitment" doctrine as ship-home) so a broad glob
+        can't silently pin a huge tree. Gated globs are surfaced, not dropped.
+      * LITERAL includes are checked against the same listing, so the keep
+        tool's coverage note can tell the truth ("on disk, will be kept")
+        instead of pessimistically warning NOT-COVERED for every untracked file.
+    Returns (glob_added_rels, literals_seen_on_disk, size_gated_reports).
+    Best-effort: listing failures degrade to empty (behavior = pre-F10)."""
+    import fnmatch
+    import os
+    from pathlib import Path
+    inc = [s for s in (includes or []) if s and str(s).strip()]
+    if not inc:
+        return set(), set(), []
+    listing: dict[str, int] = {}                       # rel -> bytes
+    try:                                               # local sandbox walk
+        ap = (get_entity(run_id) or {}).get("artifact_path")
+        if ap and os.path.isdir(ap):
+            base = Path(ap)
+            for f in base.rglob("*"):
+                if f.is_file():
+                    try:
+                        listing[str(f.relative_to(base))] = f.stat().st_size
+                    except OSError:
+                        pass
+    except Exception:  # noqa: BLE001
+        pass
+    for t in (run_metadata.get("weft_targets") or []):  # remote target inventories
+        try:
+            from core.compute.adapter import get_compute
+            inv = get_compute().sync_call("run_inventory", t)
+            for e in (inv.get("entries") or inv.get("files") or []):
+                if isinstance(e, dict) and e.get("path"):
+                    listing.setdefault(e["path"], int(e.get("bytes") or 0))
+        except Exception:  # noqa: BLE001
+            continue
+    if not listing:
+        return set(), set(), []
+    from core.data.datasets import FETCH_GUARDRAIL_BYTES
+    glob_added: set = set()
+    disk_seen: set = set()
+    size_gated: list = []
+    basenames = {r.rsplit("/", 1)[-1]: r for r in listing}
+    for pat in inc:
+        if not any(c in pat for c in "*?["):           # literal name
+            rel = pat if pat in listing else basenames.get(pat)
+            if rel is not None:
+                disk_seen.add(pat)
+            continue
+        matched = {r for r in listing
+                   if fnmatch.fnmatch(r, pat)
+                   or fnmatch.fnmatch(r.rsplit("/", 1)[-1], pat)}
+        untracked = matched - produced
+        if not untracked:
+            continue
+        total = sum(listing[r] for r in untracked)
+        if total > FETCH_GUARDRAIL_BYTES:
+            size_gated.append({"glob": pat, "files": len(untracked),
+                               "bytes": total})
+            continue
+        glob_added |= untracked
+    return glob_added, disk_seen, size_gated
+
+
+def _retain_run_outputs(run_id: str, run_metadata: dict) -> dict:
     """Durably retain this Run's KEEPER outputs against its weft target(s) — labeled to the
     Run (runs/<run>/<target>/), pinned-pending on the live session kernel (captured at
     settlement; §6.3). CUMULATIVE + IDEMPOTENT: each call submits the FULL keeper set
@@ -464,13 +538,13 @@ def _retain_run_outputs(run_id: str, run_metadata: dict) -> None:
     (`metadata.retention_alert`) rather than swallowed."""
     targets = list(run_metadata.get("weft_targets") or [])
     if not targets:
-        return  # jupyter / no weft kernel → nothing to retain against
+        return {}  # jupyter / no weft kernel → nothing to retain against
     try:
         from core.exec.artifacts import artifacts_for_run
         arts = artifacts_for_run(run_id)
     except Exception as e:  # noqa: BLE001
         _log.warning("retain: could not list artifacts for run %s: %s", run_id, e)
-        return
+        return {}
     produced = {(a.get("original_name") or "").strip() for a in arts} - {""}
     produced |= _jobdir_store_dirs(run_id)   # directory stores — invisible to harvest
     declared = _declared_output_names(run_metadata)
@@ -478,13 +552,20 @@ def _retain_run_outputs(run_id: str, run_metadata: dict) -> None:
         produced_basenames = {p.rsplit("/", 1)[-1] for p in produced}
         produced |= {n for n in declared if n not in produced_basenames}
     decision = run_metadata.get("keep_decision") or {}            # level-2: agent keep_outputs triage
+    # F10: explicit keep = disk truth (globs resolve against the real listing,
+    # size-gated; literals validated for honest coverage reporting).
+    glob_added, disk_seen, size_gated = _disk_truth_includes(
+        run_id, run_metadata, decision.get("include"), produced)
+    produced |= glob_added
+    info = {"disk_kept": sorted(glob_added), "disk_seen": sorted(disk_seen),
+            "size_gated": size_gated}
     keep = _keeper_set(produced, decision.get("include"), decision.get("exclude"))
     decided, placed = _retained_so_far(run_id)
     if not (keep - decided - placed):
-        return   # nothing newly decided — the stored selection / retained tree covers it
+        return info   # nothing newly decided — the stored selection / retained tree covers it
     cumulative = sorted(keep | decided)      # full keeper set, never a delta (§6.3)
     if not cumulative:
-        return   # run_retain errors on an empty match
+        return info   # run_retain errors on an empty match
     # Attribute each keeper to the target that ACTUALLY produced it, so a multi-target
     # Run (a backend restart mid-Run minted a new kernel_id → both recorded) retains
     # each target's OWN files against it. A blanket include per target would settle the
@@ -529,6 +610,7 @@ def _retain_run_outputs(run_id: str, run_metadata: dict) -> None:
             _log.info("retain: %s had none of %s — covered by another "
                       "target, no alert", t, sorted(inc))
     _note_retention_alert(run_id, run_metadata, "; ".join(errors) if errors else None)
+    return info
 
 
 def _attribute_keepers(arts: list, targets: list, cumulative: list) -> dict:
@@ -662,12 +744,17 @@ def set_keep_decision(run_id: str, keep=None, drop=None) -> dict:
     md["keep_decision"] = dec
     from core.graph.entities import patch_metadata
     patch_metadata(run_id, {"keep_decision": dec})   # single-key: no blob race
-    _retain_run_outputs(run_id, md)     # apply now, honoring the merged decision
+    info = _retain_run_outputs(run_id, md) or {}   # apply now, honoring the merged decision
     try:
         summary = run_durable_view(run_id).get("summary")
     except Exception:  # noqa: BLE001 — the decision is recorded regardless of the view
         summary = None
-    return {"run_id": run_id, "decision": dec, "summary": summary}
+    out = {"run_id": run_id, "decision": dec, "summary": summary}
+    # F10 disk-truth report: which glob-matched untracked rels were kept, which
+    # literal includes exist on disk, and any size-gated globs (surfaced, not
+    # silently dropped) — the keep tool folds these into its coverage note.
+    out.update({k: v for k, v in info.items() if v})
+    return out
 
 
 def bring_back_run(run_id: str, force: bool = False) -> dict:
