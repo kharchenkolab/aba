@@ -1035,6 +1035,36 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
     _ct = (ctx or {}).get("cancel_token")
     from core.catalog import resolve_capability
     cap = resolve_capability(name)
+    # env= is an UNAMBIGUOUS "install this package INTO env X" — handle it EARLY,
+    # before the default-env machinery (already-importable probe, pack-provider
+    # recognition, cluster modules). Those all answer "is it available in the
+    # DEFAULT stack / how do I get it there", which is the wrong question for a
+    # named target: a package present in the default env would short-circuit and
+    # env X would never gain it (found live: ensure_capability(env='nptools',
+    # 'pandas') returned ready while nptools stayed numpy-only). For a package
+    # capability we extend with its declared specs; for an UNCATALOGUED name we
+    # extend with the raw name (the env's language picks pypi vs cran) — weft's
+    # solver resolves it. A NON-package capability keeps env='s scope note.
+    if env is not None:
+        _prov = (cap or {}).get("provisioning") or {}
+        _pkgs = None
+        if _prov.get("pip"):
+            _pkgs = list(_prov["pip"])
+        elif _prov.get("conda"):
+            _c = _prov["conda"]
+            _spec = _c["spec"] if isinstance(_c, dict) else _c
+            _pkgs = [_spec] if isinstance(_spec, str) else list(_spec)
+        elif (cap or {}).get("archetype") == "r_package":
+            _pkgs = [(cap or {}).get("package") or (cap or {}).get("library") or name]
+        elif not cap or (cap or {}).get("archetype") in (None, "library"):
+            _pkgs = [name]   # uncatalogued / plain library → install by name
+        if _pkgs is not None:
+            return _extend_into_named_env(env, _pkgs, cap or {"name": name})
+        # a non-package capability (MCP server, reference): fall through, note it
+        _env_scope_note = (f" (env={env!r} applies to PACKAGE installs only; this "
+                           f"capability is not a package — provisioned normally.)")
+    else:
+        _env_scope_note = ""
     # Cluster module provider (prefer:first, job-path scope): does a cluster module
     # satisfy this tool by exact name? ONLY for CLI/binary tools — NEVER for a pip
     # library. `resolve()` matches any exact-name Lmod module, and on some clusters a
@@ -1210,23 +1240,9 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
     from core.runtime import progress
     progress.emit(f"Materializing '{cap.get('name')}'…", phase="ensure")
     prov = cap.get("provisioning") or {}
-    # env= routing: a PACKAGE install (pypi/conda/cran ecosystems) extends the
-    # named env rather than landing in the default session. Non-package
-    # capabilities (MCP servers, references) ignore env= and note that below.
-    if env is not None:
-        _pkgs = None
-        if prov.get("pip"):
-            _pkgs = list(prov["pip"])
-        elif prov.get("conda"):
-            _c = prov["conda"]
-            _spec = _c["spec"] if isinstance(_c, dict) else _c
-            _pkgs = [_spec] if isinstance(_spec, str) else list(_spec)
-        elif cap.get("archetype") == "r_package":
-            _pkgs = [cap.get("package") or cap.get("library") or name]
-        if _pkgs is not None:
-            return _extend_into_named_env(env, _pkgs, cap)
-        _env_scope_note = (f" (env={env!r} applies to PACKAGE installs only; this "
-                           f"capability is not a package — it was provisioned normally.)")
+    # env= for a PACKAGE was already handled early (before the default-env
+    # machinery). Only a NON-package env= capability reaches here; `_env_scope_note`
+    # (set above) is appended to its result so the agent learns env= was ignored.
     if prov.get("pip"):
         # Already importable? Then ensuring is a no-op. Two cases, both keyed on
         # the seed's explicit import_name (so we never short-circuit a package

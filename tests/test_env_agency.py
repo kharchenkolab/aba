@@ -132,6 +132,29 @@ def test_ensure_capability_unknown_env_errors(monkeypatch):
     assert "inspect_env" in out["note"]
 
 
+def test_ensure_capability_env_extends_even_when_importable_by_default(monkeypatch):
+    """F-ENV-3 (found live): an UNCATALOGUED package that IS importable in the
+    default stack must STILL extend the named env — the default-env
+    already-importable shortcut must not short-circuit a named target
+    (ensure_capability(env='grow','pandas') returned ready while 'grow' never
+    gained pandas)."""
+    _setup(monkeypatch)
+    named_envs.create("prjT", "grow", packages=["numpy"])
+    e1 = _env_id("grow")
+    # uncatalogued: resolver returns nothing
+    monkeypatch.setattr(_catalog, "resolve_capability", lambda name, *a, **k: None)
+    # make the default-env import probe SUCCEED — the trap the live bug fell into
+    import content.bio.tools.discovery as d
+    monkeypatch.setattr(d, "_default_probe_python", lambda: "/usr/bin/python3")
+    import core.exec.verify as _v
+    monkeypatch.setattr(_v, "verify_python_imports", lambda names, **k: (True, ""))
+    out = ensure_capability({"name": "pandas", "env": "grow"})
+    assert out["status"] == "ready" and out.get("env") == "grow"
+    row = named_envs.resolve("prjT", "grow")
+    assert "pandas" in row["packages"], "named env must gain the package"
+    assert e1 in row["history"] and row["env_id"] != e1
+
+
 # ── 3. evict_env — evict / site-scope / forget / active-refusal ──────────────
 
 def test_evict_env_all_sites_keeps_row(monkeypatch):

@@ -1761,14 +1761,20 @@ def mn_env_lifecycle_arc(client, pid, tid):
     pdv_ok = any("PDV=" in ((t.get("result") or {}).get("stdout") or "")
                  for t in recall_steps)
     no_dup = not tools_named([cap4], "make_isolated_env")
-    # SUBSTRATE: the CURRENT env id must be realized on BOTH sites
+    # SUBSTRATE: the CURRENT env id must be realized on the SECOND site (hpc).
+    # NB a CROSS-PLATFORM second site re-locks to a new frozen id (base+layers
+    # re-solved for that platform), so the local realization stays under the
+    # earlier id — the honest cross-site invariant is "current id realized on
+    # the site we just used it on", plus the functional NPV(local)/NPSUM(hpc)
+    # checks that prove it actually WORKED on both. Requiring one id realized on
+    # both at once would fight the re-lock design (only holds for same-platform).
     sites: set = set()
     try:
         from core.compute import adapter as _ad
         cur = (resolve(pid, "nptools") or {}).get("env_id")
         st = _ad.get_compute().sync_call("env_status", cur)
         sites = {r.get("site") for r in (st.get("realizations") or [])
-                 if r.get("state") in ("ready", "READY")}
+                 if str(r.get("state")).lower() == "ready"}
     except Exception:  # noqa: BLE001 — leave empty → check fails loudly
         pass
     return caps, [
@@ -1786,8 +1792,8 @@ def mn_env_lifecycle_arc(client, pid, tid):
         ("fresh thread REDISCOVERED the env (never named by user)",
          bool(recall_steps) and pdv_ok),
         ("no duplicate env minted on recall (anti-sprawl)", no_dup),
-        (f"substrate truth: realized on ≥2 sites incl hpc ({sorted(sites)})",
-         "hpc" in sites and len(sites) >= 2),
+        (f"substrate truth: current env id realized on the 2nd site hpc "
+         f"({sorted(sites)})", "hpc" in sites),
     ]
 
 
