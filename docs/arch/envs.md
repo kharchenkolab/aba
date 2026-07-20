@@ -62,13 +62,29 @@ identity). ABA keeps per-project `name → EnvID` handles in `PROJECTS_DIR/<pid>
   `role: base` env pack (a missing one is a loud, structured misconfiguration). `env_id()`
   **adopts** an EnvID from a published catalog when one exists (the managed-cluster path —
   `seeding.publish_base_packs` / `adopt_env_id`), else solves the spec locally.
-- **Project default env — a weft session cloned from the base pack** (`core/compute/project_env.py`).
-  The per-project default is a **session** off the base: interactive kernels and local
-  one-shot runs execute the session's prefix, and `ensure_capability` installs land **live**
-  in it (`session_install`). Because a live session is mutable, background jobs and exports
-  don't run it directly — they run a `session_snapshot` **EnvID** (a frozen, dirty-cached
-  point-in-time), so a job's env can't shift under it mid-flight. The registry is the `default`
-  key of `weft_envs.json`.
+- **Project default env — a weft session over the base pack** (`core/compute/project_env.py`).
+  The per-project default is a **session** off the base. What a session *runs from* is the
+  substrate's fact, consumed as weft's **runtime block** `{source: session|base, env_id,
+  prefix, activation, ns_wrap, direct_exec}` (`session_runtime`, observation-only): the clone
+  may be **lazy** — a zero-delta session runs from its base realization in place
+  (`source: "base"`, identity = the base EnvID) until the first `session_install`
+  **materializes** its own clone (the *flip moment* — the install result carries the fresh
+  block, and a mutated session is honestly identity-less scratch until snapshot). ABA never
+  probes prefix existence for liveness (`ensure()` asks `session_runtime`; only a truly
+  pruned session rebuilds + replays recorded additions), and one-shot lanes compose commands
+  through `project_env.argv_for_runtime(...)` — direct `prefix/bin/*` exec only when
+  `direct_exec`, else through the activation line (inside `unshare -rm` when `ns_wrap`;
+  squashfs bases are mount-scoped and have no path outside their activation).
+  `interpreter()`/`prefix()` refuse typed (`session.no_direct_exec`) rather than hand out a
+  dangling path. Against a pre-runtime (eager-cloning) weft, an activation-shaped shim
+  (`_shim_runtime`) synthesizes the block — deleted once every deployment's weft exposes
+  `session_runtime`. `ensure_capability` installs land **live** in the session
+  (`session_install`). Because a live session is mutable, background jobs and exports don't
+  run it directly — they run a `session_snapshot` **EnvID** (frozen, dirty-cached; weft
+  returns the base EnvID for a zero-delta session rather than minting a duplicate). The
+  registry is the `default` key of `weft_envs.json`. Guard: `tests/test_lazy_session_lane.py`
+  runs the lane under BOTH substrate personalities (eager and lazy) × both topologies
+  (direct-exec and activation-only).
 - **Named / isolated envs** (`core/compute/named_envs.py`) — the escape hatch for a hard
   conflict or a deliberately-pinned stack: a fully separate, **frozen** EnvID. `create(...)`
   solves a fresh one; `extend(name, packages)` adds packages as an `extends_env` layer over the
@@ -98,9 +114,11 @@ science interpreter comes from the weft env. Its old `materialize()` provisionin
 (pip-into-overlay, conda, container) **raises `NotImplementedError`** — conda and tool envs are
 weft's now.
 
-The local run lane selects its interpreter accordingly (`core/exec/run.py:44-72`):
+The local run lane selects its interpreter accordingly (`core/exec/run.py`):
 `env=<name>` → `named_envs.interpreter()`; a pre-resolved job-spec snapshot → that EnvID's
-python; else the default → `base_env.require("python")` + `project_env.interpreter()`.
+python; else the default → `base_env.require("python")` + the session **runtime block**
+(`project_env.runtime()` → `argv_for_runtime`, topology-blind). The best-effort env
+fingerprint is skipped (never faked) when no direct interpreter path exists.
 
 ## Platform membership (multi-site envs)
 
@@ -212,7 +230,7 @@ the install-time probe can't run.
 | `core/compute/adapter.py` · `ports.py` | the **one** weft doorway (`from weft.api import Weft`, `:105`) + the abstract compute port (`env_ensure`/`env_evict`/`env_status`/`session_*`/`task_*`) |
 | `core/compute/env_packs.py` | bundle `envs/` facet → weft `EnvSpec` → `env_ensure` → EnvID; `pack_spec`, `import_names` maps |
 | `core/compute/base_env.py` | the shared base pack: `require(language)` (no served-base fallback), `env_id()` (adopt-or-solve), `ensure_platform`, `interpreter`/`prefix` |
-| `core/compute/project_env.py` | the per-project **default env as a weft session**: `ensure`, `install` (live `session_install`), `snapshot` (frozen EnvID for jobs/exports), `stop_all_sessions`, `reset` |
+| `core/compute/project_env.py` | the per-project **default env as a weft session**: `ensure` (runtime-block liveness, rebuild+replay), `runtime`/`argv_for_runtime`/`exec_argv` (topology-blind one-shot argv), `install` (live `session_install`, flip-aware), `snapshot` (frozen EnvID for jobs/exports), `stop_all_sessions`, `reset` |
 | `core/compute/named_envs.py` | named/isolated **frozen** EnvIDs: `create`/`extend` (extend→new EnvID), `ensure_ready`/`ensure_realized`, `ensure_platform`, `ensure_tool_env` (CLI tools) |
 | `core/compute/seeding.py` | managed-cluster catalog: `publish_base_packs` / `adopt_env_id` (published `image.sqfs` keyed by EnvID) |
 | `core/exec/verify.py` | the honest runtime probes: `verify_python_imports`, `gpu_capability_ok`, `torch_cuda_build` |
@@ -238,3 +256,12 @@ the install-time probe can't run.
   still says "wipeable overlay" and `core/exec/materialize.py`'s module header still describes the
   `ENVS_DIR/pylib` overlay — both pre-weft text; the code routes to `session_install` / raises.
   Trust the behavior described above, not those headers.
+- **Direct-path residue outside the default lane.** The default lane is topology-blind
+  (`argv_for_runtime`), but `named_envs.interpreter()` still hands out a bare prefix path
+  (mount-scoped named-env realizations would need the same activation treatment —
+  `named_envs.run_in` already routes through weft when no ready prefix exists), and a few
+  presentation/probe surfaces are direct-exec-only by construction (`env_layers` site-dir
+  scans, `_session_site_dirs`, the viewer launchers' interpreter resolution, run-lane env
+  fingerprints). All degrade honestly (typed refusal / omitted layer / skipped fingerprint)
+  rather than lie, but on an activation-only topology they under-report; migrating them to
+  argv/runtime consumption is backlog.

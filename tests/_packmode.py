@@ -49,10 +49,20 @@ def enable(monkeypatch, *, py: str | None = None, rscript: str | None = None):
     def _prefix(pid, lang):
         return _r_prefix if lang == "r" else _py_prefix
     monkeypatch.setattr(_pe, "prefix", _prefix)
+
+    # The runtime block (Step 2 contract): the stubbed session is a plain
+    # on-disk prefix → direct exec. run.py's default lane and exec_argv/runtime
+    # consume ensure()['runtime']; interpreter/prefix stay stubbed above.
+    def _rt(pid, lang):
+        return {"source": "session", "env_id": None,
+                "prefix": str(_prefix(pid, lang)), "activation": "true",
+                "ns_wrap": False, "direct_exec": True}
     monkeypatch.setattr(_pe, "ensure",
                         lambda pid, lang: {"session_id": "ses_test",
                                            "prefix": _prefix(pid, lang),
-                                           "base_env_id": "env:test"})
+                                           "base_env_id": "env:test",
+                                           "runtime": _rt(pid, lang),
+                                           "materialized": True})
     return installs
 
 

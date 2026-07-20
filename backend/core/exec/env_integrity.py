@@ -34,17 +34,6 @@ def python_package_status(name: str, *, project_id: Optional[str] = None,
     if project_id is None:
         from core import projects
         project_id = projects.current()
-    # Probe the project's weft SESSION python (its site-packages are authoritative);
-    # fall back to the aba runtime interpreter when no python pack is declared.
-    probe_py = sys.executable
-    from_session = False
-    try:
-        from core.compute import base_env as _bev, project_env as _penv
-        if _bev.active("python"):
-            probe_py = str(_penv.interpreter(str(project_id or "_none"), "python"))
-            from_session = True
-    except Exception:  # noqa: BLE001 — no realizable session → runtime interpreter
-        pass
     appends = "".join(f"sys.path.append({str(p)!r})\n" for p in (extra_paths or []))
     script = (
         "import sys, json, importlib\n"
@@ -65,8 +54,23 @@ def python_package_status(name: str, *, project_id: Optional[str] = None,
         "    o['error'] = traceback.format_exc()[-1000:]\n"
         "print('ABA_JSON=' + json.dumps(o))\n"
     )
+    # Probe the project's weft SESSION python (its site-packages are
+    # authoritative) via the topology-blind argv builder — a lazy session's
+    # probe runs against its base realization (content-identical), a
+    # mount-scoped one through its activation. Fall back to the aba runtime
+    # interpreter when no python pack is declared.
+    probe_argv = [sys.executable, "-c", script]
+    from_session = False
     try:
-        proc = subprocess.run([probe_py, "-c", script],
+        from core.compute import base_env as _bev, project_env as _penv
+        if _bev.active("python"):
+            probe_argv = _penv.exec_argv(str(project_id or "_none"), "python",
+                                         ["-c", script])
+            from_session = True
+    except Exception:  # noqa: BLE001 — no realizable session → runtime interpreter
+        pass
+    try:
+        proc = subprocess.run(probe_argv,
                               capture_output=True, text=True, timeout=timeout_s)
     except Exception as e:  # noqa: BLE001
         out["error"] = f"could not run diagnostic: {e}"
@@ -87,22 +91,34 @@ def python_package_status(name: str, *, project_id: Optional[str] = None,
 def env_overview(project_id: Optional[str] = None) -> dict:
     """A map of the Python env — the no-package 'where am I' view: the project's
     weft SESSION python (base pack + session_install additions) and the aba
-    runtime interpreter. (The served-base pip overlays + base lock are gone —
-    W3.5; weft owns environment realization.)"""
+    runtime interpreter. The session block reports the RUNTIME truth — a lazy
+    session that runs from its base realization is `active` with
+    `materialized: False` (the old prefix-derived `active` read a healthy lazy
+    session as absent), and a mutated session's identity is honestly "unhashed
+    scratch" until snapshot."""
     from core.compute import base_env as _bev, project_env as _penv
     if project_id is None:
         from core import projects
         project_id = projects.current()
-    session = None
+    session: dict = {"project_id": project_id, "active": False, "prefix": None,
+                     "materialized": None, "source": None, "identity": None}
     if project_id and _bev.active("python"):
         try:
-            session = str(_penv.prefix(str(project_id), "python"))
+            info = _penv.ensure(str(project_id), "python")
+            rt = info["runtime"]
+            session.update({
+                "active": True,
+                "prefix": str(info["prefix"]) if info["prefix"] else None,
+                "materialized": info["materialized"],
+                "source": rt.get("source"),
+                "identity": (rt.get("env_id") if not info["materialized"] else
+                             "unhashed scratch — snapshot before recording results"),
+            })
         except Exception:  # noqa: BLE001 — session not realizable
-            session = None
+            pass
     return {
         "python": sys.executable,          # the aba runtime interpreter
-        "session": {"project_id": project_id, "prefix": session,
-                    "active": session is not None},
+        "session": session,
     }
 
 

@@ -42,6 +42,7 @@ def run_python_code(
     # interactive isolated-env kernel. weft rebuilds a GC-reclaimed realization
     # from the env's lock transparently at realize time.
     interp = (interp or "").strip() or None    # the param survives; branches below may set it
+    _default_rt = None    # default lane: session RUNTIME drives the argv, not a path
     if env:
         from core.compute import named_envs
         from core.compute.errors import ComputeError
@@ -63,11 +64,14 @@ def run_python_code(
         # W3.5 weft-only: the default lane is the PROJECT's session over the
         # bundle-declared base pack — REQUIRED, no served-base fallback. A
         # deployment with no python pack is misconfigured (loud, structured).
+        # The session's RUNTIME (not a bare interpreter path) shapes the exec:
+        # a lazy session runs from its base realization in place, and a
+        # mount-scoped prefix has no path outside its activation.
         from core.compute import base_env, project_env
         from core.compute.errors import ComputeError
         try:
             base_env.require("python")
-            interp = str(project_env.interpreter(str(project_id), "python"))
+            _default_rt = project_env.runtime(str(project_id), "python")
         except (ComputeError, RuntimeError) as ce:
             return {"error": f"the python environment pack is not available: {ce}"}
 
@@ -96,12 +100,25 @@ def run_python_code(
 
     ex = MaterializingExecutor()
     menv = ex.materialize(Provisioning())         # base-venv subprocess run harness
-    # `interp` is the weft interpreter (named env / job-spec / base-pack session);
-    # it is always resolved by here — the no-pack case already returned an error.
+    # Build the run argv. Default lane: topology-blind argv from the session
+    # runtime (direct prefix exec where permitted, activation-wrapped otherwise);
+    # isolated-env / job-spec lanes carry a weft-resolved interpreter PATH.
     # Never fall back to the backend venv (sys.executable) for science code.
-    used_interp = str(interp or "").strip()
-    if not used_interp:
-        return {"error": "no python interpreter resolved for this run (internal)"}
+    # `used_interp` is the direct interpreter path when one exists — consumed by
+    # the best-effort env fingerprint below, which skips on activation-only
+    # topologies rather than lie.
+    if _default_rt is not None:
+        from core.compute import project_env as _penv
+        run_argv = _penv.argv_for_runtime(_default_rt, "python",
+                                          [str(scratch / "script.py")])
+        _p = _default_rt.get("prefix")
+        used_interp = (str(Path(_p) / "bin" / "python")
+                       if (_default_rt.get("direct_exec") and _p) else "")
+    else:
+        used_interp = str(interp or "").strip()
+        if not used_interp:
+            return {"error": "no python interpreter resolved for this run (internal)"}
+        run_argv = [used_interp, str(scratch / "script.py")]
     # Env-var parity with the interactive kernel (jupyter.py _kernel_env):
     # the agent's code routinely reads WORK_DIR / DATA_DIR / ARTIFACTS_DIR via
     # `os.environ[...]` since they're set up that way for run_python (kernel
@@ -121,7 +138,7 @@ def run_python_code(
         "PYTHONUNBUFFERED": "1",
     }
     result = ex.exec(
-        menv, [used_interp, str(scratch / "script.py")],
+        menv, run_argv,
         cwd=str(scratch), cancel_token=cancel_token, timeout_s=timeout_s,
         env_vars=env_vars, stream=stream,
     )
@@ -140,7 +157,7 @@ def run_python_code(
     # interpreter that ran — the background/Slurm analog of the kernel-session
     # probe. Cheap (~0.1s), best-effort, never fails the run.
     from core.exec.fingerprint import package_versions_for_interpreter
-    _pkg = package_versions_for_interpreter(used_interp, "python")
+    _pkg = package_versions_for_interpreter(used_interp, "python") if used_interp else {}
     _langver = _pkg.pop("__lang_version__", "") if isinstance(_pkg, dict) else ""
     out = {
         "stdout": snip_middle(result.stdout or ""),
@@ -198,6 +215,7 @@ def run_r_code(
 
     # R preamble — kept short. The agent's own script.R follows verbatim.
     lib_lines: list[str] = []
+    _default_rt = None    # default lane: session RUNTIME drives the argv, not a path
     if env:
         # §11: isolated R env — under weft a named R env is a FULL standalone
         # env (its own R + libs, a realized prefix), not a lib dir stacked on
@@ -219,12 +237,15 @@ def run_r_code(
     else:
         # W3.5 weft-only: the default R lane is the PROJECT's session over the
         # bundle-declared R base pack — REQUIRED, standalone (its own .libPaths,
-        # no stack). No tools-env R fallback; a missing R pack is loud.
+        # no stack). No tools-env R fallback; a missing R pack is loud. As with
+        # python, the session RUNTIME shapes the exec (lazy sessions run from
+        # the base realization; mount-scoped prefixes are activation-only).
         from core.compute import base_env, project_env
         from core.compute.errors import ComputeError
         try:
             base_env.require("r")
-            rscript = project_env.interpreter(str(project_id), "r")
+            _default_rt = project_env.runtime(str(project_id), "r")
+            rscript = None
         except (ComputeError, RuntimeError) as ce:
             return {"error": f"the R environment pack is not available: {ce}"}
     preamble_lines = list(lib_lines)
@@ -242,16 +263,26 @@ def run_r_code(
         "ARTIFACTS_DIR": str(ARTIFACTS_DIR),
         "ABA_PYTHON": sys.executable,  # let R shell out to Python if needed
     }
-    r_cmd = [str(rscript), "--vanilla", str(scratch / "script.R")]
     # R block-buffers stdout to a pipe (no PYTHONUNBUFFERED equivalent), so a background R
     # job's prints wouldn't reach run.log until it exits — the Jobs-card live tail would sit
     # empty until completion. `stdbuf -oL` forces line-buffered stdio → live streaming (Item 2).
     # Only for streaming (background) runs; best-effort (skip if stdbuf is unavailable).
+    _pre: list[str] = []
     if stream:
         import shutil as _sh
         _stdbuf = _sh.which("stdbuf")
         if _stdbuf:
-            r_cmd = [_stdbuf, "-oL", *r_cmd]
+            _pre = [_stdbuf, "-oL"]
+    if _default_rt is not None:
+        from core.compute import project_env as _penv
+        r_cmd = _penv.argv_for_runtime(_default_rt, "r",
+                                       ["--vanilla", str(scratch / "script.R")],
+                                       pre=_pre)
+        _p = _default_rt.get("prefix")
+        rscript = (Path(_p) / "bin" / "Rscript"
+                   if (_default_rt.get("direct_exec") and _p) else None)
+    else:
+        r_cmd = [*_pre, str(rscript), "--vanilla", str(scratch / "script.R")]
     result = ex.exec(
         env, r_cmd,
         cwd=str(scratch), cancel_token=cancel_token, timeout_s=timeout_s,
@@ -269,9 +300,12 @@ def run_r_code(
                                                     project_id=str(project_id))
     from core.exec.output_cap import snip_middle
     # Provenance: snapshot the R env with the SAME .libPaths() the run used.
+    # Best-effort — skipped (never faked) when no direct Rscript path exists
+    # (activation-only topology).
     from core.exec.fingerprint import package_versions_for_interpreter
-    _rpkg = package_versions_for_interpreter(str(rscript), "r",
-                                             r_preamble="\n".join(lib_lines))
+    _rpkg = (package_versions_for_interpreter(str(rscript), "r",
+                                              r_preamble="\n".join(lib_lines))
+             if rscript else {})
     _rver = _rpkg.pop("__lang_version__", "") if isinstance(_rpkg, dict) else ""
     out = {
         "stdout": snip_middle(result.stdout or ""),

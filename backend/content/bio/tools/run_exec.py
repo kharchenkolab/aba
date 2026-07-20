@@ -1117,8 +1117,10 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
             # scope-key + the env's python); the shared thread scratch cwd is
             # reused so files hand off to/from the default kernel.
             scope_key = str(thread_id) if not env_name else f"{thread_id}::env::{env_name}"
-            # W3.0: base-pack default lane — realize BEFORE the pool lock (a
-            # first-use realize under it would wedge every kernel acquisition).
+            # W3.0: base-pack default lane — resolve BEFORE the pool lock (a
+            # first-use base solve/realize under it would wedge every kernel
+            # acquisition; a lazy session itself is cheap — it runs from the
+            # base realization until first install).
             if not env_name:
                 from core.compute import base_env, project_env
                 from core.compute.errors import ComputeError

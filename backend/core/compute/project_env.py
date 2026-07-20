@@ -3,13 +3,21 @@
 iteration; snapshot before recording results").
 
 On a pack-declaring deployment, each project's default env (per language) is a
-**session cloned from the base pack**: kernels and one-shot runs execute the
-session's prefix, and `ensure_capability` installs land LIVE in it
-(`session_install`) — the running kernel imports the new package without a
-restart, matching the old overlay UX. Frozen identity is minted exactly when
-it matters: **background jobs and exports run a `session_snapshot` EnvID**
-(dirty-cached — one snapshot per change-set, not per job), which is what puts
-a true EnvID into those exec records.
+**session over the base pack**. What the session RUNS FROM is the substrate's
+fact, consumed as weft's runtime block ({source: session|base, env_id, prefix,
+activation, ns_wrap, direct_exec}): the clone may be LAZY — a zero-delta
+session runs from the base realization in place until the first install
+materializes its own clone (the flip moment). Kernels attach by session_id
+(weft activates the right thing); one-shot lanes compose commands with
+`argv_for_runtime` (direct prefix exec only when the runtime permits,
+activation-wrapped otherwise — squashfs bases are mount-scoped and have no
+path outside their activation). `ensure_capability` installs land LIVE in the
+session (`session_install`) — the running kernel imports the new package
+without a restart, matching the old overlay UX. Frozen identity is minted
+exactly when it matters: **background jobs and exports run a
+`session_snapshot` EnvID** (dirty-cached — one snapshot per change-set, not
+per job; a zero-delta session's snapshot IS the base EnvID), which is what
+puts a true EnvID into those exec records.
 
 Policy: the Settings → Modules toggles govern packs. A pack whose module is
 OFF refuses with the enable prompt (never silently solves a toolchain the user
@@ -26,15 +34,20 @@ Sync, worker-thread callable (same rules as named_envs).
 """
 from __future__ import annotations
 
+import shlex
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 from core.compute import adapter as _adapter
 from core.compute import base_env, named_envs
 from core.compute.errors import ComputeError
 
 _ECOS = ("conda", "pypi")
+
+
+def _exe(language: str) -> str:
+    return "Rscript" if language.lower() == "r" else "python"
 
 
 def _gate_module_policy(language: str) -> None:
@@ -81,22 +94,75 @@ def _save_row(pid: str, language: str, row: dict) -> None:
 
 
 # ── session lifecycle ────────────────────────────────────────────────────────
+#
+# What a session RUNS FROM is the substrate's fact, not ours. Weft's `runtime`
+# block ({source: session|base, env_id, prefix, activation, ns_wrap,
+# direct_exec}) is the authoritative answer — an unmaterialized (lazy) session
+# runs from its base realization in place, a materialized one from its own
+# clone, and on squashfs/userns topologies the prefix is MOUNT-SCOPED (exists
+# only inside the activation's namespace — a bare `prefix/bin/*` exec is
+# wrong there even against an EAGER weft). We therefore never probe the
+# filesystem to decide liveness or resolve interpreters; `_shim_runtime` is
+# the one compatibility exception, for weft versions that predate the runtime
+# contract (those clone eagerly, so a live session always owns a plain
+# on-disk prefix).
 
-def _session_prefix(session_id: str) -> Optional[Path]:
-    """The session's live prefix on the local site. Session location is
-    deterministic (`sessions/<id>` under the site root — weft's session_exec
-    activates `<location>/pixi.toml`, interpreter under `.pixi/envs/default`);
-    existence doubles as the liveness check (session_stop rm -rf's the dir)."""
-    p = (_adapter.weft_workspace() / "site-local" / "sessions" / session_id
-         / ".pixi" / "envs" / "default")
-    return p if p.exists() else None
+
+def _shim_runtime(session_id: str) -> Optional[dict]:
+    """Runtime block synthesized for a PRE-RUNTIME weft (eager clones only).
+    None ⇒ the prefix is gone ⇒ the session was pruned (session_stop rm -rf's
+    the dir) — the caller's cue to rebuild. Activation-shaped like weft's own
+    block (the same pixi shell-hook session_exec uses) so callers stay
+    topology-blind; deleted with the shim once every deployment's weft
+    exposes session_runtime."""
+    root = _adapter.weft_workspace() / "site-local" / "sessions" / session_id
+    p = root / ".pixi" / "envs" / "default"
+    if not p.exists():
+        return None
+    pixi = _adapter.resolve_pixi() or "pixi"
+    return {
+        "source": "session", "env_id": None, "prefix": str(p),
+        "activation": (f"eval \"$({shlex.quote(pixi)} shell-hook "
+                       f"--manifest-path {shlex.quote(str(root / 'pixi.toml'))})\""),
+        "ns_wrap": False, "direct_exec": True,
+    }
+
+
+def _current_runtime(session_id: str) -> Optional[dict]:
+    """The session's current runtime block, substrate-first: weft's
+    session_runtime (observation-only — deliberately does NOT touch the
+    session's last_used, so polling can't mask idleness) when this weft
+    exposes it, else the eager-clone shim. Returns None when the session is
+    GONE (pruned/stopped) — and never for a merely-unmaterialized one; that
+    distinction is exactly what the old prefix-existence probe conflated."""
+    ad = _adapter.get_compute()
+    try:
+        rt_call = ad.session_runtime      # AttributeError: pre-runtime weft
+    except AttributeError:
+        return _shim_runtime(session_id)
+    try:
+        return named_envs._sync(rt_call(session_id))
+    except ComputeError:
+        return None                        # task.invalid: no active session
+
+
+def _ensure_out(session_id: str, base_eid: str, rt: dict) -> dict:
+    p = rt.get("prefix")
+    return {"session_id": session_id, "base_env_id": base_eid, "runtime": rt,
+            "prefix": Path(p) if p else None,
+            "materialized": rt.get("source") == "session"}
 
 
 def ensure(pid: str, language: str) -> dict:
     """The project's default session for `language` (create on first use —
     the lazy-install moment for `first_use` packs). Returns {session_id,
-    prefix, base_env_id}. A pruned/lost session is rebuilt from the base pack
-    and the recorded additions are REPLAYED. Raises ComputeError/RuntimeError
+    prefix, base_env_id, runtime, materialized}; `prefix` may be None
+    (activation-only topologies) and `materialized=False` means the session
+    legitimately runs from its base realization — NOT an error. Liveness is
+    the substrate's answer (session_runtime), never prefix existence: a lazy
+    live session must not trigger a rebuild (that was the duplicate-session
+    leak), and only a truly pruned/lost session is rebuilt from the base pack
+    with the recorded additions REPLAYED. Raises ComputeError/RuntimeError
     (module OFF) — surfaced to the agent, never silent."""
     pid = str(pid)
     _gate_module_policy(language)
@@ -106,10 +172,9 @@ def ensure(pid: str, language: str) -> dict:
                            f"no {language} base pack declared", stage="aba")
     row = get(pid, language)
     if row and row.get("base_env_id") == base_eid:
-        prefix = _session_prefix(row["session_id"])
-        if prefix is not None:
-            return {"session_id": row["session_id"], "prefix": prefix,
-                    "base_env_id": base_eid}
+        rt = _current_runtime(row["session_id"])
+        if rt is not None:
+            return _ensure_out(row["session_id"], base_eid, rt)
     # (Re)create — new project, base pack CHANGED, or session pruned. Tell the
     # three apart: a changed base under an existing project is a drift the agent
     # must SEE (old snapshots/EnvIDs no longer match; additions are replayed onto
@@ -128,31 +193,91 @@ def ensure(pid: str, language: str) -> dict:
               f"{len(additions)} recorded addition(s). Snapshots/EnvIDs recorded "
               f"under the old base no longer match — re-run to record results "
               f"under the new env.")
+    rt = res.get("runtime")
     for add in additions:                      # replay the recorded deltas
-        named_envs._sync(ad.session_install(sid, **{add["eco"]: add["specs"]}))
+        if add.get("eco") == "installer":      # captured arbitrary installer
+            ires = named_envs._sync(ad.session_run_installer(
+                sid, add.get("cmd") or "", note=add.get("note", "")))
+        else:
+            ires = named_envs._sync(ad.session_install(sid, **{add["eco"]: add["specs"]}))
+        # installs are the FLIP moment (base → own clone): the install result
+        # carries the fresh runtime; the start-time block is stale after one
+        rt = (ires or {}).get("runtime") or rt
+    if rt is None:
+        rt = _shim_runtime(sid)
+        if rt is None:
+            # only reachable on a pre-runtime (eager) weft, where a missing
+            # prefix after session_start IS a realization failure
+            raise ComputeError("env.realize_failed",
+                               f"session {sid} has no local prefix", stage="realize")
     new_row = {"session_id": sid, "base_env_id": base_eid,
                "additions": additions, "rev": (row or {}).get("rev", 0),
                "snapshot": None,               # stale after a rebuild
                "created_at": time.time()}
     _save_row(pid, language, new_row)
-    prefix = _session_prefix(sid)
-    if prefix is None:
-        raise ComputeError("env.realize_failed",
-                           f"session {sid} has no local prefix", stage="realize")
-    out = {"session_id": sid, "prefix": prefix, "base_env_id": base_eid}
+    out = _ensure_out(sid, base_eid, rt)
     if base_changed:
         out["base_changed"] = {"from": old_base, "to": base_eid,
                                "additions_replayed": len(additions)}
     return out
 
 
+def runtime(pid: str, language: str) -> dict:
+    """The default session's runtime contract: {source: "session"|"base",
+    env_id, prefix, activation, ns_wrap, direct_exec}. `activation` is always
+    correct; `prefix` only when `direct_exec` (see argv_for_runtime)."""
+    return ensure(pid, language)["runtime"]
+
+
+def argv_for_runtime(rt: dict, language: str, args: Sequence[str], *,
+                     pre: Sequence[str] = ()) -> list[str]:
+    """argv that runs the default env's interpreter with `args`, topology-blind
+    — the ONE builder every one-shot lane (harness, probes, launchers) shares.
+    A plain-prefix runtime execs `prefix/bin/<exe>` directly; anything else
+    goes through the runtime's activation line, inside a user+mount namespace
+    when the substrate says the activation's mounts live only there (ns_wrap —
+    squashfs bases). `pre` prepends a wrapper (e.g. stdbuf -oL) in either
+    shape. bash mirrors weft's own wrapper choice: conda activate.d hooks
+    contain bashisms."""
+    tail = [str(a) for a in args]
+    head = [str(x) for x in pre]
+    exe = _exe(language)
+    p = rt.get("prefix")
+    if rt.get("direct_exec") and p:
+        return [*head, str(Path(p) / "bin" / exe), *tail]
+    script = f"{rt['activation']} && exec {shlex.join([*head, exe, *tail])}"
+    if rt.get("ns_wrap"):
+        script = f"unshare -rm bash -c {shlex.quote(script)}"
+    return ["bash", "-c", script]
+
+
+def exec_argv(pid: str, language: str, args: Sequence[str], *,
+              pre: Sequence[str] = ()) -> list[str]:
+    """`argv_for_runtime` over the project's current default-session runtime."""
+    return argv_for_runtime(runtime(pid, language), language, args, pre=pre)
+
+
 def prefix(pid: str, language: str) -> Path:
-    return ensure(pid, language)["prefix"]
+    """The default env's on-disk prefix — only where the runtime permits
+    direct filesystem access; raises a typed refusal otherwise (mount-scoped /
+    packed bases have no caller-usable path — the old code handed out a
+    dangling one). Code that RUNS things wants exec_argv; presentation wants
+    runtime()."""
+    out = ensure(pid, language)
+    rt = out["runtime"]
+    if rt.get("direct_exec") and out["prefix"] is not None:
+        return out["prefix"]
+    raise ComputeError(
+        "session.no_direct_exec",
+        f"the default {language} env has no directly-accessible prefix on "
+        f"this topology (runs from {rt.get('source')!r} via activation); use "
+        f"project_env.exec_argv()/runtime()", stage="aba")
 
 
 def interpreter(pid: str, language: str) -> Path:
-    exe = "Rscript" if language.lower() == "r" else "python"
-    return prefix(pid, language) / "bin" / exe
+    """Direct path to the default env's interpreter — same contract (and same
+    honest refusal) as prefix()."""
+    return prefix(pid, language) / "bin" / _exe(language)
 
 
 def install(pid: str, language: str, specs: list[str], *,
@@ -167,12 +292,19 @@ def install(pid: str, language: str, specs: list[str], *,
     pid = str(pid)
     s = ensure(pid, language)
     ad = _adapter.get_compute()
-    out = named_envs._sync(ad.session_install(s["session_id"], **{eco: list(specs)}))
+    out = dict(named_envs._sync(
+        ad.session_install(s["session_id"], **{eco: list(specs)})) or {})
     row = get(pid, language)
     row["additions"].append({"eco": eco, "specs": list(specs), "at": time.time()})
     row["rev"] = int(row.get("rev") or 0) + 1
     _save_row(pid, language, row)
-    return {"session_id": s["session_id"], "prefix": str(s["prefix"]), **(out or {})}
+    # an install is the FLIP moment (lazy session materializes its own clone):
+    # surface the post-install runtime, never the stale pre-install block
+    rt = out.get("runtime") or _current_runtime(s["session_id"]) or s["runtime"]
+    out["runtime"] = rt
+    p = rt.get("prefix")
+    return {"session_id": s["session_id"],
+            "prefix": str(p) if p else None, **out}
 
 
 def run_installer(pid: str, language: str, cmd: str, *, note: str = "") -> dict:
@@ -182,12 +314,16 @@ def run_installer(pid: str, language: str, cmd: str, *, note: str = "") -> dict:
     pid = str(pid)
     s = ensure(pid, language)
     ad = _adapter.get_compute()
-    out = named_envs._sync(ad.session_run_installer(s["session_id"], cmd, note=note))
+    out = dict(named_envs._sync(
+        ad.session_run_installer(s["session_id"], cmd, note=note)) or {})
     row = get(pid, language)
     row["additions"].append({"eco": "installer", "cmd": cmd, "note": note,
                              "at": time.time()})
     row["rev"] = int(row.get("rev") or 0) + 1
     _save_row(pid, language, row)
+    # same FLIP handling as install(): callers get the post-install runtime
+    out["runtime"] = (out.get("runtime")
+                      or _current_runtime(s["session_id"]) or s["runtime"])
     return out
 
 

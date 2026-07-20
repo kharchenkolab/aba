@@ -125,17 +125,19 @@ def inspect_env(input_: dict, ctx: dict | None = None) -> dict:
             return {"status": "unavailable", "name": name, "language": "r",
                     "loads": False,
                     "error": "no R environment pack is declared for this deployment"}
-        try:
-            _rs = str(_penv.interpreter(str(pid or "_none"), "r"))
-        except (ComputeError, RuntimeError) as e:
-            return {"status": "error", "name": name, "language": "r",
-                    "loads": False, "error": f"R session unavailable: {e}"}
         expr = (f"ok <- requireNamespace({name!r}, quietly=TRUE); "
                 + f"cat('ABA_LOADS=', isTRUE(ok), '\\n', sep=''); "
                 + f"if (isTRUE(ok)) {{ cat('ABA_VER=', as.character(packageVersion({name!r})), '\\n', sep=''); "
                 + f"cat('ABA_LOC=', find.package({name!r}), '\\n', sep='') }}")
         try:
-            proc = subprocess.run([_rs, "-e", expr], capture_output=True,
+            # topology-blind: probes a lazy session against its base
+            # realization; a mount-scoped prefix through its activation
+            _argv = _penv.exec_argv(str(pid or "_none"), "r", ["-e", expr])
+        except (ComputeError, RuntimeError) as e:
+            return {"status": "error", "name": name, "language": "r",
+                    "loads": False, "error": f"R session unavailable: {e}"}
+        try:
+            proc = subprocess.run(_argv, capture_output=True,
                                   text=True, timeout=120)
             out, err = proc.stdout or "", proc.stderr or ""
         except Exception as e:  # noqa: BLE001
@@ -899,14 +901,15 @@ def _default_probe_python() -> str | None:
 
 
 def _r_version_in_session(pid: str, libname: str) -> str | None:
-    """packageVersion() against the PROJECT SESSION's R (pack mode)."""
+    """packageVersion() against the PROJECT SESSION's R (pack mode) — via the
+    topology-blind argv builder (works for lazy and activation-only sessions)."""
     import subprocess
     from core.compute import project_env
     try:
-        rs = project_env.interpreter(str(pid), "r")
-        r = subprocess.run([str(rs), "-e",
-                            f'cat(as.character(packageVersion("{libname}")))'],
-                           capture_output=True, text=True, timeout=120)
+        argv = project_env.exec_argv(
+            str(pid), "r",
+            ["-e", f'cat(as.character(packageVersion("{libname}")))'])
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=120)
         v = (r.stdout or "").strip()
         return v if r.returncode == 0 and v else None
     except Exception:  # noqa: BLE001
