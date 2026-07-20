@@ -3,9 +3,12 @@ name: ABA
 category: Interactive Apps
 subcategory: Servers
 role: batch_connect
+# Site deployers MAY insert a version line as the description's first
+# paragraph at deploy time (insert-if-deploying — see README.md "Site
+# deployer contract"). The SHIPPED file must render clean as-is: no
+# double-underscore placeholders (guarded by tests/test_ood_template_contracts.py)
+# — an un-deployed copy of this app dir must never show template artifacts.
 description: |
-  __ABA_VERSION_LINE__
-
   AI Bioinformatics Agent — the ABA web app launched on a compute node and
   reverse-proxied to your browser. Pick your lab and instance size, then launch;
   connect your Anthropic subscription or API key in-session via Settings → Agent.

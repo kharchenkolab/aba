@@ -111,10 +111,19 @@ if [ -n "${ABA_SIF:-}" ]; then
   # In-session pip/uv (weft session_install) unpack wheels under $TMPDIR. Under
   # --containall /tmp is a small (~64MB) in-memory tmpfs, so a scientific-scale add
   # (pyarrow, polars, torch, scipy) ENOSPCs mid-unpack and surfaces as a confusing
-  # env.solve_conflict "No space left on device". Point TMPDIR at the per-user runtime
-  # dir (real disk, bound via /groups) so unpacks have room; the tmpfs /tmp stays for
-  # sockets/small files. weft's LocalAdapter inherits this env when it shells out.
-  _sess_tmp="${ABA_RUNTIME_DIR}/tmp"; mkdir -p "$_sess_tmp"
+  # env.solve_conflict "No space left on device". Prefer NODE-LOCAL job scratch
+  # ($SLURM_TMPDIR: fast local disk, purged by Slurm at job end); fall back to a
+  # PER-SESSION dir under the user's runtime tree (real disk via the /groups bind —
+  # parallel-FS, so slower for many-small-file unpacks, and not auto-purged: the
+  # exit trap removes it so debris can't accrue against quota across sessions).
+  # The tmpfs /tmp stays for sockets/small files. weft's LocalAdapter inherits this.
+  if [ -n "${SLURM_TMPDIR:-}" ] && [ -d "${SLURM_TMPDIR}" ]; then
+    _sess_tmp="${SLURM_TMPDIR}"
+  else
+    _sess_tmp="${ABA_RUNTIME_DIR}/tmp/session-${SLURM_JOB_ID:-$$}"
+    mkdir -p "$_sess_tmp"
+    trap 'rm -rf "$_sess_tmp"' EXIT
+  fi
   envs+=( --env "TMPDIR=${_sess_tmp}" )
   # ABA_SIF + ABA_JOB_WRAP: forwarded so the containerized backend's slurm_submitter
   # can wrap offloaded env-jobs by RE-ENTERING this image (apptainer exec) under a fat
