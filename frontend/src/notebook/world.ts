@@ -94,7 +94,8 @@ export interface SessionRec {
 
 export interface WhatsNew {
   since: string
-  items: { ts: string; text: string; loud?: boolean; live?: boolean }[]
+  /** every item is a DOOR when elId is set — the strip names work AND takes you there */
+  items: { ts: string; text: string; loud?: boolean; live?: boolean; elId?: string }[]
 }
 
 export interface OnePager {
@@ -131,10 +132,15 @@ export interface World {
   /** the live session's home locus — wears a standing "working here" state */
   anchorAt?: { session: string; elId: string }
   /** peripheral change signals: TOC pulse badges + delta-rail ticks.
-   *  Three tiers only: accretion (routine, teal) · draft (awaiting you,
-   *  amber) · condition (loud, red). The document may glow anywhere, but
-   *  it moves only under the user's hand — no auto-scroll, ever. */
+   *  Three tiers only: accretion (routine, teal — clears on view) · draft
+   *  (awaiting you, amber — until acted; ALSO derived from pending state)
+   *  · condition (loud, red — until resolved). The document may glow
+   *  anywhere, but it moves only under the user's hand — no auto-scroll. */
   deltas?: { elId: string; kind: 'accretion' | 'draft' | 'condition'; count?: number; label: string }[]
+  /** total runs when the sediment shows only its recent window (scale face) */
+  sedimentTotal?: number
+  /** the figure the weekly digest leads with */
+  digestFig?: string
   /** sediment entries expanded on first render */
   openSediment?: string[]
   /** render "work ▸" affordances on section heads (the work loop is wired) */

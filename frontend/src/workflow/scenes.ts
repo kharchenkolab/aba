@@ -269,9 +269,9 @@ const e5: Scene = {
     whatsNew: {
       since: 'Mar 02',
       items: [
-        { ts: 'Mar 03', text: 'seasonal decomposition — stable summer gain; winter panels noisy' },
-        { ts: 'Mar 03', text: 'trail started — “Something is off in the seasonal component”' },
-        { ts: 'Mar 04', text: 'pressure spikes: quantized — logger artifact, parked' },
+        { ts: 'Mar 03', text: 'seasonal decomposition — stable summer gain; winter panels noisy', elId: 'el-e_seasonal' },
+        { ts: 'Mar 03', text: 'trail started — “Something is off in the seasonal component”', elId: 'el-T1' },
+        { ts: 'Mar 04', text: 'pressure spikes: quantized — logger artifact, parked', elId: 'el-e_pressure' },
       ],
     },
     sections: [{ ...e4Sections[0], sessions: [{ label: 'seasonal first cut', when: 'Mar 03', meta: '2 runs · 1 fragment' }] }],
@@ -292,7 +292,23 @@ const e5: Scene = {
 // PART II — MATURE (month 4). The coastal world as the notebook knows it.
 // =======================================================================
 
-const mBase: World = { ...coastalWorld, work: true }
+/** Mature what's-new with every item a DOOR (elId targets). */
+const mWhatsNew = {
+  since: 'Jul 12',
+  items: [
+    { ts: 'Jul 15', text: 'claim advanced — “Sensor drift is temperature-driven” → supported', elId: 'el-q1p2' },
+    { ts: 'Jul 16', text: 'contradiction — R12 opposes R9 (opposite sign, winter subset)', loud: true, elId: 'el-q1a1' },
+    { ts: 'Jul 17', text: 'QC sweep on batch 7 — 104 outputs, verdict acceptable, 3 flagged', elId: 'el-run_qc' },
+    { ts: 'Jul 17', text: 'batch 7 upstream source changed (drift flag raised)', elId: 'el-run_qc' },
+    { ts: 'Jul 18', text: 'tidal coefficient join — anomaly rate tracks tides (ρ = 0.61)', elId: 'el-run_springtide' },
+    { ts: 'today', text: 'hold-out check on 2025 data started on hpc — running now', live: true, elId: 'el-run_holdout' },
+  ],
+}
+
+const mBase: World = { ...coastalWorld, work: true, whatsNew: mWhatsNew, digestFig: 'fig_winter' }
+
+/** The live contradiction is a CONDITION — it persists until resolved. */
+const contradictionDelta = { elId: 'el-q1a1', kind: 'condition' as const, label: 'contradiction — R12 opposes R9 (unresolved; hold-out running)' }
 
 /** The Jul 18 sitting under Q2 — filed, distilled, findable. */
 const anomalyDig: SessionRec = {
@@ -330,6 +346,7 @@ const m1: Scene = {
       items: [{ label: 'last session: “anomaly cluster dig”', meta: 'Jul 18 · under Q2 · 1 run', action: 'transcript ▷', sessionId: 'anomaly cluster dig' }],
     },
     sessions: [anomalyDig],
+    deltas: [contradictionDelta],
   },
 }
 
@@ -507,11 +524,12 @@ const m5: Scene = {
     whatsNew: {
       since: 'Jul 19',
       items: [
-        { ts: 'Jul 20', text: 'winter flip is NOT a service artifact — refit excluding serviced stations, 31/48 stations flip (session: winter dig)' },
-        { ts: 'Jul 20', text: 'addendum drafted for Q1 — awaiting ratification' },
-        { ts: 'today', text: 'hold-out check on 2025 data — still running on hpc', live: true },
+        { ts: 'Jul 20', text: 'winter flip is NOT a service artifact — refit excluding serviced stations, 31/48 stations flip (session: winter dig)', elId: 'el-q1a2' },
+        { ts: 'Jul 20', text: 'addendum drafted for Q1 — awaiting ratification', elId: 'el-q1a2' },
+        { ts: 'today', text: 'hold-out check on 2025 data — still running on hpc', live: true, elId: 'el-run_holdout' },
       ],
     },
+    deltas: [contradictionDelta],
     pendingDrafts: 2,
     sections: coastalWorld.sections.map(s => s.id !== 'q1' ? s : {
       ...s,
@@ -594,8 +612,8 @@ const m7: Scene = {
     whatsNew: {
       since: 'Jul 12',
       items: [
-        { ts: 'now', text: 'hold-out finished — winter flip CONFIRMED on 2025 data (−0.31 ± 0.09) → the contradiction resolves', loud: true },
-        ...(coastalWorld.whatsNew?.items.filter(i => !i.live) ?? []),
+        { ts: 'now', text: 'hold-out finished — winter flip CONFIRMED on 2025 data (−0.31 ± 0.09) → the contradiction resolves', loud: true, elId: 'el-q1a1' },
+        ...mWhatsNew.items.filter(i => !i.live),
       ],
     },
     sediment: [...m3Sed, ...matureSed],
@@ -614,7 +632,59 @@ const m7: Scene = {
   },
 }
 
-export const SCENES: Scene[] = [e1, e2, e3, e4, e5, m1, m2, m3, m4, m5, m6, m7]
+// ---- M8 · year 2 — the scale face + the busy-scientist surfaces
+// 8 questions, 4 trails, 214 runs: dormant questions compact to ONE line
+// each (holding their claims); stalled trails fold; the sediment shows its
+// recent window; the triage band still answers the whole visit in one
+// glance, the tray clears the queue without hunting, ⌘K asks or finds from
+// anywhere, and "this week ▸" renders the PI's emailable digest.
+const dormantQs: Section[] = [
+  { id: 'q3', question: 'Is sensor drift reversible after re-calibration?', phase: 'late', paragraphs: [], addenda: [], dormant: { since: 'Feb', holds: 'Re-calibration restores baseline within 0.5% (robust)' } },
+  { id: 'q4', question: 'Do storm events bias the anomaly detector?', phase: 'mid', paragraphs: [], addenda: [], dormant: { since: 'Apr', holds: 'Detector unbiased once storm days are excluded (cross-checked)' } },
+  { id: 'q5', question: 'Can batch 3’s gap be imputed?', phase: 'late', paragraphs: [], addenda: [], dormant: { since: 'Jan', holds: 'Imputation viable for gaps under 6 h (supported)' } },
+  { id: 'q6', question: 'Salinity cross-sensitivity of the pressure channel?', phase: 'mid', paragraphs: [], addenda: [], dormant: { since: 'Mar', holds: 'No detectable cross-sensitivity (supported)' } },
+  { id: 'q7', question: 'Do mooring depths shift after storms?', phase: 'early', paragraphs: [], addenda: [], dormant: { since: 'May' } },
+  { id: 'q8', question: 'Inter-annual comparability — 2024 vs 2025', phase: 'early', paragraphs: [], addenda: [], dormant: { since: 'Jun', holds: 'Comparable after drift correction (conjecture)' } },
+]
+const stalledTrails: Trail[] = [
+  {
+    id: 'T3', title: 'Heavier tails after firmware 2.1', state: 'stalled',
+    fragments: [
+      { ts: 'Feb 11', text: 'Post-update response distributions look heavier-tailed on 6 sensors.' },
+      { ts: 'Mar 02', text: 'Vendor notes mention a filter change in 2.1 — plausible mechanism, unverified.' },
+    ],
+  },
+  {
+    id: 'T4', title: 'North-shore sensors age faster', state: 'stalled',
+    fragments: [
+      { ts: 'Jan 20', text: 'Gain decline slope roughly 2× south-shore units.' },
+      { ts: 'Feb 28', text: 'Could be exposure (fetch) — no covariate data yet.' },
+      { ts: 'Apr 06', text: 'Two more units replaced on the north line; effect persists in the survivors.' },
+    ],
+  },
+]
+const m8: Scene = {
+  id: 'm8', group: 'mature', title: 'year 2 — scale',
+  narration:
+    'Year 2: 8 questions, 4 trails, 214 runs — the SCALE face. Dormant questions ' +
+    'compact to one quiet line each, holding their claims; stalled trails fold; the ' +
+    'sediment shows its recent window. The triage band still answers the visit in one ' +
+    'glance — ⚡ condition, ▢ needs-you (open the tray: ratify, batch-file routine, or ' +
+    'go), ▷ resume. Try ⌘K (“did the hold-out land?”), a what’s-new line as a door, ' +
+    'and “this week ▸” — the emailable digest.',
+  world: {
+    ...m5.world,
+    sections: [...m5.world.sections, ...dormantQs],
+    trails: [...m5.world.trails.map(t => t.id !== 'T1' ? t : {
+      ...t,
+      fragments: t.fragments.map((f, i) => i === t.fragments.length - 1 ? { ...f, draft: true } : f),
+    }), ...stalledTrails],
+    sedimentTotal: 214,
+    deltas: [contradictionDelta],
+  },
+}
+
+export const SCENES: Scene[] = [e1, e2, e3, e4, e5, m1, m2, m3, m4, m5, m6, m7, m8]
 
 export const GROUPS: { id: 'early' | 'mature'; label: string }[] = [
   { id: 'early', label: 'I · early days (day 0–3)' },

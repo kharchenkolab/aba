@@ -51,6 +51,57 @@ function SessGlyph({ live }: { live?: boolean }) {
 const sessionLive = (w: World, id?: string) =>
   (w.sessions ?? []).some(s => (s.id === id || s.label === id) && s.state === 'open')
 
+// ------------------------------------------------------------ pending state
+
+/** Everything awaiting the user, DERIVED from record state (never a
+ *  hand-kept counter — the tray and every count over it must agree by
+ *  construction). Routine items are veto-tier: batchable, auto-filable
+ *  with an undo window. Decisions (addenda, claim drafts) stay manual. */
+export interface PendingItem {
+  key: string
+  kind: 'addendum' | 'fragment' | 'note' | 'claim draft'
+  label: string
+  elId: string
+  routine: boolean
+}
+function derivePending(w: World): PendingItem[] {
+  const out: PendingItem[] = []
+  for (const s of w.sections) {
+    for (const a of s.addenda) if (a.status === 'pending') {
+      out.push({ key: a.id, kind: 'addendum', label: `${s.question} — addendum · ${a.on}`, elId: `el-${a.id}`, routine: false })
+    }
+  }
+  for (const t of w.trails) {
+    t.fragments.forEach((f, i) => {
+      if (f.draft) out.push({ key: `${t.id}:${i}`, kind: 'fragment', label: `${t.id} — “${f.text.slice(0, 56)}…”`, elId: `el-${t.id}`, routine: true })
+    })
+    if (t.nudge) out.push({ key: `${t.id}-nudge`, kind: 'claim draft', label: t.nudge.action, elId: `el-${t.id}`, routine: false })
+  }
+  for (const n of w.looseNotes) if (n.draft) {
+    out.push({ key: n.id, kind: 'note', label: `note — “${n.text.slice(0, 56)}…”`, elId: `el-note-${n.id}`, routine: true })
+  }
+  return out
+}
+
+/** Peripheral deltas = scene-declared + DERIVED amber for every pending
+ *  item's location (same state the tray shows — parity by construction). */
+function effectiveDeltas(w: World, pending: PendingItem[]) {
+  const declared = w.deltas ?? []
+  const derived: NonNullable<World['deltas']> = []
+  const seen = new Set(declared.map(d => d.elId))
+  const byLoc = new Map<string, number>()
+  for (const p of pending) {
+    // amber lands on the TOC-navigable container (section/trail/loose)
+    const loc = p.elId.startsWith('el-note-') ? 'el-loose'
+      : p.kind === 'addendum' ? `el-${p.elId.replace(/^el-/, '').replace(/a\d+$/, '')}` : p.elId
+    byLoc.set(loc, (byLoc.get(loc) ?? 0) + 1)
+  }
+  for (const [elId, count] of byLoc) {
+    if (!seen.has(elId)) derived.push({ elId, kind: 'draft', count, label: `${count} awaiting you` })
+  }
+  return [...declared, ...derived]
+}
+
 // ---------------------------------------------------------------- ref parsing
 
 interface RefCtx {
@@ -65,6 +116,9 @@ interface RefCtx {
   look: (label: string) => void
   /** hold an excerpt on the desk for the session's duration (two-locus work) */
   hold: (elId: string, label: string) => void
+  /** routine drafts are veto-tier: file in place, undoable */
+  accepted: Set<string>
+  accept: (key: string) => void
 }
 
 /** Render prose with [[kind:id|label]] live references. Block-level
@@ -192,6 +246,21 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
 }) {
   const { w } = ctx
   const phaseNote = { early: 'early — mostly noticing', mid: 'mid — condensing', late: 'late — writing up' }[s.phase]
+  // scale face: a dormant question is ONE quiet line — what it asks, what it
+  // holds, since when — with a wake door; no dead scaffolding on screen
+  if (s.dormant) {
+    return (
+      <section className="nsec nsec--dormant" id={`el-${s.id}`}>
+        <span className="nsec__dq">{s.question}</span>
+        {s.dormant.holds && <span className="nsec__dholds" title="the claim this question holds — live maturity">● {s.dormant.holds}</span>}
+        <span className="nsec__dsince">dormant since {s.dormant.since}</span>
+        {w.work && (
+          <button className="nsec__work" onClick={() => onWork?.(s.id)}
+                  title="wake it — a session opens with the question and its history in scope">wake ▸</button>
+        )}
+      </section>
+    )
+  }
   // the live session's home locus wears a STANDING state — scroll away and
   // back, and where the work is landing stays unmistakable
   const anchored = w.anchorAt?.elId === s.id
@@ -303,6 +372,18 @@ function TrailCard({ t, ctx, drafted, onDraft }: {
   t: Trail; ctx: RefCtx; drafted: boolean; onDraft: () => void
 }) {
   const stateWord = { accumulating: 'accumulating', cohering: 'cohering ●', stalled: 'stalled' }[t.state]
+  const [unfolded, setUnfolded] = useState(false)
+  // scale face: stalled trails fold to one line — findable, not loud
+  if (t.state === 'stalled' && !unfolded) {
+    return (
+      <button className="trail trail--folded" id={`el-${t.id}`} onClick={() => setUnfolded(true)}
+              title="stalled — no fragment in a while; folded, never lost">
+        <span className="trail__id">{t.id}</span>
+        <span className="trail__foldtitle">{t.title}</span>
+        <span className="trail__foldmeta">{t.fragments.length} fragments · last {t.fragments[t.fragments.length - 1]?.ts} · stalled — unfold ▾</span>
+      </button>
+    )
+  }
   return (
     <article className={`trail trail--${t.state}`} id={`el-${t.id}`}>
       <div className="trail__head">
@@ -327,7 +408,10 @@ function TrailCard({ t, ctx, drafted, onDraft }: {
                   {ctx.w.figureTitles[f.ref] ?? f.ref}
                 </button>
               )}
-              {f.draft && <span className="draftb" title="drafted by the agent during a working session — enters the trail when you ratify it">draft</span>}
+              {f.draft && (ctx.accepted.has(`${t.id}:${i}`)
+                ? <span className="draftb draftb--done">✓ filed</span>
+                : <button className="draftb draftb--act" onClick={() => ctx.accept(`${t.id}:${i}`)}
+                          title="routine drafts file in place — one click, undoable from the tray">draft — file ✓</button>)}
               {f.src && (
                 <button className="frag__turn" onClick={() => ctx.openSession(f.src!.sess, f.src!.turn)}
                         title="provenance for prose: the exchange that drafted this fragment">
@@ -506,26 +590,52 @@ function searchRecord(w: World, q: string, scope: 'story' | 'noticed' | 'everyth
 
 // ----------------------------------------------------------------- desk strip
 
-/** Glyph grammar (uniform everywhere): the ARROW marks a door to a
- *  session; fill/color carries state — ▷ outline teal = at rest, ▶ filled
- *  green = live now (rhymes with runs' own ▶ state marks). */
-function DeskStrip({ w, held, onOpenSession, onJump }: {
+/** The TRIAGE BAND — one glance answers the whole visit: anything broken
+ *  (⚡ conditions)? anything needs me (▢ → the tray)? anything running (▶)?
+ *  where was I (resume ▷/▶, held ⌖)? Each slot is a DOOR; empty slots
+ *  don't render. Glyph grammar: the ARROW marks a door to a session,
+ *  fill/color carries state — ▷ outline teal = at rest, ▶ filled green =
+ *  live now (rhymes with runs' own ▶ state marks). */
+function TriageBand({ w, pending, deltas, held, trayOpen, onToggleTray, onOpenSession, onJump, children }: {
   w: World
+  pending: PendingItem[]
+  deltas: NonNullable<World['deltas']>
   held: { elId: string; label: string }[]
+  trayOpen: boolean
+  onToggleTray: () => void
   onOpenSession: (id: string) => void
   onJump: (elId: string) => void
+  children?: ReactNode   // the tray, rendered by the parent (owns the state)
 }) {
   const d = w.desk!
+  const conditions = deltas.filter(x => x.kind === 'condition')
+  const running = w.sediment.filter(e => e.state === 'running')
   return (
-    <div className="desk" title="the present tense: open sessions, running work, held excerpts, where you left off">
-      <span className="desk__kicker">at the desk</span>
-      <span className="desk__line">{d.line}</span>
+    <div className="desk" title="the triage band — anything broken? anything needs me? anything running? where was I?">
+      <span className="desk__kicker">now</span>
+      {conditions.length > 0 && (
+        <button className="desk__item desk__cond" onClick={() => onJump(conditions[0].elId)}
+                title={conditions.map(c => c.label).join(' · ')}>
+          ⚡ {conditions.length === 1 ? conditions[0].label.split(' — ')[0] : `${conditions.length} conditions`}
+        </button>
+      )}
+      {pending.length > 0 && (
+        <button className={`desk__item desk__needs ${trayOpen ? 'is-open' : ''}`} onClick={onToggleTray}
+                title="everything awaiting you, in one tray — ratify, file, or defer without hunting">
+          ▢ {pending.length} need{pending.length === 1 ? 's' : ''} you {trayOpen ? '▴' : '▾'}
+        </button>
+      )}
+      {running.length > 0 && (
+        <button className="desk__item is-live" onClick={() => onJump(`el-${running[0].id}`)}
+                title={running.map(r => r.title).join(' · ')}>
+          ▶ {running.length === 1 ? running[0].title : `${running.length} running`}
+        </button>
+      )}
       {d.items.map(i => (
         <button key={i.label} className={`desk__item ${i.live ? 'is-live' : ''}`}
                 onClick={() => { if (i.sessionId) onOpenSession(i.sessionId) }}>
           {i.sessionId ? <><SessGlyph live={i.live} />{' '}</> : null}{i.label}
           <span className="desk__meta"> · {i.meta}</span>
-          {i.action && <span className="desk__act"> {i.action}</span>}
         </button>
       ))}
       {held.map(h => (
@@ -534,6 +644,7 @@ function DeskStrip({ w, held, onOpenSession, onJump }: {
           ⌖ {h.label}
         </button>
       ))}
+      {children}
     </div>
   )
 }
@@ -541,18 +652,19 @@ function DeskStrip({ w, held, onOpenSession, onJump }: {
 /** The delta rail — a minimap of change. Ticks sit at each changed
  *  element's position in the document; three tiers only. Click = jump.
  *  The rail may glow; the page never scrolls itself. */
-function DeltaRail({ w, docRef, onJump }: {
-  w: World
+function DeltaRail({ deltas, seen, docRef, onJump }: {
+  deltas: NonNullable<World['deltas']>
+  seen: Set<string>
   docRef: React.RefObject<HTMLElement | null>
   onJump: (elId: string) => void
 }) {
   const [ticks, setTicks] = useState<{ pct: number; kind: string; elId: string; label: string }[]>([])
   useEffect(() => {
     const doc = docRef.current
-    if (!doc || !w.deltas?.length) { setTicks([]); return }
+    if (!doc || !deltas.length) { setTicks([]); return }
     const t = setTimeout(() => {
       const total = doc.scrollHeight
-      setTicks(w.deltas!.map(d => {
+      setTicks(deltas.map(d => {
         const el = document.getElementById(d.elId)
         if (!el) return null
         const top = el.getBoundingClientRect().top - doc.getBoundingClientRect().top + doc.scrollTop
@@ -560,13 +672,14 @@ function DeltaRail({ w, docRef, onJump }: {
       }).filter(Boolean) as { pct: number; kind: string; elId: string; label: string }[])
     }, 120)   // after layout (images have known aspect from CSS; 120ms suffices for the mock)
     return () => clearTimeout(t)
-  }, [w, docRef])
+  }, [deltas, docRef])
   if (!ticks.length) return null
   return (
     <div className="drail-wrap">
       <div className="drail" title="the delta rail — where change landed, by kind; click a tick to jump">
         {ticks.map(t => (
-          <button key={t.elId + t.kind} className={`drail__tick drail__tick--${t.kind}`}
+          <button key={t.elId + t.kind}
+                  className={`drail__tick drail__tick--${t.kind} ${t.kind === 'accretion' && seen.has(t.elId) ? 'is-seen' : ''}`}
                   style={{ top: `${t.pct}%` }} title={t.label}
                   onClick={() => onJump(t.elId)} />
         ))}
@@ -626,12 +739,39 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
   const [openSed, setOpenSed] = useState<Set<string>>(new Set(w.openSediment ?? []))
   const [ratified, setRatified] = useState<Set<string>>(new Set())
   const [drafted, setDrafted] = useState<Set<string>>(new Set())
-  const [view, setView] = useState<'record' | 'onepager'>(
+  const [accepted, setAccepted] = useState<Set<string>>(new Set())
+  const [trayOpen, setTrayOpen] = useState(() => new URLSearchParams(window.location.search).get('tray') === '1')
+  const [undoable, setUndoable] = useState<{ keys: string[]; label: string } | null>(null)
+  const [seenAcc, setSeenAcc] = useState<Set<string>>(new Set())
+  const [omni, setOmni] = useState<{ open: boolean; q: string; asked: boolean }>({ open: false, q: '', asked: false })
+  const [view, setView] = useState<'record' | 'onepager' | 'digest'>(
     () => new URLSearchParams(window.location.search).get('view') === 'onepager' && w.onePager ? 'onepager' : 'record')
   const [newOpen, setNewOpen] = useState(false)
   const [q, setQ] = useState('')
   const [scope, setScope] = useState<'story' | 'noticed' | 'everything'>('everything')
   const [activeAnchor, setActiveAnchor] = useState('')
+
+  // everything awaiting the user, derived from record state — the tray and
+  // every count over it agree by construction (minus what was acted on here)
+  const pending = useMemo(
+    () => derivePending(w).filter(p =>
+      !ratified.has(p.key) && !accepted.has(p.key) &&
+      !(p.kind === 'claim draft' && drafted.has(p.key.replace('-nudge', '')))),
+    [w, ratified, accepted, drafted])
+  const deltas = useMemo(() => effectiveDeltas(w, pending), [w, pending])
+
+  // ⌘K — the fast entry: ask or find, from anywhere
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setOmni(o => ({ open: !o.open, q: '', asked: false }))
+      }
+      if (e.key === 'Escape') setOmni(o => o.open ? { ...o, open: false } : o)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   // TOC tracks the reader's position: the anchor nearest above the upper
   // third of the document column is "where you are".
@@ -643,13 +783,25 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
   ]
   const onDocScroll = (e: React.UIEvent<HTMLElement>) => {
     const doc = e.currentTarget
-    const line = doc.getBoundingClientRect().top + doc.clientHeight / 3
+    const rect = doc.getBoundingClientRect()
+    const line = rect.top + doc.clientHeight / 3
     let best = ''
     for (const id of ANCHORS) {
       const el = document.getElementById(id)
       if (el && el.getBoundingClientRect().top <= line) best = id
     }
     if (best !== activeAnchor) setActiveAnchor(best)
+    // lifecycle: ACCRETION signals clear once their region has been seen —
+    // routine ticks must never become wallpaper (amber/red persist)
+    for (const d of deltas) {
+      if (d.kind !== 'accretion' || seenAcc.has(d.elId)) continue
+      const el = document.getElementById(d.elId)
+      if (!el) continue
+      const r = el.getBoundingClientRect()
+      if (r.top < rect.bottom && r.bottom > rect.top) {
+        setSeenAcc(s => new Set(s).add(d.elId))
+      }
+    }
   }
 
   const scrollTo = (domId: string) => {
@@ -673,6 +825,8 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
     openSession: (id, turn) => { if (findSession(id)) { setSessDock(null); setSessPage({ id, turn }) } },
     look: label => setLookingAt(label),
     hold: (elId, label) => setHeld(h => h.some(x => x.elId === elId) ? h : [...h, { elId, label }]),
+    accepted,
+    accept: key => { setAccepted(s => new Set(s).add(key)); setUndoable({ keys: [key], label: 'filed 1 item' }) },
   }
   const hits = useMemo(() => (q.trim() ? searchRecord(w, q, scope) : []), [w, q, scope])
   const behindLine = w.pendingDrafts > 0
@@ -708,6 +862,55 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
     )
   }
 
+  // ------------------------------------------------ weekly digest
+  // the busy PI's consumption format for projects they don't open daily:
+  // conditions · needs-you · what's new · one figure — auto-rendered
+  if (view === 'digest' && w.whatsNew) {
+    // conditions come from BOTH loud news and standing condition deltas —
+    // a condition that made no news this week is still a condition
+    const loud = [
+      ...w.whatsNew.items.filter(i => i.loud).map(i => i.text),
+      ...deltas.filter(d => d.kind === 'condition' && !w.whatsNew!.items.some(i => i.loud && i.elId === d.elId)).map(d => d.label),
+    ]
+    const news = w.whatsNew.items.filter(i => !i.loud)
+    return (
+      <div className="rec rec--onepager">
+        <main className="doc doc--onepager">
+          <div className="doc__viewbar">
+            <button className="btn" onClick={() => setView('record')}>← full record</button>
+            <span className="doc__viewnote">auto-rendered from the record · emailable · the format for the four projects you don't open daily</span>
+          </div>
+          <h1>{w.project.title} — this week</h1>
+          <div className="op__sig">since {w.whatsNew.since} · {w.whatsNew.items.length} events · {pending.length} awaiting you</div>
+          {loud.length > 0 && (
+            <section className="dg__block dg__block--cond">
+              <h2>⚡ conditions</h2>
+              {loud.map((t, k) => <p key={k}>{t}</p>)}
+            </section>
+          )}
+          {pending.length > 0 && (
+            <section className="dg__block dg__block--needs">
+              <h2>▢ needs you · {pending.length}</h2>
+              {pending.map(p => <p key={p.key}>{p.label}</p>)}
+            </section>
+          )}
+          {news.length > 0 && (
+            <section className="dg__block">
+              <h2>new this week</h2>
+              {news.map((i, k) => <p key={k}><span className="wnew__ts">{i.ts}</span>{i.text}</p>)}
+            </section>
+          )}
+          {w.digestFig && (
+            <figure className="fig">
+              <img src={ART(w.digestFig)} alt="figure of the week" />
+              <figcaption><span>figure of the week — {w.figureTitles[w.digestFig] ?? w.digestFig}</span></figcaption>
+            </figure>
+          )}
+        </main>
+      </div>
+    )
+  }
+
   // right column: the margin bench wins (same instrument, narrower scope);
   // otherwise a docked session transcript; otherwise the live session.
   const docked = sessDock ? findSession(sessDock) : undefined
@@ -723,12 +926,14 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
             lookingAt={lookingAt}
             onShowRef={elId => scrollTo(elId)} />
         : null
-  // peripheral change signals on the TOC: pulse badges, three tiers
+  // peripheral change signals on the TOC: pulse badges, three tiers;
+  // accretion fades once seen (lifecycle), amber/red persist until resolved
   const deltaBadge = (elId: string) => {
-    const d = w.deltas?.find(x => x.elId === elId)
+    const d = deltas.find(x => x.elId === elId)
     if (!d) return null
+    const seen = d.kind === 'accretion' && seenAcc.has(d.elId)
     return (
-      <span className={`toc__delta toc__delta--${d.kind}`} title={d.label}>
+      <span className={`toc__delta toc__delta--${d.kind} ${seen ? 'is-seen' : ''}`} title={d.label}>
         {d.kind === 'condition' ? '⚡' : `+${d.count ?? 1}`}
       </span>
     )
@@ -770,11 +975,21 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
         )}
         <div className="toc__group">sediment</div>
         <button className={`toc__item ${activeAnchor === 'el-sediment' ? 'is-active' : ''}`} onClick={() => scrollTo('el-sediment')}>
-          {w.sediment.length} run{w.sediment.length === 1 ? '' : 's'} · complete · automatic
+          {w.sedimentTotal ?? w.sediment.length} run{(w.sedimentTotal ?? w.sediment.length) === 1 ? '' : 's'} · complete · automatic
           {deltaBadge('el-sediment')}
         </button>
 
         <div className="toc__spacer" />
+        <button className="toc__omni" onClick={() => setOmni({ open: true, q: '', asked: false })}
+                title="ask or find, from anywhere — typing is the fastest move (⌘K)">
+          ⌘K · ask or find
+        </button>
+        {w.whatsNew && (
+          <button className="toc__onepager" onClick={() => setView('digest')}
+                  title="this week in the project — conditions, decisions, new results; auto-rendered, emailable">
+            this week ▸
+          </button>
+        )}
         {w.onePager && (
           <button className="toc__onepager" onClick={() => setView('onepager')}
                   title="the same record rendered for the one-number visitor (§ focus spectrum)">
@@ -820,7 +1035,7 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
           onDock={() => { setSessDock(pageSess.id); setSessPage(null) }} />
       ) : (
       <main className="doc" onScroll={onDocScroll} ref={docRef}>
-        <DeltaRail w={w} docRef={docRef} onJump={elId => scrollTo(elId)} />
+        <DeltaRail deltas={deltas} seen={seenAcc} docRef={docRef} onJump={elId => scrollTo(elId)} />
         <header className="doc__head">
           <h1>{w.project.title}</h1>
           <div className="doc__sub">
@@ -828,8 +1043,63 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
           </div>
         </header>
 
-        {/* the present tense: open sessions, held excerpts, where you left off */}
-        {w.desk && <DeskStrip w={w} held={held} onOpenSession={id => ctx.openSession(id)} onJump={elId => scrollTo(elId)} />}
+        {/* the triage band: conditions · needs-you (tray) · running · resume · held */}
+        {w.desk && (
+          <TriageBand w={w} pending={pending} deltas={deltas} held={held}
+                      trayOpen={trayOpen} onToggleTray={() => setTrayOpen(o => !o)}
+                      onOpenSession={id => ctx.openSession(id)} onJump={elId => { setTrayOpen(false); scrollTo(elId) }}>
+            {trayOpen && (
+              <div className="tray" title="everything awaiting you — derived from the record itself, so this list and the count always agree">
+                <div className="tray__head">
+                  <span>needs you · {pending.length}</span>
+                  {pending.some(p => p.routine) && (
+                    <button className="btn"
+                            title="routine items are veto-tier: batch-file them; decisions (addenda, claim drafts) stay one-by-one"
+                            onClick={() => {
+                              const keys = pending.filter(p => p.routine).map(p => p.key)
+                              setAccepted(s => new Set([...s, ...keys]))
+                              setUndoable({ keys, label: `filed ${keys.length} routine` })
+                            }}>
+                      file all routine ({pending.filter(p => p.routine).length})
+                    </button>
+                  )}
+                  {undoable && (
+                    <button className="tray__undo"
+                            onClick={() => {
+                              setAccepted(s => { const n = new Set(s); undoable.keys.forEach(k => n.delete(k)); return n })
+                              setRatified(s => { const n = new Set(s); undoable.keys.forEach(k => n.delete(k)); return n })
+                              setUndoable(null)
+                            }}>
+                      ✓ {undoable.label} — undo
+                    </button>
+                  )}
+                </div>
+                {pending.length === 0 && <div className="tray__empty">nothing needs you — the record is current</div>}
+                {pending.map(p => (
+                  <div key={p.key} className="tray__row">
+                    <span className={`tray__kind tray__kind--${p.routine ? 'routine' : 'decision'}`}>{p.kind}</span>
+                    <span className="tray__label">{p.label}</span>
+                    {p.kind === 'addendum' && (
+                      <button className="btn btn--primary"
+                              onClick={() => { setRatified(s => new Set(s).add(p.key)); setUndoable({ keys: [p.key], label: 'ratified 1' }) }}>
+                        Ratify
+                      </button>
+                    )}
+                    {p.routine && (
+                      <button className="btn"
+                              onClick={() => { setAccepted(s => new Set(s).add(p.key)); setUndoable({ keys: [p.key], label: 'filed 1' }) }}>
+                        file ✓
+                      </button>
+                    )}
+                    <button className="btn" onClick={() => { setTrayOpen(false); scrollTo(p.elId) }}
+                            title="see it in context before deciding">go →</button>
+                  </div>
+                ))}
+                <div className="tray__foot">decide here or in place — same state either way · dismissals are remembered</div>
+              </div>
+            )}
+          </TriageBand>
+        )}
 
         {/* what's new */}
         {w.whatsNew && (
@@ -844,12 +1114,18 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
                   </span>
                 ))}
               </span>
-              <span className="wnew__behind" title="degradation is visible and recoverable, never silent rot">{behindLine}</span>
+              {!w.desk && <span className="wnew__behind" title="degradation is visible and recoverable, never silent rot">{behindLine}</span>}
               <span>{newOpen ? '▾' : '▸'}</span>
             </button>
             {newOpen && (
               <div className="wnew__body">
-                {w.whatsNew.items.map((i, k) => (
+                {/* every item is a DOOR: the strip names work AND takes you there */}
+                {w.whatsNew.items.map((i, k) => i.elId ? (
+                  <button key={k} className={`wnew__item wnew__item--door ${i.loud ? 'is-loud' : ''}`}
+                          onClick={() => scrollTo(i.elId!)} title="jump to it">
+                    <span className="wnew__ts">{i.ts}</span>{i.text}<span className="wnew__go"> →</span>
+                  </button>
+                ) : (
                   <div key={k} className={`wnew__item ${i.loud ? 'is-loud' : ''}`}>
                     <span className="wnew__ts">{i.ts}</span>{i.text}
                   </div>
@@ -896,7 +1172,10 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
                           {w.figureTitles[n.ref] ?? n.ref}
                         </button>
                       )}
-                      {n.draft && <span className="draftb" title="drafted by the agent during a working session — not yet ratified">draft</span>}
+                      {n.draft && (accepted.has(n.id)
+                        ? <span className="draftb draftb--done">✓ filed</span>
+                        : <button className="draftb draftb--act" onClick={() => ctx.accept(n.id)}
+                                  title="routine drafts file in place — one click, undoable from the tray">draft — file ✓</button>)}
                     </span>
                   </div>
                 ))}
@@ -988,6 +1267,8 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
           </div>
           <div className="sed-foot">
             append-only · chronological · the machine keeps this stratum; retention rides on each line
+            {w.sedimentTotal && w.sedimentTotal > w.sediment.length &&
+              <> · showing the recent window — all {w.sedimentTotal} runs in the archive, searchable</>}
           </div>
         </div>
 
@@ -1002,6 +1283,40 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
       {/* keyed by anchor: each element's margin conversation is its own —
           switching targets must never carry the previous exchange along */}
       {showRight}
+
+      {/* ---------- ⌘K omnibox: ask or find, from anywhere ---------- */}
+      {omni.open && (
+        <div className="omni" onClick={e => { if (e.target === e.currentTarget) setOmni(o => ({ ...o, open: false })) }}>
+          <div className="omni__box">
+            <input autoFocus value={omni.q} placeholder="Ask Guide, or find anything — “did the hold-out land?”…"
+                   onChange={e => setOmni(o => ({ ...o, q: e.target.value, asked: false }))} />
+            {omni.q.trim() && (
+              <div className="omni__hits">
+                <button className="omni__ask" onClick={() => setOmni(o => ({ ...o, asked: true }))}>
+                  ✦ ask Guide: “{omni.q.trim()}”
+                </button>
+                {omni.asked && (
+                  <div className="omni__answer">
+                    Canned in the storyboard — in the real system this asks with the whole
+                    Record in scope. Typing is the first move from anywhere, not just day 0.
+                  </div>
+                )}
+                {searchRecord(w, omni.q, 'everything').map((h, i) => (
+                  <button key={i} className="toc__hit" onClick={() => {
+                    if (h.sess) ctx.openSession(h.sess.id, h.sess.turn)
+                    else if (h.domId) { setSessPage(null); const id = h.domId; setTimeout(() => scrollTo(id), 80) }
+                    setOmni(o => ({ ...o, open: false }))
+                  }}>
+                    <span className={`toc__hit-stratum toc__hit-stratum--${h.stratum}`}>{h.stratum}</span>
+                    {h.label}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="omni__note">⌘K from anywhere · finds what was said, not just what was kept · Esc closes</div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

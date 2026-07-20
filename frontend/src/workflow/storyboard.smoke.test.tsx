@@ -97,6 +97,29 @@ describe('workflow storyboard', () => {
     unmount()
   })
 
+  it('M8 is the scale + triage face: band slots, tray parity, dormant/stalled compaction', () => {
+    const { getByText, container, unmount } = render(<Record world={SCENES[12].world} />)
+    getByText(/4 need you/)                                       // band count (derived)
+    fireEvent.click(getByText(/4 need you/))
+    expect(container.querySelectorAll('.tray__row').length).toBe(4)  // tray parity with the count
+    fireEvent.click(getByText(/file all routine/))
+    getByText(/3 need you/)                                       // batch-file drops the count
+    getByText('✓ filed')                                          // …and flips the in-place badge
+    expect(container.querySelectorAll('.nsec--dormant').length).toBe(6)
+    expect(container.querySelectorAll('.trail--folded').length).toBe(2)
+    getByText(/214 runs · complete · automatic/)
+    getByText(/⚡ contradiction/)
+    unmount()
+  })
+
+  it("what's-new items are doors (clickable when they have a target)", () => {
+    const { getByText, container, unmount } = render(<Record world={SCENES[9].world} />)
+    fireEvent.click(container.querySelector('.wnew__head')!)
+    const door = getByText(/addendum drafted for Q1/).closest('button')
+    expect(door).toBeTruthy()
+    unmount()
+  })
+
   it('the plain notebook world still renders (default Record)', () => {
     const { getAllByText, getByText, unmount } = render(<Record />)
     expect(getAllByText('Coastal sensor study').length).toBeGreaterThan(0)

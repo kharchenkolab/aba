@@ -41,6 +41,9 @@ export interface Section {
   open?: string[]
   /** archived working sessions filed under this question */
   sessions?: { label: string; when: string; meta: string }[]
+  /** scale face: a dormant question compacts to ONE quiet line — question,
+   *  what it holds, since when — with a wake ▸ door. No dead scaffolding. */
+  dormant?: { since: string; holds?: string }
 }
 
 export interface Fragment {
