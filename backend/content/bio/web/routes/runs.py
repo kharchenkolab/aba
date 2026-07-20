@@ -290,6 +290,31 @@ def run_bring_back(rid: str, force: bool = False, _pid: str = Depends(require_pr
     return out
 
 
+@router.get("/api/runs/{rid}/execs")
+def run_execs(rid: str, limit: int = 200):
+    """The Run's execution records with their PLACEMENT PROVENANCE — exec id,
+    kind, language, status, and the `compute` block (substrate / site / kernel
+    or task identity) each record was stamped with. This is the mechanism-truth
+    surface: it says HOW each step actually ran (which substrate, which
+    machine), independent of what the step produced. Backs provenance display
+    and the regtest transport oracle (a migration's success criterion is
+    mechanism, and outcome-level surfaces cannot see it)."""
+    _run_or_404(rid)
+    from core.graph import exec_records
+    out = []
+    for row in exec_records.list_by_run(rid, limit=limit):
+        rec = exec_records.get(row.get("exec_id")) or {}
+        out.append({"exec_id": row.get("exec_id"),
+                    "status": row.get("status"),
+                    "started_at": row.get("started_at"),
+                    "kind": rec.get("kind"),
+                    "language": rec.get("language"),
+                    "executor": rec.get("executor"),
+                    "compute": rec.get("compute"),
+                    "weft_target": rec.get("weft_target")})
+    return {"execs": out}
+
+
 @router.get("/api/runs/{run_id}/artifacts")
 def list_run_artifacts(run_id: str):
     """All artifacts produced by every exec attributed to this Run.

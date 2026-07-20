@@ -22,6 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from surfaces import surface_parity_failures  # noqa: E402
+from transport import transport_truth  # noqa: E402
 
 try:
     import requests as _rq
@@ -108,9 +109,16 @@ def main() -> int:
             all_fails.append(f"{pid}: open_failed:{e}")
             continue
         fails = surface_parity_failures(c, pid, max_fetches=60)
+        # mechanism truth alongside surface truth: recent exec records must
+        # say the SUBSTRATE ran them — a deployment misconfigured onto a
+        # legacy lane looks identical on every outcome surface, and only
+        # this check catches it (the lesson of the kernel-transport gap)
+        tt = transport_truth(c, pid, max_runs=8)
+        fails += tt["failures"]
         for f in fails:
             all_fails.append(f"{pid}: {f}")
-        print(f"[{pid}] {'OK' if not fails else f'{len(fails)} failure(s)'}")
+        print(f"[{pid}] {'OK' if not fails else f'{len(fails)} failure(s)'}"
+              f" (execs checked: {tt['checked']})")
 
     if initial and not only:
         try:
