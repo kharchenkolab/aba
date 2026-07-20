@@ -1638,14 +1638,36 @@ def propose_capability_tool(input_: dict) -> dict:
     return {"status": "approved", "name": name, "archetype": archetype, "note": note}
 
 
+# FTP tree hosts that also serve the SAME paths over HTTPS. ftp:// transfers
+# truncate SILENTLY on many HPC compute nodes (no error, a short/partial file that
+# later fails as "corrupt gzip") and urllib's ftp handler usually can't report a
+# Content-Length, so the truncation is undetectable. HTTPS gives a verifiable
+# Content-Length and is reliable on the same nodes. (Live 2026-07-21: an ftp://
+# GEO download truncated; the https:// mirror of the identical path was clean.)
+_FTP_TO_HTTPS_HOSTS = {"ftp.ncbi.nlm.nih.gov", "ftp.ensembl.org", "ftp.ebi.ac.uk"}
+
+
+def _prefer_https(url: str) -> str:
+    """Rewrite ftp:// → https:// for hosts that mirror the same tree over HTTPS."""
+    from urllib.parse import urlsplit
+    p = urlsplit(url)
+    if p.scheme == "ftp" and (p.hostname in _FTP_TO_HTTPS_HOSTS):
+        rest = p.path + (f"?{p.query}" if p.query else "")
+        return f"https://{p.hostname}{rest}"
+    return url
+
+
 def fetch_url(input_: dict, ctx: dict | None = None) -> dict:
-    """Download a URL into the project's fetch scratch (P4). Size-gated + audited."""
+    """Download a URL into the project's fetch scratch (P4). Size-gated + audited.
+    Prefers HTTPS over FTP and verifies the full Content-Length, retrying a
+    truncated transfer instead of returning a short file that later reads as
+    corrupt (the silent-FTP-truncation failure, live 2026-07-21)."""
     import urllib.request
     from core.data.workspace import scratch_dir
     from core.graph.audit import log_event
     from core import projects
 
-    url = (input_.get("url") or "").strip()
+    url = _prefer_https((input_.get("url") or "").strip())
     if not url:
         return {"error": "url is required"}
     filename = input_.get("filename") or url.split("?")[0].rstrip("/").split("/")[-1] or "download"
@@ -1654,22 +1676,34 @@ def fetch_url(input_: dict, ctx: dict | None = None) -> dict:
     threshold = 5 * 1024 ** 3
     mode = config.settings.capability_approval.get()
     # Some hosts (e.g. Bioconductor) 403 the default urllib user-agent.
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (ABA)"})
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            clen = int(resp.headers.get("Content-Length") or 0)
-            if clen > threshold and mode == "ask":
-                return {"status": "needs_approval", "url": url, "bytes": clen,
-                        "note": f"Download is ~{clen} bytes (over threshold); approval required in ask mode."}
-            total = 0
-            with open(dest, "wb") as f:
-                for chunk in iter(lambda: resp.read(1 << 20), b""):
-                    f.write(chunk)
-                    total += len(chunk)
-    except Exception as e:  # noqa: BLE001
-        return {"error": f"fetch failed: {e}"}
-    log_event("data_fetched", title=filename, detail={"url": url, "bytes": total, "path": str(dest)})
-    return {"status": "ok", "path": str(dest), "filename": filename, "bytes": total}
+    headers = {"User-Agent": "Mozilla/5.0 (ABA)"}
+    last_err = None
+    for _attempt in range(3):
+        try:
+            with urllib.request.urlopen(
+                    urllib.request.Request(url, headers=headers), timeout=120) as resp:
+                clen = int(resp.headers.get("Content-Length") or 0)
+                if clen > threshold and mode == "ask":
+                    return {"status": "needs_approval", "url": url, "bytes": clen,
+                            "note": f"Download is ~{clen} bytes (over threshold); approval required in ask mode."}
+                total = 0
+                with open(dest, "wb") as f:
+                    for chunk in iter(lambda: resp.read(1 << 20), b""):
+                        f.write(chunk)
+                        total += len(chunk)
+        except Exception as e:  # noqa: BLE001
+            last_err = f"fetch failed: {e}"
+            continue
+        # A known Content-Length we didn't fully receive = a truncated transfer
+        # (the exact silent-corruption case). Retry rather than hand back a short file.
+        if clen and total < clen:
+            last_err = f"truncated: received {total} of {clen} bytes"
+            continue
+        log_event("data_fetched", title=filename,
+                  detail={"url": url, "bytes": total, "path": str(dest)})
+        return {"status": "ok", "path": str(dest), "filename": filename,
+                "bytes": total, "verified": bool(clen)}
+    return {"error": last_err or "fetch failed", "url": url}
 
 
 def lookup_sra_runinfo(input_: dict, ctx: dict | None = None) -> dict:
