@@ -111,9 +111,14 @@ def env_overview(project_id: Optional[str] = None) -> dict:
                 "prefix": str(info["prefix"]) if info["prefix"] else None,
                 "materialized": info["materialized"],
                 "source": rt.get("source"),
-                "identity": (rt.get("env_id") if not info["materialized"] else
+                # weft contract: env_id is NULL once mutated (a clone OR a
+                # cold-base pylib overlay) — scratch has no identity until
+                # snapshot; unmutated sessions carry the base's identity
+                "identity": (rt.get("env_id") or
                              "unhashed scratch — snapshot before recording results"),
             })
+            if rt.get("pylib"):
+                session["overlay"] = rt["pylib"]   # cold-base pylib layer
         except Exception:  # noqa: BLE001 — session not realizable
             pass
     return {
@@ -198,11 +203,25 @@ def env_layers(project_id: Optional[str] = None) -> dict:
     py_layers = []
     if project_id and _bev.active("python"):
         try:
-            py_sess = _penv.prefix(str(project_id), "python")
-            py_layers.append(
-                {"tier": "session", "scope": "project", "project_id": project_id,
-                 "delivery": "weft", "mutable": True, "path": str(py_sess),
-                 "packages": _py_packages([str(p) for p in _site_paths(py_sess)])})
+            _info = _penv.ensure(str(project_id), "python")
+            _rt = _info["runtime"]
+            if _rt.get("pylib"):
+                # cold-base session: the session's own layer is a PYLIB overlay
+                # over the mounted base (a flat --target dir; dist-info scans
+                # directly) — the base itself is below it, read-only
+                py_layers.append(
+                    {"tier": "session", "scope": "project", "project_id": project_id,
+                     "delivery": "weft", "mutable": True, "mode": "pylib-overlay",
+                     "path": str(_rt["pylib"]),
+                     "packages": _py_packages([str(_rt["pylib"])])})
+            elif _rt.get("direct_exec") and _info["prefix"] is not None:
+                py_sess = _info["prefix"]
+                py_layers.append(
+                    {"tier": "session", "scope": "project", "project_id": project_id,
+                     "delivery": "weft", "mutable": True, "path": str(py_sess),
+                     "packages": _py_packages([str(p) for p in _site_paths(py_sess)])})
+            # else: activation-only with no scannable dir — no session layer
+            # (the runtime truth still shows in env_overview)
         except Exception:  # noqa: BLE001 — session not realizable → no session layer
             pass
     for name in iso_names:

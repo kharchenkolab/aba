@@ -1381,6 +1381,21 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         except Exception as e:  # noqa: BLE001
             if _mod:
                 return _mod_covered(f"isn't needed there and failed: {e}")
+            from core.compute.errors import ComputeError as _CE
+            if isinstance(e, _CE) and e.code == "session.cold_base":
+                # refusal-with-lever: on an adopted/mounted (cold-cache) base a
+                # conda add would re-download the whole base. ABA's lever is the
+                # isolated-env lane (a delta env over the base — only the
+                # missing closure is fetched); relay the substrate's own levers
+                # alongside it.
+                return {"status": "error", "name": name, "error": e.to_payload(),
+                        "note": (f"conda install into the default env is refused on this "
+                                 f"deployment: the base env is an adopted read-only mount "
+                                 f"(cold package cache) — a writable clone would re-download "
+                                 f"the entire base. Use an ISOLATED env instead: "
+                                 f"create_env(name=..., packages=[...]) then "
+                                 f"ensure_capability(..., env=name) — it solves as a delta "
+                                 f"over the base and fetches only what's missing.")}
             return {"status": "error", "name": name, "note": f"conda install failed: {e}"}
         _note = ("Installed into the project's weft session; the binary is on PATH — "
                  "invoke it from run_python via subprocess.")

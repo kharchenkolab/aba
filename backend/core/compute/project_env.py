@@ -148,9 +148,12 @@ def _current_runtime(session_id: str) -> Optional[dict]:
 
 def _ensure_out(session_id: str, base_eid: str, rt: dict) -> dict:
     p = rt.get("prefix")
+    # "materialized" = the session owns an on-disk layer of its own: a full
+    # clone (source=session) OR a cold-base PYLIB overlay over the mount
+    # (source stays "base", runtime carries `pylib`; weft 6070bfc).
     return {"session_id": session_id, "base_env_id": base_eid, "runtime": rt,
             "prefix": Path(p) if p else None,
-            "materialized": rt.get("source") == "session"}
+            "materialized": rt.get("source") == "session" or bool(rt.get("pylib"))}
 
 
 def ensure(pid: str, language: str) -> dict:

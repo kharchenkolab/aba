@@ -404,3 +404,85 @@ def test_verify_python_imports_argv_builder():
         ["json"], python_exe="/nonexistent/bin/python",
         argv_builder=lambda args: [sys.executable, *args])
     assert ok2
+
+
+# ── cold-base sessions (weft 6070bfc: pylib overlay over a mounted base) ─────
+
+class _ColdBaseStub(_LazyStub):
+    """Adopted/unpacked (cold package cache) base: a pypi add materializes a
+    PYLIB overlay over the mount — source stays "base", env_id nulls (mutated
+    scratch), activation composes overlay.sh, direct exec can't see the layer;
+    a conda add refuses with session.cold_base + levers."""
+
+    def _pylib(self, sid):
+        return WS / "site-local" / f"sessions/{sid}" / "pylib"
+
+    def _rt(self, sid) -> dict:
+        s = self.sessions[sid]
+        rt = {"source": "base", "env_id": s["base_env_id"],
+              "prefix": str(BASE_PREFIX), "activation": BASE_ACT,
+              "ns_wrap": False, "direct_exec": True}
+        if s.get("mode") == "pylib":
+            rt.update(env_id=None,
+                      activation=f"{BASE_ACT} && . overlay.sh",
+                      direct_exec=False, pylib=str(self._pylib(sid)))
+        return rt
+
+    async def session_install(self, sid, **kw):
+        if kw.get("conda"):
+            raise ComputeError(
+                "session.cold_base",
+                "adding conda package(s) needs a writable clone of the base, "
+                "but the base was adopted/unpacked on this site (cold cache)",
+                stage="realize",
+                hints={"options": {"extends": "mint a delta env",
+                                   "warm_site": "run where the base was built",
+                                   "full_clone": "full_clone=true (needs egress)"}})
+        self.installs.append((sid, kw))
+        self.sessions[sid]["mode"] = "pylib"
+        self._pylib(sid).mkdir(parents=True, exist_ok=True)
+        return {"installed": kw, "mode": "pylib", "runtime": self._rt(sid)}
+
+
+@pytest.fixture()
+def cold(monkeypatch):
+    yield _install_stub(monkeypatch, _ColdBaseStub())
+    base_env.reset_cache()
+
+
+def test_cold_base_pypi_pylib_overlay(cold):
+    project_env.ensure("prj_c1", "python")
+    res = project_env.install("prj_c1", "python", ["toolz"], eco="pypi")
+    rt = res["runtime"]
+    assert rt.get("pylib") and rt["direct_exec"] is False and rt["env_id"] is None
+    out = project_env.ensure("prj_c1", "python")
+    assert out["materialized"] is True          # the pylib layer IS the session's own
+    argv = project_env.exec_argv("prj_c1", "python", ["-c", "1"])
+    assert argv[:2] == ["bash", "-c"] and "overlay.sh" in argv[2]
+    # the overlay is env-var composed — invisible to a bare path exec
+    with pytest.raises(ComputeError) as ei:
+        project_env.interpreter("prj_c1", "python")
+    assert ei.value.code == "session.no_direct_exec"
+
+
+def test_cold_base_conda_refusal_propagates(cold):
+    project_env.ensure("prj_c2", "python")
+    with pytest.raises(ComputeError) as ei:
+        project_env.install("prj_c2", "python", ["somepkg"], eco="conda")
+    assert ei.value.code == "session.cold_base"
+    assert "options" in (ei.value.hints or {})
+    # a refused install records NO phantom addition (nothing to replay)
+    assert (project_env.get("prj_c2", "python") or {}).get("additions") == []
+
+
+def test_cold_base_overview_and_layers(cold):
+    from core.exec.env_integrity import env_overview, env_layers
+    s0 = env_overview("prj_c3")["session"]
+    assert s0["identity"] == "env:v1:packbase"      # unmutated: base identity
+    project_env.install("prj_c3", "python", ["toolz"], eco="pypi")
+    s1 = env_overview("prj_c3")["session"]
+    assert s1["materialized"] is True and "unhashed scratch" in (s1["identity"] or "")
+    assert s1.get("overlay", "").endswith("pylib")
+    layers = env_layers("prj_c3")["python"]["layers"]
+    sess = [l for l in layers if l["tier"] == "session"]
+    assert sess and sess[0].get("mode") == "pylib-overlay"
