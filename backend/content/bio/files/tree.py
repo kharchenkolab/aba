@@ -72,6 +72,70 @@ def _file_meta(e: dict) -> dict:
     return {"size": size, "mtime": mtime, "disk_path": str(disk) if disk else None}
 
 
+def _dataset_home_site(e: dict) -> Optional[str]:
+    """The site a dataset's bytes live on, from `metadata.home.site`; None if unset."""
+    return ((e.get("metadata") or {}).get("home") or {}).get("site")
+
+
+def _dataset_descriptor(e: dict) -> dict:
+    """`{top, n_files, total_bytes}` for a dataset — from `metadata.descriptor`,
+    falling back to `metadata.fingerprint`. `top` is the real first-level names the
+    controller captured even when it never holds the bytes."""
+    md = e.get("metadata") or {}
+    desc = md.get("descriptor") or {}
+    fp = md.get("fingerprint") or {}
+    top = desc.get("top") or fp.get("top") or []
+    n_files = desc.get("n_files") or fp.get("n_files") or len(top)
+    total_bytes = desc.get("total_bytes") or fp.get("total_bytes")
+    return {"top": list(top), "n_files": n_files or 0, "total_bytes": total_bytes}
+
+
+def _is_remote_dataset(e: dict) -> bool:
+    """A by-reference / non-local-home dataset — its bytes are on another site, so
+    the controller's local disk walk must not run (it would fabricate a `.bin`)."""
+    md = e.get("metadata") or {}
+    site = _dataset_home_site(e)
+    return bool(md.get("by_reference")) or bool(site and site != "local")
+
+
+def _is_remote_dir_dataset(e: dict) -> bool:
+    """A remote dataset shaped as a directory (more than one real file) — the case
+    `_leaf_name` must not coerce into a single `.bin`."""
+    return _is_remote_dataset(e) and (_dataset_descriptor(e)["n_files"] or 0) > 1
+
+
+def _remote_dataset_node(e: dict, seg: str) -> dict:
+    """Build a dataset node for a remote/by-reference home from the captured
+    descriptor — NEVER the controller's local disk (which holds no bytes). A
+    directory home (n_files > 1) becomes an entity-backed folder with one child per
+    real filename (sizes unknown → null, not a lie); a single-file home stays a
+    leaf. Each node carries `site` so the UI can label the home."""
+    site = _dataset_home_site(e)
+    desc = _dataset_descriptor(e)
+    top, n_files = desc["top"], desc["n_files"]
+    ap = (e.get("artifact_path") or "").rstrip("/")
+    if n_files > 1 or len(top) > 1:
+        ds = _folder(seg, path=f"datasets/{seg}", entity=e)
+        ds["site"] = site
+        for nm in top:
+            ds["children"].append({
+                "kind": "file",
+                "name": nm,
+                "path": f"datasets/{seg}/{nm}",
+                "entity_id": None,
+                "entity_type": None,
+                "title": nm,
+                "artifact_path": (f"{ap}/{nm}" if ap else None),
+                "size": None,      # per-file size isn't captured; total_bytes is aggregate
+                "mtime": None,
+                "site": site,
+            })
+        return ds
+    node = _file_node(e, path=f"datasets/{_leaf_name(e)}")
+    node["site"] = site
+    return node
+
+
 def _leaf_name(e: dict) -> str:
     """Filename for a leaf entity. Uses title slug + extension lookup;
     name_with_ext skips an already-present suffix so a title like
@@ -81,6 +145,12 @@ def _leaf_name(e: dict) -> str:
     if t in PROSE_EXTS:
         return name_with_ext(slug, PROSE_EXTS[t])
     ext = ext_from_artifact(e, default=".bin")
+    # Guard: a remote/by-reference DIRECTORY home has a dot-less final segment
+    # (e.g. `.../GSM5746259`), which would otherwise coerce into a fabricated
+    # single ".bin" leaf. Such a dataset is rendered from its descriptor (see the
+    # datasets branch below); never invent an extension for it here.
+    if ext == ".bin" and _is_remote_dir_dataset(e):
+        ext = ""
     return name_with_ext(slug, ext)
 
 
@@ -438,6 +508,13 @@ def build_files_tree(*, include_archived: bool = False) -> dict:
         for d in sorted(datasets, key=lambda x: x.get("created_at") or ""):
             placed_in_thread.add(d["id"])  # datasets aren't orphans
             ap = d.get("artifact_path")
+            # Remote / by-reference home: the bytes are on another site, so build
+            # the listing from the captured descriptor (real filenames) rather than
+            # walking the controller's local disk — which holds nothing and would
+            # fabricate a title-slug `.bin`.
+            if _is_remote_dataset(d):
+                d_folder["children"].append(_remote_dataset_node(d, _folder_slug(d)))
+                continue
             disk = _resolve_disk(ap) if ap else None
             if disk and _P(disk).is_dir():
                 # A directory dataset (e.g. a 10x bundle / multi-sample download):

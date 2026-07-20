@@ -855,13 +855,125 @@ def _sidecar_files(location: Optional[str]) -> set:
     return out
 
 
+def _kernel_site_map() -> dict:
+    """{target: site} for the compute targets weft currently knows — so a Run's
+    output can be attributed to the machine it lives on. Best-effort; a stopped
+    kernel may be absent (the retained index then supplies the site)."""
+    try:
+        from core.compute import get_compute
+        return {k.get("kernel_id"): k.get("site")
+                for k in (get_compute().sync_call("list_kernels").get("kernels") or [])
+                if k.get("kernel_id")}
+    except Exception:  # noqa: BLE001 — no map just means we fall back to the index
+        return {}
+
+
+def _remote_locate(run_id: str, rel: str) -> Optional[tuple]:
+    """`(target, site, size)` for a Run file whose bytes live on a NON-local site,
+    or None. Sources, in order: retained rows (which carry the target's site) then
+    the Run's live weft targets, confirming existence + size with `file_stat`.
+    Never raises — a substrate hiccup degrades to None (the local tiers already
+    missed, so the caller ends at None either way)."""
+    from core.compute import retention
+    ent = get_entity(run_id) or {}
+    md = ent.get("metadata") or {}
+    kmap = _kernel_site_map()
+    site_of: dict = {}
+    try:
+        for row in (retention.retained(label=run_id) or []):
+            t, s = row.get("target"), row.get("site")
+            if t and s:
+                site_of.setdefault(t, s)
+    except Exception as e:  # noqa: BLE001
+        _log.debug("_remote_locate: retained() failed for %s: %s", run_id, e)
+    # Candidate targets: retained rows + the Run's recorded weft targets.
+    targets = list(dict.fromkeys(list(site_of) + list(md.get("weft_targets") or [])))
+    for t in targets:
+        site = site_of.get(t) or kmap.get(t) or "local"
+        if site == "local":
+            continue
+        try:
+            st = retention.file_stat(t, rel)
+        except Exception:  # noqa: BLE001 — swept / unreachable on this target
+            continue
+        if st.get("exists"):
+            return (t, site, st.get("bytes"))
+    return None
+
+
+def run_output_site(run_id: str, rel: str) -> Optional[str]:
+    """The site where a Run output's bytes live, when that is NOT this controller —
+    for honest "on <site>" messaging in the serving routes. None when the file is
+    local, unknown, or the substrate is unreachable. Best-effort, never raises."""
+    try:
+        hit = _remote_locate(run_id, rel)
+    except Exception:  # noqa: BLE001
+        return None
+    return hit[1] if hit else None
+
+
+def _fetched_cache_dir(run_id: str):
+    """Stable local cache dir for bytes fetched from a remote site to open a Run
+    output — a `<run_id>-fetched` sibling under the project scratch tree, so a
+    second open is a free cache hit (durability + resolvability converge: fetching
+    to view IS bringing a local copy home)."""
+    from core.data.workspace import scratch_dir
+    from core import projects
+    pid = str(projects.current() or "default")
+    return scratch_dir(pid, f"{run_id}-fetched")
+
+
+def _fetch_remote_file(run_id: str, rel: str, target: str,
+                       size: Optional[int]) -> Optional[str]:
+    """Fetch one remote Run file's bytes to the local cache and return the path,
+    or None. Small files (≤ the 8 MB preview cap) ride the `file_read` channel;
+    larger ones (≤ the transparent 50 MB gate) travel the data plane via
+    `retention.retain(dest="@workspace")` — the same location-axis copy bring-back
+    uses. Cache-hit is checked by the caller before we ever fetch."""
+    import os as _os
+    from core.compute import retention
+    dest = _os.path.join(str(_fetched_cache_dir(run_id)), rel)
+    _os.makedirs(_os.path.dirname(dest) or ".", exist_ok=True)
+    if size is not None and size <= _PREVIEW_CAP:
+        try:
+            rd = retention.file_read(target, rel, max_bytes=_PREVIEW_CAP)
+        except Exception:  # noqa: BLE001
+            return None
+        b64 = rd.get("bytes_b64")
+        if b64 is None or rd.get("truncated"):
+            return None
+        import base64
+        with open(dest, "wb") as fh:
+            fh.write(base64.b64decode(b64))
+        return dest
+    # 8–50 MB: location-axis copy into the local workspace, then read it back.
+    try:
+        res = retention.retain(target, include=[rel], dest="@workspace",
+                               label=run_id, background=False)
+    except Exception:  # noqa: BLE001
+        return None
+    loc = retention.location_path(res)
+    if not loc:
+        return None
+    for cand in (_os.path.join(loc, rel), _os.path.join(loc, rel.rsplit("/", 1)[-1])):
+        real = _os.path.realpath(cand)
+        if _os.path.isfile(real):
+            return real
+    return None
+
+
 def resolve_run_file(run_id: str, rel: str) -> Optional[str]:
     """Absolute on-disk path for one of a Run's files, resolved across tiers
     (misc/output_durability.md §6.2): weft's retained tree (a `done` row's
-    `location`) first, then the live sandbox (`artifact_path`). None if not
-    resolvable. Rejects path escapes on every candidate base."""
+    `location`) first, then the live sandbox (`artifact_path`), then — when the
+    bytes live on a NON-local site — a size-gated fetch of a local copy into the
+    `<run_id>-fetched` cache (fetch-on-open == bring-a-copy-home). Files above the
+    transparent 50 MB gate stay remote (None → the /file route reports "on <site>,
+    bring it home"). None if not resolvable. Rejects path escapes on every base;
+    all remote failures degrade to None, never raise into the caller."""
     import os as _os
     from core.compute import retention
+    from core.exec.run import _MAX_HARVEST_BYTES
 
     def _under(base: Optional[str]) -> Optional[str]:
         if not base:
@@ -882,7 +994,28 @@ def resolve_run_file(run_id: str, rel: str) -> Optional[str]:
     except Exception as e:  # noqa: BLE001
         _log.warning("resolve_run_file: retained() failed for %s: %s", run_id, e)
     ent = get_entity(run_id)
-    return _under((ent or {}).get("artifact_path"))
+    local = _under((ent or {}).get("artifact_path"))
+    if local:
+        return local
+    # Remote tier — only when the local tiers missed AND the index/live sandbox
+    # place the file on a non-local site. Transparent below the fetch-on-open gate;
+    # bigger outputs are left for the route to name honestly.
+    try:
+        hit = _remote_locate(run_id, rel)
+        if not hit:
+            return None
+        target, _site, size = hit
+        # cache-hit BEFORE fetching: a prior open already brought it home.
+        cached = _os.path.join(str(_fetched_cache_dir(run_id)), rel)
+        if _os.path.isfile(cached) and (size is None or _os.path.getsize(cached) == size):
+            return cached
+        if size is not None and size > _MAX_HARVEST_BYTES:
+            return None                       # too big to pull transparently
+        return _fetch_remote_file(run_id, rel, target, size)
+    except Exception as e:  # noqa: BLE001 — remote tier degrades to the local result
+        _log.debug("resolve_run_file: remote tier failed for %s/%s: %s",
+                   run_id, rel, e)
+        return None
 
 
 @lru_cache(maxsize=512)
@@ -1138,14 +1271,119 @@ def resolve_project_run_output(name: str, *, max_runs: int = 12) -> Optional[tup
     (capped). Backs open_viewer / the viewer-launch route resolving a fresh weft output that
     isn't in the entity-graph files tree yet — so the user needn't `data_register` it first."""
     scanned = 0
+    remote_cands: list = []          # target-bearing runs, for the remote pass
     for e in reversed(list_entities(type_filter="analysis", include_archived=False)):
         hit = resolve_run_output_path(e["id"], name)
         if hit:
             return (e["id"], hit)
+        if (e.get("metadata") or {}).get("weft_targets"):
+            remote_cands.append(e["id"])
         scanned += 1
         if scanned >= max_runs:
             break
+    # Remote pass, only after EVERY local scan missed: the output may live on a
+    # remote node's sandbox/retained tree (the same seam the launch route fixed —
+    # a `path=` lookup must not 404 a real remote output). Constrained: only
+    # runs with weft targets, capped, size-gated inside resolve_run_store, and
+    # any failure degrades to the local-miss answer (None), never raises.
+    for rid in remote_cands[:4]:
+        local = resolve_run_store(rid, name)
+        if local:
+            return (rid, local)
     return None
+
+
+def run_id_for_entity(entity_id: str) -> Optional[str]:
+    """The Run that produced a pinned entity, via its `exec_id` → exec record
+    `run_id`. Lets a viewer node carrying only an `entity_id` reach the canonical
+    Run resolver. None when the entity isn't run-linked. Best-effort."""
+    try:
+        ent = get_entity(entity_id)
+        if not ent:
+            return None
+        exec_id = ent.get("exec_id")
+        if not exec_id:
+            return None
+        from core.graph import exec_records
+        return (exec_records.get(exec_id) or {}).get("run_id")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _rel_under_store(path: Optional[str], name: str) -> bool:
+    """Is inventory `path` part of the store addressed by `name` (an exact match,
+    or a member under the store's dir prefix — matched on the full rel or the
+    basename, since a jobdir listing and a logical name may differ in leading
+    segments)?"""
+    if not path:
+        return False
+    base = name.rsplit("/", 1)[-1].rstrip("/")
+    n = name.rstrip("/")
+    return (path == n or path.startswith(n + "/")
+            or path == base or path.startswith(base + "/"))
+
+
+def _bring_back_store(run_id: str, target: str, name: str,
+                      *, force: bool = False) -> Optional[str]:
+    """Bring a whole remote DIRECTORY store home into the workspace, size-gated by
+    the same guardrail bring-back uses (never a silent multi-GB transfer). Returns
+    the local store dir, or None when it's too big / unresolvable — the caller then
+    reports "on <site>". A single `retain(dest="@workspace")` moves the location
+    axis; the store stays kept where it is too."""
+    import os as _os
+    from core.compute import retention
+    from core.compute.adapter import get_compute
+    from core.data.datasets import FETCH_GUARDRAIL_BYTES
+    total, sized = 0, False
+    try:
+        inv = get_compute().sync_call("run_inventory", target)
+        under = [e for e in (inv.get("entries") or inv.get("files") or [])
+                 if isinstance(e, dict) and _rel_under_store(e.get("path"), name)]
+        if under:
+            sized = True
+            total = sum(e.get("bytes", 0) for e in under)
+    except Exception:  # noqa: BLE001 — unknown size reads as "too big"
+        sized = False
+    if not force and (not sized or total > FETCH_GUARDRAIL_BYTES):
+        return None
+    try:
+        res = retention.retain(target, include=[name], dest="@workspace",
+                               label=run_id, background=False)
+    except Exception:  # noqa: BLE001
+        return None
+    loc = retention.location_path(res)
+    if not loc:
+        return None
+    base = name.rsplit("/", 1)[-1]
+    for cand in (_os.path.join(loc, name), _os.path.join(loc, base), loc):
+        real = _os.path.realpath(cand)
+        if _os.path.isdir(real):
+            return real
+    return None
+
+
+def resolve_run_store(run_id: str, name: str, *, force: bool = False) -> Optional[str]:
+    """Local path to a Run output — FILE or DIRECTORY store — matching `name`,
+    fetching a remote copy home when the local tiers miss (durability +
+    resolvability converge on one transport). Order: local dir-aware tiers
+    (`resolve_run_output_path`) → a remote FILE fetched transparently
+    (`resolve_run_file`) → a remote store dir brought home under the size gate.
+    None when unresolvable or past the guardrail; never raises."""
+    try:
+        local = resolve_run_output_path(run_id, name)
+        if local:
+            return local
+        f = resolve_run_file(run_id, name)      # remote single-file, transparent gate
+        if f:
+            return f
+        hit = _remote_locate(run_id, name)
+        if not hit:
+            return None
+        target, _site, _size = hit
+        return _bring_back_store(run_id, target, name, force=force)
+    except Exception as e:  # noqa: BLE001 — a resolver must degrade, not raise
+        _log.debug("resolve_run_store failed for %s/%s: %s", run_id, name, e)
+        return None
 
 
 def _sel_match(rel: str, done_sel: list):

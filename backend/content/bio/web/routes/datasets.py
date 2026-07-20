@@ -135,7 +135,19 @@ def dataset_tree(did: str):
         return None
 
     ap = ent.get("artifact_path")
-    is_directory = bool(ap) and Path(ap).is_dir()
+    # For a remote / by-reference home the controller holds no bytes, so a local
+    # `Path(ap).is_dir()` is always False and would lie about shape. Derive it from
+    # the captured descriptor instead (n_files > 1 → directory).
+    md = ent.get("metadata") or {}
+    home_site = (md.get("home") or {}).get("site")
+    if md.get("by_reference") or (home_site and home_site != "local"):
+        desc = md.get("descriptor") or {}
+        fp = md.get("fingerprint") or {}
+        n_files = (desc.get("n_files") or fp.get("n_files")
+                   or len(desc.get("top") or fp.get("top") or []))
+        is_directory = (n_files or 0) > 1
+    else:
+        is_directory = bool(ap) and Path(ap).is_dir()
 
     node = _find(tree)
     if node is None:

@@ -237,17 +237,34 @@ def _unzip_store(src: Path, out: Path, set_phase=None) -> None:
         z.extractall(out)
 
 
-def _resolve_source(node: dict, pid: str) -> Path:
-    """Best-effort resolution of the node to an on-disk file. Prefer the
-    entity/tree artifact_path (absolute); fall back to project-relative; finally
-    search the project's work dirs by basename.
+def _run_id_for_node(node: dict) -> "str | None":
+    """The Run a viewer node belongs to: an explicit `run_id` (set by the
+    launch route when it resolved a fresh Run output), else the node's
+    `entity_id` → the exec that produced it → its Run. None when the node isn't
+    Run-linked (an unregistered path with neither) — the remote tier can't engage."""
+    rid = node.get("run_id")
+    if rid:
+        return rid
+    eid = node.get("entity_id")
+    if eid:
+        from content.bio.lifecycle.runs import run_id_for_entity
+        return run_id_for_entity(eid)
+    return None
 
-    The last fallback matters for `.lstar.zarr` **directory** stores written by a
-    run: a Run's output is shown at the LOGICAL path `threads/<t>/runs/<r>/output/`
-    but physically lives under `work/<ana_id>/` (tree.py). Regular files carry a
-    physical `artifact_path`, but a directory store can resolve to the logical
-    output path with no physical path — so `project_root/<logical>` doesn't exist.
-    The store is really at `work/<ana_id>/<name>`, so scan there (newest first)."""
+
+def _resolve_source(node: dict, pid: str) -> Path:
+    """Resolve the node to an on-disk source. Local candidates first — an absolute
+    `artifact_path`, project-relative joins, then a basename scan of the project's
+    work dirs (a `.lstar.zarr` **directory** store shows at the LOGICAL output path
+    but physically lives under `work/<ana_id>/`). When those miss, route through the
+    canonical Run resolver (`resolve_run_store`), which is directory-aware and, for a
+    remote-produced output, fetches a size-gated local copy home — so a store on
+    another site opens the same way a local one does.
+
+    Raises FileNotFoundError naming the site when the output lives on a non-local
+    machine and can't be brought home under the gate (so the user sees "on <site> —
+    bring it home", not an opaque "source not found"); returns a nonexistent Path
+    for the truly-unknown case so the caller surfaces its clean error."""
     from core.config import project_root, project_data_dir
     raw = node.get("artifact_path") or node.get("path") or node.get("name") or ""
     p = Path(raw)
@@ -265,6 +282,18 @@ def _resolve_source(node: dict, pid: str) -> Path:
         matches = sorted(work.glob(f"*/{name}"), key=lambda m: m.stat().st_mtime, reverse=True)
         if matches:
             return matches[0]
+    # Canonical resolver — handles a directory store AND a remote fetch home.
+    run_id = _run_id_for_node(node)
+    if run_id and name:
+        from content.bio.lifecycle.runs import resolve_run_store, run_output_site
+        hit = resolve_run_store(run_id, name)
+        if hit:
+            return Path(hit)
+        site = run_output_site(run_id, name)
+        if site and site != "local":
+            raise FileNotFoundError(
+                f"pagoda3: {name!r} lives on {site} — bring it home to view it "
+                f"(Keep it, then open); it isn't on this machine yet.")
     return p            # nonexistent → caller surfaces a clean error
 
 

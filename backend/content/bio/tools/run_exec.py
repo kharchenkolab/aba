@@ -501,23 +501,34 @@ def _write_exec_record(*, lang: str, ctx: dict | None, code: str, cwd,
         # returns three lists; we union them into one stream addressable
         # as <exec_id>:<kind>:<idx>.
         produced: list[dict] = []
+        # Per-output HOME site (remote-output lifecycle): the producing step's
+        # site, from the same `compute` block written below. Stamped on each
+        # produced entry ONLY when non-local, so a downstream resolver has a
+        # per-output "home = <site>" signal instead of inferring it from the run.
+        # Additive — consumers may read it but must not require it (older records
+        # lack it, and a local step omits it).
+        _site = getattr(sess, "site", "local") or "local"
+        _site_kw = {"site": _site} if _site != "local" else {}
         # `size` (from harvest's recorded bytes) rides along for every kind so the
         # durable Files panel shows real sizes, not 0, for normally-copied files too.
         for i, p in enumerate(plots or []):
             produced.append({"kind": "figure", "idx": i,
                              "url": p.get("url"), "size": p.get("bytes"),
-                             "name": p.get("original_name") or p.get("name")})
+                             "name": p.get("original_name") or p.get("name"),
+                             **_site_kw})
         for i, t in enumerate(tables or []):
             produced.append({"kind": "table", "idx": i,
                              "url": t.get("url"), "size": t.get("bytes"),
-                             "name": t.get("original_name") or t.get("name")})
+                             "name": t.get("original_name") or t.get("name"),
+                             **_site_kw})
         for i, f in enumerate(files or []):
             produced.append({"kind": "file", "idx": i,
                              "url": f.get("url"), "size": f.get("bytes"),
                              "name": f.get("original_name") or f.get("name"),
                              # link-only (oversize) files carry no served url;
                              # the marker rides along so retention/UI see them.
-                             **({"link_only": True} if f.get("link_only") else {})})
+                             **({"link_only": True} if f.get("link_only") else {}),
+                             **_site_kw})
 
         completed_iso = datetime.now(timezone.utc).isoformat()
         wall_s = max(0.0, _time.time() - started_ts)

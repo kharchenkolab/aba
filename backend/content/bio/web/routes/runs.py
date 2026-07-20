@@ -154,11 +154,12 @@ def run_file(rid: str, rel: str, download: int = 0):
     sandbox sweep. `rel` is relative to the run dir; traversal outside is rejected
     on every base. Images/text render inline; `download=1` forces an attachment."""
     _run_or_404(rid)
-    from content.bio.lifecycle.runs import resolve_run_file, read_run_file
+    from content.bio.lifecycle.runs import resolve_run_file, read_run_file, run_output_site
     name = Path(rel).name
     media = mimetypes.guess_type(name)[0] or "application/octet-stream"
     headers = {"Content-Disposition": f'attachment; filename="{name}"'} if download else {}
-    # Tier 1: a local file (retained tree / scratch) → stream from disk.
+    # Tier 1: a local file (retained tree / scratch), OR a remote output whose bytes
+    # were fetched into the local cache under the transparent gate → stream from disk.
     target = resolve_run_file(rid, rel)
     if target:
         return FileResponse(target, media_type=media, headers=headers)
@@ -167,9 +168,18 @@ def run_file(rid: str, rel: str, download: int = 0):
     data, truncated, total = read_run_file(rid, rel)
     if data is not None and not truncated:
         return Response(content=data, media_type=media, headers=headers)
+    # Tier-1 declined and the preview is truncated → the file is too big to bring
+    # home transparently. Name the site so the message is "on <site>, bring it home
+    # to view" instead of an opaque size error (site lookup is best-effort).
+    site = None
+    try:
+        site = run_output_site(rid, rel)
+    except Exception:  # noqa: BLE001 — an honest message must never 500 the route
+        site = None
     if truncated:
-        raise HTTPException(413, f"{rel!r} is {total} bytes — too large to preview; "
-                                 "Keep it to retain, then download")
+        where = (f" It lives on {site} — bring it home to view it (Keep it, then "
+                 f"download)." if site else " Keep it to retain, then download.")
+        raise HTTPException(413, f"{rel!r} is {total} bytes — too large to preview.{where}")
     raise HTTPException(404, f"no file {rel!r} in the run (retained or sandbox)")
 
 
