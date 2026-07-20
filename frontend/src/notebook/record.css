@@ -662,8 +662,15 @@ input { font: inherit; }
   letter-spacing: 0.08em; text-transform: uppercase; color: var(--ok);
   margin-bottom: 4px;
 }
-.desk__running { color: var(--ok); animation: rec-pulse 2s infinite; }
 .desk__item--held { border-style: dashed; color: var(--ink); }
+
+/* THE session marker: one arrow shape, state by fill/color —
+   ▷ outline teal = session at rest · ▶ filled green = live now */
+.sessg {
+  color: var(--teal); font-size: 1.15em; font-weight: 700; line-height: 1;
+  display: inline-block; transform: translateY(0.5px);
+}
+.sessg--live { color: var(--ok); animation: rec-pulse 2s infinite; }
 
 .toc__delta {
   margin-left: 6px; font-size: 9.5px; font-weight: 700;

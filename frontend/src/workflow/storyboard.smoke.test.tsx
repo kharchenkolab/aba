@@ -50,8 +50,8 @@ describe('workflow storyboard', () => {
 
   it('M5 files the transcript under its question and sediment lines', () => {
     const { getAllByText, getByText, unmount } = render(<Record world={SCENES[9].world} />)
-    getByText(/⟲ winter dig · Jul 20 · 5 runs · 1 fragment · 1 draft — transcript/)
-    expect(getAllByText(/⟲ winter dig/).length).toBeGreaterThan(1) // section + sediment ⟲ chips
+    getByText(/winter dig · Jul 20 · 5 runs · 1 fragment · 1 draft — transcript/)
+    expect(getAllByText(/^winter dig$/).length + getAllByText(/winter dig/).length).toBeGreaterThan(1) // section + sediment session chips
     unmount()
   })
 

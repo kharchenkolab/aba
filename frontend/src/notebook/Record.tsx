@@ -40,6 +40,17 @@ const MATURITY_GLYPH: Record<string, string> = {
   conjecture: '○', supported: '◐', 'cross-checked': '◕', robust: '●', contested: '◮',
 }
 
+/** THE session marker (uniform everywhere): one arrow shape, state carried
+ *  by fill/color — ▶ filled green = session live now, ▷ outline teal =
+ *  session at rest (filed/parked). Runs' own ▶ state marks rhyme with it:
+ *  the arrow family is the execution/session domain; fill is liveness. */
+function SessGlyph({ live }: { live?: boolean }) {
+  return <span className={`sessg ${live ? 'sessg--live' : ''}`}>{live ? '▶' : '▷'}</span>
+}
+
+const sessionLive = (w: World, id?: string) =>
+  (w.sessions ?? []).some(s => (s.id === id || s.label === id) && s.state === 'open')
+
 // ---------------------------------------------------------------- ref parsing
 
 interface RefCtx {
@@ -188,7 +199,7 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
     <section className={`nsec ${anchored ? 'nsec--live' : ''}`} id={`el-${s.id}`}>
       {anchored && (
         <div className="nsec__livetag" title="this session's anchor — its products land here first; the state stands until the session closes">
-          ⟲ {w.anchorAt!.session} · working here
+          <SessGlyph live /> {w.anchorAt!.session} · working here
         </div>
       )}
       <div className="nsec__head">
@@ -212,7 +223,7 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
           {s.sessions.map(x => (
             <button key={x.label} className="sess" onClick={() => ctx.openSession(x.label)}
                     title="the working exchange, filed under this question — the full episode: transcript, artifacts, leftovers; continuable">
-              ⟲ {x.label} · {x.when} · {x.meta} — transcript
+              <SessGlyph live={sessionLive(w, x.label)} /> {x.label} · {x.when} · {x.meta} — transcript
             </button>
           ))}
         </div>
@@ -320,7 +331,7 @@ function TrailCard({ t, ctx, drafted, onDraft }: {
               {f.src && (
                 <button className="frag__turn" onClick={() => ctx.openSession(f.src!.sess, f.src!.turn)}
                         title="provenance for prose: the exchange that drafted this fragment">
-                  ⟲ turn {f.src.turn}
+                  <SessGlyph live={sessionLive(ctx.w, f.src.sess)} /> turn {f.src.turn}
                 </button>
               )}
             </span>
@@ -373,7 +384,7 @@ function SedimentRow({ e, ctx, open, onToggle }: {
           <span className="sed__sess"
                 title={`produced in session “${e.sessionRef}”${e.turnRef ? ` — jump to turn ${e.turnRef}` : ' — open the session'}`}
                 onClick={ev => { ev.stopPropagation(); ctx.openSession(e.sessionRef!, e.turnRef) }}>
-            ⟲ {e.sessionRef}
+            <SessGlyph live={sessionLive(ctx.w, e.sessionRef)} /> {e.sessionRef}
           </span>
         )}
         <span className={`sed__ret sed__ret--${ret.cls}`}>{ret.label}</span>
@@ -495,9 +506,9 @@ function searchRecord(w: World, q: string, scope: 'story' | 'noticed' | 'everyth
 
 // ----------------------------------------------------------------- desk strip
 
-/** Glyph grammar (uniform everywhere): ⟲ marks a DOOR to a session — any
- *  state; ▶ means EXECUTING NOW — a state marker, never a link icon. They
- *  co-occur when a door leads to a live session. */
+/** Glyph grammar (uniform everywhere): the ARROW marks a door to a
+ *  session; fill/color carries state — ▷ outline teal = at rest, ▶ filled
+ *  green = live now (rhymes with runs' own ▶ state marks). */
 function DeskStrip({ w, held, onOpenSession, onJump }: {
   w: World
   held: { elId: string; label: string }[]
@@ -512,7 +523,7 @@ function DeskStrip({ w, held, onOpenSession, onJump }: {
       {d.items.map(i => (
         <button key={i.label} className={`desk__item ${i.live ? 'is-live' : ''}`}
                 onClick={() => { if (i.sessionId) onOpenSession(i.sessionId) }}>
-          {i.sessionId ? '⟲ ' : ''}{i.label}{i.live ? <span className="desk__running" title="session live now"> ▶</span> : ''}
+          {i.sessionId ? <><SessGlyph live={i.live} />{' '}</> : null}{i.label}
           <span className="desk__meta"> · {i.meta}</span>
           {i.action && <span className="desk__act"> {i.action}</span>}
         </button>
@@ -932,7 +943,7 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
                       <button className="sedsess__head" onClick={() => ctx.openSession(s.id)}
                               title="open the session — transcript, artifacts, leftovers">
                         <span className="sed__date">{s.when}</span>
-                        <span className="sedsess__glyph">⟲</span>
+                        <span className="sedsess__glyph"><SessGlyph live={s.state === 'open'} /></span>
                         <span className="sedsess__title">{s.label}</span>
                         <span className="sedsess__anchor">{s.anchor.label}</span>
                         <span className="sedsess__meta">

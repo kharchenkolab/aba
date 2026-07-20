@@ -122,7 +122,7 @@ export interface World {
   desk?: DeskState
   /** a working panel open over the document */
   panel?: PanelState
-  /** the sessions on the record — episodes behind the redux (⟲ targets) */
+  /** the sessions on the record — episodes behind the redux (▷/▶ targets) */
   sessions?: SessionRec[]
   /** open this session's page on first render (storyboard scenes) */
   openSession?: { id: string; turn?: number }

@@ -10,10 +10,10 @@
  *
  * Session close is a distillation moment: the panel proposes what enters
  * the record (fragments, addenda, keeps); the transcript files under its
- * anchor — reachable from the section (⟲) and from every sediment line it
+ * anchor — reachable from the section (▷) and from every sediment line it
  * produced, never rendered in the document body.
  *
- * Rendered read-only for archived transcripts (the ⟲ links).
+ * Rendered read-only for archived transcripts (the ▷ links).
  */
 import { useEffect, useRef, useState } from 'react'
 import type { PanelState, PanelMsg } from './world'

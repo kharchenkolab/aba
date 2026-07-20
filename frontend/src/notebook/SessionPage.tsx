@@ -5,7 +5,7 @@
  * sessions, runs, and results. This page is the session on its own terms:
  *  - the DISTILLATE up top (what entered the record from here) — the map
  *    side of the contract, so redux and source stay mutually checkable;
- *  - the full transcript with ADDRESSABLE TURNS (⟲ links from sediment
+ *  - the full transcript with ADDRESSABLE TURNS (▷/▶ links from sediment
  *    lines, trail fragments, and search land here, scrolled + flashed);
  *  - the LEFTOVERS shelf — artifacts produced but never pinned, noted, or
  *    discussed. Curation missed them by definition; late review needs them
@@ -50,7 +50,7 @@ export default function SessionPage({ sess, focusTurn, onBack, onDock }: {
     setDraft('')
   }
 
-  // ⟲ links land on a specific exchange: scroll it into view and flash it
+  // ▷ links land on a specific exchange: scroll it into view and flash it
   useEffect(() => {
     if (!focusTurn) return
     const el = document.getElementById(`turn-${sess.id}-${focusTurn}`)
@@ -130,7 +130,7 @@ export default function SessionPage({ sess, focusTurn, onBack, onDock }: {
       )}
 
       <section className="sp__transcript">
-        <div className="sp__rule">transcript · turns are addressable — ⟲ links land here</div>
+        <div className="sp__rule">transcript · turns are addressable — ▷ links land here</div>
         {numbered.map(({ m, turn }, i) => (
           <div key={i}
                className={`sp__turn ${turn ? 'sp__turn--n' : ''}`}

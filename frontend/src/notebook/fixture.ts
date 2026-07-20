@@ -81,7 +81,7 @@ export interface SedimentEntry {
   retention: 'kept' | 'temporary' | 'at-risk'
   site?: string
   trailRef?: string
-  /** id of the working session that produced this run (⟲ chip) */
+  /** id of the working session that produced this run (▷/▶ chip) */
   sessionRef?: string
   /** the turn within that session that launched/reported this run */
   turnRef?: number

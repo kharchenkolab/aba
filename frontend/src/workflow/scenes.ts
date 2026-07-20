@@ -261,7 +261,7 @@ const e5: Scene = {
     'Day 3, no session open. The Record reads as a LAB DIARY: sediment and notes dominate, ' +
     'one question stands as a stub, a first trail has opened (with one agent-drafted ' +
     'fragment awaiting your eye). The desk remembers where you left off; yesterday’s ' +
-    'session is filed under Q1 — click ⟲ to reread it. An almost-empty story is the ' +
+    'session is filed under Q1 — click ▷ to reread it. An almost-empty story is the ' +
     'correct early face.',
   world: {
     project: { ...P0, lastVisit: '2026-03-02' },
@@ -281,7 +281,7 @@ const e5: Scene = {
     pendingDrafts: 1,
     desk: {
       line: 'no open session',
-      items: [{ label: 'yesterday: “seasonal first cut”', meta: 'under Q1 · 2 runs · 1 fragment', action: 'transcript ⟲', sessionId: 'seasonal first cut' }],
+      items: [{ label: 'yesterday: “seasonal first cut”', meta: 'under Q1 · 2 runs · 1 fragment', action: 'transcript ▷', sessionId: 'seasonal first cut' }],
     },
     sessions: [seasonalCut],
     openSediment: ['e_seasonal'],
@@ -327,7 +327,7 @@ const m1: Scene = {
     sediment: matureSed,
     desk: {
       line: 'no open sessions',
-      items: [{ label: 'last session: “anomaly cluster dig”', meta: 'Jul 18 · under Q2 · 1 run', action: 'transcript ⟲', sessionId: 'anomaly cluster dig' }],
+      items: [{ label: 'last session: “anomaly cluster dig”', meta: 'Jul 18 · under Q2 · 1 run', action: 'transcript ▷', sessionId: 'anomaly cluster dig' }],
     },
     sessions: [anomalyDig],
   },
@@ -419,7 +419,7 @@ const m3: Scene = {
   id: 'm3', group: 'mature', title: 'the churn loop',
   narration:
     'Ask, run, look, ask again — three runs in forty minutes. The dead ends STAY in the ' +
-    'sediment (one line each, marked ⟲ with their session); the one fragment that matters ' +
+    'sediment (one line each, marked ▷ with their session); the one fragment that matters ' +
     'is already drafted onto trail T1, awaiting your eye. The document accretes DURING ' +
     'the session, not from an end-of-day writeup.',
   world: {
@@ -498,8 +498,8 @@ const m5: Scene = {
     'Next morning the DOCUMENT is the resume point — and the work record now reads BY ' +
     'SESSION: each sitting one super-row (turns · runs · distilled · UNEXAMINED count), ' +
     'its runs nested, solo runs standing apart. Yesterday’s session is one click away ' +
-    'from Q1 (⟲), the desk, every sediment line it produced — and the T1 fragment now ' +
-    'carries “⟲ turn 4”: provenance for prose, at turn grain. Try searching “never ' +
+    'from Q1 (▷), the desk, every sediment line it produced — and the T1 fragment now ' +
+    'carries “▷ turn 4”: provenance for prose, at turn grain. Try searching “never ' +
     'serviced” — what was SAID is findable, not just what was kept.',
   world: {
     ...mBase,
@@ -530,7 +530,7 @@ const m5: Scene = {
     sediment: [...m5Sed, ...matureSed],
     desk: {
       line: 'no open sessions',
-      items: [{ label: 'yesterday: “winter dig”', meta: 'under Q1 · 5 runs · 1 fragment', action: 'transcript ⟲', sessionId: 'winter dig' }],
+      items: [{ label: 'yesterday: “winter dig”', meta: 'under Q1 · 5 runs · 1 fragment', action: 'transcript ▷', sessionId: 'winter dig' }],
     },
     sessions: [winterDigFiled, anomalyDig],
     sedimentGrain: 'session',
@@ -545,7 +545,7 @@ const m6: Scene = {
     'A session on its own terms — full page for sifting, docked panel for working ' +
     '(⇥ / ⤢ convert between them). Distillate up top; the LEFTOVERS shelf: artifacts ' +
     'produced but never pinned, noted, or discussed — including one the agent flags as ' +
-    'possibly bearing on Q2. Transcript turns are addressable (⟲ links land here, ' +
+    'possibly bearing on Q2. Transcript turns are addressable (▷ links land here, ' +
     'highlighted), the chain edge records what this sitting continued, and the composer ' +
     'at the foot means filed ≠ dead.',
   world: {

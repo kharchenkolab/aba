@@ -66,14 +66,14 @@ answer, made concrete in the **workflow storyboard** (`/workflow.html`):
   question / trail / figure — same instrument as the margin bench, wider
   scope). Opened from Q1 it starts knowing the question, its evidence and
   trails — zero context-setting.
-- **Runs land in the sediment at launch** (▶ line, marked ⟲ with their
+- **Runs land in the sediment at launch** (▶ line, marked ▷/▶ with their
   session) — the document records actions as they happen; results return
   into the conversation; fragments/notes are drafted into the strata DURING
   the session (visible `draft` badges).
 - **Session close is a distillation moment**: the panel proposes what enters
   the record (fragment → trail, addendum draft → question, keeps →
   retention); nothing enters without ratification; the transcript files
-  under its anchor — reachable from the section head (⟲), the desk, and
+  under its anchor — reachable from the section head (▷), the desk, and
   every sediment line it produced. Work is findable from what it touched.
 - **The desk strip** is the document's present tense: open sessions, running
   work, yesterday's resume point.
@@ -95,8 +95,8 @@ first-class, not scaffolding:
   (continues ← / continued by →); the docked panel for side-by-side work
   (the existing chat-in-right-column mode). Both end in a live composer:
   filed ≠ dead.
-- **Turn-grade ⟲ everywhere**: sediment lines jump to the turn that
-  launched their run; trail fragments carry "⟲ turn N" (provenance for
+- **Turn-grade session links everywhere**: sediment lines jump to the turn that
+  launched their run; trail fragments carry "▷ turn N" (provenance for
   prose); search covers **what was SAID**, not just what was kept — a
   transcript hit lands on its turn, highlighted.
 
@@ -105,7 +105,7 @@ The governing rule: *the document may glow anywhere, but it moves only
 under the user's hand* — no auto-scroll, ever. Mechanisms (scene M7):
 
 - **Standing anchor state**: the live session's home section wears
-  "⟲ winter dig · working here" until close — scroll away and back, the
+  "▶ winter dig · working here" until close — scroll away and back, the
   hot region is unmistakable.
 - **Changes land by visibility**: in view → materialize in place with a
   flash; out of view → a **TOC pulse badge** and a **delta-rail tick**
@@ -124,11 +124,12 @@ under the user's hand* — no auto-scroll, ever. Mechanisms (scene M7):
 - **hold ⌖**: pin an excerpt to the desk for two-locus work; clears at
   session close.
 
-**Glyph grammar** (uniform): **⟲** marks a door to a session (any state —
-the noun); **▶** means executing right now (a state, never a link icon);
-they co-occur when the door leads to a live session (`⟲ winter dig ▶`).
-**⚡** contradiction/condition · **⌖** held excerpt · **draft** badge =
-agent-proposed, awaiting ratification.
+**Glyph grammar** (uniform; PK: one prominent arrow beats ⟲): the ARROW
+is the session marker, state carried by fill/color — **▷** outline teal =
+session at rest (filed/parked), **▶** filled green = live now. It rhymes
+with runs' own ▶ state marks: the arrow family is the execution/session
+domain, fill is liveness. **⚡** contradiction/condition · **⌖** held
+excerpt · **draft** badge = agent-proposed, awaiting ratification.
 
 **The storyboard** (`frontend/src/workflow/`) plays this as twelve
 interactive scenes over the SAME Record renderer (parameterized over a
