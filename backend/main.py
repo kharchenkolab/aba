@@ -608,6 +608,11 @@ async def chat(req: ChatRequest):
             thread_id=req.thread_id,
             started_at=started_at,
             body_gen=body_gen,
+            # F8: same text re-POSTed while this thread's turn is still live
+            # (client double-POST from a second tab) collapses onto the
+            # original sink instead of spawning a duplicate turn; a different
+            # text queues behind the live turn (turn_executor).
+            dedup_text=req.text,
         )
     # The SSE generator reads only the in-memory sink + turn_events JSONL (never
     # the project DB), so it runs correctly outside the bound context.

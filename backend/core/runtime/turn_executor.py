@@ -19,10 +19,22 @@ This module decouples the two:
 """
 from __future__ import annotations
 import asyncio
+import time
 from typing import AsyncGenerator, Optional
 
 from core.runtime import turn_sink as _ts
 from core.runtime.turn import gen_run_id
+
+# ── per-thread turn serialization (F8, misc/ux_findings.md) ──────────────────
+# Two concurrent submits to the SAME thread (second browser tab, client
+# double-POST) used to run as two interleaved agent loops — mutually
+# interrupted tool calls, shuffled history. Policy: queue-with-notice — a new
+# turn for a thread with a live turn WAITS for it (the subscriber sees an
+# immediate `notice`), and an identical text re-POSTed while the original is
+# still live (the 243ms client double-POST) is deduped onto the original sink.
+_last_turn: dict[str, asyncio.Task] = {}          # thread_id → newest turn task
+_recent_turn: dict[str, tuple[str, float, "_ts.TurnSink"]] = {}  # tid → (text, ts, sink)
+_DUP_WINDOW_S = 10.0
 
 
 def new_run_id() -> str:
@@ -77,12 +89,37 @@ async def _drain(gen: AsyncGenerator[dict, None], sink: "_ts.TurnSink",
         _ts.close(sink.run_id)
 
 
+async def _queued_body(prior: asyncio.Task, body_gen: AsyncGenerator[dict, None],
+                       ) -> AsyncGenerator[dict, None]:
+    """F8 queue-with-notice: a new turn for a thread that already has a live
+    turn WAITS for it, then runs — the two never interleave. The subscriber
+    gets an immediate `notice` so the second tab shows "queued…" instead of a
+    frozen box, then the real turn streams once the prior one finishes."""
+    from core.runtime import wire
+    yield wire.notice(text="Queued behind the turn already running in this "
+                           "thread — it'll start as soon as that one finishes.")
+    try:
+        await prior
+    except Exception:  # noqa: BLE001 — however the prior turn ended, we run next
+        pass
+    async for obj in body_gen:
+        yield obj
+
+
+def _thread_has_live_turn(thread_id: Optional[str]) -> Optional[asyncio.Task]:
+    if not thread_id:
+        return None
+    t = _last_turn.get(thread_id)
+    return t if (t is not None and not t.done()) else None
+
+
 def start_turn(
     *,
     run_id: str,
     thread_id: Optional[str],
     started_at: str,
     body_gen: AsyncGenerator[dict, None],
+    dedup_text: Optional[str] = None,
 ) -> "_ts.TurnSink":
     """Allocate a sink for `run_id` and spawn the agent loop as a
     background task. `body_gen` is the agent-loop async generator
@@ -93,7 +130,15 @@ def start_turn(
 
     Idempotent on `run_id`: a second call returns the existing sink
     (and skips re-spawning) — the caller should ensure run_ids are
-    unique."""
+    unique.
+
+    F8 per-thread serialization (queue-with-notice, misc/ux_findings.md):
+      * DEDUP — the same `dedup_text` re-POSTed while the original is still
+        live (the ~243ms client double-POST from a second tab) returns the
+        ORIGINAL sink, so one message never becomes two turns.
+      * QUEUE — a DIFFERENT text for a thread with a live turn is wrapped so
+        it waits for the live turn before running; the subscriber sees an
+        immediate `notice`. No two turns for one thread ever interleave."""
     existing = _ts.get(run_id)
     if existing is not None:
         # Pre-existing — don't spawn a duplicate task. Close the unused
@@ -104,6 +149,20 @@ def start_turn(
             pass
         return existing
 
+    # F8: same-thread concurrency. Decide dedup vs queue BEFORE spawning.
+    prior = _thread_has_live_turn(thread_id)
+    if prior is not None and thread_id and dedup_text is not None:
+        rec = _recent_turn.get(thread_id)
+        if (rec is not None and rec[0] == dedup_text
+                and (_now() - rec[1]) <= _DUP_WINDOW_S
+                and _ts.get(rec[2].run_id) is not None):
+            # Client double-POST: collapse onto the original turn's sink.
+            try:
+                asyncio.ensure_future(body_gen.aclose())
+            except Exception:  # noqa: BLE001
+                pass
+            return rec[2]
+
     # Capture the project NOW, synchronously, while the originating request's
     # per-request pin is still the active global. The detached task below will
     # re-bind it to its own context so concurrent requests can't swap it.
@@ -111,8 +170,25 @@ def start_turn(
     pid = _projects.current()
 
     sink = _ts.create(run_id, thread_id, started_at)
-    task = asyncio.create_task(_drain(body_gen, sink, pid), name=f"turn:{run_id}")
+    # Only a NEW USER turn (chat, which passes dedup_text) queues behind a live
+    # prior. A RESUME (dedup_text=None — approval/tool-result continuation) never
+    # queues: the turn it continues is already parked/done, and waiting on it
+    # would deadlock. Both still register as _last_turn below, so a later new
+    # turn queues behind whichever is live.
+    should_queue = prior is not None and dedup_text is not None
+    gen = _queued_body(prior, body_gen) if should_queue else body_gen
+    task = asyncio.create_task(_drain(gen, sink, pid), name=f"turn:{run_id}")
     # Attach the task so we can find / inspect / (rarely) cancel it.
     # Sink stays alive after the task completes — see core/runtime/turn_sink.py.
     sink._task = task  # type: ignore[attr-defined]
+    if thread_id:
+        _last_turn[thread_id] = task
+        if dedup_text is not None:
+            _recent_turn[thread_id] = (dedup_text, _now(), sink)
     return sink
+
+
+def _now() -> float:
+    # Wall clock is fine here — this only gates a ~10s dedup window and is never
+    # persisted / replayed.
+    return time.time()
