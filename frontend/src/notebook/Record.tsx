@@ -28,7 +28,7 @@
  * The renderer is parameterized over a World (see world.ts): /notebook.html
  * renders coastalWorld; /workflow.html renders storyboard scenes.
  */
-import { Fragment as F, useMemo, useState, type ReactNode } from 'react'
+import { Fragment as F, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { type Section, type Trail, type SedimentEntry } from './fixture'
 import { coastalWorld, type World, type SessionRec } from './world'
 import WorkPanel from './WorkPanel'
@@ -50,6 +50,10 @@ interface RefCtx {
   scrollTo: (domId: string) => void
   /** open a session — its full page by default, at a specific turn when known */
   openSession: (id: string, turn?: number) => void
+  /** deixis, doc → chat: clicking an element makes it the conversation's subject */
+  look: (label: string) => void
+  /** hold an excerpt on the desk for the session's duration (two-locus work) */
+  hold: (elId: string, label: string) => void
 }
 
 /** Render prose with [[kind:id|label]] live references. Block-level
@@ -148,7 +152,8 @@ function FigureEmbed({ figId, ctx, caption }: { figId: string; ctx: RefCtx; capt
   const title = ctx.w.figureTitles[figId] ?? figId
   return (
     <figure className="fig" id={`el-${figId}`}>
-      <img src={ART(figId)} alt={title} />
+      <img src={ART(figId)} alt={title} onClick={() => ctx.look(title)}
+           title="click to make this the conversation's subject (looking at:)" />
       <figcaption>
         <span>{caption ?? title}</span>
         <span className="fig__actions">
@@ -176,8 +181,16 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
 }) {
   const { w } = ctx
   const phaseNote = { early: 'early — mostly noticing', mid: 'mid — condensing', late: 'late — writing up' }[s.phase]
+  // the live session's home locus wears a STANDING state — scroll away and
+  // back, and where the work is landing stays unmistakable
+  const anchored = w.anchorAt?.elId === s.id
   return (
-    <section className="nsec" id={`el-${s.id}`}>
+    <section className={`nsec ${anchored ? 'nsec--live' : ''}`} id={`el-${s.id}`}>
+      {anchored && (
+        <div className="nsec__livetag" title="this session's anchor — its products land here first; the state stands until the session closes">
+          ⟲ {w.anchorAt!.session} · working here
+        </div>
+      )}
       <div className="nsec__head">
         <h3>{s.question}</h3>
         <span className="nsec__phase" title="phase is per-question, derived from content — a young question in an old project is simply early">{phaseNote}</span>
@@ -250,6 +263,12 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
                 <button className="btn btn--primary" onClick={() => onRatify(a.id)}>Ratify</button>
                 <button className="btn" title="dismissals are remembered">Dismiss</button>
                 <button className="btn" onClick={() => ctx.openBench(a.id, `addendum — ${s.question}`)}>discuss ✦</button>
+                {w.work && (
+                  <button className="btn" onClick={() => ctx.hold(`el-${a.id}`, `addendum · ${a.on}`)}
+                          title="hold this on the desk while you work elsewhere — two-locus work without split screen; clears at session close">
+                    hold ⌖
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -277,7 +296,8 @@ function TrailCard({ t, ctx, drafted, onDraft }: {
     <article className={`trail trail--${t.state}`} id={`el-${t.id}`}>
       <div className="trail__head">
         <span className="trail__id">{t.id}</span>
-        <h4>{t.title}</h4>
+        <h4 onClick={() => ctx.look(`trail ${t.id} · ${t.title}`)}
+            title="click to make this trail the conversation's subject">{t.title}</h4>
         <span className={`trail__state trail__state--${t.state}`}
               title="a trail is a named hunch — a home for weak scattered evidence BEFORE it can be stated as a claim">
           {stateWord}
@@ -475,20 +495,71 @@ function searchRecord(w: World, q: string, scope: 'story' | 'noticed' | 'everyth
 
 // ----------------------------------------------------------------- desk strip
 
-function DeskStrip({ w, onOpenSession }: { w: World; onOpenSession: (id: string) => void }) {
+/** Glyph grammar (uniform everywhere): ⟲ marks a DOOR to a session — any
+ *  state; ▶ means EXECUTING NOW — a state marker, never a link icon. They
+ *  co-occur when a door leads to a live session. */
+function DeskStrip({ w, held, onOpenSession, onJump }: {
+  w: World
+  held: { elId: string; label: string }[]
+  onOpenSession: (id: string) => void
+  onJump: (elId: string) => void
+}) {
   const d = w.desk!
   return (
-    <div className="desk" title="the present tense: open sessions, running work, where you left off">
+    <div className="desk" title="the present tense: open sessions, running work, held excerpts, where you left off">
       <span className="desk__kicker">at the desk</span>
       <span className="desk__line">{d.line}</span>
       {d.items.map(i => (
         <button key={i.label} className={`desk__item ${i.live ? 'is-live' : ''}`}
                 onClick={() => { if (i.sessionId) onOpenSession(i.sessionId) }}>
-          {i.live ? '▶ ' : ''}{i.label}
+          {i.sessionId ? '⟲ ' : ''}{i.label}{i.live ? <span className="desk__running" title="session live now"> ▶</span> : ''}
           <span className="desk__meta"> · {i.meta}</span>
           {i.action && <span className="desk__act"> {i.action}</span>}
         </button>
       ))}
+      {held.map(h => (
+        <button key={h.elId} className="desk__item desk__item--held" onClick={() => onJump(h.elId)}
+                title="held for this session — click to jump back; clears at session close">
+          ⌖ {h.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+/** The delta rail — a minimap of change. Ticks sit at each changed
+ *  element's position in the document; three tiers only. Click = jump.
+ *  The rail may glow; the page never scrolls itself. */
+function DeltaRail({ w, docRef, onJump }: {
+  w: World
+  docRef: React.RefObject<HTMLElement | null>
+  onJump: (elId: string) => void
+}) {
+  const [ticks, setTicks] = useState<{ pct: number; kind: string; elId: string; label: string }[]>([])
+  useEffect(() => {
+    const doc = docRef.current
+    if (!doc || !w.deltas?.length) { setTicks([]); return }
+    const t = setTimeout(() => {
+      const total = doc.scrollHeight
+      setTicks(w.deltas!.map(d => {
+        const el = document.getElementById(d.elId)
+        if (!el) return null
+        const top = el.getBoundingClientRect().top - doc.getBoundingClientRect().top + doc.scrollTop
+        return { pct: Math.min(97, (top / total) * 100), kind: d.kind, elId: d.elId, label: d.label }
+      }).filter(Boolean) as { pct: number; kind: string; elId: string; label: string }[])
+    }, 120)   // after layout (images have known aspect from CSS; 120ms suffices for the mock)
+    return () => clearTimeout(t)
+  }, [w, docRef])
+  if (!ticks.length) return null
+  return (
+    <div className="drail-wrap">
+      <div className="drail" title="the delta rail — where change landed, by kind; click a tick to jump">
+        {ticks.map(t => (
+          <button key={t.elId + t.kind} className={`drail__tick drail__tick--${t.kind}`}
+                  style={{ top: `${t.pct}%` }} title={t.label}
+                  onClick={() => onJump(t.elId)} />
+        ))}
+      </div>
     </div>
   )
 }
@@ -536,6 +607,9 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
   const [sessPage, setSessPage] = useState<{ id: string; turn?: number } | null>(w.openSession ?? null)
   const [sessDock, setSessDock] = useState<string | null>(null)
   const [grain, setGrain] = useState<'run' | 'session'>(w.sedimentGrain ?? 'run')
+  const [lookingAt, setLookingAt] = useState<string | undefined>(undefined)
+  const [held, setHeld] = useState<{ elId: string; label: string }[]>([])
+  const docRef = useRef<HTMLElement | null>(null)
   const [disclosed, setDisclosed] = useState<Set<string>>(new Set())
   const [methodsOn, setMethodsOn] = useState<Set<string>>(new Set())
   const [openSed, setOpenSed] = useState<Set<string>>(new Set(w.openSediment ?? []))
@@ -586,6 +660,8 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
     disclosed,
     scrollTo,
     openSession: (id, turn) => { if (findSession(id)) { setSessDock(null); setSessPage({ id, turn }) } },
+    look: label => setLookingAt(label),
+    hold: (elId, label) => setHeld(h => h.some(x => x.elId === elId) ? h : [...h, { elId, label }]),
   }
   const hits = useMemo(() => (q.trim() ? searchRecord(w, q, scope) : []), [w, q, scope])
   const behindLine = w.pendingDrafts > 0
@@ -632,8 +708,21 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
           onExpand={() => { setSessDock(null); setSessPage({ id: docked.id }) }}
           onClose={() => setSessDock(null)} />
       : w.panel
-        ? <WorkPanel key="live" panel={w.panel} onAdvance={onAdvance} />
+        ? <WorkPanel key="live" panel={w.panel} onAdvance={onAdvance}
+            lookingAt={lookingAt}
+            onShowRef={elId => scrollTo(elId)} />
         : null
+  // peripheral change signals on the TOC: pulse badges, three tiers
+  const deltaBadge = (elId: string) => {
+    const d = w.deltas?.find(x => x.elId === elId)
+    if (!d) return null
+    return (
+      <span className={`toc__delta toc__delta--${d.kind}`} title={d.label}>
+        {d.kind === 'condition' ? '⚡' : `+${d.count ?? 1}`}
+      </span>
+    )
+  }
+
   // a session's full page replaces the document column (the TOC stays);
   // ⇥ sends it to the right column and brings the document back
   const pageSess = sessPage ? findSession(sessPage.id) : undefined
@@ -653,12 +742,14 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
           <button key={s.id} className={`toc__item ${activeAnchor === `el-${s.id}` ? 'is-active' : ''}`} onClick={() => scrollTo(`el-${s.id}`)}>
             <span className={`toc__phase toc__phase--${s.phase}`} />
             {s.question}
+            {deltaBadge(`el-${s.id}`)}
           </button>
         ))}
         {(w.trails.length > 0 || w.looseNotes.length > 0) && <div className="toc__group">field notes</div>}
         {w.trails.map(t => (
           <button key={t.id} className={`toc__item ${activeAnchor === `el-${t.id}` ? 'is-active' : ''}`} onClick={() => scrollTo(`el-${t.id}`)}>
             <span className="toc__trail">⋱</span> {t.id} · {t.title}
+            {deltaBadge(`el-${t.id}`)}
           </button>
         ))}
         {w.looseNotes.length > 0 && (
@@ -669,6 +760,7 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
         <div className="toc__group">sediment</div>
         <button className={`toc__item ${activeAnchor === 'el-sediment' ? 'is-active' : ''}`} onClick={() => scrollTo('el-sediment')}>
           {w.sediment.length} run{w.sediment.length === 1 ? '' : 's'} · complete · automatic
+          {deltaBadge('el-sediment')}
         </button>
 
         <div className="toc__spacer" />
@@ -716,7 +808,8 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
           onBack={() => setSessPage(null)}
           onDock={() => { setSessDock(pageSess.id); setSessPage(null) }} />
       ) : (
-      <main className="doc" onScroll={onDocScroll}>
+      <main className="doc" onScroll={onDocScroll} ref={docRef}>
+        <DeltaRail w={w} docRef={docRef} onJump={elId => scrollTo(elId)} />
         <header className="doc__head">
           <h1>{w.project.title}</h1>
           <div className="doc__sub">
@@ -724,8 +817,8 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
           </div>
         </header>
 
-        {/* the present tense: open sessions, where you left off */}
-        {w.desk && <DeskStrip w={w} onOpenSession={id => ctx.openSession(id)} />}
+        {/* the present tense: open sessions, held excerpts, where you left off */}
+        {w.desk && <DeskStrip w={w} held={held} onOpenSession={id => ctx.openSession(id)} onJump={elId => scrollTo(elId)} />}
 
         {/* what's new */}
         {w.whatsNew && (
@@ -736,7 +829,7 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
                 {w.whatsNew.items.filter(i => i.loud || i.live).map((i, k) => (
                   <span key={k} className={`wnew__chip ${i.loud ? 'is-loud' : ''} ${i.live ? 'is-live' : ''}`}>
                     {i.live ? '▶ ' : i.loud ? '⚡ ' : ''}
-                    {i.loud ? 'contradiction — R12 opposes R9' : i.text.split(' — ')[0]}
+                    {i.loud ? i.text.split(' (')[0] : i.text.split(' — ')[0]}
                   </span>
                 ))}
               </span>

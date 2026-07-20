@@ -554,7 +554,67 @@ const m6: Scene = {
   },
 }
 
-export const SCENES: Scene[] = [e1, e2, e3, e4, e5, m1, m2, m3, m4, m5, m6]
+// ---- M7 · live anchoring: the document as a working surface
+// The rules, all on one screen: the anchor wears a standing state; in-view
+// changes land in place; out-of-view changes pulse the TOC and tick the
+// delta rail (3 tiers); deixis is mutual (click the page → "looking at";
+// message refs locate their element); cross-boundary relevance stays a
+// proposal; hold ⌖ parks an excerpt on the desk. The page never scrolls
+// itself — not even for the hold-out landing mid-session.
+const m7Panel: PanelState = {
+  ...m3Panel,
+  status: 'session open · 52 min',
+  touched: ['Q1', 'T1', 'sediment ×3'],
+  lookingAt: 'Q1 · addendum (Jul 16)',
+  crossFlag: {
+    text: 'the per-station slopes also track distance to coast — may bear on Q2 (the estuary cluster)',
+    accept: 'file a note → Q2',
+  },
+  msgs: [
+    ...m3Panel.msgs,
+    { run: { title: 'Per-station winter slopes', state: 'ok', meta: '9 min · hpc' }, role: 'system' },
+    {
+      role: 'guide',
+      text: 'Per-station is in: the winter sign flips at 31 of 48 stations, serviced or not. The residual structure echoes what T1 has been collecting since June.',
+      ref: { el: 'el-T1', label: 'show T1 on the page →' },
+    },
+  ],
+}
+const m7: Scene = {
+  id: 'm7', group: 'mature', title: 'live anchoring',
+  narration:
+    'The document as a working surface. Q1 wears the standing “working here” state; ' +
+    'changes OUT of view pulse the TOC and tick the delta rail (teal accretion · amber ' +
+    'awaiting-you · red condition — the hold-out just landed, see what’s new; the page ' +
+    'never scrolls itself). Deixis is mutual: click any figure or trail on the page and ' +
+    'the panel’s “looking at:” follows; the agent’s message points back (“show T1 →”). ' +
+    'The Q2 relevance stays a PROPOSAL; hold ⌖ parks the addendum on the desk.',
+  world: {
+    ...mBase,
+    whatsNew: {
+      since: 'Jul 12',
+      items: [
+        { ts: 'now', text: 'hold-out finished — winter flip CONFIRMED on 2025 data (−0.31 ± 0.09) → the contradiction resolves', loud: true },
+        ...(coastalWorld.whatsNew?.items.filter(i => !i.live) ?? []),
+      ],
+    },
+    sediment: [...m3Sed, ...matureSed],
+    trails: m3Trails,
+    panel: m7Panel,
+    sessions: [winterDigAt(m7Panel.msgs, 5, 'open'), anomalyDig],
+    desk: { line: '1 open session', items: [{ label: 'Q1 · winter dig', meta: 'started 09:40 · 3 runs · 1 fragment drafted', live: true, sessionId: 'winter dig' }] },
+    anchorAt: { session: 'winter dig', elId: 'q1' },
+    deltas: [
+      { elId: 'el-q1', kind: 'condition', label: 'hold-out landed — resolves the winter contradiction (awaiting your read)' },
+      { elId: 'el-T1', kind: 'draft', count: 1, label: 'T1: 1 fragment drafted this session — awaiting your eye' },
+      { elId: 'el-q2', kind: 'draft', count: 1, label: 'Q2: proposed note from the winter dig (cross-boundary — not written yet)' },
+      { elId: 'el-sediment', kind: 'accretion', count: 3, label: '3 runs landed this session' },
+    ],
+    openSediment: [],
+  },
+}
+
+export const SCENES: Scene[] = [e1, e2, e3, e4, e5, m1, m2, m3, m4, m5, m6, m7]
 
 export const GROUPS: { id: 'early' | 'mature'; label: string }[] = [
   { id: 'early', label: 'I · early days (day 0–3)' },

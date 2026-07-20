@@ -85,6 +85,18 @@ describe('workflow storyboard', () => {
     unmount()
   })
 
+  it('M7 shows live anchoring: standing anchor, TOC deltas, impact set, looking-at, cross proposal', () => {
+    const { getByText, container, unmount } = render(<Record world={SCENES[11].world} />)
+    getByText(/winter dig · working here/)               // standing anchor state
+    getByText(/touched:/)                                 // impact set
+    getByText(/looking at:/)                              // deixis doc → chat
+    getByText('show T1 on the page →')                    // deixis chat → doc
+    getByText('file a note → Q2')                         // cross-boundary proposal
+    expect(container.querySelector('.toc__delta--condition')).toBeTruthy()
+    expect(container.querySelector('.toc__delta--accretion')).toBeTruthy()
+    unmount()
+  })
+
   it('the plain notebook world still renders (default Record)', () => {
     const { getAllByText, getByText, unmount } = render(<Record />)
     expect(getAllByText('Coastal sensor study').length).toBeGreaterThan(0)

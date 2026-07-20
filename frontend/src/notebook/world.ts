@@ -30,6 +30,8 @@ export interface PanelMsg {
   fig?: { id: string; stat: string }
   /** quiet system line — e.g. "fragment drafted → T1 ↓" */
   note?: string
+  /** deixis, chat → doc: the message can point at a document element */
+  ref?: { el: string; label: string }
 }
 
 /** Session-close face: the distillation moment. */
@@ -46,6 +48,14 @@ export interface PanelState {
   msgs: PanelMsg[]
   closing?: PanelClose
   archived?: { label: string; when: string }   // read-only transcript view
+  /** the impact set — record elements this session has landed things on */
+  touched?: string[]
+  /** deixis, doc → chat: the conversation's current subject; clicking a
+   *  document element updates it live — pointing replaces context-setting */
+  lookingAt?: string
+  /** cross-boundary relevance stays a PROPOSAL — the agent never writes
+   *  outside the anchor silently */
+  crossFlag?: { text: string; accept: string }
 }
 
 export interface DeskState {
@@ -118,6 +128,13 @@ export interface World {
   openSession?: { id: string; turn?: number }
   /** initial grain of the work-record stratum */
   sedimentGrain?: 'run' | 'session'
+  /** the live session's home locus — wears a standing "working here" state */
+  anchorAt?: { session: string; elId: string }
+  /** peripheral change signals: TOC pulse badges + delta-rail ticks.
+   *  Three tiers only: accretion (routine, teal) · draft (awaiting you,
+   *  amber) · condition (loud, red). The document may glow anywhere, but
+   *  it moves only under the user's hand — no auto-scroll, ever. */
+  deltas?: { elId: string; kind: 'accretion' | 'draft' | 'condition'; count?: number; label: string }[]
   /** sediment entries expanded on first render */
   openSediment?: string[]
   /** render "work ▸" affordances on section heads (the work loop is wired) */

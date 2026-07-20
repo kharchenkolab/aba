@@ -54,7 +54,7 @@ export function Msg({ m }: { m: PanelMsg }) {
   )
 }
 
-export default function WorkPanel({ panel, onClose, onAdvance, onExpand, continuable }: {
+export default function WorkPanel({ panel, onClose, onAdvance, onExpand, continuable, lookingAt, onShowRef }: {
   panel: PanelState
   onClose?: () => void
   onAdvance?: (t: string) => void
@@ -62,9 +62,14 @@ export default function WorkPanel({ panel, onClose, onAdvance, onExpand, continu
   onExpand?: () => void
   /** a filed session is not dead — reading it and continuing it are the same surface */
   continuable?: boolean
+  /** deixis, doc → chat: the current subject, driven by clicks on the document */
+  lookingAt?: string
+  /** deixis, chat → doc: message refs locate their element on the page */
+  onShowRef?: (elId: string) => void
 }) {
   const [extra, setExtra] = useState<PanelMsg[]>([])
   const [draft, setDraft] = useState('')
+  const [flagged, setFlagged] = useState(false)
   // like any chat: open at the latest exchange (and keep up as it grows).
   // Re-pin after a beat — figure images load async and grow the scroll
   // height after the first pass.
@@ -107,13 +112,41 @@ export default function WorkPanel({ panel, onClose, onAdvance, onExpand, continu
           ))}
         </div>
         {panel.scopeNote && <div className="wpanel__scopenote">{panel.scopeNote}</div>}
+        {panel.touched && panel.touched.length > 0 && (
+          <div className="wpanel__touched" title="the impact set — where this session has landed things; at close, this is exactly what the distillation reviews">
+            touched: {panel.touched.map(t => <span key={t} className="wpanel__touchchip">{t}</span>)}
+          </div>
+        )}
+        {(lookingAt ?? panel.lookingAt) && (
+          <div className="wpanel__look" title="the conversation's current subject — click any element on the page to point at it; no context-setting needed">
+            looking at: <b>{lookingAt ?? panel.lookingAt}</b>
+          </div>
+        )}
       </div>
 
       <div className="wpanel__msgs" ref={msgsRef}>
         {/* single inner child + column-reverse outer = natively bottom-anchored
             scroll (chat behavior), immune to async image-load growth */}
         <div className="wpanel__msgsinner">
-        {[...panel.msgs, ...extra].map((m, i) => <Msg key={i} m={m} />)}
+        {[...panel.msgs, ...extra].map((m, i) => (
+          <div key={i}>
+            <Msg m={m} />
+            {m.ref && (
+              <button className="wpanel__showref" onClick={() => onShowRef?.(m.ref!.el)}
+                      title="locate this on the page — highlighted where it stands">
+                {m.ref.label}
+              </button>
+            )}
+          </div>
+        ))}
+        {panel.crossFlag && (
+          <div className="wpanel__cross" title="cross-boundary relevance stays a proposal — the agent never writes outside the anchor silently">
+            ✦ {panel.crossFlag.text}
+            {flagged
+              ? <span className="wpanel__crossdone">✓ noted → Q2 (draft)</span>
+              : <button className="btn" onClick={() => setFlagged(true)}>{panel.crossFlag.accept}</button>}
+          </div>
+        )}
 
         {panel.closing && (
           <div className="wclose">

@@ -649,6 +649,74 @@ input { font: inherit; }
 
 .toc__hit-stratum--session { color: var(--ok); }
 
+/* ---- live anchoring. The document may glow anywhere, but it moves only
+   under the user's hand: in-view changes flash in place; out-of-view
+   changes pulse the TOC and tick the delta rail. Three tiers only. */
+.nsec--live {
+  border-left: 3px solid var(--ok);
+  padding-left: 14px; margin-left: -17px;
+  border-radius: 2px;
+}
+.nsec__livetag {
+  font-family: var(--sans); font-size: 10px; font-weight: 700;
+  letter-spacing: 0.08em; text-transform: uppercase; color: var(--ok);
+  margin-bottom: 4px;
+}
+.desk__running { color: var(--ok); animation: rec-pulse 2s infinite; }
+.desk__item--held { border-style: dashed; color: var(--ink); }
+
+.toc__delta {
+  margin-left: 6px; font-size: 9.5px; font-weight: 700;
+  padding: 0 5px; border-radius: 7px; white-space: nowrap;
+  animation: rec-pulse 2.4s infinite;
+}
+.toc__delta--accretion { color: var(--teal); background: var(--teal-soft); }
+.toc__delta--draft { color: var(--amber); background: var(--amber-soft); }
+.toc__delta--condition { color: var(--red); background: var(--red-soft); }
+
+/* the delta rail: sticky zero-height wrapper keeps the rail viewport-pinned
+   inside the scrolling document column */
+.drail-wrap { position: sticky; top: 12px; height: 0; overflow: visible; z-index: 5; }
+.drail {
+  position: absolute; left: min(774px, calc(100% - 12px)); top: 0; width: 8px; height: 72vh;
+  border-left: 1px solid var(--rule);
+}
+.drail__tick {
+  position: absolute; left: -2px; width: 10px; height: 5px; border-radius: 2px;
+  padding: 0;
+}
+.drail__tick--accretion { background: var(--teal); opacity: 0.55; }
+.drail__tick--draft { background: var(--amber); }
+.drail__tick--condition { background: var(--red); height: 8px; animation: rec-pulse 2s infinite; }
+.drail__tick:hover { opacity: 1; transform: scaleX(1.6); }
+
+.fig img { cursor: pointer; }
+.trail__head h4 { cursor: pointer; }
+
+.wpanel__touched {
+  margin-top: 7px; font-size: 10.5px; color: var(--ink-3);
+  display: flex; gap: 4px; align-items: baseline; flex-wrap: wrap;
+}
+.wpanel__touchchip {
+  border: 1px solid var(--rule); border-radius: 7px; padding: 0 6px;
+  color: var(--ink-2); background: var(--paper);
+}
+.wpanel__look {
+  margin-top: 6px; font-size: 11px; color: var(--ink-2);
+  border-top: 1px dotted var(--rule-strong); padding-top: 6px;
+}
+.wpanel__look b { color: var(--teal); }
+.wpanel__showref {
+  font-size: 10.5px; color: var(--teal); margin: -8px 0 12px 2px; display: block;
+}
+.wpanel__showref:hover { text-decoration: underline; }
+.wpanel__cross {
+  border: 1px dashed var(--amber); background: var(--amber-soft); border-radius: 8px;
+  padding: 8px 10px; margin: 4px 0 10px; font-size: 11.5px; color: var(--ink-2);
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.wpanel__crossdone { color: var(--ok); font-weight: 600; }
+
 /* ------------------------------------------------ one-pager */
 .rec--onepager { display: block; }
 .doc--onepager { max-width: 720px; margin: 0 auto; }
