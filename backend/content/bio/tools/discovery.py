@@ -165,8 +165,11 @@ def make_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
     or with language='r' a standalone R env) with FULL version control. USE THIS
     when a package conflicts with the base (a different numpy, tensorflow, an
     ABI-incompatible wheel) or you need to resolve a dependency conflict your own
-    way — the shared base is never touched. Run code in it with
-    run_in_isolated_env. Returns {status, name, language, engine, env_id,
+    way — the shared base is never touched. Python packages are pypi by default;
+    prefix a package with `conda:` (e.g. "conda:samtools") to route it into the
+    conda layer of the solve — for conda-only (wheel-less) packages. R packages
+    route automatically (r-*/bioconductor-* → conda, else CRAN). Run code in it
+    with run_in_isolated_env. Returns {status, name, language, engine, env_id,
     installed, verified, error}."""
     from core.compute import named_envs
     from core.compute.errors import ComputeError
@@ -182,6 +185,14 @@ def make_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
     label = "R" if is_r else "Python"
     lang = "r" if is_r else "python"
     packages = list(input_.get("packages") or [])
+    # eco passthrough (the cold-base lever's consumer side): a `conda:` prefix
+    # routes that package into the conda layer of the solve — the only way to
+    # provision a wheel-less conda-only dep through the isolated lane. (R
+    # packages route by the r-/bioconductor- prefix heuristic instead.)
+    conda_pkgs = [p[len("conda:"):] for p in packages
+                  if isinstance(p, str) and p.startswith("conda:")]
+    pip_pkgs = [p for p in packages
+                if not (isinstance(p, str) and p.startswith("conda:"))]
     pid = str(projects.current() or "default")
     try:
         # Existing env + packages → layer on (extends_env; the env is never
@@ -189,7 +200,10 @@ def make_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
         # conflicts surface NOW with weft's structured cause; realization is
         # lazy — the first run materializes the prefix.
         if named_envs.resolve(pid, name) is not None and packages:
-            res = named_envs.extend(pid, name, packages)
+            if conda_pkgs:
+                res = named_envs.extend(pid, name, conda_pkgs, eco="conda")
+            if pip_pkgs or not conda_pkgs:
+                res = named_envs.extend(pid, name, pip_pkgs)
             # Extension mints a NEW frozen EnvID — a kernel already running on
             # the old realization would never see the new packages (found live:
             # in-session imports kept failing after a successful extend). Shut
@@ -197,7 +211,8 @@ def make_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
             # new identity. In-kernel state is gone by design — say so below.
             _restarted = _evict_env_kernels(name)
         else:
-            res = named_envs.create(pid, name, language=lang, packages=packages,
+            res = named_envs.create(pid, name, language=lang, packages=pip_pkgs,
+                                    conda_packages=(conda_pkgs or None),
                                     python_version=(input_.get("python_version") or None))
             _restarted = 0
     except ComputeError as e:
@@ -958,13 +973,26 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
                 f"bioconductor-{_pkg.lower()}" if _src == "bioconductor" else f"r-{_pkg.lower()}")
             try:
                 project_env.install(pid, "r", [conda_name], eco="conda")
-            except Exception:  # noqa: BLE001 — no conda build → captured source install
-                _cmd = (f"Rscript -e 'if (!requireNamespace(\"BiocManager\", quietly=TRUE)) "
-                        f"install.packages(\"BiocManager\"); BiocManager::install(\"{_pkg}\", "
-                        f"update=FALSE, ask=FALSE)'" if _src == "bioconductor" else
-                        f"Rscript -e 'install.packages(\"{_pkg}\")'")
-                project_env.run_installer(pid, "r", _cmd,
-                                          note=f"{_src} install of {_pkg} (no conda binary)")
+            except Exception:  # noqa: BLE001 — no conda build / cold base
+                # Second lane: the substrate's cran layer (session rlib riding
+                # the base — delta-only, works on ANY base incl. adopted
+                # read-only mounts, where conda adds AND bespoke installers
+                # refuse with session.cold_base). Bespoke installers remain the
+                # last resort (github/BiocManager have no cran-layer form).
+                _done = False
+                if _src == "cran":
+                    try:
+                        project_env.install(pid, "r", [_pkg], eco="cran")
+                        _done = True
+                    except Exception:  # noqa: BLE001 — fall through to bespoke
+                        _done = False
+                if not _done:
+                    _cmd = (f"Rscript -e 'if (!requireNamespace(\"BiocManager\", quietly=TRUE)) "
+                            f"install.packages(\"BiocManager\"); BiocManager::install(\"{_pkg}\", "
+                            f"update=FALSE, ask=FALSE)'" if _src == "bioconductor" else
+                            f"Rscript -e 'install.packages(\"{_pkg}\")'")
+                    project_env.run_installer(pid, "r", _cmd,
+                                              note=f"{_src} install of {_pkg} (no conda binary)")
         elif _src == "github":
             _ref = f', ref="{rp.get("ref")}"' if rp.get("ref") else ""
             project_env.run_installer(
@@ -1393,9 +1421,11 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
                                  f"deployment: the base env is an adopted read-only mount "
                                  f"(cold package cache) — a writable clone would re-download "
                                  f"the entire base. Use an ISOLATED env instead: "
-                                 f"create_env(name=..., packages=[...]) then "
-                                 f"ensure_capability(..., env=name) — it solves as a delta "
-                                 f"over the base and fetches only what's missing.")}
+                                 f"make_isolated_env(name=..., packages=['conda:<pkg>', ...]) "
+                                 f"— the conda: prefix routes it into the conda layer of the "
+                                 f"solve; then ensure_capability(..., env=name). The isolated "
+                                 f"env solves as a delta over the base and fetches only "
+                                 f"what's missing.")}
             return {"status": "error", "name": name, "note": f"conda install failed: {e}"}
         _note = ("Installed into the project's weft session; the binary is on PATH — "
                  "invoke it from run_python via subprocess.")

@@ -146,35 +146,43 @@ def set_active(project_id: str, name: str, lang: str = "python") -> dict:
 # ── create / extend ──────────────────────────────────────────────────────────
 
 def _spec_for(project_id: str, name: str, language: str,
-              packages: list[str], python_version: Optional[str] = None) -> dict:
+              packages: list[str], python_version: Optional[str] = None,
+              conda_packages: Optional[list[str]] = None) -> dict:
     """A fresh named-env spec. Python envs bake ipykernel so the per-env
     persistent kernel works without ever installing into the frozen env; R envs
     get the cran layer for CRAN-style specs. `python_version` (e.g. "3.10")
     pins the interpreter — the whole point of an isolated env is often a
     DIFFERENT python than the base (an old package that needs <3.11); a fresh
-    env has no frozen base to conflict, so weft picks the matching build."""
+    env has no frozen base to conflict, so weft picks the matching build.
+    `conda_packages` routes wheel-less conda-only deps into the conda layer —
+    the eco passthrough the cold-base lever advertises (a python env's
+    `packages` are pypi; without this a conda-only package could never be
+    provisioned through the isolated lane)."""
     label = f"aba-{project_id}-{name}"
     if language == "r":
         conda = [p for p in packages if p.startswith(("r-", "bioconductor-"))]
         cran = [p for p in packages if not p.startswith(("r-", "bioconductor-"))]
-        deps: dict = {"conda": ["r-base =4.4.*", *conda]}
+        deps: dict = {"conda": ["r-base =4.4.*", *conda, *(conda_packages or [])]}
         if cran:
             deps["cran"] = cran
         return {"name": label, "deps": deps}
     pyspec = f"python ={python_version}" if python_version else "python =3.12"
     return {"name": label,
-            "deps": {"conda": [pyspec, "ipykernel"],
+            "deps": {"conda": [pyspec, "ipykernel", *(conda_packages or [])],
                      "pypi": list(packages)}}
 
 
 def create(project_id: str, name: str, *, language: str = "python",
            packages: list[str] | None = None,
-           python_version: Optional[str] = None) -> dict:
+           python_version: Optional[str] = None,
+           conda_packages: list[str] | None = None) -> dict:
     """Solve a fresh named env → EnvID (realization is lazy — first run
     realizes). Raises ComputeError with weft's structured cause (e.g.
-    env.solve_conflict names the minimal conflicting set)."""
+    env.solve_conflict names the minimal conflicting set). `conda_packages`
+    is the eco passthrough for conda-only deps (see _spec_for)."""
     name = name.strip()
-    spec = _spec_for(project_id, name, language, packages or [], python_version)
+    spec = _spec_for(project_id, name, language, packages or [], python_version,
+                     conda_packages)
     res = _sync(_adapter.get_compute().env_ensure(spec))     # slow — OUTSIDE the lock
     now = time.time()
     # base_spec/python_version/layers persist HOW the env was built — the
@@ -183,7 +191,8 @@ def create(project_id: str, name: str, *, language: str = "python",
     # 3.12 default) and flattened extend() layering.
     _update(project_id, lambda data: data["envs"].__setitem__(name, {
         "env_id": res["env_id"], "language": language,
-        "packages": list(packages or []), "history": [],
+        "packages": list(packages or []),
+        "conda_packages": list(conda_packages or []), "history": [],
         "python_version": python_version, "base_spec": spec, "layers": [],
         "created_at": now, "updated_at": now,
     }))
@@ -191,16 +200,51 @@ def create(project_id: str, name: str, *, language: str = "python",
             "summary": res.get("summary"), "engine": "weft"}
 
 
-def extend(project_id: str, name: str, packages: list[str]) -> dict:
+def _extend_deps(language: str, packages: list[str],
+                 eco: Optional[str] = None) -> dict:
+    """The deps block for an extend layer. Explicit `eco` routes everything
+    one way (the passthrough for conda-only python deps — the cold-base
+    lever's consumer side); otherwise python → pypi and R splits by the same
+    prefix heuristic create() uses (`r-`/`bioconductor-` → conda, else cran —
+    extend used to force cran, which stranded conda-only R packages)."""
+    if eco:
+        return {eco: list(packages)}
+    if language == "r":
+        conda = [p for p in packages if p.startswith(("r-", "bioconductor-"))]
+        cran = [p for p in packages if not p.startswith(("r-", "bioconductor-"))]
+        deps: dict = {}
+        if conda:
+            deps["conda"] = conda
+        if cran:
+            deps["cran"] = cran
+        return deps
+    return {"pypi": list(packages)}
+
+
+def _layer_deps(layer, language: str) -> dict:
+    """Normalize a recorded layer for re-lock replay: new layers store their
+    full deps block ({'deps': {eco: [...]}}); legacy layers are flat package
+    lists routed to the language default (pypi / cran) — exactly what extend
+    did when they were recorded."""
+    if isinstance(layer, dict):
+        return {k: list(v) for k, v in (layer.get("deps") or {}).items()}
+    return {("cran" if language == "r" else "pypi"): list(layer)}
+
+
+def extend(project_id: str, name: str, packages: list[str], *,
+           eco: Optional[str] = None) -> dict:
     """Add packages = extends_env over the current EnvID → NEW EnvID, handle
-    moves, old id kept in history (never install into a frozen env)."""
+    moves, old id kept in history (never install into a frozen env). `eco`
+    overrides the ecosystem routing (see _extend_deps)."""
     row = resolve(project_id, name)
     if row is None:
         raise ComputeError("unknown_env", f"no named env {name!r} in this project",
                            stage="aba", hints={"available": list_names(project_id)})
-    eco = "cran" if row["language"] == "r" else "pypi"
+    deps = _extend_deps(row["language"], packages, eco)
+    if not deps:
+        raise ComputeError("task.invalid", "nothing to install", stage="aba")
     spec = {"name": f"aba-{project_id}-{name}",
-            "extends_env": row["env_id"], "deps": {eco: list(packages)}}
+            "extends_env": row["env_id"], "deps": deps}
     res = _sync(_adapter.get_compute().env_ensure(spec))     # slow — OUTSIDE the lock
 
     def _apply(data):
@@ -212,7 +256,10 @@ def extend(project_id: str, name: str, packages: list[str]) -> dict:
         r.setdefault("history", []).append(r["env_id"])
         r["env_id"] = res["env_id"]
         r["packages"] = list(dict.fromkeys([*r.get("packages", []), *packages]))
-        r.setdefault("layers", []).append(list(packages))   # for re-lock replay
+        # layers carry their FULL deps block so a platform re-lock replays the
+        # same ecosystems (a flat list replayed as pypi would mis-route a
+        # conda layer)
+        r.setdefault("layers", []).append({"deps": deps})
         r["updated_at"] = time.time()
     _update(project_id, _apply)
     return {"env_id": res["env_id"], "status": res.get("status"),
@@ -632,15 +679,14 @@ def ensure_platform(project_id: str, name: str, platform_str: str) -> dict:
     # recorded python pin
     base = dict(row.get("base_spec") or _spec_for(
         project_id, name, language, list(row.get("packages") or []),
-        row.get("python_version")))
+        row.get("python_version"), list(row.get("conda_packages") or []) or None))
     base["platforms"] = plats
     res = _sync(_adapter.get_compute().env_ensure(base, update=True))
     env_id = res["env_id"]
-    eco = "cran" if language == "r" else "pypi"
     try:
         for layer in row.get("layers") or []:
             lspec = {"name": f"aba-{project_id}-{name}", "extends_env": env_id,
-                     "deps": {eco: list(layer)}, "platforms": plats}
+                     "deps": _layer_deps(layer, language), "platforms": plats}
             res = _sync(_adapter.get_compute().env_ensure(lspec))
             env_id = res["env_id"]
     except ComputeError as e:
@@ -655,10 +701,10 @@ def ensure_platform(project_id: str, name: str, platform_str: str) -> dict:
         # the target platforms. Same frozen-identity semantics (new EnvID).
         flat = {k: v for k, v in base.items() if k != "deps"}
         deps = {k: list(v) for k, v in (base.get("deps") or {}).items()}
-        merged = list(deps.get(eco) or [])
         for layer in row.get("layers") or []:
-            merged += [p for p in layer if p not in merged]
-        deps[eco] = merged
+            for k, v in _layer_deps(layer, language).items():   # eco-faithful merge
+                cur = deps.setdefault(k, [])
+                cur += [p for p in v if p not in cur]
         flat["deps"] = deps
         flat["platforms"] = plats
         res = _sync(_adapter.get_compute().env_ensure(flat, update=True))

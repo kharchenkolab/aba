@@ -43,7 +43,7 @@ from core.compute import adapter as _adapter
 from core.compute import base_env, named_envs
 from core.compute.errors import ComputeError
 
-_ECOS = ("conda", "pypi")
+_ECOS = ("conda", "pypi", "cran")
 
 
 def _exe(language: str) -> str:
@@ -149,11 +149,12 @@ def _current_runtime(session_id: str) -> Optional[dict]:
 def _ensure_out(session_id: str, base_eid: str, rt: dict) -> dict:
     p = rt.get("prefix")
     # "materialized" = the session owns an on-disk layer of its own: a full
-    # clone (source=session) OR a cold-base PYLIB overlay over the mount
-    # (source stays "base", runtime carries `pylib`; weft 6070bfc).
+    # clone (source=session) OR an additive overlay riding the base — pylib
+    # (cold-base pypi, weft 6070bfc) / rlib (cran layer on ANY base, 80e609d).
     return {"session_id": session_id, "base_env_id": base_eid, "runtime": rt,
             "prefix": Path(p) if p else None,
-            "materialized": rt.get("source") == "session" or bool(rt.get("pylib"))}
+            "materialized": (rt.get("source") == "session"
+                             or bool(rt.get("pylib")) or bool(rt.get("rlib")))}
 
 
 def ensure(pid: str, language: str) -> dict:
@@ -290,8 +291,10 @@ def install(pid: str, language: str, specs: list[str], *,
     the registry so a rebuilt session replays it, and the snapshot goes dirty
     (the next background job/export mints a fresh EnvID)."""
     if eco not in _ECOS:
-        raise ValueError(f"eco must be one of {_ECOS} (R goes conda-first; "
-                         f"source-CRAN via run_installer)")
+        raise ValueError(f"eco must be one of {_ECOS} (R goes conda-first on "
+                         f"warm bases; eco='cran' layers a session rlib on ANY "
+                         f"base — delta-only, no clone; bespoke installers via "
+                         f"run_installer)")
     pid = str(pid)
     s = ensure(pid, language)
     ad = _adapter.get_compute()

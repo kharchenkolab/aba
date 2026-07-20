@@ -117,8 +117,9 @@ def env_overview(project_id: Optional[str] = None) -> dict:
                 "identity": (rt.get("env_id") or
                              "unhashed scratch — snapshot before recording results"),
             })
-            if rt.get("pylib"):
-                session["overlay"] = rt["pylib"]   # cold-base pylib layer
+            _ovl = {k: rt[k] for k in ("pylib", "rlib") if rt.get(k)}
+            if _ovl:
+                session["overlays"] = _ovl   # additive layers riding the base
         except Exception:  # noqa: BLE001 — session not realizable
             pass
     return {
@@ -241,13 +242,28 @@ def env_layers(project_id: Optional[str] = None) -> dict:
     from core.compute import base_env as _bev, project_env as _penv
     if project_id and _bev.active("r"):
         try:
-            r_sess = _penv.prefix(str(project_id), "r")
-            r_sess_lib = r_sess / "lib" / "R" / "library"
-            r_rscript = str(r_sess / "bin" / "Rscript")
-            by = _r_packages_by_lib([r_sess_lib], rscript=r_rscript)
-            r_layers.append({"tier": "session", "scope": "project", "project_id": project_id,
-                             "delivery": "weft", "mutable": True, "path": str(r_sess_lib),
-                             "packages": by.get(os.path.realpath(str(r_sess_lib)), [])})
+            _rinfo = _penv.ensure(str(project_id), "r")
+            _rrt = _rinfo["runtime"]
+            if _rrt.get("rlib"):
+                # cran layer riding the base (weft 80e609d): a session-owned
+                # R_LIBS dir — package dirs enumerate directly, no Rscript
+                _rl = Path(_rrt["rlib"])
+                _names = (sorted(p.name for p in _rl.iterdir() if p.is_dir())
+                          if _rl.exists() else [])
+                r_layers.append({"tier": "session", "scope": "project",
+                                 "project_id": project_id, "delivery": "weft",
+                                 "mutable": True, "mode": "rlib-overlay",
+                                 "path": str(_rl),
+                                 "packages": [{"name": n, "version": ""} for n in _names]})
+            elif _rrt.get("direct_exec") and _rinfo["prefix"] is not None:
+                r_sess = _rinfo["prefix"]
+                r_sess_lib = r_sess / "lib" / "R" / "library"
+                r_rscript = str(r_sess / "bin" / "Rscript")
+                by = _r_packages_by_lib([r_sess_lib], rscript=r_rscript)
+                r_layers.append({"tier": "session", "scope": "project", "project_id": project_id,
+                                 "delivery": "weft", "mutable": True, "path": str(r_sess_lib),
+                                 "packages": by.get(os.path.realpath(str(r_sess_lib)), [])})
+            # else: activation-only with no scannable dir — no session layer
         except Exception:  # noqa: BLE001 — R session not realizable → no session layer
             pass
     # Named (weft) R envs — full standalone envs, rendered from the handle.

@@ -239,9 +239,14 @@ def test_reset_drops_session(stub):
     assert project_env.get("prj_reset", "python")["additions"] == []   # reset means reset
 
 
-def test_run_in_r_eco_guard(stub):
-    with pytest.raises(ValueError, match="conda-first"):
-        project_env.install("prj_eco", "r", ["ggplot2"], eco="cran")
+def test_install_eco_guard(stub):
+    """cran is a legal session eco now (weft 80e609d: rlib layer on any base);
+    unknown ecos still refuse."""
+    out = project_env.install("prj_eco", "r", ["ggplot2"], eco="cran")
+    assert stub.installs[-1][1] == {"cran": ["ggplot2"]}
+    assert out["session_id"]
+    with pytest.raises(ValueError, match="eco must be one of"):
+        project_env.install("prj_eco", "r", ["x"], eco="npm")
 
 
 # ── integration seams ────────────────────────────────────────────────────────

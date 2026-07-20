@@ -417,15 +417,22 @@ class _ColdBaseStub(_LazyStub):
     def _pylib(self, sid):
         return WS / "site-local" / f"sessions/{sid}" / "pylib"
 
+    def _rlib(self, sid):
+        return WS / "site-local" / f"sessions/{sid}" / "rlib"
+
     def _rt(self, sid) -> dict:
         s = self.sessions[sid]
         rt = {"source": "base", "env_id": s["base_env_id"],
               "prefix": str(BASE_PREFIX), "activation": BASE_ACT,
               "ns_wrap": False, "direct_exec": True}
-        if s.get("mode") == "pylib":
+        if s.get("mode") == "pylib" or s.get("rlib"):
             rt.update(env_id=None,
                       activation=f"{BASE_ACT} && . overlay.sh",
-                      direct_exec=False, pylib=str(self._pylib(sid)))
+                      direct_exec=False)
+            if s.get("mode") == "pylib":
+                rt["pylib"] = str(self._pylib(sid))
+            if s.get("rlib"):
+                rt["rlib"] = str(self._rlib(sid))
         return rt
 
     async def session_install(self, sid, **kw):
@@ -439,6 +446,10 @@ class _ColdBaseStub(_LazyStub):
                                    "warm_site": "run where the base was built",
                                    "full_clone": "full_clone=true (needs egress)"}})
         self.installs.append((sid, kw))
+        if kw.get("cran"):
+            self.sessions[sid]["rlib"] = True
+            self._rlib(sid).mkdir(parents=True, exist_ok=True)
+            return {"installed": kw, "mode": "rlib", "runtime": self._rt(sid)}
         self.sessions[sid]["mode"] = "pylib"
         self._pylib(sid).mkdir(parents=True, exist_ok=True)
         return {"installed": kw, "mode": "pylib", "runtime": self._rt(sid)}
@@ -482,7 +493,50 @@ def test_cold_base_overview_and_layers(cold):
     project_env.install("prj_c3", "python", ["toolz"], eco="pypi")
     s1 = env_overview("prj_c3")["session"]
     assert s1["materialized"] is True and "unhashed scratch" in (s1["identity"] or "")
-    assert s1.get("overlay", "").endswith("pylib")
+    assert (s1.get("overlays") or {}).get("pylib", "").endswith("pylib")
     layers = env_layers("prj_c3")["python"]["layers"]
     sess = [l for l in layers if l["tier"] == "session"]
     assert sess and sess[0].get("mode") == "pylib-overlay"
+
+
+# ── R parity: the cran layer rides ANY base (weft 80e609d) ───────────────────
+
+def test_cold_base_cran_rlib_layer(cold):
+    project_env.ensure("prj_r1", "r")
+    res = project_env.install("prj_r1", "r", ["ggplot2"], eco="cran")
+    rt = res["runtime"]
+    assert rt.get("rlib") and rt["env_id"] is None
+    out = project_env.ensure("prj_r1", "r")
+    assert out["materialized"] is True          # the rlib layer is session-owned
+    argv = project_env.exec_argv("prj_r1", "r", ["-e", "1"])
+    assert argv[:2] == ["bash", "-c"] and "overlay.sh" in argv[2]
+
+
+# ── isolated-env eco passthrough (the cold-base lever's consumer side) ───────
+
+def test_isolated_env_eco_passthrough(lazy, monkeypatch):
+    """A conda-only (wheel-less) dep must be reachable through the isolated
+    lane the cold-base refusal advertises: create routes conda_packages into
+    the conda layer, extend takes an eco override, R extend splits by the same
+    prefix heuristic create uses (it used to force cran), and layers record
+    their full deps block so a platform re-lock replays the same ecosystems."""
+    from core.compute import named_envs
+    specs = []
+    async def _env_ensure(spec, **kw):
+        specs.append(spec)
+        return {"env_id": f"env:v1:iso{len(specs)}", "status": "solved"}
+    monkeypatch.setattr(lazy, "env_ensure", _env_ensure, raising=False)
+    named_envs.create("prj_e1", "iso", language="python",
+                      packages=["numpy"], conda_packages=["samtools"])
+    assert "samtools" in specs[-1]["deps"]["conda"]
+    assert specs[-1]["deps"]["pypi"] == ["numpy"]
+    named_envs.extend("prj_e1", "iso", ["bwa"], eco="conda")
+    assert specs[-1]["deps"] == {"conda": ["bwa"]}
+    row = named_envs.resolve("prj_e1", "iso")
+    assert row["layers"][-1] == {"deps": {"conda": ["bwa"]}}
+    named_envs.create("prj_e1", "riso", language="r", packages=[])
+    named_envs.extend("prj_e1", "riso", ["r-jsonlite", "ggplot2"])
+    assert specs[-1]["deps"] == {"conda": ["r-jsonlite"], "cran": ["ggplot2"]}
+    # legacy flat layers still replay, routed to the language default
+    assert named_envs._layer_deps(["a", "b"], "python") == {"pypi": ["a", "b"]}
+    assert named_envs._layer_deps({"deps": {"conda": ["c"]}}, "r") == {"conda": ["c"]}
