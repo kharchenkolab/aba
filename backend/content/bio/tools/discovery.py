@@ -200,6 +200,7 @@ def make_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
         # conflicts surface NOW with weft's structured cause; realization is
         # lazy — the first run materializes the prefix.
         if named_envs.resolve(pid, name) is not None and packages:
+            _pre_id = (named_envs.resolve(pid, name) or {}).get("env_id")
             if conda_pkgs:
                 res = named_envs.extend(pid, name, conda_pkgs, eco="conda")
             if pip_pkgs or not conda_pkgs:
@@ -209,7 +210,11 @@ def make_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
             # in-session imports kept failing after a successful extend). Shut
             # the env's live sessions down; the next step re-attaches to the
             # new identity. In-kernel state is gone by design — say so below.
-            _restarted = _evict_env_kernels(name)
+            # IDEMPOTENT case: identity unchanged (all packages already
+            # recorded — extend answered "cached") → nothing to re-attach,
+            # do NOT kill the user's live kernels for a no-op.
+            _restarted = (_evict_env_kernels(name)
+                          if res["env_id"] != _pre_id else 0)
         else:
             res = named_envs.create(pid, name, language=lang, packages=pip_pkgs,
                                     conda_packages=(conda_pkgs or None),

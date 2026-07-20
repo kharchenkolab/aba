@@ -235,35 +235,69 @@ def extend(project_id: str, name: str, packages: list[str], *,
            eco: Optional[str] = None) -> dict:
     """Add packages = extends_env over the current EnvID → NEW EnvID, handle
     moves, old id kept in history (never install into a frozen env). `eco`
-    overrides the ecosystem routing (see _extend_deps)."""
-    row = resolve(project_id, name)
-    if row is None:
-        raise ComputeError("unknown_env", f"no named env {name!r} in this project",
-                           stage="aba", hints={"available": list_names(project_id)})
-    deps = _extend_deps(row["language"], packages, eco)
-    if not deps:
-        raise ComputeError("task.invalid", "nothing to install", stage="aba")
-    spec = {"name": f"aba-{project_id}-{name}",
-            "extends_env": row["env_id"], "deps": deps}
-    res = _sync(_adapter.get_compute().env_ensure(spec))     # slow — OUTSIDE the lock
+    overrides the ecosystem routing (see _extend_deps).
 
-    def _apply(data):
-        r = data["envs"].get(name)
-        if r is None:      # vanished concurrently — re-seed from the solved id
-            r = {"env_id": row["env_id"], "language": row["language"],
-                 "packages": list(row["packages"]), "history": []}
-            data["envs"][name] = r
-        r.setdefault("history", []).append(r["env_id"])
-        r["env_id"] = res["env_id"]
-        r["packages"] = list(dict.fromkeys([*r.get("packages", []), *packages]))
-        # layers carry their FULL deps block so a platform re-lock replays the
-        # same ecosystems (a flat list replayed as pypi would mis-route a
-        # conda layer)
-        r.setdefault("layers", []).append({"deps": deps})
-        r["updated_at"] = time.time()
-    _update(project_id, _apply)
-    return {"env_id": res["env_id"], "status": res.get("status"),
-            "summary": res.get("summary"), "delta": res.get("delta")}
+    Concurrency: the solve is slow and runs OUTSIDE the registry lock, so the
+    handle can move underneath (another extend / platform re-lock landing
+    first). The old code overwrote `env_id` unconditionally — the LAST writer
+    won and the first extend's delta silently vanished from the identity chain
+    (its layer stayed recorded, so a later re-lock resurrected it: identity
+    and record disagreed). Optimistic retry instead: apply only if the parent
+    we solved against is still the tip; otherwise re-solve on the new tip —
+    both deltas end up in the chain, in landing order."""
+    deps_probe = _extend_deps(
+        (resolve(project_id, name) or {}).get("language") or "python",
+        packages, eco)
+    if not deps_probe:
+        raise ComputeError("task.invalid", "nothing to install", stage="aba")
+    for _attempt in range(3):
+        row = resolve(project_id, name)
+        if row is None:
+            raise ComputeError("unknown_env",
+                               f"no named env {name!r} in this project",
+                               stage="aba", hints={"available": list_names(project_id)})
+        # Idempotent re-extend: every requested spec string already recorded →
+        # answer the CURRENT identity with no re-solve. The old behavior minted
+        # a new EnvID (and the tool layer then evicted the env's live kernels)
+        # for a no-op request — a retried/duplicated call was destructive. An
+        # exact-string check only: a changed pin ("pkg==2.0" vs "pkg") is a
+        # REAL change and re-solves.
+        if set(packages) <= set(row.get("packages") or []):
+            return {"env_id": row["env_id"], "status": "cached",
+                    "summary": "all requested packages already recorded — "
+                               "no re-solve", "delta": []}
+        deps = _extend_deps(row["language"], packages, eco)
+        spec = {"name": f"aba-{project_id}-{name}",
+                "extends_env": row["env_id"], "deps": deps}
+        res = _sync(_adapter.get_compute().env_ensure(spec))  # slow — OUTSIDE the lock
+        applied = {"ok": False}
+
+        def _apply(data):
+            r = data["envs"].get(name)
+            if r is None:   # vanished concurrently — re-seed from the solved id
+                r = {"env_id": row["env_id"], "language": row["language"],
+                     "packages": list(row["packages"]), "history": []}
+                data["envs"][name] = r
+            elif r.get("env_id") != row["env_id"]:
+                return      # tip moved under our solve — retry on the new tip
+            r.setdefault("history", []).append(r["env_id"])
+            r["env_id"] = res["env_id"]
+            r["packages"] = list(dict.fromkeys([*r.get("packages", []), *packages]))
+            # layers carry their FULL deps block so a platform re-lock replays
+            # the same ecosystems (a flat list replayed as pypi would mis-route
+            # a conda layer)
+            r.setdefault("layers", []).append({"deps": deps})
+            r["updated_at"] = time.time()
+            applied["ok"] = True
+        _update(project_id, _apply)
+        if applied["ok"]:
+            return {"env_id": res["env_id"], "status": res.get("status"),
+                    "summary": res.get("summary"), "delta": res.get("delta")}
+    raise ComputeError(
+        "env.concurrent_extend",
+        f"named env {name!r} kept moving under this extend (3 attempts) — "
+        f"another agent/lane is extending it concurrently; retry when it settles",
+        stage="aba")
 
 
 # ── reclaim / retire ─────────────────────────────────────────────────────────

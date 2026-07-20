@@ -540,3 +540,75 @@ def test_isolated_env_eco_passthrough(lazy, monkeypatch):
     # legacy flat layers still replay, routed to the language default
     assert named_envs._layer_deps(["a", "b"], "python") == {"pypi": ["a", "b"]}
     assert named_envs._layer_deps({"deps": {"conda": ["c"]}}, "r") == {"conda": ["c"]}
+
+
+# ── HIGH-1: concurrent extend must not lose a delta (optimistic retry) ───────
+
+def test_concurrent_extend_keeps_both_deltas(lazy, monkeypatch):
+    """Two extends racing on one handle: the solve runs outside the registry
+    lock, so the loser used to clobber env_id — the winner's delta vanished
+    from the identity chain while its layer stayed recorded (identity/record
+    drift). Now the loser detects the moved tip and re-solves on it: both
+    deltas chain, in landing order."""
+    from core.compute import named_envs
+    solved = []
+    async def _env_ensure(spec, **kw):
+        solved.append(spec)
+        return {"env_id": f"env:v1:c{len(solved)}", "status": "solved"}
+    monkeypatch.setattr(lazy, "env_ensure", _env_ensure, raising=False)
+    named_envs.create("prj_cc", "shared", language="python", packages=[])
+    base_id = named_envs.resolve("prj_cc", "shared")["env_id"]
+
+    # Simulate the race: between OUR solve and OUR apply, a competing extend
+    # lands (applied directly through the real registry machinery).
+    real_update = named_envs._update
+    fired = {"done": False}
+    def _racing_update(pid, fn):
+        if not fired["done"]:
+            fired["done"] = True
+            def _competitor(data):
+                r = data["envs"]["shared"]
+                r.setdefault("history", []).append(r["env_id"])
+                r["env_id"] = "env:v1:competitor"
+                r.setdefault("layers", []).append({"deps": {"pypi": ["rival"]}})
+            real_update(pid, _competitor)
+        return real_update(pid, fn)
+    monkeypatch.setattr(named_envs, "_update", _racing_update)
+
+    out = named_envs.extend("prj_cc", "shared", ["mypkg"])
+    row = named_envs.resolve("prj_cc", "shared")
+    # our extend re-solved AGAINST the competitor's tip, not the stale base
+    assert solved[-1]["extends_env"] == "env:v1:competitor"
+    assert row["env_id"] == out["env_id"]
+    # both deltas present in the layer record, competitor first
+    assert {"deps": {"pypi": ["rival"]}} in row["layers"]
+    assert {"deps": {"pypi": ["mypkg"]}} in row["layers"]
+    # and the identity chain kept the competitor's id in history
+    assert "env:v1:competitor" in row["history"]
+
+
+# ── HIGH-2: re-extend with already-present packages is a no-op ───────────────
+
+def test_reextend_same_packages_idempotent(lazy, monkeypatch):
+    """Re-requesting packages an env already records must not mint a new
+    EnvID (the old path re-solved AND the tool layer then evicted the env's
+    live kernels — a retried call destroyed working state). Changed spec
+    strings still re-solve."""
+    from core.compute import named_envs
+    solved = []
+    async def _env_ensure(spec, **kw):
+        solved.append(spec)
+        return {"env_id": f"env:v1:i{len(solved)}", "status": "solved"}
+    monkeypatch.setattr(lazy, "env_ensure", _env_ensure, raising=False)
+    named_envs.create("prj_id", "pinny", language="python", packages=["numpy"])
+    named_envs.extend("prj_id", "pinny", ["scipy"])
+    n = len(solved)
+    eid = named_envs.resolve("prj_id", "pinny")["env_id"]
+    out = named_envs.extend("prj_id", "pinny", ["scipy"])          # exact repeat
+    assert out["status"] == "cached" and out["env_id"] == eid
+    out2 = named_envs.extend("prj_id", "pinny", ["numpy", "scipy"])  # subset
+    assert out2["status"] == "cached" and out2["env_id"] == eid
+    assert len(solved) == n                                        # no re-solve
+    assert len(named_envs.resolve("prj_id", "pinny")["layers"]) == 1
+    out3 = named_envs.extend("prj_id", "pinny", ["scipy==1.12"])   # changed pin
+    assert out3["status"] != "cached" and len(solved) == n + 1
