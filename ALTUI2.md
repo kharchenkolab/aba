@@ -100,7 +100,37 @@ first-class, not scaffolding:
   prose); search covers **what was SAID**, not just what was kept — a
   transcript hit lands on its turn, highlighted.
 
-**The storyboard** (`frontend/src/workflow/`) plays this as eleven
+**Live anchoring (PK: how does the Record track the work as it happens?).**
+The governing rule: *the document may glow anywhere, but it moves only
+under the user's hand* — no auto-scroll, ever. Mechanisms (scene M7):
+
+- **Standing anchor state**: the live session's home section wears
+  "⟲ winter dig · working here" until close — scroll away and back, the
+  hot region is unmistakable.
+- **Changes land by visibility**: in view → materialize in place with a
+  flash; out of view → a **TOC pulse badge** and a **delta-rail tick**
+  (minimap idiom), three tiers only: teal accretion · amber awaiting-you
+  · red condition. Non-session events (a background hold-out landing) use
+  the same periphery; conditions also hit the what's-new strip — the one
+  always-visible surface — as a live ticker.
+- **Mutual deixis**: click any element on the page → the panel's
+  "looking at:" follows (pointing replaces context-setting); agent
+  messages point back ("show T1 on the page →" locates and flashes it).
+- **Impact set**: the panel lists where this session has landed things
+  ("touched: Q1 · T1 · sediment ×3") — at close, that list IS what the
+  distillation reviews.
+- **Cross-boundary relevance stays a proposal** ("may bear on Q2 — file a
+  note?"): the agent never writes outside the anchor silently.
+- **hold ⌖**: pin an excerpt to the desk for two-locus work; clears at
+  session close.
+
+**Glyph grammar** (uniform): **⟲** marks a door to a session (any state —
+the noun); **▶** means executing right now (a state, never a link icon);
+they co-occur when the door leads to a live session (`⟲ winter dig ▶`).
+**⚡** contradiction/condition · **⌖** held excerpt · **draft** badge =
+agent-proposed, awaiting ratification.
+
+**The storyboard** (`frontend/src/workflow/`) plays this as twelve
 interactive scenes over the SAME Record renderer (parameterized over a
 `World`, `src/notebook/world.ts` — `/notebook.html` is unchanged):
 *Part I, early days (day 0–3)* — the hard, nothing-to-anchor-on case: a new
@@ -111,7 +141,8 @@ mid-conversation as a stub section (E4); day 3 reads as a lab diary (E5).
 opened from a question with scope in hand (M2); the churn loop with live
 accretion (M3); walking away = distillation (M4); the morning after —
 the by-session work record, resume from the document (M5); the session
-page itself — territory behind the map (M6).
+page itself — territory behind the map (M6); live anchoring — the
+document as a working surface (M7).
 Some scenes advance through their own affordances (typing in the day-0
 composer, `work ▸` on a question, `file & close` in the panel) — the story
 moves the way the scientist would. Arrow keys / pills / `?step=` deep links.
