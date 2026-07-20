@@ -212,4 +212,6 @@ Geometry and feel are what's being tested — per NOTES.md, the real fork
 between altui1 and altui2 is rendering emphasis over one shared accretion
 pipeline.
 
+The comprehensive design document (concept, principles, entity model,
+work loop, anchoring, triage, recursion, maturation): **RECORD_DESIGN.md**.
 Design notes and study synthesis: ../NOTES.md (repo-external).
