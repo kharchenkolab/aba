@@ -55,6 +55,27 @@
   # Show the "reset to the group credential" checkbox ONLY when a personal override exists
   # (for some enrolled group). Fail-safe: any probe error → hidden (never breaks the form).
   show_reset = (enrolled.any? { |g| has_personal.call(g) } rescue false)
+
+  # Version line (small grey, under the Lab field). At FORM-render time we can only show the
+  # deployment's CURRENT release + the published env stacks (read straight off the FS) — the
+  # session CARD later shows the release the session actually PINNED. Fail-safe: any error → ''.
+  ver_bits = []
+  begin
+    rr = ((site['image'] || {})['release_root'])
+    if rr
+      rel = (File.basename(File.realpath(File.join(rr, 'current'))) rescue nil)
+      ver_bits << "release #{rel}" if rel
+    end
+  rescue; end
+  begin
+    pt = ((site['envs'] || {})['publish_tree'])
+    if pt
+      cat = YAML.safe_load(File.read(File.join(pt, 'catalog.json')))
+      names = ((cat || {})['envs'] || {}).map { |n, i| "#{n} #{(i['latest'] || '').to_s.rpartition('-').first}" }
+      ver_bits << "envs: #{names.join(', ')}" unless names.empty?
+    end
+  rescue; end
+  ver_line = ver_bits.empty? ? '' : ('aba ' + ver_bits.join(' · '))
 -%>
 ---
 cluster: "dev-cluster"
@@ -78,7 +99,7 @@ attributes:
   aba_lab:
     widget: "select"
     label: "Lab"
-    help: "<%= ui['form_intro'] || 'Your enrolled ABA groups (✓). Group not listed? Ask your admin to enroll it.' %>"
+    help: "<%= ui['form_intro'] || 'Your enrolled ABA groups (✓). Group not listed? Ask your admin to enroll it.' %><%= ver_line.empty? ? '' : "<br><small style='color:#888'>#{ver_line}</small>" %>"
     options:
 <%- lab_opts.each do |label, val| -%>
       - ["<%= label %>", "<%= val %>"]
