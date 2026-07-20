@@ -1997,6 +1997,77 @@ def mn_cbe_kernel(client, pid, tid):
     ]
 
 
+@scenario("mn_env_lifecycle_cbe")
+def mn_env_lifecycle_cbe(client, pid, tid):
+    """ENV-AGENCY on REAL SLURM (cbe.next): the full custom-env journey against
+    a real cluster that is a DIFFERENT platform from the mac controller — so it
+    also exercises F-ENV-2 (cross-platform re-lock of an extended env) for real,
+    plus a stateful session inside the env against real partition caps, and disk
+    reclaim on the cluster. Oracles: registry + substrate env_status
+    realizations + evict_env's own result + step-OWN stdout (never narration)."""
+    if not CBE_OK:
+        return [], [("cbe.next available (scenario skipped otherwise)", False)]
+    from core.compute.named_envs import resolve
+    caps = [drive_turn(client, pid, tid,
+        "Create an isolated python environment named 'cbeenv' containing "
+        "numpy, and on machine 'cbe' run a quick direct step (not background) "
+        "IN that environment that loads numpy, builds the array 0..999, and "
+        "prints exactly CNPV=<numpy.__version__> and CSUM=<int(arr.sum())>.",
+        timeout_s=2400)]
+    first_id = (resolve(pid, "cbeenv") or {}).get("env_id")
+    step1 = [t for t in tools_named(caps, "run_python")
+             if t["input"].get("site") == "cbe"
+             and (t["input"].get("env") or "") == "cbeenv"]
+    cnpv_ok = any("CNPV=" in ((t.get("result") or {}).get("stdout") or "")
+                  for t in step1)
+    csum_ok = any("CSUM=499500" in ((t.get("result") or {}).get("stdout") or ""
+                                     ).replace(" ", "") for t in step1)
+    session_used = any((t.get("result") or {}).get("execution_mode")
+                       == "remote-session" for t in step1)
+    caps.append(drive_turn(client, pid, tid,
+        "Add pandas to that same 'cbeenv' environment. Then, still on 'cbe' "
+        "and IN cbeenv, print exactly CPDV=<pandas.__version__>.",
+        timeout_s=2400))
+    row = resolve(pid, "cbeenv") or {}
+    extended = row.get("env_id") not in (None, first_id)
+    both_pkgs = {"numpy", "pandas"} <= set(row.get("packages") or [])
+    cpdv_ok = any("CPDV=" in ((t.get("result") or {}).get("stdout") or "")
+                  for t in tools_named([caps[-1]], "run_python")
+                  if t["input"].get("site") == "cbe")
+    # SUBSTRATE: current env id realized on cbe
+    on_cbe = False
+    try:
+        from core.compute import adapter as _ad
+        st = _ad.get_compute().sync_call(
+            "env_status", (resolve(pid, "cbeenv") or {}).get("env_id"))
+        on_cbe = any(r.get("site") == "cbe"
+                     and str(r.get("state")).lower() == "ready"
+                     for r in (st.get("realizations") or []))
+    except Exception:  # noqa: BLE001
+        pass
+    # RECLAIM on the real cluster
+    caps.append(drive_turn(client, pid, tid,
+        "cbeenv's copy on cbe is using disk — reclaim that space on cbe but "
+        "keep the environment so we can use it again.", timeout_s=900))
+    ev = [t for t in tools_named([caps[-1]], "evict_env")
+          if t["input"].get("name") == "cbeenv"
+          and not (t.get("result") or {}).get("error")]
+    still_registered = resolve(pid, "cbeenv") is not None
+    return caps, [
+        ("env created + used on cbe (CNPV in step's OWN stdout)",
+         bool(step1) and cnpv_ok),
+        ("stateful array computed in-env on cbe (CSUM own stdout)", csum_ok),
+        ("persistent SESSION used on the REAL cluster inside the env",
+         session_used),
+        ("extension minted a NEW frozen id", extended),
+        ("registry carries numpy AND pandas after extension", both_pkgs),
+        ("post-extend CPDV printed from cbe (own stdout)", cpdv_ok),
+        (f"substrate truth: env realized on cbe", on_cbe),
+        ("evict_env applied on cbe without error", bool(ev)),
+        ("registry identity survived the reclaim", still_registered),
+    ]
+
+
 @scenario("mn_cbe_gpu")
 def mn_cbe_gpu(client, pid, tid):
     """GPU ROUTING on the real cluster: a GPU-flagged step must carry the
@@ -2210,7 +2281,7 @@ def main():
     # of jump-host latency every run otherwise.
     global CBE_OK
     if (only is None or only & {"mn_cbe_smoke", "mn_cbe_kernel",
-                                "mn_cbe_gpu"}):
+                                "mn_cbe_gpu", "mn_env_lifecycle_cbe"}):
         if cssh("echo ok").stdout.strip() == "ok":
             try:
                 r = c.sync_call("register_site", "cbe", "slurm",
@@ -2245,6 +2316,7 @@ def main():
                   mn_env_lifecycle_arc, mn_env_reclaim,
                   mn_cbe_smoke, mn_missing_then_recover,
                   mn_bundle_header_drift, mn_cbe_kernel, mn_cbe_gpu,
+                  mn_env_lifecycle_cbe,
                   mn_long_arc]]
     # --only must NAME REAL scenarios: an unmatched filter ran ZERO scenarios
     # and printed ALL PASS vacuously (the exact bug class this study hunts)
