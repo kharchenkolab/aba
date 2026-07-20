@@ -66,6 +66,44 @@ def _row_mismatch_platform(task_err) -> Optional[str]:
     return None
 
 
+def _controller_platform() -> str:
+    from core.compute.named_envs import controller_platform
+    return controller_platform()
+
+
+def _site_platform_for(site: str) -> Optional[str]:
+    """A site's conda platform (linux-aarch64, osx-arm64, …) from its registered
+    capabilities — for the cross-platform layer_conflict re-lock (F-ENV-2).
+    None when the site can't say; the caller then skips the re-lock."""
+    try:
+        desc = _adapter().sync_call("sites_describe", site) or {}
+        caps = desc.get("capabilities") or {}
+        os_, arch = caps.get("os"), caps.get("arch")
+        if not (os_ and arch):
+            return None
+        if os_ == "darwin":
+            return f"osx-{'arm64' if arch in ('arm64', 'aarch64') else '64'}"
+        return f"linux-{'64' if arch in ('x86_64', 'amd64') else arch}"
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _relock_platform(code: str, env_name: Optional[str], site: str) -> Optional[str]:
+    """The platform to re-lock a NAMED env for, or None. Two triggers, unified
+    across every submit lane (kernel: weft.py; detached-submit + poll: here):
+      * env.platform_mismatch — weft names the site's platform in the error
+        (handled by _mismatch_platform/_row_mismatch_platform at the call site);
+      * env.layer_conflict on a CROSS-platform site — an EXTENDED env's delta was
+        solved against the controller-platform parent and won't fit on a
+        different platform (F-ENV-2); we look the platform up from the site's
+        caps. A SAME-platform layer_conflict is a genuine solve failure → None.
+    Only NAMED envs re-lock (the default snapshot has no per-project handle)."""
+    if not env_name or code != "env.layer_conflict":
+        return None
+    sp = _site_platform_for(site)
+    return sp if (sp and sp != _controller_platform()) else None
+
+
 def _adapter():
     from core.compute import get_compute
     return get_compute()
@@ -402,7 +440,8 @@ class WeftSubmitter:
         try:
             r = comp.sync_call("task_submit", task)
         except ComputeError as e:
-            plat = _mismatch_platform(e)
+            plat = _mismatch_platform(e) or _relock_platform(
+                getattr(e, "code", ""), env_name, self.site)
             if plat and env_name:
                 # lazy re-lock (design §Environments): add the site's platform
                 # to the env's lock and retry ONCE
@@ -522,6 +561,13 @@ class WeftSubmitter:
             # recorded spec; the DEFAULT env re-locks its BASE PACK (the
             # session snapshot's extras don't travel — recorded on the job).
             plat = _row_mismatch_platform(task_err)
+            if not plat and params.get("env") and isinstance(task_err, dict):
+                # F-ENV-2 parity: a cross-platform layer_conflict for an
+                # EXTENDED named env surfaces here at realize too.
+                job_site = params.get("weft_site") or params.get("site") \
+                    or self.site
+                plat = _relock_platform(str(task_err.get("error") or ""),
+                                        params.get("env"), job_site)
             if plat and not params.get("platform_relocked") and \
                     (params.get("env") or params.get("env_id")):
                 try:
