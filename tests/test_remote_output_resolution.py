@@ -782,3 +782,54 @@ def _standalone() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(_standalone())
+
+
+# ── exec-cwd tier: detached-job outputs (dead_link class, found live) ─────────
+
+def test_exec_cwd_tier_finds_detached_job_output(monkeypatch, tmp_path):
+    """A DETACHED job's output sits in its job scratch dir — invisible to the
+    kernel-jobdir map (list_kernels only sees KERNEL targets) and possibly
+    missing from an incomplete bring-back. The exec-cwd tier (record_path
+    dirname**2) makes it resolvable without any transfer."""
+    rid = _mk_run(thread_id="t", run_state="done", weft_targets=[])
+    jobdir = tmp_path / "job_x1"
+    (jobdir / ".exec").mkdir(parents=True)
+    (jobdir / "fig4.png").write_bytes(b"png-bytes")
+    monkeypatch.setattr(retmod, "retained", lambda **kw: [])
+    from core.graph import exec_records as _xr
+    monkeypatch.setattr(_xr, "list_by_run",
+                        lambda run_id, **kw: [
+                            {"exec_id": "e1",
+                             "record_path": str(jobdir / ".exec" / "e1.json")}])
+    hit = runs_mod.locate_run_output(rid, "fig4.png", match="exact", remote=False)
+    assert hit and hit["locality"] == "local"
+    assert hit["local_path"] == str(jobdir / "fig4.png")
+    assert hit["durability"] == "live"
+
+
+# ── harvested-artifact tier: viewer parity (viewer_blind class, found live) ───
+
+def test_artifact_store_tier_answers_name_lookup(monkeypatch, tmp_path):
+    """The run ADVERTISES a produced file (content-addressed serving copy) but
+    no retained/jobdir/sandbox holds it — the name-lookup surfaces must still
+    see it: the resolver consumes the SAME catalog the run-file surface
+    serves (presentation parity)."""
+    rid = _mk_run(thread_id="t", run_state="done", weft_targets=[])
+    monkeypatch.setattr(retmod, "retained", lambda **kw: [])
+    import core.config as _cfg
+    art_dir = tmp_path / "arts"
+    art_dir.mkdir()
+    (art_dir / "abc123.csv").write_bytes(b"a,b\n1,2\n")
+    monkeypatch.setattr(_cfg, "project_artifacts_dir", lambda pid: art_dir)
+    from core.exec import artifacts as _arts
+    monkeypatch.setattr(_arts, "artifacts_for_run",
+                        lambda run_id, **kw: [
+                            {"original_name": "table.csv",
+                             "url": "/artifacts/p1/abc123.csv",
+                             "sha256": "abc123", "size": 8}])
+    hit = runs_mod.locate_run_output(rid, "table.csv", remote=False)
+    assert hit and hit["durability"] == "store"
+    assert hit["local_path"] == str(art_dir / "abc123.csv")
+    assert hit["digest"] == "abc123"
+    # a name the run never advertised still resolves to nothing
+    assert runs_mod.locate_run_output(rid, "other.csv", remote=False) is None

@@ -1237,7 +1237,27 @@ def locate_run_output(run_id: str, name: str, *, match: str = "name",
     tiers.extend((d, "live", False) for d in _run_jobdirs(run_id))
     ap = (ent or {}).get("artifact_path")
     if ap:
-        tiers.append((ap, "scratch", False))           # jupyter / non-weft fallback
+        tiers.append((ap, "scratch", False))           # legacy / non-weft fallback
+    # exec-cwd tier: every exec attributed to this Run wrote its sidecar under
+    # <cwd>/.exec, so dirname² of record_path recovers the directory the bytes
+    # were written in — a DETACHED JOB's scratch dir or a kernel sandbox. The
+    # kernel-jobdir map above only sees KERNEL targets (list_kernels), so a
+    # detached job's outputs were unreachable (found live: dead_link on a file
+    # sitting in its job scratch dir).
+    try:
+        from core.graph import exec_records as _xr
+        seen = {_os.path.realpath(r) for r, _, _ in tiers}
+        for _ix in _xr.list_by_run(run_id):
+            rp = _ix.get("record_path")
+            if not rp:
+                continue
+            cdir = _os.path.dirname(_os.path.dirname(str(rp)))
+            if cdir and _os.path.isdir(cdir) \
+                    and _os.path.realpath(cdir) not in seen:
+                seen.add(_os.path.realpath(cdir))
+                tiers.append((cdir, "live", False))
+    except Exception as e:  # noqa: BLE001 — a tier must never break the resolver
+        _log.debug("locate_run_output: exec-cwd tier failed for %s: %s", run_id, e)
 
     def _exact_under(root: str) -> Optional[str]:
         baser = _os.path.realpath(root)
@@ -1288,6 +1308,42 @@ def locate_run_output(run_id: str, name: str, *, match: str = "name",
                         "target": t2, "digest": None}
     except Exception as e:  # noqa: BLE001 — a fallback must stay a fallback
         _log.debug("locate_run_output (run,rel) fallback failed for %s: %s",
+                   run_id, e)
+    # HARVESTED-ARTIFACT tier (serving cache, last local tier): what the run
+    # itself ADVERTISES — produced[] entries on its exec records, whose bytes
+    # are content-addressed copies under the project's artifacts dir. The
+    # name-lookup surfaces (viewer/path-lookup) must see everything the
+    # run-file surface serves; resolving them from different catalogs is the
+    # presentation-parity violation the surfaces oracle caught live
+    # (viewer_blind on a durably-served table).
+    try:
+        from core.exec.artifacts import artifacts_for_run
+        from core.config import project_artifacts_dir
+        base = _os.path.basename(name)
+        for a in artifacts_for_run(run_id):
+            on = (a.get("original_name") or "").strip()
+            url = a.get("url") or ""
+            if not on or not url.startswith("/artifacts/"):
+                continue
+            if not ((on == name) if match == "exact"
+                    else (on == name or _os.path.basename(on) == base)):
+                continue
+            parts = url.split("/")            # ['', 'artifacts', pid, served]
+            if len(parts) != 4:
+                continue
+            f = project_artifacts_dir(parts[2]) / parts[3]
+            if f.is_file():
+                try:
+                    size = a.get("size") or _os.path.getsize(str(f))
+                except OSError:
+                    size = a.get("size")
+                return {"run_id": run_id, "rel": on, "root": str(f.parent),
+                        "local_path": str(f), "locality": "local",
+                        "site": "local", "durability": "store",
+                        "kind": "file", "size": size, "mtime": None,
+                        "target": None, "digest": a.get("sha256")}
+    except Exception as e:  # noqa: BLE001 — a tier must never break the resolver
+        _log.debug("locate_run_output: artifact-store tier failed for %s: %s",
                    run_id, e)
     if not remote:
         return None
