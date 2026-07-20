@@ -868,15 +868,103 @@ def _kernel_site_map() -> dict:
         return {}
 
 
-def _remote_locate(run_id: str, rel: str) -> Optional[tuple]:
-    """`(target, site, size)` for a Run file whose bytes live on a NON-local site,
-    or None. Sources, in order: retained rows (which carry the target's site) then
-    the Run's live weft targets, confirming existence + size with `file_stat`.
-    Never raises — a substrate hiccup degrades to None (the local tiers already
-    missed, so the caller ends at None either way)."""
+def _is_kernel_target(t) -> bool:
+    return isinstance(t, str) and t.startswith("krn_")
+
+
+@lru_cache(maxsize=32)
+def _site_root(site: str) -> Optional[str]:
+    """A registered site's weft root abs path (from its capabilities/config) —
+    the base under which a kernel sandbox lives (`<root>/kernels/<kernel_id>`).
+    None when unknown. Cached (site config doesn't change mid-session)."""
+    try:
+        from core.compute.adapter import get_compute
+        d = get_compute().sync_call("sites_describe", site) or {}
+        return (d.get("config") or {}).get("root")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _kernel_abs_path(target: str, site: str, rel: str) -> Optional[str]:
+    """Absolute path of a rel inside a LIVE kernel's sandbox on its site
+    (`<root>/kernels/<kernel_id>/<rel>`) — the handle the data-plane
+    (`register_source → fetch`) needs to bring a store/large file home from an
+    OPEN run (the retain lane defers on a live kernel; the read lane caps at
+    8 MB). None when the site root is unknown or the target isn't a kernel."""
+    if not _is_kernel_target(target):
+        return None
+    root = _site_root(site)
+    if not root:
+        return None
+    return f"{root.rstrip('/')}/kernels/{target}/{rel}"
+
+
+def _data_plane_fetch(abs_path: str, site: str, dest: str) -> bool:
+    """Bring a remote abs path (file or directory) home to `dest` over the
+    datasets data-plane (`register_source → fetch`) — one transfer, all sizes,
+    size-gated by the same `FETCH_GUARDRAIL_BYTES` fetch enforces. True on a
+    complete local copy. The transport datasets already use; not a new one."""
+    try:
+        import os as _os
+        from core.data import datasets as _ds
+        _os.makedirs(_os.path.dirname(dest) or ".", exist_ok=True)
+        meta = _ds.register_source(abs_path, site=site)
+        res = _ds.fetch(meta, dest)
+        return bool(res.get("ok")) and _os.path.exists(dest)
+    except Exception as e:  # noqa: BLE001
+        _log.debug("_data_plane_fetch(%s@%s) failed: %s", abs_path, site, e)
+        return False
+
+
+def _live_inventory(target: str, **kw) -> dict:
+    """Inventory a target, preferring the LIVE sandbox for a kernel target — an
+    OPEN run's outputs sit in the live kernel dir, which has NO terminal record
+    yet (`run_inventory` without live raises data.missing). Try live-first for a
+    kernel, terminal-first otherwise, falling back across both so a just-settled
+    kernel still resolves. {} on total failure (caller reads as 'unknown → too big')."""
+    from core.compute.adapter import get_compute
+    c = get_compute()
+    for live in ((True, False) if _is_kernel_target(target) else (False, True)):
+        try:
+            return c.sync_call("run_inventory", target, live=live, **kw)
+        except Exception:  # noqa: BLE001
+            continue
+    return {}
+
+
+def _live_file_stat(target: str, rel: str) -> dict:
+    """file_stat, live-aware for a kernel target (open run). For a kernel, try a
+    LIVE-flag read first (its dir has no terminal record); otherwise use the
+    `retention.file_stat` wrapper. Both fall back to the other. {} on failure."""
     from core.compute import retention
-    ent = get_entity(run_id) or {}
-    md = ent.get("metadata") or {}
+
+    def _live():
+        try:
+            from core.compute.adapter import get_compute
+            st = get_compute().sync_call("run_file_stat", target, rel, live=True)
+            return st if isinstance(st, dict) else None
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _wrapped():
+        try:
+            return retention.file_stat(target, rel)
+        except Exception:  # noqa: BLE001
+            return None
+
+    for fn in ((_live, _wrapped) if _is_kernel_target(target) else (_wrapped, _live)):
+        st = fn()
+        if st is not None:
+            return st
+    return {}
+
+
+def _run_remote_targets(run_id: str) -> list:
+    """`[(target, site)]` — the Run's targets whose bytes live on a NON-local site,
+    from retained rows (which carry the site) + the Run's recorded weft targets.
+    Used by both the single-FILE locate and the DIRECTORY-store bring-back."""
+    from core.compute import retention
+    md = (get_entity(run_id) or {}).get("metadata") or {}
     kmap = _kernel_site_map()
     site_of: dict = {}
     try:
@@ -885,17 +973,21 @@ def _remote_locate(run_id: str, rel: str) -> Optional[tuple]:
             if t and s:
                 site_of.setdefault(t, s)
     except Exception as e:  # noqa: BLE001
-        _log.debug("_remote_locate: retained() failed for %s: %s", run_id, e)
-    # Candidate targets: retained rows + the Run's recorded weft targets.
-    targets = list(dict.fromkeys(list(site_of) + list(md.get("weft_targets") or [])))
-    for t in targets:
+        _log.debug("_run_remote_targets: retained() failed for %s: %s", run_id, e)
+    out = []
+    for t in dict.fromkeys(list(site_of) + list(md.get("weft_targets") or [])):
         site = site_of.get(t) or kmap.get(t) or "local"
-        if site == "local":
-            continue
-        try:
-            st = retention.file_stat(t, rel)
-        except Exception:  # noqa: BLE001 — swept / unreachable on this target
-            continue
+        if site != "local":
+            out.append((t, site))
+    return out
+
+
+def _remote_locate(run_id: str, rel: str) -> Optional[tuple]:
+    """`(target, site, size)` for a single Run FILE whose bytes live on a
+    NON-local site, or None — confirms existence + size with `file_stat`
+    (live-aware for an open kernel). Never raises."""
+    for t, site in _run_remote_targets(run_id):
+        st = _live_file_stat(t, rel)
         if st.get("exists"):
             return (t, site, st.get("bytes"))
     return None
@@ -1323,42 +1415,66 @@ def _rel_under_store(path: Optional[str], name: str) -> bool:
             or path == base or path.startswith(base + "/"))
 
 
-def _bring_back_store(run_id: str, target: str, name: str,
+def _bring_back_store(run_id: str, target: str, site: str, name: str,
                       *, force: bool = False) -> Optional[str]:
-    """Bring a whole remote DIRECTORY store home into the workspace, size-gated by
-    the same guardrail bring-back uses (never a silent multi-GB transfer). Returns
-    the local store dir, or None when it's too big / unresolvable — the caller then
-    reports "on <site>". A single `retain(dest="@workspace")` moves the location
-    axis; the store stays kept where it is too."""
+    """Bring a whole remote DIRECTORY store home into the workspace cache,
+    size-gated by the same guardrail (never a silent multi-GB transfer). Returns
+    the local store dir, or None when it's too big / unresolvable (caller then
+    reports "on <site>"). Two transports, both reusing existing primitives:
+      * LIVE KERNEL (open run): the store sits in the kernel sandbox; retain there
+        is pinned-pending and the read channel caps at 8 MB — so bring it home over
+        the datasets data-plane on the sandbox abs path (`register_source → fetch`),
+        one transfer, all sizes.
+      * FINISHED target (job): a location-axis `retain(dest="@workspace")` places it."""
     import os as _os
     from core.compute import retention
-    from core.compute.adapter import get_compute
     from core.data.datasets import FETCH_GUARDRAIL_BYTES
-    total, sized = 0, False
+    cache = str(_fetched_cache_dir(run_id))
+    base = name.rsplit("/", 1)[-1]
+
+    if _is_kernel_target(target):
+        abs_path = _kernel_abs_path(target, site, name)
+        if not abs_path:
+            return None
+        dest = _os.path.join(cache, name)            # preserve the store's own name
+        if _os.path.isdir(dest) and _os.listdir(dest):
+            return _os.path.realpath(dest)           # cache hit (atomic → complete)
+        # Fetch to a .partial sibling, then atomic-rename — so `dest` existing
+        # always means a COMPLETE store (a viewer never opens a half-fetched dir).
+        import shutil as _sh
+        tmp = dest + ".partial"
+        _sh.rmtree(tmp, ignore_errors=True)
+        if _data_plane_fetch(abs_path, site, tmp) and _os.path.isdir(tmp):
+            try:
+                _os.replace(tmp, dest)
+            except OSError:                          # dest raced in — use it
+                _sh.rmtree(tmp, ignore_errors=True)
+            return _os.path.realpath(dest) if _os.path.isdir(dest) else None
+        _sh.rmtree(tmp, ignore_errors=True)
+        return None                                  # gate/failure → honest "on <site>"
+
+    # Finished target: size-gate off the recorded inventory, then location-copy.
     try:
-        inv = get_compute().sync_call("run_inventory", target)
+        inv = _live_inventory(target)
         under = [e for e in (inv.get("entries") or inv.get("files") or [])
                  if isinstance(e, dict) and _rel_under_store(e.get("path"), name)]
-        if under:
-            sized = True
-            total = sum(e.get("bytes", 0) for e in under)
-    except Exception:  # noqa: BLE001 — unknown size reads as "too big"
-        sized = False
-    if not force and (not sized or total > FETCH_GUARDRAIL_BYTES):
+    except Exception:  # noqa: BLE001
+        under = []
+    if not under:
+        return None
+    if not force and sum(e.get("bytes", 0) for e in under) > FETCH_GUARDRAIL_BYTES:
         return None
     try:
         res = retention.retain(target, include=[name], dest="@workspace",
                                label=run_id, background=False)
+        loc = retention.location_path(res)
     except Exception:  # noqa: BLE001
-        return None
-    loc = retention.location_path(res)
-    if not loc:
-        return None
-    base = name.rsplit("/", 1)[-1]
-    for cand in (_os.path.join(loc, name), _os.path.join(loc, base), loc):
-        real = _os.path.realpath(cand)
-        if _os.path.isdir(real):
-            return real
+        loc = None
+    if loc:
+        for cand in (_os.path.join(loc, name), _os.path.join(loc, base), loc):
+            real = _os.path.realpath(cand)
+            if _os.path.isdir(real):
+                return real
     return None
 
 
@@ -1376,11 +1492,14 @@ def resolve_run_store(run_id: str, name: str, *, force: bool = False) -> Optiona
         f = resolve_run_file(run_id, name)      # remote single-file, transparent gate
         if f:
             return f
-        hit = _remote_locate(run_id, name)
-        if not hit:
-            return None
-        target, _site, _size = hit
-        return _bring_back_store(run_id, target, name, force=force)
+        # DIRECTORY store (or a file file_stat can't see): try the size-gated
+        # dir bring-back against each remote target — keyed on the Run's targets,
+        # NOT on a per-file stat (a store is a directory, so file_stat misses it).
+        for target, site in _run_remote_targets(run_id):
+            got = _bring_back_store(run_id, target, site, name, force=force)
+            if got:
+                return got
+        return None
     except Exception as e:  # noqa: BLE001 — a resolver must degrade, not raise
         _log.debug("resolve_run_store failed for %s/%s: %s", run_id, name, e)
         return None

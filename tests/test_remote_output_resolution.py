@@ -283,3 +283,44 @@ def _standalone() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(_standalone())
+
+
+def test_live_kernel_store_brings_back_via_data_plane(monkeypatch, tmp_path):
+    """An OPEN run's DIRECTORY store lives in a live kernel sandbox: retain there
+    is pinned-pending and the read channel caps at 8 MB, so the resolver must
+    bring it home over the datasets data-plane on the sandbox abs path
+    (register_source -> fetch). Confirms: kernel target -> data-plane fetch of
+    `<root>/kernels/<kid>/<name>`, atomic into the run cache, cache hit on repeat."""
+    rid = _mk_run(weft_targets=["krn_live1"], run_state="open")
+    monkeypatch.setattr(runs_mod, "_kernel_site_map", lambda: {"krn_live1": "mendel"})
+    monkeypatch.setattr(runs_mod, "_site_root", lambda site: "/remote/.weft")
+    # no local tiers, no retained rows
+    monkeypatch.setattr(runs_mod, "resolve_run_output_path", lambda r, n: None)
+    monkeypatch.setattr(retmod, "retained", lambda **kw: [])
+
+    import core.data.datasets as dsmod
+    calls = {"fetches": 0, "abs": None}
+
+    def _reg(source, *, site=None, **kw):
+        calls["abs"] = (source, site)
+        return {"home": {"site": site, "path": source}}
+
+    def _fetch(meta, to_path, **kw):
+        calls["fetches"] += 1
+        os.makedirs(to_path, exist_ok=True)
+        open(os.path.join(to_path, "zarr.json"), "w").write("{}")
+        os.makedirs(os.path.join(to_path, "chunks"), exist_ok=True)
+        open(os.path.join(to_path, "chunks", "0"), "wb").write(b"x" * 100)
+        return {"ok": True, "path": to_path}
+
+    monkeypatch.setattr(dsmod, "register_source", _reg)
+    monkeypatch.setattr(dsmod, "fetch", _fetch)
+
+    p1 = runs_mod.resolve_run_store(rid, "store.zarr")
+    assert p1 and os.path.isdir(p1) and os.path.isfile(os.path.join(p1, "zarr.json"))
+    assert calls["abs"] == ("/remote/.weft/kernels/krn_live1/store.zarr", "mendel") \
+        or calls["abs"][0].endswith("kernels/krn_live1/store.zarr")   # site from kmap may vary
+    assert calls["fetches"] == 1
+    # cache hit — no second fetch
+    p2 = runs_mod.resolve_run_store(rid, "store.zarr")
+    assert p2 == p1 and calls["fetches"] == 1
