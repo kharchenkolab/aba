@@ -76,6 +76,15 @@
     end
   rescue; end
   ver_line = ver_bits.empty? ? '' : ('aba ' + ver_bits.join(' · '))
+  ver_html = ver_line.empty? ? '' : "<br><small style='color:#888'>#{ver_line}</small>"
+  # Render the version as a FOOTER: hang it off the help of the LAST field in the form order
+  # below, so it sits at the bottom of the card (not mid-form). aba_lab is always first, so it
+  # never carries it. vf.(field) returns the version HTML only for the last field, else ''.
+  form_fields = ['aba_lab', 'aba_instance']
+  form_fields << 'has_gpu' if show_gpu
+  form_fields << 'reset_credential' if show_reset
+  last_field = form_fields.last
+  vf = ->(f) { last_field == f ? ver_html : '' }
 -%>
 ---
 cluster: "dev-cluster"
@@ -92,14 +101,14 @@ attributes:
   aba_instance:
     widget: "select"
     label: "Instance"
-    help: "Light = 1 core; Heavy = 10 cores."
+    help: "Light = 1 core; Heavy = 10 cores.<%= vf.call('aba_instance') %>"
     options:
       - ["Light — 1 core", "light"]
       - ["Heavy — 10 cores", "heavy"]
   aba_lab:
     widget: "select"
     label: "Lab"
-    help: "<%= ui['form_intro'] || 'Your enrolled ABA groups (✓). Group not listed? Ask your admin to enroll it.' %><%= ver_line.empty? ? '' : "<br><small style='color:#888'>#{ver_line}</small>" %>"
+    help: "<%= ui['form_intro'] || 'Your enrolled ABA groups (✓). Group not listed? Ask your admin to enroll it.' %><%= vf.call('aba_lab') %>"
     options:
 <%- lab_opts.each do |label, val| -%>
       - ["<%= label %>", "<%= val %>"]
@@ -107,6 +116,7 @@ attributes:
   has_gpu:
     widget: "check_box"
     label: "Request a GPU"
+    help: "<%= vf.call('has_gpu') %>"
   # No credential field: the group credential (set up in the group's ABA folder) is used by
   # default, and a user connects their OWN key/subscription in-session via Settings → Agent.
   # This box (shown only when you already have a personal credential saved) discards it so the
@@ -114,4 +124,4 @@ attributes:
   reset_credential:
     widget: "check_box"
     label: "Use the group credential (clear my personal key/subscription)"
-    help: "You have a personal credential saved from a previous session. Check to discard it and use the lab's shared credential this session."
+    help: "You have a personal credential saved from a previous session. Check to discard it and use the lab's shared credential this session.<%= vf.call('reset_credential') %>"
