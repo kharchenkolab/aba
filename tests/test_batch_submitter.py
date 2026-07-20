@@ -15,12 +15,14 @@ sys.path.insert(0, str(ROOT / "backend"))
 pytestmark = pytest.mark.platform
 
 
-def test_factory_defaults_to_local(monkeypatch):
+def test_factory_defaults_to_weft_local_lane(monkeypatch):
     monkeypatch.delenv("ABA_BATCH_SUBMITTER", raising=False)
     from core.jobs.submitter import get_submitter, submitter_name
-    from core.jobs.runner import LocalSubmitter
+    from core.jobs.weft_submitter import WeftSubmitter
     assert submitter_name() == "local"
-    assert isinstance(get_submitter(), LocalSubmitter)
+    # the default lane is a weft task — no in-process fallback since the
+    # cutover; a substrate outage surfaces as submit()'s typed error instead
+    assert isinstance(get_submitter(), WeftSubmitter)
 
 
 def test_factory_reads_env(monkeypatch):

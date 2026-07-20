@@ -93,11 +93,13 @@ def pagoda3_dist_path() -> Path:
 
 
 def _rscript(pid: "str | None" = None) -> "str | None":
-    """The Rscript lstar's R bridge uses for `.rds` (Seurat / SCE / pagoda2 /
-    conos). W3.4: on a pack deployment R lives in the r-bio base pack's project
-    SESSION, so resolve that first; then `$LSTAR_RSCRIPT`, the legacy tools-env
-    R, then a system Rscript. (The backend's own PATH may not include any R.)"""
-    import shutil as _sh
+    """The Rscript lstar's R bridge uses for `.rds` conversions. Two sources
+    only: the R base pack's project session (the substrate-resolved
+    interpreter), or an explicit `$LSTAR_RSCRIPT` operator override. The
+    legacy silent fallbacks (tools-env R, system-PATH R) are retired with the
+    cutover — a converter quietly running an unmanaged interpreter is the
+    silent-lane-switch class; when neither source resolves the caller surfaces
+    the honest cause (enable the R pack, or set LSTAR_RSCRIPT)."""
     cands: list = []
     try:
         from core.compute import base_env, project_env
@@ -107,13 +109,11 @@ def _rscript(pid: "str | None" = None) -> "str | None":
             cands.append(str(project_env.interpreter(_pid, "r")))
     except Exception:  # noqa: BLE001
         pass
-    cands.append(os.getenv("LSTAR_RSCRIPT"))
-    try:
-        from core.config import ENVS_DIR
-        cands.append(str(Path(ENVS_DIR) / "tools" / "bin" / "Rscript"))
-    except Exception:  # noqa: BLE001
-        pass
-    cands += ["/usr/local/bin/Rscript", "/opt/homebrew/bin/Rscript", _sh.which("Rscript")]
+    override = os.getenv("LSTAR_RSCRIPT")
+    if override:
+        print(f"[pagoda3] using operator-override Rscript ($LSTAR_RSCRIPT)",
+              flush=True)
+        cands.append(override)
     for cand in cands:
         if cand and os.path.exists(cand):
             return cand

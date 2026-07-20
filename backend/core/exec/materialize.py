@@ -1,25 +1,12 @@
-"""MaterializingExecutor — builds capability environments on demand (P1).
+"""MaterializingExecutor — the local run HARNESS for one-shot subprocesses.
 
-Standardizes on **pip** (capdat_impl.md, per PK): Python library capabilities
-materialize into a single shared pip ``--prefix`` overlay under ENVS_DIR/pylib,
-which is wholly wipeable (``rm -rf`` → repopulates on next request) and kept OUT
-of the system ``.venv`` so the backend env stays pristine.
-
-The overlay is consumed by *appending* its site-packages dirs to ``sys.path``
-(run_python preamble), not prepending via PYTHONPATH — so the ``.venv``'s
-scientific stack (scanpy/numpy/pandas) always wins and the overlay only supplies
-packages that are genuinely missing. That sidesteps version-shadowing while
-still composing.
-
-Why ``--prefix`` not ``--target``: ``--target`` ignores already-installed
-packages on sys.path and re-downloads every transitive dep into the overlay
-(scanpy → 100+ MB of duplicated numpy/pandas). ``--prefix`` respects the
-running interpreter's site-packages, so a request for GEOparse installs *just*
-GEOparse — numpy/pandas resolve to the .venv copy and aren't downloaded again.
-
-Non-Python CLI tools (salmon/STAR/fastqc — not on PyPI) need conda; that path
-is deferred (capdat_impl.md task 186) and raises NotImplementedError here.
-"""
+Provisioning is the substrate's job now: environments are weft-solved and
+weft-realized, and callers hand this executor an already-resolved interpreter
+(a session/named-env prefix). What remains here is subprocess management in
+the base venv — the launch harness — plus an honest refusal for any stray
+pre-substrate Provisioning request (pip/conda/container overlays died with
+the migration; CLI tools live in weft tool envs via
+``named_envs.ensure_tool_env``)."""
 from __future__ import annotations
 import sys
 import sysconfig
@@ -67,9 +54,6 @@ class MaterializingExecutor:
                 "seams); conda/tool envs are weft's now — use "
                 "named_envs.ensure_tool_env, not MaterializingExecutor."
             )
-
-            return self._base_env()
-
         return self._base_env()
 
     def exec(
