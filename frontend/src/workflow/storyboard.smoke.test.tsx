@@ -112,6 +112,60 @@ describe('workflow storyboard', () => {
     unmount()
   })
 
+  it('M9 is the spine: arcs fold, faces follow state, epitaphs, roll-up periphery, parity', () => {
+    const m9 = SCENES.find(s => s.id === 'm9')!
+    const { getByText, getAllByText, container, unmount } = render(<Record world={m9.world} />)
+    getByText(/rolling synthesis · drafted by Guide/)              // the ratified abstract
+    expect(container.querySelectorAll('.arc').length).toBe(4)      // four arcs
+    expect(container.querySelectorAll('.arc--folded').length).toBe(2)  // A1 + A4 fold whole
+    // open faces render; folded arcs' questions don't
+    expect(container.querySelectorAll('.spq--openq').length).toBe(3)
+    expect(container.querySelectorAll('.spq--dead').length).toBe(1)    // only A2's epitaph visible
+    fireEvent.click(getAllByText('Calibration & drift').find(el => el.closest('.arc__head'))!)  // unfold A1
+    expect(container.querySelectorAll('.spq--dead').length).toBe(3)
+    getByText(/ruled out — cross-vendor replication/)
+    // pending rides the question lines: band count = tray rows (parity)
+    getByText(/2 need you/)
+    fireEvent.click(getByText(/2 need you/))
+    expect(container.querySelectorAll('.tray__row').length).toBe(2)
+    // roll-up: the arc TOC entries carry aggregated badges
+    expect(container.querySelector('.toc__rollup')).toBeTruthy()
+    // a folded arc is an ABSTRACT, not a blank: it shows what it holds
+    getByText(/STL detrending adopted throughout/)
+    // the rolling abstract cites its arcs as live refs
+    expect(container.querySelectorAll('.ref--arc').length).toBe(3)
+    // the archive declares itself
+    expect(getAllByText(/1,847 runs/).length).toBeGreaterThan(0)
+    unmount()
+  })
+
+  it('M9 epitaphs are searchable — "did we ever try X?" answers with the killing run', () => {
+    const m9 = SCENES.find(s => s.id === 'm9')!
+    const { getByPlaceholderText, container, unmount } = render(<Record world={m9.world} />)
+    const input = getByPlaceholderText('search the record…') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'gap-filling' } })
+    const hit = container.querySelector('.toc__hit-stratum--epitaph')
+    expect(hit).toBeTruthy()
+    expect(hit!.parentElement!.textContent).toContain('R148')
+    unmount()
+  })
+
+  it('M9 descends: open ▸ on the winter question advances; M10 wears the crumb', () => {
+    const m9 = SCENES.find(s => s.id === 'm9')!
+    let advanced = ''
+    const { getAllByText, unmount } = render(<Record world={m9.world} onAdvance={t => { advanced = t }} />)
+    const q22row = getAllByText('open ▸').find(b => b.closest('.spq')?.textContent?.includes('winter anomaly recur'))!
+    fireEvent.click(q22row)
+    expect(advanced).toBe('descend:q22')
+    unmount()
+    const m10 = SCENES.find(s => s.id === 'm10')!
+    const r2 = render(<Record world={m10.world} />)
+    r2.getByText(/‹ Coastal sensor study/)                         // the breadcrumb up
+    r2.getAllByText(/Does the winter anomaly recur/)               // the question IS the page title
+    r2.getByText('the story so far')                               // …and the full face lives here
+    r2.unmount()
+  })
+
   it("what's-new items are doors (clickable when they have a target)", () => {
     const { getByText, container, unmount } = render(<Record world={SCENES[9].world} />)
     fireEvent.click(container.querySelector('.wnew__head')!)

@@ -38,6 +38,9 @@ export default function Storyboard() {
   })
 
   const onAdvance = (trigger: string) => {
+    // ascend is universal: a question page's breadcrumb climbs back to the
+    // scene it descended from
+    if (trigger === 'ascend') { goto(idx - 1); return }
     if (scene.advance && scene.advance.on === trigger) goto(idx + 1)
   }
 

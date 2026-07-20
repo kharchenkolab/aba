@@ -850,6 +850,115 @@ input { font: inherit; }
 .op__appendix h2 { font-size: 14px; font-family: var(--sans); text-transform: uppercase; letter-spacing: 0.1em; color: var(--ink-2); }
 .op__sedline { font-family: var(--sans); font-size: 12.5px; color: var(--ink-2); padding: 3px 0; }
 
+/* ------------------------------------------------ the spine (project grain)
+   The Record recurses: the spine is mostly one-liners with a few open
+   sections — a table of contents with three chapters open. Compaction is
+   the COMMON case; the full face lives one level down. */
+.doc__crumb {
+  display: inline-flex; align-items: baseline; gap: 6px; margin-bottom: 10px;
+  background: none; border: none; cursor: pointer; padding: 0;
+  font-family: var(--sans); font-size: 12.5px; color: var(--teal); font-weight: 600;
+}
+.doc__crumb:hover { text-decoration: underline; }
+.doc__crumbarc { color: var(--ink-3); font-weight: 400; }
+
+.spabs { max-width: 640px; }
+.spabs p { font-family: var(--serif); font-size: 15.5px; line-height: 1.62; margin: 0 0 12px; }
+.spabs__prev {
+  background: none; border: none; cursor: pointer; padding: 0; margin-left: 10px;
+  font-family: var(--sans); font-size: 11px; color: var(--ink-3);
+}
+.spabs__prev:hover { color: var(--teal); }
+.spabs__arch {
+  margin-top: 8px; padding: 8px 12px; border-left: 2px solid var(--rule-strong);
+  font-family: var(--sans); font-size: 12px; color: var(--ink-3); font-style: italic;
+  background: #f4f2ec; border-radius: 0 6px 6px 0;
+}
+
+.arc { margin: 0 0 14px; border: 1px solid var(--rule); border-radius: 10px; background: #fdfcf9; }
+.arc--folded { background: transparent; }
+.arc__head {
+  display: flex; align-items: baseline; gap: 10px; width: 100%; text-align: left;
+  background: none; border: none; cursor: pointer; padding: 10px 14px;
+  font-family: var(--sans);
+}
+.arc__head:hover { background: #f6f4ee; border-radius: 10px; }
+.arc__id {
+  font-family: var(--mono); font-size: 11px; font-weight: 700; color: var(--terra);
+  border: 1px solid var(--terra); border-radius: 5px; padding: 1px 5px; flex: none;
+}
+.arc__title { font-family: var(--serif); font-size: 16.5px; font-weight: 700; color: var(--ink); }
+.arc__era { font-size: 11px; color: var(--ink-3); flex: none; }
+.arc__counts { font-size: 11.5px; color: var(--ink-3); margin-left: auto; flex: none; }
+.arc__disc { font-size: 11px; color: var(--ink-3); flex: none; }
+.toc__rollup { display: inline-flex; gap: 3px; margin-left: 6px; }
+.arc__holds {
+  padding: 0 14px 10px 40px; margin-top: -4px;
+  font-family: var(--sans); font-size: 12px; color: var(--teal);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.arc__qs { padding: 0 14px 10px; display: flex; flex-direction: column; gap: 2px; }
+.ref--arc {
+  font-family: var(--mono); font-size: 11px; font-weight: 700; color: var(--terra);
+  border: 1px solid var(--terra); border-radius: 5px; padding: 0 5px;
+  background: none; cursor: pointer; vertical-align: baseline;
+}
+.ref--arc:hover { background: var(--terra-soft); }
+
+/* one question, one line — the face follows the state */
+.spq {
+  display: flex; align-items: baseline; gap: 9px; padding: 6px 8px;
+  font-family: var(--sans); border-radius: 7px;
+}
+.spq__glyph { flex: none; font-size: 12px; color: var(--ink-3); width: 14px; text-align: center; }
+.spq__glyph--ok { color: var(--ok); }
+.spq__glyph--dead { color: var(--ink-3); }
+.spq__title { font-family: var(--serif); font-size: 14.5px; font-weight: 650; color: var(--ink-2); flex: none; }
+.spq__title--open { color: var(--ink); font-size: 15px; }
+.spq__holds { font-size: 12px; color: var(--ink-2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spq__date { font-size: 11px; color: var(--ink-3); margin-left: auto; flex: none; }
+.spq__act { font-size: 11px; color: var(--ink-3); flex: none; }
+
+.spq--closed .spq__title { font-weight: 600; }
+.spq--held .spq__title { font-weight: 550; color: var(--ink-3); }
+.spq--held .spq__date { margin-left: 0; }
+.spq--held .nsec__work { margin-left: auto; }
+
+.spq--dead .spq__title {
+  font-weight: 500; font-style: italic; color: var(--ink-3);
+  text-decoration: line-through; text-decoration-color: #cfcabc; text-decoration-thickness: 1px;
+}
+.spq__verdict { font-size: 12px; color: var(--ink-3); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spq__run {
+  font-family: var(--mono); font-size: 10.5px; color: var(--ink-3);
+  border: 1px solid var(--rule); border-radius: 4px; padding: 0 4px; flex: none;
+}
+.spq--dead .spq__date { margin-left: 0; }
+
+.spq--openq {
+  flex-direction: column; align-items: stretch; gap: 3px;
+  border: 1px solid var(--rule); border-left: 3px solid var(--teal);
+  background: #fff; padding: 8px 12px; margin: 4px 0;
+}
+.spq__line1 { display: flex; align-items: baseline; gap: 9px; }
+.spq__now { font-family: var(--serif); font-size: 13.5px; color: var(--ink-2); line-height: 1.5; padding-left: 2px; }
+.spq__sess {
+  display: inline-flex; align-items: baseline; gap: 4px; flex: none;
+  background: none; border: 1px solid var(--rule); border-radius: 6px; padding: 1px 7px;
+  cursor: pointer; font-family: var(--sans); font-size: 11.5px; color: var(--ink-2);
+}
+.spq__sess:hover { border-color: var(--teal); color: var(--teal); }
+.spq__page {
+  background: none; border: 1px solid var(--rule); border-radius: 6px; cursor: pointer;
+  font-family: var(--sans); font-size: 11px; color: var(--ink-3); padding: 1px 8px;
+  margin-left: auto; flex: none;
+}
+.spq__page:hover { border-color: var(--teal); color: var(--teal); }
+.spq__page--primary { color: var(--teal); border-color: var(--teal); font-weight: 600; }
+.spq__page--primary:hover { background: var(--teal); color: #fff; }
+.toc__arcid { font-family: var(--mono); font-size: 10px; font-weight: 700; color: var(--terra); }
+.toc__hit-stratum--epitaph { color: var(--ink-3); background: #efece4; }
+
 /* ------------------------------------------------ print (the one-pager IS a
    deliverable: "print and take it to the meeting") */
 @media print {

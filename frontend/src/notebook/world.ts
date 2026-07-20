@@ -102,6 +102,70 @@ export interface OnePager {
   dataLine: string; methodLine: string; number: string; caveat: string
 }
 
+// ------------------------------------------------------------------- spine
+// The Record RECURSES. A flat page holds one question's active working set
+// (~5–8 live narrative lines) — roughly a tenth of one paper's project once
+// the unpublished 5–10× (negative results, alternative attempts) is counted.
+// So a mature project is a SPINE plus question pages: the spine is the
+// project-grain face — a rolling ratified abstract over ARCS (the aims /
+// result-lines of the paper), each question ONE line whose face follows its
+// state; the full detail face (today's whole prototype) lives one level
+// down, per question. Depth follows the science; compaction is the common
+// case, not the edge case — the spine is mostly one-liners with a few open
+// sections, like a table of contents with three chapters open.
+
+/** One question on the spine — one line, face by state.
+ *  open   — active working set: a "now" line, live badges, descend door
+ *  held   — dormant with the claim it holds + wake door
+ *  closed — reads like a published abstract line: the ratified verdict
+ *  dead   — an EPITAPH: hypothesis · verdict · the run that killed it ·
+ *           date. One line forever, searchable — the paper reports the
+ *           survivors; the record keeps the casualties. */
+export interface SpineQ {
+  id: string
+  title: string
+  state: 'open' | 'held' | 'closed' | 'dead'
+  /** the claim this question currently holds (closed/held), maturity in text */
+  holds?: string
+  /** open questions: where the work stands right now */
+  now?: string
+  /** held: dormant since */
+  since?: string
+  /** dead: how the line died */
+  epitaph?: { verdict: string; run: string; date: string }
+  /** a session standing on this question (▷ at rest / ▶ live) */
+  session?: { label: string; live?: boolean }
+  /** open rows: recency ("today · 3 runs") */
+  activity?: string
+  /** pending items ON this question's subtree, surfaced for the tray —
+   *  same parity discipline: the band count, the tray rows, and these
+   *  badges are one derivation */
+  pending?: { key: string; kind: 'addendum' | 'fragment' | 'note' | 'claim draft'; label: string; routine: boolean }[]
+}
+
+export interface SpineArc {
+  id: string
+  title: string
+  era: string                    // "y1", "y2–y3", "cross-cutting"
+  questions: SpineQ[]
+  runs?: number                  // this arc's share of the sediment
+  /** arcs default COLLAPSED (header only) unless open — the inverted face */
+  open?: boolean
+  /** the folded arc's ABSTRACT face: what the whole chapter holds, one line */
+  holds?: string
+}
+
+export interface Spine {
+  /** the rolling synthesis — ratified like any prose; consolidation is a
+   *  ratification event: a new synthesis SUPERSEDES (never rewrites) the
+   *  last, which archives beneath it, still cited */
+  abstract: { text: string }[]
+  synthesisNote: string          // "rolling synthesis · re-ratified …"
+  superseded?: { label: string; note: string }
+  arcs: SpineArc[]
+  sessionsTotal: number
+}
+
 export interface World {
   project: { title: string; started: string; lastVisit: string }
   whatsNew: WhatsNew | null
@@ -134,8 +198,11 @@ export interface World {
   /** peripheral change signals: TOC pulse badges + delta-rail ticks.
    *  Three tiers only: accretion (routine, teal — clears on view) · draft
    *  (awaiting you, amber — until acted; ALSO derived from pending state)
-   *  · condition (loud, red — until resolved). The document may glow
-   *  anywhere, but it moves only under the user's hand — no auto-scroll. */
+   *  · condition (loud, red — until resolved). Anchoring rule: the
+   *  viewport holds a visible landmark steady (scroll-anchoring on an
+   *  element near the top/middle of view); updates landing IN view
+   *  materialize where they land — best seen, not suppressed — and
+   *  out-of-view updates go to the periphery. The page never jumps. */
   deltas?: { elId: string; kind: 'accretion' | 'draft' | 'condition'; count?: number; label: string }[]
   /** total runs when the sediment shows only its recent window (scale face) */
   sedimentTotal?: number
@@ -145,6 +212,10 @@ export interface World {
   openSediment?: string[]
   /** render "work ▸" affordances on section heads (the work loop is wired) */
   work?: boolean
+  /** the project-grain face: spine over arcs (replaces the strata) */
+  spine?: Spine
+  /** a question page one level below the spine — breadcrumb back up */
+  crumb?: { up: string; arc: string }
 }
 
 export const coastalWorld: World = {

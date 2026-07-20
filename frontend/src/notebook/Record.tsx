@@ -80,6 +80,13 @@ function derivePending(w: World): PendingItem[] {
   for (const n of w.looseNotes) if (n.draft) {
     out.push({ key: n.id, kind: 'note', label: `note — “${n.text.slice(0, 56)}…”`, elId: `el-note-${n.id}`, routine: true })
   }
+  // spine face: pending rides on the question lines — the band count, the
+  // tray rows, and the amber ticks are still ONE derivation
+  for (const arc of w.spine?.arcs ?? []) {
+    for (const q of arc.questions) for (const p of q.pending ?? []) {
+      out.push({ key: p.key, kind: p.kind, label: `${q.title} — ${p.label}`, elId: `el-${q.id}`, routine: p.routine })
+    }
+  }
   return out
 }
 
@@ -126,7 +133,7 @@ interface RefCtx {
 function renderRefs(text: string, ctx: RefCtx): ReactNode[] {
   const { w } = ctx
   const out: ReactNode[] = []
-  const re = /\[\[(fig|claim|run|trail):([^\]|]+)(?:\|([^\]]+))?\]\]/g
+  const re = /\[\[(fig|claim|run|trail|arc):([^\]|]+)(?:\|([^\]]+))?\]\]/g
   let last = 0, m: RegExpExecArray | null, k = 0
   while ((m = re.exec(text))) {
     if (m.index > last) out.push(<F key={k++}>{text.slice(last, m.index)}</F>)
@@ -159,6 +166,13 @@ function renderRefs(text: string, ctx: RefCtx): ReactNode[] {
         <button key={k++} className="ref ref--trail" title={t ? `trail: ${t.title} (${t.fragments.length} fragments)` : id}
                 onClick={() => ctx.scrollTo(`el-${id}`)}>
           ⋱ {label ?? id}
+        </button>)
+    } else if (kind === 'arc') {
+      const a = w.spine?.arcs.find(x => x.id === id)
+      out.push(
+        <button key={k++} className="ref ref--arc" title={a ? `${a.title} — jump to the arc` : id}
+                onClick={() => ctx.scrollTo(`el-${id}`)}>
+          {label ?? id}
         </button>)
     }
     last = m.index + m[0].length
@@ -495,6 +509,112 @@ function SedimentRow({ e, ctx, open, onToggle }: {
   )
 }
 
+// --------------------------------------------------------------------- spine
+// The project-grain face (the Record recurses — see world.ts). Every
+// question is ONE line whose face follows its state; arcs collapse whole;
+// the full detail face lives one level down, behind `open ▸`.
+
+function SpineQRow({ q, ctx, onAdvance, badge }: {
+  q: import('./world').SpineQ; ctx: RefCtx
+  onAdvance?: (t: string) => void; badge?: ReactNode
+}) {
+  if (q.state === 'dead') {
+    return (
+      <div className="spq spq--dead" id={`el-${q.id}`}
+           title="the epitaph line: hypothesis · verdict · the run that killed it. The paper reports the survivors; the record keeps the casualties — searchable forever (“did we ever try…?”)">
+        <span className="spq__glyph spq__glyph--dead">†</span>
+        <span className="spq__title">{q.title}</span>
+        <span className="spq__verdict">{q.epitaph?.verdict}</span>
+        <span className="spq__run">{q.epitaph?.run}</span>
+        <span className="spq__date">{q.epitaph?.date}</span>
+      </div>
+    )
+  }
+  if (q.state === 'held') {
+    return (
+      <div className="spq spq--held" id={`el-${q.id}`}>
+        <span className="spq__glyph">◦</span>
+        <span className="spq__title">{q.title}</span>
+        {q.holds && <span className="spq__holds" title="the claim this line holds while it sleeps — live maturity">● {q.holds}</span>}
+        <span className="spq__date">held since {q.since}</span>
+        <button className="nsec__work" onClick={() => onAdvance?.(`wake:${q.id}`)}
+                title="wake it — a session opens with the question and its whole history in scope">wake ▸</button>
+        {badge}
+      </div>
+    )
+  }
+  if (q.state === 'closed') {
+    return (
+      <div className="spq spq--closed" id={`el-${q.id}`}>
+        <span className="spq__glyph spq__glyph--ok">✓</span>
+        <span className="spq__title">{q.title}</span>
+        <span className="spq__holds">{q.holds}</span>
+        <button className="spq__page" onClick={() => onAdvance?.(`descend:${q.id}`)}
+                title="the full question page — narrative, trails, sediment slice, sessions — one level down">page ▸</button>
+      </div>
+    )
+  }
+  return (
+    <div className="spq spq--openq" id={`el-${q.id}`}>
+      <div className="spq__line1">
+        {q.session
+          ? <button className="spq__sess" onClick={() => ctx.openSession(q.session!.label)}
+                    title={q.session.live ? 'session live on this question now' : 'last session on this question — transcript'}>
+              <SessGlyph live={q.session.live} /> {q.session.label}
+            </button>
+          : <span className="spq__glyph">·</span>}
+        <span className="spq__title spq__title--open">{q.title}</span>
+        {badge}
+        {q.activity && <span className="spq__act">{q.activity}</span>}
+        <button className="spq__page spq__page--primary" onClick={() => onAdvance?.(`descend:${q.id}`)}
+                title="descend — the full page (today's whole notebook face) lives at question grain">open ▸</button>
+      </div>
+      {q.now && <div className="spq__now">{q.now}</div>}
+    </div>
+  )
+}
+
+function SpineArcBlock({ arc, ctx, onAdvance, badgeFor, rollup }: {
+  arc: import('./world').SpineArc; ctx: RefCtx
+  onAdvance?: (t: string) => void
+  badgeFor: (elId: string) => ReactNode
+  rollup: ReactNode
+}) {
+  const [open, setOpen] = useState(!!arc.open)
+  const n = (st: string) => arc.questions.filter(q => q.state === st).length
+  const counts = [
+    n('closed') ? `${n('closed')} closed` : '',
+    n('open') ? `${n('open')} open` : '',
+    n('held') ? `${n('held')} held` : '',
+    n('dead') ? `${n('dead')} ruled out` : '',
+  ].filter(Boolean).join(' · ')
+  return (
+    <section className={`arc ${open ? '' : 'arc--folded'}`} id={`el-${arc.id}`}>
+      <button className="arc__head" onClick={() => setOpen(o => !o)}
+              title={open ? 'fold the arc' : 'unfold — every question one line'}>
+        <span className="arc__id">{arc.id}</span>
+        <span className="arc__title">{arc.title}</span>
+        <span className="arc__era">{arc.era}</span>
+        <span className="arc__counts">{counts}{arc.runs ? ` · ${arc.runs} runs` : ''}</span>
+        {/* roll-up only when folded — open arcs show badges on the rows themselves */}
+        {!open && rollup}
+        <span className="arc__disc">{open ? '▾' : '▸'}</span>
+      </button>
+      {/* the folded arc's ABSTRACT face: not just counts — what it holds */}
+      {!open && arc.holds && (
+        <div className="arc__holds" title="the chapter's claim, held while it sleeps — the fold is an abstract, not a blank">● {arc.holds}</div>
+      )}
+      {open && (
+        <div className="arc__qs">
+          {arc.questions.map(q => (
+            <SpineQRow key={q.id} q={q} ctx={ctx} onAdvance={onAdvance} badge={badgeFor(`el-${q.id}`)} />
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
 // -------------------------------------------------------------- margin bench
 
 function MarginBench({ w, target, onClose }: {
@@ -561,6 +681,19 @@ function searchRecord(w: World, q: string, scope: 'story' | 'noticed' | 'everyth
       hits.push({ domId: `el-${t.id}`, label: `${t.id} · ${t.title}`, stratum: 'noticed' })
     for (const n of w.looseNotes) if (has(n.text))
       hits.push({ domId: `el-note-${n.id}`, label: n.text.slice(0, 48) + '…', stratum: 'noticed' })
+  }
+  // the spine: closed claims and open now-lines search as story; EPITAPHS
+  // get their own stratum — "did we ever try X?" must answer in one query,
+  // years later, with the run that killed it
+  if (w.spine && (scope === 'story' || scope === 'everything')) {
+    for (const arc of w.spine.arcs) for (const q of arc.questions) {
+      if (q.state === 'dead') {
+        if (has(q.title) || has(q.epitaph?.verdict ?? ''))
+          hits.push({ domId: `el-${q.id}`, label: `† ${q.title} — ${q.epitaph?.verdict ?? 'ruled out'} (${q.epitaph?.run ?? ''})`, stratum: 'epitaph' })
+      } else if (has(q.title) || has(q.holds ?? '') || has(q.now ?? '')) {
+        hits.push({ domId: `el-${q.id}`, label: `${arc.id} · ${q.title}`, stratum: 'story' })
+      }
+    }
   }
   if (scope === 'everything') {
     for (const e of w.sediment) if (has(e.title) || has(e.verdict))
@@ -744,6 +877,7 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
   const [undoable, setUndoable] = useState<{ keys: string[]; label: string } | null>(null)
   const [seenAcc, setSeenAcc] = useState<Set<string>>(new Set())
   const [omni, setOmni] = useState<{ open: boolean; q: string; asked: boolean }>({ open: false, q: '', asked: false })
+  const [prevSyn, setPrevSyn] = useState(false)
   const [view, setView] = useState<'record' | 'onepager' | 'digest'>(
     () => new URLSearchParams(window.location.search).get('view') === 'onepager' && w.onePager ? 'onepager' : 'record')
   const [newOpen, setNewOpen] = useState(false)
@@ -775,12 +909,14 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
 
   // TOC tracks the reader's position: the anchor nearest above the upper
   // third of the document column is "where you are".
-  const ANCHORS = [
-    ...w.sections.map(s => `el-${s.id}`),
-    ...w.trails.map(t => `el-${t.id}`),
-    ...(w.looseNotes.length ? ['el-loose'] : []),
-    'el-sediment',
-  ]
+  const ANCHORS = w.spine
+    ? [...w.spine.arcs.map(a => `el-${a.id}`), 'el-sediment']
+    : [
+        ...w.sections.map(s => `el-${s.id}`),
+        ...w.trails.map(t => `el-${t.id}`),
+        ...(w.looseNotes.length ? ['el-loose'] : []),
+        'el-sediment',
+      ]
   const onDocScroll = (e: React.UIEvent<HTMLElement>) => {
     const doc = e.currentTarget
     const rect = doc.getBoundingClientRect()
@@ -938,6 +1074,23 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
       </span>
     )
   }
+  // spine periphery ROLLS UP the tree: a badge on an arc means something
+  // inside it changed — same three tiers, counts aggregating upward
+  const arcRollup = (a: import('./world').SpineArc) => {
+    const ids = new Set(a.questions.map(q => `el-${q.id}`))
+    const rel = deltas.filter(d => ids.has(d.elId))
+    if (!rel.length) return null
+    const cond = rel.some(d => d.kind === 'condition')
+    const draft = rel.filter(d => d.kind === 'draft').reduce((x, d) => x + (d.count ?? 1), 0)
+    const acc = rel.filter(d => d.kind === 'accretion' && !seenAcc.has(d.elId)).reduce((x, d) => x + (d.count ?? 1), 0)
+    return (
+      <span className="toc__rollup" title={rel.map(d => d.label).join(' · ')}>
+        {cond && <span className="toc__delta toc__delta--condition">⚡</span>}
+        {draft > 0 && <span className="toc__delta toc__delta--draft">+{draft}</span>}
+        {acc > 0 && <span className="toc__delta toc__delta--accretion">+{acc}</span>}
+      </span>
+    )
+  }
 
   // a session's full page replaces the document column (the TOC stays);
   // ⇥ sends it to the right column and brings the document back
@@ -950,32 +1103,46 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
       {/* ---------- contents rail ---------- */}
       <nav className="toc">
         <div className="toc__title">The Record</div>
-        <div className="toc__project">{w.project.title}</div>
+        <div className="toc__project">{w.crumb ? w.crumb.up : w.project.title}</div>
         <div className="toc__since">since {w.project.started.slice(0, 7)}</div>
 
-        {w.sections.length > 0 && <div className="toc__group">story so far</div>}
-        {w.sections.map(s => (
-          <button key={s.id} className={`toc__item ${activeAnchor === `el-${s.id}` ? 'is-active' : ''}`} onClick={() => scrollTo(`el-${s.id}`)}>
-            <span className={`toc__phase toc__phase--${s.phase}`} />
-            {s.question}
-            {deltaBadge(`el-${s.id}`)}
-          </button>
-        ))}
-        {(w.trails.length > 0 || w.looseNotes.length > 0) && <div className="toc__group">field notes</div>}
-        {w.trails.map(t => (
-          <button key={t.id} className={`toc__item ${activeAnchor === `el-${t.id}` ? 'is-active' : ''}`} onClick={() => scrollTo(`el-${t.id}`)}>
-            <span className="toc__trail">⋱</span> {t.id} · {t.title}
-            {deltaBadge(`el-${t.id}`)}
-          </button>
-        ))}
-        {w.looseNotes.length > 0 && (
-          <button className={`toc__item ${activeAnchor === 'el-loose' ? 'is-active' : ''}`} onClick={() => scrollTo('el-loose')}>
-            <span className="toc__trail">·</span> loose notes
-          </button>
+        {w.spine ? (
+          <>
+            <div className="toc__group">the spine</div>
+            {w.spine.arcs.map(a => (
+              <button key={a.id} className={`toc__item ${activeAnchor === `el-${a.id}` ? 'is-active' : ''}`} onClick={() => scrollTo(`el-${a.id}`)}>
+                <span className="toc__arcid">{a.id}</span> {a.title}
+                {arcRollup(a)}
+              </button>
+            ))}
+          </>
+        ) : (
+          <>
+            {w.sections.length > 0 && <div className="toc__group">story so far</div>}
+            {w.sections.map(s => (
+              <button key={s.id} className={`toc__item ${activeAnchor === `el-${s.id}` ? 'is-active' : ''}`} onClick={() => scrollTo(`el-${s.id}`)}>
+                <span className={`toc__phase toc__phase--${s.phase}`} />
+                {s.question}
+                {deltaBadge(`el-${s.id}`)}
+              </button>
+            ))}
+            {(w.trails.length > 0 || w.looseNotes.length > 0) && <div className="toc__group">field notes</div>}
+            {w.trails.map(t => (
+              <button key={t.id} className={`toc__item ${activeAnchor === `el-${t.id}` ? 'is-active' : ''}`} onClick={() => scrollTo(`el-${t.id}`)}>
+                <span className="toc__trail">⋱</span> {t.id} · {t.title}
+                {deltaBadge(`el-${t.id}`)}
+              </button>
+            ))}
+            {w.looseNotes.length > 0 && (
+              <button className={`toc__item ${activeAnchor === 'el-loose' ? 'is-active' : ''}`} onClick={() => scrollTo('el-loose')}>
+                <span className="toc__trail">·</span> loose notes
+              </button>
+            )}
+          </>
         )}
         <div className="toc__group">sediment</div>
         <button className={`toc__item ${activeAnchor === 'el-sediment' ? 'is-active' : ''}`} onClick={() => scrollTo('el-sediment')}>
-          {w.sedimentTotal ?? w.sediment.length} run{(w.sedimentTotal ?? w.sediment.length) === 1 ? '' : 's'} · complete · automatic
+          {(w.sedimentTotal ?? w.sediment.length).toLocaleString()} run{(w.sedimentTotal ?? w.sediment.length) === 1 ? '' : 's'}{w.spine ? ` · ${w.spine.sessionsTotal} sessions` : ''} · complete · automatic
           {deltaBadge('el-sediment')}
         </button>
 
@@ -992,8 +1159,10 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
         )}
         {w.onePager && (
           <button className="toc__onepager" onClick={() => setView('onepager')}
-                  title="the same record rendered for the one-number visitor (§ focus spectrum)">
-            view as one-pager
+                  title={w.spine
+                    ? 'the paper being assembled from the record — the one-pager grown up; same machinery, no separate writing surface'
+                    : 'the same record rendered for the one-number visitor (§ focus spectrum)'}>
+            {w.spine ? 'the manuscript seed ▸' : 'view as one-pager'}
           </button>
         )}
         <div className="toc__search">
@@ -1037,9 +1206,19 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
       <main className="doc" onScroll={onDocScroll} ref={docRef}>
         <DeltaRail deltas={deltas} seen={seenAcc} docRef={docRef} onJump={elId => scrollTo(elId)} />
         <header className="doc__head">
+          {w.crumb && (
+            <button className="doc__crumb" onClick={() => onAdvance?.('ascend')}
+                    title="back up to the project spine — this page is one question's Record, one level down">
+              ‹ {w.crumb.up} <span className="doc__crumbarc">· {w.crumb.arc}</span>
+            </button>
+          )}
           <h1>{w.project.title}</h1>
           <div className="doc__sub">
-            a record co-written by you and Guide · narrative is yours to ratify · sediment keeps itself
+            {w.spine
+              ? 'the project spine — a rolling synthesis over arcs · every question one line · detail lives one level down'
+              : w.crumb
+                ? 'a question page — the full Record face, at question grain · co-written, ratified by you'
+                : 'a record co-written by you and Guide · narrative is yours to ratify · sediment keeps itself'}
           </div>
         </header>
 
@@ -1135,8 +1314,45 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
           </section>
         )}
 
+        {/* ---------- spine: the project-grain face ---------- */}
+        {w.spine && (
+          <>
+            <div className="stratum">
+              <div className="stratum__rule">
+                <span>the story so far — project grain</span>
+                <em>rolling synthesis · ratified · supersedes, never rewrites</em>
+              </div>
+              <div className="spabs">
+                {w.spine.abstract.map((p, i) => <p key={i}>{renderRefs(p.text, ctx)}</p>)}
+                <div className="npara__sig">
+                  {w.spine.synthesisNote}
+                  {w.spine.superseded && (
+                    <button className="spabs__prev" onClick={() => setPrevSyn(o => !o)}
+                            title="consolidation is a ratification event — each synthesis supersedes the last; nothing is rewritten, everything archives beneath, still cited">
+                      {prevSyn ? '▾' : '▸'} {w.spine.superseded.label}
+                    </button>
+                  )}
+                </div>
+                {prevSyn && w.spine.superseded && (
+                  <div className="spabs__arch">{w.spine.superseded.note}</div>
+                )}
+              </div>
+            </div>
+            <div className="stratum">
+              <div className="stratum__rule">
+                <span>the arcs</span>
+                <em>every question one line · the face follows the state · detail lives one level down</em>
+              </div>
+              {w.spine.arcs.map(a => (
+                <SpineArcBlock key={a.id} arc={a} ctx={ctx} onAdvance={onAdvance}
+                  badgeFor={deltaBadge} rollup={arcRollup(a)} />
+              ))}
+            </div>
+          </>
+        )}
+
         {/* ---------- stratum 1: narrative ---------- */}
-        {w.sections.length > 0 && (
+        {!w.spine && w.sections.length > 0 && (
           <div className="stratum">
             <div className="stratum__rule"><span>the story so far</span><em>ratified · sparse · load-bearing</em></div>
             {w.sections.map(s => (
@@ -1151,7 +1367,7 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
         )}
 
         {/* ---------- stratum 2: field notes & trails ---------- */}
-        {(w.trails.length > 0 || w.looseNotes.length > 0) && (
+        {!w.spine && (w.trails.length > 0 || w.looseNotes.length > 0) && (
           <div className="stratum">
             <div className="stratum__rule"><span>field notes & trails</span><em>noticed ≠ believed · cheap · revisable</em></div>
             {w.trails.map(t => (
@@ -1268,7 +1484,7 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
           <div className="sed-foot">
             append-only · chronological · the machine keeps this stratum; retention rides on each line
             {w.sedimentTotal && w.sedimentTotal > w.sediment.length &&
-              <> · showing the recent window — all {w.sedimentTotal} runs in the archive, searchable</>}
+              <> · showing the recent window — all {w.sedimentTotal.toLocaleString()} runs in the archive, searchable</>}
           </div>
         </div>
 

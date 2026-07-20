@@ -19,11 +19,11 @@ import {
   provenance as coastalProv, benchFallback,
   type SedimentEntry, type Section, type Trail, type LooseNote, type Prov,
 } from '../notebook/fixture'
-import { coastalWorld, type World, type PanelState, type PanelMsg, type SessionRec } from '../notebook/world'
+import { coastalWorld, type World, type PanelState, type PanelMsg, type SessionRec, type Spine } from '../notebook/world'
 
 export interface Scene {
   id: string
-  group: 'early' | 'mature'
+  group: 'early' | 'mature' | 'late'
   title: string        // step pill label
   narration: string    // caption under the storyboard bar
   /** interactive advance: which trigger moves the story forward, and the hint shown */
@@ -574,11 +574,12 @@ const m6: Scene = {
 
 // ---- M7 · live anchoring: the document as a working surface
 // The rules, all on one screen: the anchor wears a standing state; in-view
-// changes land in place; out-of-view changes pulse the TOC and tick the
-// delta rail (3 tiers); deixis is mutual (click the page → "looking at";
-// message refs locate their element); cross-boundary relevance stays a
-// proposal; hold ⌖ parks an excerpt on the desk. The page never scrolls
-// itself — not even for the hold-out landing mid-session.
+// changes MATERIALIZE where they land (best seen, not suppressed) while
+// the viewport scroll-anchors on a visible landmark — the page never
+// jumps; out-of-view changes pulse the TOC and tick the delta rail (3
+// tiers); deixis is mutual (click the page → "looking at"; message refs
+// locate their element); cross-boundary relevance stays a proposal;
+// hold ⌖ parks an excerpt on the desk.
 const m7Panel: PanelState = {
   ...m3Panel,
   status: 'session open · 52 min',
@@ -602,11 +603,12 @@ const m7: Scene = {
   id: 'm7', group: 'mature', title: 'live anchoring',
   narration:
     'The document as a working surface. Q1 wears the standing “working here” state; ' +
-    'changes OUT of view pulse the TOC and tick the delta rail (teal accretion · amber ' +
-    'awaiting-you · red condition — the hold-out just landed, see what’s new; the page ' +
-    'never scrolls itself). Deixis is mutual: click any figure or trail on the page and ' +
-    'the panel’s “looking at:” follows; the agent’s message points back (“show T1 →”). ' +
-    'The Q2 relevance stays a PROPOSAL; hold ⌖ parks the addendum on the desk.',
+    'changes IN view materialize where they land — best seen, not suppressed — while the ' +
+    'viewport holds a visible landmark steady (scroll-anchoring; the page never jumps). ' +
+    'Changes OUT of view pulse the TOC and tick the delta rail (teal accretion · amber ' +
+    'awaiting-you · red condition). Deixis is mutual: click any figure or trail and the ' +
+    'panel’s “looking at:” follows; the agent points back (“show T1 →”). The Q2 relevance ' +
+    'stays a PROPOSAL; hold ⌖ parks the addendum on the desk.',
   world: {
     ...mBase,
     whatsNew: {
@@ -684,9 +686,203 @@ const m8: Scene = {
   },
 }
 
-export const SCENES: Scene[] = [e1, e2, e3, e4, e5, m1, m2, m3, m4, m5, m6, m7, m8]
+// =======================================================================
+// PART III — VERY MATURE (year 3). One paper's project, honestly counted:
+// a Science-scale paper is 4–6 main + 30–50 supplementary figures, times
+// the 5–10× that never leaves the lab (negative results, alternative
+// attempts) — hundreds of figure-grade artifacts, 15–30 investigation
+// lines over the project's lifetime. A flat scroll holds ~5–8 LIVE
+// narrative lines: one question's active working set, a tenth of the
+// project. So the Record RECURSES: the spine (project grain — rolling
+// abstract over arcs, every question one line) with the full notebook
+// face living one level down, per question. Compaction is the common
+// case: mostly one-liners, three chapters open.
+// =======================================================================
 
-export const GROUPS: { id: 'early' | 'mature'; label: string }[] = [
+const sitePairing: SessionRec = {
+  id: 'site pairing', label: 'site pairing', when: 'May 10', state: 'open',
+  anchor: { kind: 'question', label: 'Q3.1 · exposed vs sheltered' },
+  scope: [{ kind: 'question', label: 'Q3.1 · exposed vs sheltered' }],
+  turns: 3,
+  msgs: [
+    { role: 'you', text: 'Rerun the site-pair contrast with the estuary pair excluded — is the third pair confounded or real?' },
+    { role: 'guide', text: 'Pairs A and B hold (+0.21, +0.18); pair C flips sign when the estuary stations drop. Queued the hold-out on the 2027 winter subset to arbitrate.' },
+    { run: { title: 'Site-pair hold-out — estuary excluded', state: 'running', meta: 'hpc · started 09:12' }, role: 'system' },
+  ],
+  distillate: [], leftovers: [],
+}
+const winterDig2: SessionRec = {
+  id: 'winter dig II', label: 'winter dig II', when: 'May 7', state: 'filed',
+  anchor: { kind: 'question', label: 'Q2.2 · winter anomaly' },
+  scope: [{ kind: 'question', label: 'Q2.2 · winter anomaly' }],
+  turns: 6,
+  msgs: [
+    { role: 'you', text: 'Final panels for the winter addendum — the 2027 recurrence and the tidal phase alignment.' },
+    { role: 'guide', text: 'Rendered both. The recurrence stands at −0.31 ± 0.09; the addendum draft is updated and awaits your ratification.' },
+  ],
+  distillate: [{ text: 'Addendum — the winter anomaly recurs in 2027; tidal forcing favored', dest: 'Q2.2 · awaiting ratification' }],
+  leftovers: [{ id: 'fig_qc_ok1', title: 'Phase-alignment residuals by station (unexamined)' }],
+}
+
+/** Year-3 sediment: the RECENT WINDOW only — 1,847 runs live in the
+ *  archive, searchable; the page shows this week's pulse. */
+const y3Sed: SedimentEntry[] = [
+  {
+    id: 'y3_holdout', date: 'May 10', title: 'Site-pair hold-out — estuary excluded',
+    state: 'running', verdict: 'running on hpc — 2027 winter subset', nOutputs: 0, shown: [],
+    retention: 'temporary', site: 'hpc', isNew: true, sessionRef: 'site pairing', turnRef: 3,
+  },
+  {
+    id: 'y3_pairs', date: 'May 9', title: 'Site-pair refit — pairs A/B/C',
+    state: 'ok', verdict: '2 of 3 pairs hold (A +0.21, B +0.18); C confounded by the estuary',
+    nOutputs: 6, shown: [], retention: 'kept', site: 'hpc', isNew: true, sessionRef: 'site pairing', turnRef: 2,
+  },
+  {
+    id: 'y3_krig', date: 'May 8', title: 'Kriging cross-validation — 2027 field',
+    state: 'ok', verdict: 'residuals non-stationary — R190 opposes R171’s stationarity assumption',
+    nOutputs: 4, shown: [], retention: 'kept', site: 'hpc',
+  },
+  {
+    id: 'y3_qc', date: 'May 8', title: 'Weekly QC sweep — all stations',
+    state: 'ok', verdict: 'acceptable — 0 flagged', nOutputs: 96, shown: [], retention: 'temporary',
+  },
+  {
+    id: 'y3_panels', date: 'May 7', title: 'Winter addendum — final panels',
+    state: 'ok', verdict: 'recurrence −0.31 ± 0.09 · phase alignment holds',
+    nOutputs: 3, shown: [], retention: 'kept', sessionRef: 'winter dig II', turnRef: 2,
+  },
+]
+
+const y3Spine: Spine = {
+  abstract: [
+    { text: 'Coastal sensor networks carry a seasonal bias that is correctable but spatially structured. The winter drift at exposed sites (−0.8 °C) is instrumental: correction model C2 restores year-round comparability, and the calibration arc is closed ([[arc:A1]]).' },
+    { text: 'The residual winter anomaly is real. It survives correction, recurs in the 2027 data (−0.31 ± 0.09), and aligns with tidal phase; tidal forcing is favored over vertical mixing. This is the paper’s central claim — the addendum is drafted and awaits ratification ([[arc:A2]]).' },
+    { text: 'Spatial structure is the open front ([[arc:A3]]): exposed/sheltered pairing holds at two of three site pairs, and interpolating the bias field is blocked — the [[run:y3_krig|kriging cross-validation]] shows non-stationary residuals.' },
+  ],
+  synthesisNote: 'rolling synthesis · drafted by Guide · re-ratified by you · May 4, 2028',
+  superseded: {
+    label: 'supersedes the Nov 2027 synthesis (archived)',
+    note: 'Nov 2027 synthesis — archived, immutable, still cited from A2’s narrative. Consolidation never rewrites: each synthesis is a new layer over the last; the full long-form story lives on each question’s page.',
+  },
+  sessionsTotal: 212,
+  arcs: [
+    {
+      id: 'A1', title: 'Calibration & drift', era: 'y1 · closed', runs: 388,
+      holds: 'Winter drift is instrumental and correctable — model C2 restores year-round comparability (robust)',
+      questions: [
+        { id: 'q11', title: 'Is the calibration stable across seasons?', state: 'closed', holds: 'No — winter drift −0.8 °C at exposed sites; correction model C2 adopted (robust)' },
+        { id: 'q12', title: 'Does sensor age predict drift rate?', state: 'closed', holds: 'Weakly (r = 0.31) — age dropped from the correction model (cross-checked)' },
+        { id: 'q13', title: 'Drift is a firmware artifact', state: 'dead', epitaph: { verdict: 'ruled out — cross-vendor replication shows identical drift', run: 'R41', date: 'Feb y1' } },
+        { id: 'q14', title: 'Salinity fouling explains exposed-site drift', state: 'dead', epitaph: { verdict: 'ruled out — fouling scrub changed nothing', run: 'R57', date: 'May y1' } },
+      ],
+    },
+    {
+      id: 'A2', title: 'The seasonal signal', era: 'y1–y2', open: true, runs: 611,
+      questions: [
+        { id: 'q21', title: 'Is the summer amplitude real or aliasing?', state: 'closed', holds: 'Real — confirmed at 3 sites with 10-minute sampling (robust)' },
+        {
+          id: 'q22', title: 'Does the winter anomaly recur, and what drives it?', state: 'open',
+          now: 'Recurs in the 2027 data (−0.31 ± 0.09); tidal forcing favored over vertical mixing — the paper’s central claim. Addendum drafted, awaiting you.',
+          session: { label: 'winter dig II' }, activity: 'May 7',
+          pending: [{ key: 'q22-add', kind: 'addendum', label: 'addendum · 2027 recurrence confirmed — ratify?', routine: false }],
+        },
+        { id: 'q23', title: 'Storm events as regime markers', state: 'held', holds: '3 candidate events tagged (conjecture)', since: 'Nov y2' },
+        { id: 'q24', title: 'The anomaly tracks the lunar cycle', state: 'dead', epitaph: { verdict: 'ruled out — phase scramble kills the correlation', run: 'R102', date: 'Nov y2' } },
+      ],
+    },
+    {
+      id: 'A3', title: 'Spatial structure of the bias', era: 'y2–y3 · active', open: true, runs: 402,
+      questions: [
+        {
+          id: 'q31', title: 'Do exposed and sheltered sites differ?', state: 'open',
+          now: '2 of 3 site pairs hold (+0.21, +0.18); the third is confounded by the estuary — hold-out running to arbitrate.',
+          session: { label: 'site pairing', live: true }, activity: 'today · 2 runs',
+          pending: [{ key: 'q31-frag', kind: 'fragment', label: 'fragment · “pair C flips when estuary stations drop” — file?', routine: true }],
+        },
+        {
+          id: 'q32', title: 'Can we interpolate the bias field between sites?', state: 'open',
+          now: 'Blocked — kriging residuals are non-stationary (R190 opposes R171’s stationarity assumption).',
+        },
+        { id: 'q33', title: 'Depth stratification of the bias', state: 'held', since: 'Mar y3' },
+      ],
+    },
+    {
+      id: 'A4', title: 'Methods & harmonization', era: 'cross-cutting', runs: 446,
+      holds: 'STL detrending adopted throughout; NOAA harmonization parked feasible',
+      questions: [
+        { id: 'q41', title: 'Detrending: STL or polynomial?', state: 'closed', holds: 'STL — beats polynomial on winter residuals; adopted throughout (robust)' },
+        { id: 'q42', title: 'Cross-network harmonization with NOAA buoys', state: 'held', holds: 'Feasible on overlapping months (conjecture)', since: 'Jan y3' },
+        { id: 'q43', title: 'Neural gap-filling beats linear interpolation', state: 'dead', epitaph: { verdict: 'ruled out — worse at gaps over 6 h', run: 'R148', date: 'Jan y3' } },
+      ],
+    },
+  ],
+}
+
+const m9: Scene = {
+  id: 'm9', group: 'late', title: 'year 3 — the spine',
+  narration:
+    'Year 3: 12 questions across 4 arcs · 1,847 runs · 212 sessions — an order of magnitude past ' +
+    'one scroll, so the Record RECURSES. The spine is the project page: a rolling ratified ' +
+    'abstract (consolidation supersedes, never rewrites — the Nov synthesis is archived beneath), ' +
+    'then every question as ONE line whose face follows its state: open · held · closed · dead. ' +
+    'Dead lines are EPITAPHS — hypothesis, verdict, the run that killed it; the paper reports the ' +
+    'survivors, the record keeps the casualties (⌘K “gap-filling”). Closed arcs fold whole; the ' +
+    'periphery rolls up per arc; the triage band is unchanged — it was always derived, never ' +
+    'positional.',
+  advance: { on: 'descend:q22', hint: 'click  open ▸  on the winter-anomaly question (A2) to descend to its page' },
+  world: {
+    project: { title: 'Coastal sensor study', started: '2026-03-02', lastVisit: '2028-05-03' },
+    ...emptyWorld,
+    onePager: coastalWorld.onePager,
+    spine: y3Spine,
+    whatsNew: {
+      since: 'May 3',
+      items: [
+        { ts: 'May 7', text: 'winter addendum drafted — 2027 recurrence confirmed (−0.31 ± 0.09)', elId: 'el-q22' },
+        { ts: 'May 8', text: 'kriging cross-validation fails — residuals non-stationary (condition raised)', loud: true, elId: 'el-q32' },
+        { ts: 'May 9', text: 'site pairs: 2 of 3 hold; pair C confounded by the estuary', elId: 'el-q31' },
+        { ts: 'today', text: 'site-pair hold-out running on hpc — 2027 winter subset', live: true, elId: 'el-y3_holdout' },
+      ],
+    },
+    sediment: y3Sed,
+    sedimentTotal: 1847,
+    sessions: [sitePairing, winterDig2],
+    desk: {
+      line: '1 open session',
+      items: [{ label: 'Q3.1 · site pairing', meta: 'started 09:10 · 1 run in flight', live: true, sessionId: 'site pairing' }],
+    },
+    deltas: [
+      { elId: 'el-q32', kind: 'condition', label: 'interpolation blocked — kriging residuals non-stationary (R190 vs R171)' },
+      { elId: 'el-sediment', kind: 'accretion', count: 5, label: '5 runs this week' },
+    ],
+  },
+}
+
+// ---- M10 · descend: the question page IS the earlier prototype
+const m10: Scene = {
+  id: 'm10', group: 'late', title: 'descend — one question',
+  narration:
+    'One level down, and the WHOLE earlier prototype is here: the question page IS the notebook ' +
+    'face you have been watching all along — its narrative, its trails, its sediment slice, its ' +
+    'sessions. Nothing was redesigned to scale: the single-scroll Record was the QUESTION-grain ' +
+    'face all along, and a young project (E1–E5) is simply one that has not needed its spine ' +
+    'yet. ‹ climbs back up.',
+  world: {
+    ...m5.world,
+    project: { ...m5.world.project, title: 'Does the winter anomaly recur, and what drives it?' },
+    crumb: { up: 'Coastal sensor study', arc: 'A2 · the seasonal signal' },
+    // ONE question's page: the two narrative sections read as its sub-lines
+    sections: m5.world.sections.map(s =>
+      s.id === 'q1' ? { ...s, question: 'Does it recur? — the winter refits' }
+      : s.id === 'q2' ? { ...s, question: 'What drives it? — tides vs the estuary' }
+      : s),
+  },
+}
+
+export const SCENES: Scene[] = [e1, e2, e3, e4, e5, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10]
+
+export const GROUPS: { id: 'early' | 'mature' | 'late'; label: string }[] = [
   { id: 'early', label: 'I · early days (day 0–3)' },
   { id: 'mature', label: 'II · mature project (month 4)' },
+  { id: 'late', label: 'III · very mature (year 3)' },
 ]

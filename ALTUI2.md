@@ -101,8 +101,10 @@ first-class, not scaffolding:
   transcript hit lands on its turn, highlighted.
 
 **Live anchoring (PK: how does the Record track the work as it happens?).**
-The governing rule: *the document may glow anywhere, but it moves only
-under the user's hand* — no auto-scroll, ever. Mechanisms (scene M7):
+The governing rule: *the viewport holds a visible landmark steady, and the
+page never jumps* — scroll-anchoring, not a frozen document: updates
+landing in view materialize where they land (best seen, not suppressed).
+Mechanisms (scene M7):
 
 - **Standing anchor state**: the live session's home section wears
   "▶ winter dig · working here" until close — scroll away and back, the
@@ -131,6 +133,44 @@ with runs' own ▶ state marks: the arrow family is the execution/session
 domain, fill is liveness. **⚡** contradiction/condition · **⌖** held
 excerpt · **draft** badge = agent-proposed, awaiting ratification.
 
+**The Record recurses (PK: this won't scale past ~5 questions — and the
+one-paper calibration was off by 10×).** A Science-scale paper is 4–6 main
++ 30–50 supplementary figures, times the 5–10× that never leaves the lab —
+so ONE paper's project is hundreds of figure-grade artifacts across 15–30
+investigation lines, and a flat scroll holds ~5–8 live narrative lines:
+one question's active working set, a tenth of the project. The answer is
+one move, applied within a single-paper project, not just across years:
+
+- **The spine** (scene M9) is the project-grain face: a **rolling ratified
+  abstract** (consolidation is a ratification event — each synthesis
+  *supersedes* the last, which archives beneath it, still cited; nothing
+  is rewritten) over **arcs** (the aims/result-lines of the paper), every
+  question ONE line whose face follows its state: *open* (a "now" line,
+  live badges, `open ▸`), *held* (the claim it sleeps on + `wake ▸`),
+  *closed* (the verdict, like a published abstract line), *dead* — an
+  **EPITAPH**: hypothesis · verdict · the run that killed it · date. The
+  paper reports the survivors; the record keeps the casualties, and
+  "did we ever try X?" answers in one search (epitaph stratum) years
+  later — institutional memory of negatives, which no paper provides.
+- **Compaction is the common case**: arcs fold whole to an abstract face
+  (counts + what the chapter *holds*), the sediment shows its recent
+  window over a declared archive (1,847 runs · 212 sessions), and the
+  periphery **rolls up the tree** — an arc's TOC badge aggregates its
+  children, same three tiers. The triage band survives untouched: it was
+  always derived from record state, never positional.
+- **Descend and the whole earlier prototype is there** (scene M10): a
+  question page IS the single-scroll notebook face — narrative (as the
+  question's sub-lines), trails, its sediment slice, its sessions —
+  under a breadcrumb (`‹` ascends). Depth follows the science (program →
+  paper/arc → question); a young project is simply one that hasn't
+  needed its spine yet, so E1–E5 need no migration story.
+
+**Anchoring rule, softened (PK)**: the viewport holds a visible landmark
+steady (scroll-anchoring on an element near the top/middle of view);
+updates landing IN view materialize where they land — best seen, not
+suppressed; out-of-view updates go to the periphery. The page never
+jumps, but it is allowed to change before your eyes.
+
 **Busy-scientist surfaces** (OODA pass, see NOTES.md §11): the **triage
 band** (⚡ conditions · ▢ needs-you · ▶ running · ▷ resume — one glance,
 every slot a door); the **needs-you tray** (all pending decisions,
@@ -143,7 +183,7 @@ slide-over below 1000px; **⌘K omnibox** (ask or find, from anywhere);
 face — dormant questions compact to one line, stalled trails fold, the
 sediment declares its recent window.
 
-**The storyboard** (`frontend/src/workflow/`) plays this as thirteen
+**The storyboard** (`frontend/src/workflow/`) plays this as fifteen
 interactive scenes over the SAME Record renderer (parameterized over a
 `World`, `src/notebook/world.ts` — `/notebook.html` is unchanged):
 *Part I, early days (day 0–3)* — the hard, nothing-to-anchor-on case: a new
@@ -156,9 +196,13 @@ accretion (M3); walking away = distillation (M4); the morning after —
 the by-session work record, resume from the document (M5); the session
 page itself — territory behind the map (M6); live anchoring — the
 document as a working surface (M7); year 2 — the scale face + triage (M8).
+*Part III, very mature (year 3)* — the spine: recursion, arcs, epitaphs,
+rolled-up periphery (M9); descend into one question and find the whole
+earlier prototype there (M10; `‹` ascends back).
 Some scenes advance through their own affordances (typing in the day-0
-composer, `work ▸` on a question, `file & close` in the panel) — the story
-moves the way the scientist would. Arrow keys / pills / `?step=` deep links.
+composer, `work ▸` on a question, `file & close` in the panel, `open ▸`
+on a spine line) — the story moves the way the scientist would. Arrow
+keys / pills / `?step=` deep links.
 
 ## Deliberate scope cuts
 
