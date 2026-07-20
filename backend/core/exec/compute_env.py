@@ -135,6 +135,31 @@ def context_line() -> str:
             line += (f". Remote machines available: {', '.join(remotes)} — run a step there "
                      f"with run_python/run_r site=<name> (prefer the machine holding the "
                      f"inputs; describe_compute for capacity).")
+        # This project's named isolated envs — the fresh-thread rediscovery cue.
+        # REGISTRY-ONLY: this line renders every turn, so NO substrate/adapter call
+        # here (env_status et al. belong in inspect_env). Empty registry → no clause
+        # (byte-identical line to today). Lazy import; never break a turn.
+        try:
+            from core.compute import named_envs as _ne
+            from core import projects as _proj
+            _pid = _proj.current()
+            _names = _ne.list_names(_pid) if _pid else []
+            if _names:
+                _active = {"python": _ne.get_active(_pid, "python"),
+                           "r": _ne.get_active(_pid, "r")}
+                _items = []
+                for _n in _names:
+                    _row = _ne.resolve(_pid, _n) or {}
+                    _lang = _row.get("language") or "python"
+                    _tag = "r" if _lang == "r" else "py"
+                    if _n == _active.get(_lang):     # * marks the active env
+                        _tag += "*"
+                    _pk = list(_row.get("packages") or [])
+                    _shown = "+".join(_pk[:2]) + (f"+{len(_pk) - 2}" if len(_pk) > 2 else "")
+                    _items.append(f"{_n} ({_tag}, {_shown})" if _shown else f"{_n} ({_tag})")
+                line += ("; named envs: " + ", ".join(_items) + " — inspect_env() for detail")
+        except Exception:  # noqa: BLE001 — the clause must never break a turn
+            pass
         return line
     except Exception:  # noqa: BLE001
         return ""

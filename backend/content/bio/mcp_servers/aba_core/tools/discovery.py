@@ -10,9 +10,10 @@ or cancel_token (long-running installs).
 """
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
 
 from core import config
 
@@ -170,8 +171,10 @@ def register_discovery_tools(mcp: FastMCP) -> None:
         (real import / library()), its version, which tier owns it (base /
         shared-overlay / project-overlay), and the error if it's
         present-but-broken (ABI mismatch / partial install). Without `name`: an
-        overview of the env tiers + base-lock state. Use it to troubleshoot a
-        failed install or a package that 'is there' but won't import."""
+        overview of the env tiers + base-lock state, and also the project's
+        named-env catalog — what exists, what's in each, where each is realized
+        and how much disk it holds. Use it to troubleshoot a failed install or a
+        package that 'is there' but won't import."""
         from core.runtime.tool_ctx import peek_ctx
         from content.bio.tools import inspect_env as _impl
         return _impl({"name": name, "language": language}, peek_ctx(aba_ctx_id))
@@ -184,6 +187,9 @@ def register_discovery_tools(mcp: FastMCP) -> None:
                           aba_ctx_id: str | None = None) -> dict:
         """Create/refresh an ISOLATED env you OWN (a standalone solved
         environment) and install `packages` into it with full version control.
+        CHECK FIRST: inspect_env() lists this project's existing envs — extend one
+        (same call with more packages, or ensure_capability(env=...)) instead of
+        creating a near-duplicate.
         Use when a package conflicts with the base (a different numpy,
         tensorflow, an ABI-incompatible wheel) or you need to resolve a
         dependency conflict your own way — the shared base is never touched, so
@@ -212,17 +218,47 @@ def register_discovery_tools(mcp: FastMCP) -> None:
         return _impl({"name": name}, peek_ctx(aba_ctx_id))
 
     @mcp.tool()
+    def evict_env(name: str,
+                  site: str | None = None,
+                  forget: bool = False,
+                  aba_ctx_id: str | None = None) -> dict:
+        """Reclaim the disk a named env holds on a machine — or retire it. Evicts
+        the env's realizations (weft): pass `site='name'` for one machine, omit it
+        for every site. Eviction keeps the env's identity + lock, so it rebuilds
+        transparently from the lock on next use — nothing is lost but time.
+        `forget=True` additionally removes the env from the project's registry (the
+        name is gone); refused for the ACTIVE env — set_active_env('default') first.
+        Returns per-site freed bytes. Use it to reclaim disk on a machine, or to
+        retire an env you no longer need."""
+        from core.runtime.tool_ctx import peek_ctx
+        from content.bio.tools import evict_env as _impl
+        return _impl({"name": name, "site": site, "forget": forget},
+                     peek_ctx(aba_ctx_id))
+
+    @mcp.tool()
     def ensure_capability(name: str | list[str],
                           source: str | None = None,
                           package: str | None = None,
                           ref: str | None = None,
                           min_version: str | None = None,
                           force: bool = False,
+                          env: Annotated[str | None, Field(
+                              description="Install into this named ISOLATED env "
+                              "(from make_isolated_env / inspect_env) instead of the "
+                              "project default — the package extends that env (a new "
+                              "EnvID is minted; history kept). Package installs only; "
+                              "ignored for non-package capabilities like MCP servers."
+                          )] = None,
                           aba_ctx_id: str | None = None) -> dict:
         """Install / make-ready a named capability (PyPI, conda,
         bioconda, MCP server, …). Long-running for installs — uses
         in_tool_ctx so progress.emit phase lines reach the handler-
         thread sink and stream to the chat as tool_progress events.
+
+        INTO A NAMED ENV: pass env='name' to install into an isolated env
+        (created with make_isolated_env) rather than the default — the package
+        extends that env (new EnvID, old id kept in history). Applies to package
+        installs; a non-package capability ignores env= and says so.
 
         SEVERAL AT ONCE: pass a LIST of names — ensure_capability(["numpy",
         "scipy", "pandas"]) — to make them all ready in one call; the result
@@ -251,15 +287,16 @@ def register_discovery_tools(mcp: FastMCP) -> None:
             return {"status": "error", "note": (
                 "source/package/ref/min_version apply to a SINGLE capability — pass one "
                 "name with those overrides, or a list of names with none.")}
+        _env = {"env": env} if env else {}
         with in_tool_ctx(aba_ctx_id) as ctx:
             if len(names) == 1:
-                _in: dict = {"name": names[0], **overrides}
+                _in: dict = {"name": names[0], **overrides, **_env}
                 if force:
                     _in["force"] = True
                 return _impl(_in, ctx)
             # Several packages: ensure each; aggregate a per-package result list.
             _READY = {"ok", "ready", "reference", "available"}
-            results = [_impl({"name": n, **({"force": True} if force else {})}, ctx)
+            results = [_impl({"name": n, **_env, **({"force": True} if force else {})}, ctx)
                        for n in names]
             not_ready = [r for r in results if r.get("status") not in _READY]
             out = {"status": "ok" if not not_ready else "partial",

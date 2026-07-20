@@ -604,6 +604,71 @@ def s_keep_triage(client, pid, tid):
     ]
 
 
+@scenario("env_lifecycle_local")
+def s_env_lifecycle(client, pid, tid):
+    """ENV-AGENCY journey, local lane (env_agency_plan.md Phase 2): the agent
+    creates a project-scoped named env, EXTENDS it, and — in a FRESH thread,
+    with the user never naming it — REDISCOVERS and reuses it instead of
+    minting a duplicate. Oracles are registry + tool-input + step-own stdout
+    (block-4 doctrine), never narration:
+      - registry row exists with BOTH packages after the extension, and the
+        extension minted a NEW env id (old id in history — frozen identities);
+      - each verification step ran with env=<name> and its OWN stdout carries
+        the version token;
+      - the fresh thread created NO new env (anti-sprawl) and chose the right
+        env WITHOUT the user naming it (discovery via inspect_env / the
+        per-turn env clause)."""
+    caps = [drive_turn(client, pid, tid,
+        "I want to experiment with the 'six' package without touching the "
+        "shared setup. Create an isolated python environment named "
+        "'sandboxenv' containing six, and run a quick step IN that "
+        "environment that prints exactly SIXV=<six.__version__>.")]
+    from core.compute.named_envs import resolve, list_names
+    row1 = resolve(pid, "sandboxenv")
+    first_id = (row1 or {}).get("env_id")
+    caps.append(drive_turn(client, pid, tid,
+        "Now I also need the 'click' package in that same environment — add "
+        "it, then from inside the environment print CLICKV=<click.__version__> "
+        "and SIXV=<six.__version__> in one step."))
+    row2 = resolve(pid, "sandboxenv")
+    extended = (row2 or {}).get("env_id") not in (None, first_id)
+    both_pkgs = {"six", "click"} <= set((row2 or {}).get("packages") or [])
+    history_kept = first_id in ((row2 or {}).get("history") or [])
+    env_steps = [t for t in tools_named(caps, "run_python")
+                 if (t["input"].get("env") or "") == "sandboxenv"]
+    tok1 = any("SIXV=" in ((t.get("result") or {}).get("stdout") or "")
+               for t in env_steps)
+    tok2 = any("CLICKV=" in ((t.get("result") or {}).get("stdout") or "")
+               and "SIXV=" in ((t.get("result") or {}).get("stdout") or "")
+               for t in env_steps)
+    # ── FRESH THREAD: rediscovery without the user naming the env ──
+    tid2 = client.post("/api/threads",
+                       json={"project_id": pid,
+                             "title": "env recall"}).json()["id"]
+    cap3 = drive_turn(client, pid, tid2,
+        "Which isolated environments does this project have, and what's in "
+        "them? Then run a quick check in the appropriate one that prints "
+        "SIXV=<six.__version__> again.")
+    caps.append(cap3)
+    recall_steps = [t for t in tools_named([cap3], "run_python")
+                    if (t["input"].get("env") or "") == "sandboxenv"]
+    recall_tok = any("SIXV=" in ((t.get("result") or {}).get("stdout") or "")
+                     for t in recall_steps)
+    no_dup = (not tools_named([cap3], "make_isolated_env")
+              and list_names(pid) == ["sandboxenv"])
+    return caps, [
+        ("env created and used (step env=sandboxenv, SIXV in OWN stdout)",
+         bool(env_steps) and tok1),
+        ("extension minted a NEW env id (frozen identities)", extended),
+        ("registry carries BOTH packages after the extension", both_pkgs),
+        ("old env id kept in history", history_kept),
+        ("post-extend step prints BOTH versions from its OWN stdout", tok2),
+        ("fresh thread REDISCOVERED the env (user never named it; "
+         "step ran env=sandboxenv)", bool(recall_steps) and recall_tok),
+        ("no duplicate env minted in the fresh thread (anti-sprawl)", no_dup),
+    ]
+
+
 @scenario("retention_alert_loop")
 def s_alert_loop(client, pid, tid):
     """A run whose keepers could not be kept (no durable storage) carries a
@@ -789,8 +854,8 @@ def main():
 
     scenarios = [(fn._scenario, fn) for fn in
                  [s_url, s_reuse, s_remote, s_drift, s_produced,
-                  s_keep_reuse, s_keep_triage, s_alert_loop, s_garbage,
-                  s_odd_format, s_metal]]
+                  s_keep_reuse, s_keep_triage, s_env_lifecycle, s_alert_loop,
+                  s_garbage, s_odd_format, s_metal]]
     if only:
         known = {name for name, _ in scenarios}
         unknown = only - known

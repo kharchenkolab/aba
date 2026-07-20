@@ -101,6 +101,7 @@ from .discovery import (    # noqa: F401, E402
     make_isolated_env,
     run_in_isolated_env,
     set_active_env,
+    evict_env,
     ensure_capability,
     propose_capability_tool,
     fetch_url,

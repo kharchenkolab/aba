@@ -279,19 +279,24 @@ def resolve_spec_for_turn(*, request_override: Optional[str] = None,
 
 def filter_tools_by_allowlist(tools: list[dict], allowlist: tuple[str, ...]) -> list[dict]:
     """Respect AgentSpec.tool_allowlist:
-      ()          → no tools (advisor with no tool access)
-      ("*",)      → all tools pass through
-      ("a","b")   → only tools whose name is in the set
+      ()               → no tools (advisor with no tool access)
+      ("*",)           → all tools pass through
+      ("a","b")        → only tools whose name is in the set
+      ("*", "!c")      → all tools EXCEPT c — exclusions compose with either
+                         form and always win. This is how a tight-window tier
+                         (lean) sheds an advanced tool without enumerating the
+                         whole catalog (which would rot as tools are added).
 
     The Guide's spec uses ('*',); the existing one-shot advisors use ()
     today (they don't call tools). A future advisor that needs e.g.
     only `query_db` would set tool_allowlist: ['query_db']."""
     if not allowlist:
         return []
+    excl = {a[1:] for a in allowlist if isinstance(a, str) and a.startswith("!")}
     if "*" in allowlist:
-        return list(tools)
-    keep = set(allowlist)
-    return [t for t in tools if t.get("name") in keep]
+        return [t for t in tools if t.get("name") not in excl]
+    keep = {a for a in allowlist if not (isinstance(a, str) and a.startswith("!"))}
+    return [t for t in tools if t.get("name") in keep and t.get("name") not in excl]
 
 
 def _advisor_via_runtime(spec: "AgentSpec", user_prompt: str,

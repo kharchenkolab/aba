@@ -1706,6 +1706,145 @@ def mn_fetch_register_verify(client, pid, tid):
     ]
 
 
+@scenario("mn_env_lifecycle_arc")
+def mn_env_lifecycle_arc(client, pid, tid):
+    """ENV-AGENCY flagship (env_agency_plan.md Phase 2): one named env across
+    its whole life — create with one package, EXTEND with another (new frozen
+    id, history kept), stateful remote SESSION inside it on the slurm fixture,
+    then FRESH-THREAD rediscovery (user never names it) and reuse on a SECOND
+    site (local), with the substrate's per-site realization list as ground
+    truth. Oracles: registry + env_status realizations + tool inputs +
+    step-OWN stdout; narration never load-bearing."""
+    sdir = "/home/physicist/aba-mn-envarc"
+    hssh(f"rm -rf {sdir} && mkdir -p {sdir} && (echo v; seq 1 200 | "
+         f"awk '{{print ($1*11)%29}}') > {sdir}/vals.csv")
+    expected_sum = sum((i * 11) % 29 for i in range(1, 201))
+    caps = [drive_turn(client, pid, tid,
+        "Create an isolated python environment named 'nptools' containing "
+        "numpy, and run a quick LOCAL step in that environment that prints "
+        "exactly NPV=<numpy.__version__>.", timeout_s=1200)]
+    from core.compute.named_envs import resolve
+    first_id = (resolve(pid, "nptools") or {}).get("env_id")
+    caps.append(drive_turn(client, pid, tid,
+        "Also add pandas to that same environment.", timeout_s=1200))
+    row = resolve(pid, "nptools") or {}
+    extended = row.get("env_id") not in (None, first_id)
+    both_pkgs = {"numpy", "pandas"} <= set(row.get("packages") or [])
+    caps.append(drive_turn(client, pid, tid,
+        f"On machine 'hpc', IN the nptools environment, run two direct steps "
+        f"in sequence (not background): (1) load the single column of "
+        f"{sdir}/vals.csv into a numpy array and KEEP IT IN MEMORY, printing "
+        f"exactly COUNT=<how many values>; (2) WITHOUT re-reading the file — "
+        f"using the in-memory array from step 1 — print exactly "
+        f"NPSUM=<the integer sum of the array>.", timeout_s=1800))
+    hpc_steps = [t for t in tools_named(caps, "run_python")
+                 if t["input"].get("site") == "hpc"
+                 and (t["input"].get("env") or "") == "nptools"]
+    outs = [((t.get("result") or {}).get("stdout") or "") for t in hpc_steps]
+    count_ok = any("COUNT=200" in o.replace(" ", "") for o in outs)
+    sum_ok = any(f"NPSUM={expected_sum}" in o.replace(" ", "") for o in outs)
+    session_used = any((t.get("result") or {}).get("execution_mode")
+                       == "remote-session" for t in hpc_steps)
+    # ── FRESH THREAD: rediscover (never named) + SECOND site (local) ──
+    tid2 = client.post("/api/threads",
+                       json={"project_id": pid,
+                             "title": "env arc recall"}).json()["id"]
+    cap4 = drive_turn(client, pid, tid2,
+        "What isolated environments does this project have and what's in "
+        "them? Then, right here locally (no site), verify the appropriate "
+        "one still works by printing exactly PDV=<pandas.__version__> from "
+        "inside it.", timeout_s=1200)
+    caps.append(cap4)
+    recall_steps = [t for t in tools_named([cap4], "run_python")
+                    if (t["input"].get("env") or "") == "nptools"
+                    and not t["input"].get("site")]
+    pdv_ok = any("PDV=" in ((t.get("result") or {}).get("stdout") or "")
+                 for t in recall_steps)
+    no_dup = not tools_named([cap4], "make_isolated_env")
+    # SUBSTRATE: the CURRENT env id must be realized on BOTH sites
+    sites: set = set()
+    try:
+        from core.compute import adapter as _ad
+        cur = (resolve(pid, "nptools") or {}).get("env_id")
+        st = _ad.get_compute().sync_call("env_status", cur)
+        sites = {r.get("site") for r in (st.get("realizations") or [])
+                 if r.get("state") in ("ready", "READY")}
+    except Exception:  # noqa: BLE001 — leave empty → check fails loudly
+        pass
+    return caps, [
+        ("env created + used locally (NPV in step's OWN stdout)",
+         any("NPV=" in ((t.get("result") or {}).get("stdout") or "")
+             for t in tools_named(caps, "run_python")
+             if (t["input"].get("env") or "") == "nptools")),
+        ("extension minted a NEW frozen id", extended),
+        ("registry carries numpy AND pandas after extension", both_pkgs),
+        ("stateful SESSION on hpc inside the env (remote-session)",
+         bool(hpc_steps) and session_used),
+        ("COUNT from the step's OWN stdout", count_ok),
+        (f"exact in-memory NPSUM={expected_sum} from the step's OWN stdout",
+         sum_ok),
+        ("fresh thread REDISCOVERED the env (never named by user)",
+         bool(recall_steps) and pdv_ok),
+        ("no duplicate env minted on recall (anti-sprawl)", no_dup),
+        (f"substrate truth: realized on ≥2 sites incl hpc ({sorted(sites)})",
+         "hpc" in sites and len(sites) >= 2),
+    ]
+
+
+@scenario("mn_env_reclaim")
+def mn_env_reclaim(client, pid, tid):
+    """ENV-AGENCY reclaim (env_agency_plan.md Phase 2): disk on the node is
+    reclaimed via evict_env while the env's IDENTITY survives — next use
+    transparently rebuilds from the lock. Ground truths: the evict tool's own
+    result, the substrate realization state, the node's real env-store disk
+    usage (ssh du), and the rebuilt step's own stdout."""
+    def _du_envs() -> int:
+        out = hssh("du -sk /home/physicist/.weft/envs 2>/dev/null "
+                   "| cut -f1").stdout or "0"
+        return int(out.strip() or 0)
+    caps = [drive_turn(client, pid, tid,
+        "Create an isolated python environment named 'evictme' containing "
+        "the 'six' package, and on machine 'hpc' run a quick direct step IN "
+        "that environment printing exactly S6=<six.__version__>.",
+        timeout_s=1800)]
+    used = [t for t in tools_named(caps, "run_python")
+            if (t["input"].get("env") or "") == "evictme"
+            and t["input"].get("site") == "hpc"]
+    s6_ok = any("S6=" in ((t.get("result") or {}).get("stdout") or "")
+                for t in used)
+    du_before = _du_envs()
+    caps.append(drive_turn(client, pid, tid,
+        "That environment's copy on hpc is taking up disk — reclaim that "
+        "space on hpc, but keep the environment itself so we can use it "
+        "again later.", timeout_s=900))
+    ev = tools_named(caps, "evict_env")
+    ev_ok = any((t["input"].get("name") == "evictme"
+                 and not t["input"].get("forget")
+                 and not (t.get("result") or {}).get("error"))
+                for t in ev)
+    du_after = _du_envs()
+    from core.compute.named_envs import resolve
+    still_registered = resolve(pid, "evictme") is not None
+    caps.append(drive_turn(client, pid, tid,
+        "Run the same version check in that environment on hpc again.",
+        timeout_s=1800))
+    rebuilt = [t for t in tools_named([caps[-1]], "run_python")
+               if (t["input"].get("env") or "") == "evictme"
+               and t["input"].get("site") == "hpc"]
+    rebuilt_ok = any("S6=" in ((t.get("result") or {}).get("stdout") or "")
+                     for t in rebuilt)
+    return caps, [
+        ("env created + used on hpc (S6 in step's OWN stdout)",
+         bool(used) and s6_ok),
+        ("evict_env applied (name=evictme, forget not set, no error)", ev_ok),
+        (f"node env store actually SHRANK (du {du_before}K→{du_after}K)",
+         du_after < du_before),
+        ("registry row survived the evict (identity kept)", still_registered),
+        ("next use on hpc transparently REBUILT (S6 again, own stdout)",
+         bool(rebuilt) and rebuilt_ok),
+    ]
+
+
 @scenario("mn_long_arc")
 def mn_long_arc(client, pid, tid):
     """LONG-ARC realism (depth doctrine #1-#4): a 9-turn project arc where
@@ -2097,6 +2236,7 @@ def main():
                   mn_net_drop_midjob, mn_mid_chain_steering,
                   mn_repeat_sync, mn_interrupt_sync, mn_first_use,
                   mn_system_env_session, mn_fetch_register_verify,
+                  mn_env_lifecycle_arc, mn_env_reclaim,
                   mn_cbe_smoke, mn_missing_then_recover,
                   mn_bundle_header_drift, mn_cbe_kernel, mn_cbe_gpu,
                   mn_long_arc]]

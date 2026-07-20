@@ -83,8 +83,35 @@ def inspect_env(input_: dict, ctx: dict | None = None) -> dict:
                                    if (pid and _bev.active("r")) else None)
             except Exception:  # noqa: BLE001 — overview must not fail on R
                 ov["r_session"] = None
+        # The project's named-env catalog — what exists, what's in each, where it
+        # is realized and how much disk it holds. env_status is per-env, but this
+        # tool is on-demand (unlike the per-turn compute line), so substrate calls
+        # are fine; a per-env substrate error degrades to "unavailable", never fails.
+        from core.compute import named_envs as _ne
+        try:
+            _names = _ne.list_names(pid) if pid else []
+        except Exception:  # noqa: BLE001 — no registry / unreadable → empty catalog
+            _names = []
+        _active = {"python": _ne.get_active(pid, "python") if pid else "default",
+                   "r": _ne.get_active(pid, "r") if pid else "default"}
+        catalog = []
+        for _n in _names:
+            _row = _ne.resolve(pid, _n) or {}
+            _lang = _row.get("language") or "python"
+            try:
+                _reals = _ne.realizations(_row["env_id"])
+            except Exception:  # noqa: BLE001 — substrate hiccup on ONE env only
+                _reals = "unavailable"
+            catalog.append({
+                "name": _n, "language": _lang,
+                "packages": list(_row.get("packages") or []),
+                "active": (_n == _active.get(_lang)),
+                "env_id": _row.get("env_id"),
+                "created_at": _row.get("created_at"),
+                "realizations": _reals,
+            })
         return {"status": "ok", "scope": "overview", "language": "r" if is_r else "python",
-                "tiers": ov}
+                "tiers": ov, "named_envs": catalog}
 
     if is_r:
         # Probe the project's weft R SESSION (base pack + additions); its own
@@ -182,7 +209,8 @@ def make_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
     _run = "run_r" if is_r else "run_python"
     out["note"] = (f"Isolated {label} env {name!r} solved; run code in it with "
                    f"{_run}(env={name!r}, code=…) — the first run materializes it. "
-                   f"Calling make_isolated_env again with more packages LAYERS them on.")
+                   f"Calling make_isolated_env again with more packages LAYERS them on. "
+                   f"Listed in inspect_env(); survives across threads.")
     return out
 
 
@@ -231,6 +259,54 @@ def set_active_env(input_: dict, ctx: dict | None = None) -> dict:
     return {"status": "ok", "active_python_env": name,
             "note": f"Bare run_python now runs in '{name}'. Use env='default' for a one-off "
                     f"in the normal stack, or set_active_env('default') to switch back."}
+
+
+def evict_env(input_: dict, ctx: dict | None = None) -> dict:
+    """Reclaim the disk a named env's realizations hold on a machine — or retire
+    the env entirely. Wraps weft's evict over the env's realizations: eviction
+    keeps the env's identity + lock, so it rebuilds transparently on next use;
+    `forget=True` additionally removes the project's registry row."""
+    from core.compute import named_envs
+    from core.compute.errors import ComputeError
+    from core import projects
+    name = (input_.get("name") or "").strip()
+    if not name:
+        return {"status": "error", "note": "evict_env needs a `name`."}
+    site = (input_.get("site") or "").strip() or None
+    forget = bool(input_.get("forget"))
+    pid = str(projects.current() or "default")
+    if named_envs.resolve(pid, name) is None:
+        return {"status": "error", "name": name,
+                "note": f"No named env '{name}' in this project. Call inspect_env() to see "
+                        f"the project's named-env catalog."}
+    # forget=True is evict-and-forget in one call — but a still-active env is
+    # refused BEFORE any eviction, so there is no partial action.
+    if forget and name == named_envs.get_active(pid,
+                            (named_envs.resolve(pid, name) or {}).get("language") or "python"):
+        return {"status": "error", "name": name,
+                "note": f"'{name}' is the active env — call set_active_env('default') before "
+                        f"forgetting it (no disk was evicted)."}
+    try:
+        freed = named_envs.evict(pid, name, site=site)
+    except ComputeError as e:
+        return {"status": "error", "name": name,
+                "note": f"could not evict '{name}': {e.detail or e.code}"}
+    except Exception as e:  # noqa: BLE001
+        return {"status": "error", "name": name, "note": f"could not evict '{name}': {e}"}
+    scope = f"site '{site}'" if site else "all sites"
+    out = {"status": "ok", "name": name, "site": site,
+           "sites": freed["sites"], "freed_bytes": freed["freed_bytes"],
+           "note": (f"Evicted {name!r} on {scope}: {freed['freed_bytes']} bytes freed. "
+                    f"The env rebuilds from its lock on next use — nothing is lost but time.")}
+    if forget:
+        try:
+            named_envs.forget(pid, name)
+        except ComputeError as e:
+            return {**out, "status": "error",
+                    "note": out["note"] + f" BUT forget failed: {e.detail or e.code}"}
+        out["forgotten"] = True
+        out["note"] += f" '{name}' is now gone from the project's named-env registry."
+    return out
 
 
 def _is_constraint_conflict(msg: str) -> bool:
@@ -881,6 +957,31 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
                     f"is usable in run_r now."}
 
 
+def _extend_into_named_env(env_name: str, packages: list[str], cap: dict) -> dict:
+    """Layer `packages` into a named isolated env via extends_env (frozen
+    identities: a new EnvID is minted, the old id kept in history). The env's
+    language picks the ecosystem (pypi | cran)."""
+    from core.compute import named_envs
+    from core.compute.errors import ComputeError
+    from core import projects
+    pid = str(projects.current() or "default")
+    try:
+        res = named_envs.extend(pid, env_name, list(packages))
+    except ComputeError as e:
+        return {"status": "error", "name": cap.get("name"), "env": env_name,
+                "error": e.to_payload(),
+                "note": f"could not extend env '{env_name}': {e.detail or e.code}"}
+    except Exception as e:  # noqa: BLE001
+        return {"status": "error", "name": cap.get("name"), "env": env_name,
+                "note": f"could not extend env '{env_name}': {e}"}
+    return {"status": "ready", "name": cap.get("name"), "env": env_name,
+            "env_id": res["env_id"], "installed": list(packages),
+            "note": (f"Installed {', '.join(packages)} into isolated env '{env_name}' "
+                     f"(new env_id {res['env_id']}). Frozen identities: extending mints a "
+                     f"new id; history kept — the env's state carries over. Run in it with "
+                     f"run_python(env='{env_name}', …).")}
+
+
 def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
     """Materialize a catalogued capability on demand (P1). Python libraries go
     into the wipeable overlay so the next run_python can import them; non-pip
@@ -889,6 +990,17 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
     name = (input_.get("name") or input_.get("capability") or "").strip()
     if not name:
         return {"error": "name is required"}
+    # env= targets a named ISOLATED env instead of the default session; a package
+    # install extends it (new EnvID, history kept). Validate up front — an unknown
+    # name never silently falls back to the default env.
+    env = (input_.get("env") or "").strip() or None
+    if env is not None:
+        from core.compute import named_envs as _ne
+        from core import projects as _proj
+        if _ne.resolve(str(_proj.current() or "default"), env) is None:
+            return {"status": "error", "name": name, "env": env,
+                    "note": f"No named env '{env}' in this project. Call inspect_env() to "
+                            f"see the named-env catalog, or make_isolated_env to create it."}
     _ct = (ctx or {}).get("cancel_token")
     from core.catalog import resolve_capability
     cap = resolve_capability(name)
@@ -1038,6 +1150,10 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
     from core.catalog import capability_role
     _role = capability_role(cap)
     _role_note = ""
+    # Set when env= was passed for a NON-package capability (below): env applies
+    # to package installs only, so the capability is provisioned normally and this
+    # note tells the agent why the env target was ignored.
+    _env_scope_note = ""
     if _role == "viewer":
         _vb = cap.get("viewer") or {}
         _opens = ", ".join(list(_vb.get("extensions") or []) +
@@ -1056,11 +1172,30 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         payload.setdefault("role", _role)
         if _role_note and payload.get("status") == "ready":
             payload["note"] = (payload.get("note") or "") + _role_note
+        if _env_scope_note:
+            payload["note"] = (payload.get("note") or "") + _env_scope_note
         return payload
 
     from core.runtime import progress
     progress.emit(f"Materializing '{cap.get('name')}'…", phase="ensure")
     prov = cap.get("provisioning") or {}
+    # env= routing: a PACKAGE install (pypi/conda/cran ecosystems) extends the
+    # named env rather than landing in the default session. Non-package
+    # capabilities (MCP servers, references) ignore env= and note that below.
+    if env is not None:
+        _pkgs = None
+        if prov.get("pip"):
+            _pkgs = list(prov["pip"])
+        elif prov.get("conda"):
+            _c = prov["conda"]
+            _spec = _c["spec"] if isinstance(_c, dict) else _c
+            _pkgs = [_spec] if isinstance(_spec, str) else list(_spec)
+        elif cap.get("archetype") == "r_package":
+            _pkgs = [cap.get("package") or cap.get("library") or name]
+        if _pkgs is not None:
+            return _extend_into_named_env(env, _pkgs, cap)
+        _env_scope_note = (f" (env={env!r} applies to PACKAGE installs only; this "
+                           f"capability is not a package — it was provisioned normally.)")
     if prov.get("pip"):
         # Already importable? Then ensuring is a no-op. Two cases, both keyed on
         # the seed's explicit import_name (so we never short-circuit a package

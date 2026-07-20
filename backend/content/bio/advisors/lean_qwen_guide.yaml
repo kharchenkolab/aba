@@ -45,7 +45,8 @@ manifest_role: primary
 #   (c) Catalog rendering follows the same compact policy as `lean`.
 prompt_mode: lean_small
 # Full reach — all tools visible to the model.
-tool_allowlist: ['*']
+tool_allowlist: ['*', '!evict_env', '!run_nextflow']   # lean sheds the advanced
+                                       # (half-window budget; standard keeps it)
 # Same budget as lean_guide. Small models don't benefit from a
 # larger summarization budget; if anything they suffer more.
 summary_budget_chars: 25000

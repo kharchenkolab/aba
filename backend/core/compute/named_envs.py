@@ -219,6 +219,61 @@ def extend(project_id: str, name: str, packages: list[str]) -> dict:
             "summary": res.get("summary"), "delta": res.get("delta")}
 
 
+# ── reclaim / retire ─────────────────────────────────────────────────────────
+
+def evict(project_id: str, name: str, *, site: Optional[str] = None) -> dict:
+    """Reclaim disk held by a named env's realizations (weft ``env_evict``), on a
+    single `site` or every realized site. The env's IDENTITY and lock are kept —
+    it rebuilds transparently from the lock on next use (see ``ensure_realized``).
+    Returns ``{env_id, sites: {site: bytes_freed}, freed_bytes}``."""
+    row = resolve(project_id, name)
+    if row is None:
+        raise ComputeError("unknown_env", f"no named env {name!r} in this project",
+                           stage="aba", hints={"available": list_names(project_id)})
+    env_id = row["env_id"]
+    st = _sync(_adapter.get_compute().env_status(env_id))
+    per_site: dict = {}
+    for r in st.get("realizations", []):
+        s = r.get("site")
+        if site is not None and s != site:
+            continue
+        if r.get("state") != "ready":     # only a realized site holds disk to free
+            continue
+        # env_evict is a fast store op — the synchronous pass-through the module
+        # reconciler uses (reconciler.py `_evict_pack_env`), not the async solve port.
+        _adapter.get_compute().sync_call("env_evict", env_id, s)
+        per_site[s] = int(r.get("bytes") or 0)
+    return {"env_id": env_id, "sites": per_site,
+            "freed_bytes": sum(per_site.values())}
+
+
+def forget(project_id: str, name: str) -> dict:
+    """Remove a named env's registry row — the name is gone from the project.
+    REFUSED (no partial action) when it is the ACTIVE env; reset with
+    set_active_env('default') first. Disk is not touched here (use ``evict``); a
+    still-realized prefix is simply orphaned from the handle."""
+    pid = str(project_id)
+    row = resolve(pid, name)
+    if row is None:
+        raise ComputeError("unknown_env", f"no named env {name!r} in this project",
+                           stage="aba", hints={"available": list_names(pid)})
+    lang = row.get("language") or "python"
+    if name == get_active(pid, lang):
+        raise ComputeError(
+            "active_env",
+            f"'{name}' is the active {lang} env — call set_active_env('default') "
+            f"before forgetting it", stage="aba")
+
+    def _apply(data):
+        data["envs"].pop(name, None)
+        # defensively clear any active pointer still naming this env
+        for _l, _a in list(data.get("active", {}).items()):
+            if _a == name:
+                data["active"][_l] = "default"
+    _update(pid, _apply)
+    return {"forgotten": name}
+
+
 # ── realization / interpreter ────────────────────────────────────────────────
 
 _LOCAL_SITE = "local"
@@ -340,6 +395,18 @@ def _realization_ready(env_id: str, site: str = "local") -> bool:
         return False
     return any(r.get("site") == site and r.get("state") == "ready"
                for r in st.get("realizations", []))
+
+
+def realizations(env_id: str) -> list[dict]:
+    """Every site's realization row for `env_id` — ``{site, state, bytes,
+    idle_days}`` — from weft ``env_status``. The full list that
+    ``_realization_ready`` reduces to a single-site bool; the env catalog and
+    footprint surfaces need all of it. Raises on a substrate error (callers that
+    render a catalog degrade per-env rather than fail)."""
+    st = _sync(_adapter.get_compute().env_status(env_id))
+    return [{"site": r.get("site"), "state": r.get("state"),
+             "bytes": r.get("bytes"), "idle_days": r.get("idle_days")}
+            for r in st.get("realizations", [])]
 
 
 def ensure_ready(env_id: str, *, timeout_s: int = 900,
