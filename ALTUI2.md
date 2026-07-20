@@ -131,7 +131,19 @@ with runs' own ▶ state marks: the arrow family is the execution/session
 domain, fill is liveness. **⚡** contradiction/condition · **⌖** held
 excerpt · **draft** badge = agent-proposed, awaiting ratification.
 
-**The storyboard** (`frontend/src/workflow/`) plays this as twelve
+**Busy-scientist surfaces** (OODA pass, see NOTES.md §11): the **triage
+band** (⚡ conditions · ▢ needs-you · ▶ running · ▷ resume — one glance,
+every slot a door); the **needs-you tray** (all pending decisions,
+derived from record state so count and content agree by construction;
+Ratify / file ✓ / go →; "file all routine" batches the veto-tier,
+undoable); what's-new items as doors; badge lifecycle (accretion clears
+on view, amber derived from pending, red until resolved); panel as
+slide-over below 1000px; **⌘K omnibox** (ask or find, from anywhere);
+**"this week ▸"** — the auto-rendered, emailable digest; and the scale
+face — dormant questions compact to one line, stalled trails fold, the
+sediment declares its recent window.
+
+**The storyboard** (`frontend/src/workflow/`) plays this as thirteen
 interactive scenes over the SAME Record renderer (parameterized over a
 `World`, `src/notebook/world.ts` — `/notebook.html` is unchanged):
 *Part I, early days (day 0–3)* — the hard, nothing-to-anchor-on case: a new
@@ -143,7 +155,7 @@ opened from a question with scope in hand (M2); the churn loop with live
 accretion (M3); walking away = distillation (M4); the morning after —
 the by-session work record, resume from the document (M5); the session
 page itself — territory behind the map (M6); live anchoring — the
-document as a working surface (M7).
+document as a working surface (M7); year 2 — the scale face + triage (M8).
 Some scenes advance through their own affordances (typing in the day-0
 composer, `work ▸` on a question, `file & close` in the panel) — the story
 moves the way the scientist would. Arrow keys / pills / `?step=` deep links.
