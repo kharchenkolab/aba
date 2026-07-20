@@ -115,21 +115,33 @@ def pack_env_id(spec: ModuleSpec) -> tuple[str, str] | None:
 
 
 def _pack_ready(pack: str) -> bool:
-    """Cheap store-read probe (no solve, no network): the pack's env is solved
-    AND has a ready local realization."""
+    """Cheap store-read probe (no solve): the pack's env is adopted OR realized
+    READY on the local site.
+
+    Resolve the pack NAME → EnvID via the catalog adoption path FIRST — weft env
+    rows are keyed by EnvID and an ADOPTED base leaves NO local spec row, so its
+    `name` is empty and matching `list_envs` by name never hits. That was the reason
+    mount-adopted base packs (python-bio/r-bio) showed 'pending' forever on the
+    SIF/pack deployment despite being live (2026-07-21). Fall back to the name match
+    for a locally-SOLVED base (writable deploy: the spec carries a name). An adopted
+    RO mount is recorded state=ready read_only=1; accept either signal."""
     try:
-        from core.compute import get_compute
+        from core.compute import get_compute, seeding
         w = get_compute()
-        envs = w.sync_call("list_envs")
-        rows = envs.get("envs") if isinstance(envs, dict) else envs
-        for e in (rows or []):
-            if (e.get("name") or "") == pack:
-                st = w.sync_call("env_status", e.get("env_id") or e.get("id"))
-                return any(r.get("site") == "local" and r.get("state") == "ready"
-                           for r in st.get("realizations", []))
+        eid = seeding.adopt_env_id(pack)                 # adopted (catalog) → EnvID
+        if not eid:                                      # locally-solved base: match by spec name
+            envs = w.sync_call("list_envs")
+            rows = envs.get("envs") if isinstance(envs, dict) else envs
+            eid = next((e.get("env_id") or e.get("id")
+                        for e in (rows or []) if (e.get("name") or "") == pack), None)
+        if not eid:
+            return False
+        st = w.sync_call("env_status", eid)
+        return any(r.get("site") == "local"
+                   and (r.get("state") == "ready" or r.get("read_only"))
+                   for r in st.get("realizations", []))
     except Exception:  # noqa: BLE001
-        pass
-    return False
+        return False
 
 
 def probe_ready(spec: ModuleSpec) -> bool:
