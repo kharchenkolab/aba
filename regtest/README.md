@@ -16,6 +16,11 @@ regtest/
     forensic.py         Opus deep-dive on a FAILED step from a bundle
     library_runner.py   legacy v1 single-prompt runner (for the 4 v1-only scenarios)
     sweep.py            run ALL scenarios + scorecard + baseline diff + retention
+    surfaces.py         consumption-surface parity oracle (scenario-end, default ON —
+                        every advertised listing URL / artifact / download / viewer
+                        lookup must answer honestly; see SCHEMA.md "Surface parity")
+    live_audit.py       point the SAME oracle at a RUNNING server across all its
+                        projects (the "first click after coming back" guard)
   scenarios/
     <id>/scenario.yaml  the scenario (v2 = multi-turn `steps:`; v1 = single `prompt`)
     <id>/_make_data.py  per-scenario data generator (some fetch real data)

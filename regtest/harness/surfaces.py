@@ -141,7 +141,8 @@ def surface_parity_failures(client, pid: str, *, run_ids=None,
             continue
         if e.get("type") == "analysis" or budget[0] <= 0:
             continue
-        _fetch_ok(f"/api/entities/{e['id']}/download",
-                  f"entity:{e['id']}:{(e.get('title') or '')[:30]}")
+        # context is the opaque entity id only — failure strings land in
+        # scorecards/reports and must not carry user prose (titles)
+        _fetch_ok(f"/api/entities/{e['id']}/download", f"entity:{e['id']}")
 
     return fails
