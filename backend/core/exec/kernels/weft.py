@@ -81,6 +81,24 @@ def _weft_setup_code(lang: str, remote: bool = False) -> str:
             + _j._harvest_helpers_py())
 
 
+def _site_platform(site: str) -> str | None:
+    """The site's conda platform string (linux-aarch64, osx-arm64, …) from its
+    registered capabilities (os + arch). None when the site can't say — the
+    caller then skips the cross-platform re-lock rather than guessing."""
+    try:
+        from core.compute import adapter as _ad
+        desc = _ad.get_compute().sync_call("sites_describe", site) or {}
+        caps = desc.get("capabilities") or {}
+        os_, arch = caps.get("os"), caps.get("arch")
+        if not (os_ and arch):
+            return None
+        if os_ == "darwin":
+            return f"osx-{'arm64' if arch in ('arm64', 'aarch64') else '64'}"
+        return f"linux-{'64' if arch in ('x86_64', 'amd64') else arch}"
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _slurm_time_s(t: str) -> int | None:
     """'H:MM:SS' / 'D-HH:MM:SS' / 'MM:SS' → seconds; None if unparseable."""
     try:
@@ -210,6 +228,19 @@ def for_pool(scope_key: str, lang: str, *, cwd: str, env_name: str | None,
             # ran while the session lane failed and fell back).
             from core.jobs.weft_submitter import _mismatch_platform
             plat = _mismatch_platform(e)
+            if not plat and getattr(e, "code", "") == "env.layer_conflict":
+                # An EXTENDED env's layer chain can fail to realize on a
+                # DIFFERENT-platform site with layer_conflict (the delta was
+                # solved against the controller-platform parent) — same root
+                # as platform_mismatch, different error shape (found live:
+                # extended env on the linux fixture from a mac controller,
+                # F-ENV-2). ensure_platform re-solves base + layers for the
+                # site's platform. Only cross-platform: a SAME-platform
+                # layer_conflict is a genuine solve failure — re-locking
+                # would just repeat it.
+                sp = _site_platform(site)
+                if sp and sp != named_envs.controller_platform():
+                    plat = sp
             if plat:
                 if env_name:
                     relock = named_envs.ensure_platform(pid, env_name, plat)

@@ -353,6 +353,60 @@ def test_snapshot_platform_mismatch_relocks_base_pack():
             base_env.ensure_platform = orig_plat
 
 
+def test_layer_conflict_cross_platform_relocks_named_env():
+    """F-ENV-2 (found live): an EXTENDED named env fails to realize on a
+    DIFFERENT-platform site with env.layer_conflict (the delta was solved
+    against the controller-platform parent) — the kernel lane must treat that
+    like a platform mismatch and re-lock via ensure_platform (which re-solves
+    base + layers for the site's platform), not fall back to one-shot."""
+    import core.compute.named_envs as ne
+    from core.compute.errors import ComputeError
+    calls = []
+    orig_resolve, orig_ready = ne.resolve, ne.ensure_ready
+    orig_plat = getattr(ne, "ensure_platform", None)
+
+    def fake_ready(eid, **k):
+        calls.append(("ready", eid))
+        if eid == "env_chain_osx":
+            raise ComputeError(
+                "env.layer_conflict",
+                "the delta does not fit on this parent without moving base "
+                "package versions", stage="solve")
+
+    ne.resolve = lambda pid, name: ({"env_id": "env_chain_osx",
+                                     "language": "python"}
+                                    if name == "chained" else None)
+    ne.ensure_ready = fake_ready
+    ne.ensure_platform = lambda pid, name, plat: (
+        calls.append(("relock", name, plat)) or {"env_id": "env_chain_linux"})
+
+    # the fixture site reports a linux capability set (cross-platform vs the
+    # darwin controller this test runs on)
+    orig_sync = FAKE.sync_call
+
+    def sync_with_describe(nm, *a, **kw):
+        if nm == "sites_describe":
+            return {"capabilities": {"os": "linux", "arch": "aarch64"}}
+        return orig_sync(nm, *a, **kw)
+
+    FAKE.sync_call = sync_with_describe
+    try:
+        pool = poolm.KernelPool()
+        s = pool.get_or_start("thr_layer@hpc", "python", cwd=_TMP,
+                              env_name="chained", site="hpc")
+        check("layer_conflict on a cross-platform site triggered the re-lock",
+              ("relock", "chained", "linux-aarch64") in calls, str(calls))
+        check("session started on the RE-LOCKED env id",
+              FAKE.kernel_starts[-1].get("env_id") == "env_chain_linux",
+              str(FAKE.kernel_starts[-1]))
+        s.shutdown()
+    finally:
+        FAKE.sync_call = orig_sync
+        ne.resolve, ne.ensure_ready = orig_resolve, orig_ready
+        if orig_plat is not None:
+            ne.ensure_platform = orig_plat
+
+
 def test_walltime_clamped_to_partition_cap():
     """Capped partitions (PartitionTimeLimit fence): kernel_start refusing
     the default 8h ask must trigger ONE retry clamped to the roomiest
