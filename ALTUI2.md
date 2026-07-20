@@ -78,9 +78,31 @@ answer, made concrete in the **workflow storyboard** (`/workflow.html`):
 - **The desk strip** is the document's present tense: open sessions, running
   work, yesterday's resume point.
 
-**The storyboard** (`frontend/src/workflow/`) plays this as ten interactive
-scenes over the SAME Record renderer (now parameterized over a `World`,
-`src/notebook/world.ts` — `/notebook.html` is unchanged):
+**Sessions surfaced (PK: "the real analysis is in sessions, Runs and
+Results").** The redux is a MAP; sessions are the territory — they hold
+what curation missed (unpinned artifacts, asides) and they match episodic
+memory (you remember the sitting, not the entity). So sessions are
+first-class, not scaffolding:
+
+- **The work record has two grains**: *by run* (flat chronology) or *by
+  session* — each sitting one super-row (turns · runs · distilled ·
+  **unexamined count**) with its runs nested; solo/automatic runs stand
+  apart. The session is the chain; sometimes the chain is what you follow.
+- **A session is a full page AND a docked panel** (⤢ / ⇥ convert): the
+  page for sifting — distillate up top, the **leftovers shelf** (artifacts
+  produced but never pinned, noted, or discussed — kept findable for late
+  review), the transcript with **addressable turns**, chain edges
+  (continues ← / continued by →); the docked panel for side-by-side work
+  (the existing chat-in-right-column mode). Both end in a live composer:
+  filed ≠ dead.
+- **Turn-grade ⟲ everywhere**: sediment lines jump to the turn that
+  launched their run; trail fragments carry "⟲ turn N" (provenance for
+  prose); search covers **what was SAID**, not just what was kept — a
+  transcript hit lands on its turn, highlighted.
+
+**The storyboard** (`frontend/src/workflow/`) plays this as eleven
+interactive scenes over the SAME Record renderer (parameterized over a
+`World`, `src/notebook/world.ts` — `/notebook.html` is unchanged):
 *Part I, early days (day 0–3)* — the hard, nothing-to-anchor-on case: a new
 project is a composer, not a document (E1); the first exchange births the
 sediment (E2); noticing becomes notes (E3); the first question is born
@@ -88,7 +110,8 @@ mid-conversation as a stub section (E4); day 3 reads as a lab diary (E5).
 *Part II, mature (month 4)* — re-entry and orientation (M1); a session
 opened from a question with scope in hand (M2); the churn loop with live
 accretion (M3); walking away = distillation (M4); the morning after —
-resume from the document, transcript one click away (M5).
+the by-session work record, resume from the document (M5); the session
+page itself — territory behind the map (M6).
 Some scenes advance through their own affordances (typing in the day-0
 composer, `work ▸` on a question, `file & close` in the panel) — the story
 moves the way the scientist would. Arrow keys / pills / `?step=` deep links.
