@@ -54,30 +54,44 @@ _CANCEL_GRACE_S = config.settings.kernel_cancel_grace_s.get()
 
 
 def _weft_setup_code(lang: str, remote: bool = False) -> str:
-    """The kernel's first-block setup: DATA_DIR + harvest helpers, WORK_DIR bound
-    to the kernel's OWN cwd (its sandbox), and NO chdir.
+    """The kernel's first-block setup: DATA_DIR / ARTIFACTS_DIR / WORK_DIR — each as
+    a VARIABLE *and* an env var — plus harvest helpers, WORK_DIR bound to the kernel's
+    OWN cwd (its sandbox), and NO chdir.
+
+    Both forms on purpose: agents reach for the bare name (`DATA_DIR/…`) AND for
+    `os.environ['DATA_DIR']` / `Sys.getenv('DATA_DIR')` interchangeably, and the
+    one-shot lane (core/exec/run.py) already provides both — so the interactive
+    kernel must too, or code that probes the env form dies with a bare KeyError
+    (observed live 2026-07-21: agent did `os.environ['DATA_DIR']`, got KeyError,
+    fell back to a hardcoded path). ARTIFACTS_DIR was previously absent entirely.
 
     A weft kernel must keep its sandbox as cwd — the file-block protocol reads/writes
     `blocks/NNNN.*` and `kernel.stop` RELATIVE to cwd, so chdir'ing away orphans the
     protocol and the kernel dies. So the sandbox IS the work dir; aba harvests from
     there. WORK_DIR is set from `getcwd()` at runtime (the kernel knows its own
-    sandbox; the controller doesn't know the id until kernel_start returns).
+    sandbox; the controller doesn't know the id until kernel_start returns); the
+    run_exec cwd snippet re-points WORK_DIR (both forms) on a cwd change.
 
-    `remote=True`: the controller's project data dir does not exist on the
-    kernel's machine — bind DATA_DIR to the sandbox too, so writes stay
+    `remote=True`: the controller's project data/artifacts dirs do not exist on the
+    kernel's machine — bind DATA_DIR/ARTIFACTS_DIR to the sandbox too, so writes stay
     (run,rel)-addressable there instead of failing on a foreign path."""
     from core.exec.kernels import setup_helpers as _j
+    data, artifacts = _j._project_data_artifacts()
     if lang == "r":
         from core.exec.r import cran_repo, _ppm_ua_expr
         repoline = f'options(repos=c(CRAN={cran_repo()!r})); {_ppm_ua_expr()}\n'
-        data_line = ("DATA_DIR <- getwd()\n" if remote else
-                     f"DATA_DIR <- {str(_j._project_data_artifacts()[0])!r}\n")
-        return (f"{repoline}{data_line}WORK_DIR <- getwd()\n"
+        dirs = ("DATA_DIR <- getwd(); ARTIFACTS_DIR <- getwd()\n" if remote else
+                f"DATA_DIR <- {str(data)!r}; ARTIFACTS_DIR <- {str(artifacts)!r}\n")
+        return (f"{repoline}{dirs}WORK_DIR <- getwd()\n"
+                "Sys.setenv(DATA_DIR=DATA_DIR, ARTIFACTS_DIR=ARTIFACTS_DIR, WORK_DIR=WORK_DIR)\n"
                 + _j._harvest_helpers_r())
-    data_line = ("DATA_DIR = _os.getcwd()\n" if remote else
-                 f"DATA_DIR = {str(_j._project_data_artifacts()[0])!r}\n")
+    dirs = ("DATA_DIR = ARTIFACTS_DIR = _os.getcwd()\n" if remote else
+            f"DATA_DIR = {str(data)!r}\nARTIFACTS_DIR = {str(artifacts)!r}\n")
     return ("import os as _os\n_os.environ.setdefault('MPLBACKEND', 'Agg')\n"
-            f"{data_line}WORK_DIR = _os.getcwd()\n"
+            f"{dirs}WORK_DIR = _os.getcwd()\n"
+            "_os.environ['DATA_DIR'] = DATA_DIR\n"
+            "_os.environ['ARTIFACTS_DIR'] = ARTIFACTS_DIR\n"
+            "_os.environ['WORK_DIR'] = WORK_DIR\n"
             + _j._harvest_helpers_py())
 
 
