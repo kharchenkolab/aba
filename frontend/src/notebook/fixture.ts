@@ -37,6 +37,10 @@ export interface Section {
   phase: 'early' | 'mid' | 'late'
   paragraphs: Paragraph[]
   addenda: Addendum[]
+  /** open questions — rendered on the stub face when no prose is ratified yet */
+  open?: string[]
+  /** archived working sessions filed under this question */
+  sessions?: { label: string; when: string; meta: string }[]
 }
 
 export interface Fragment {
@@ -44,6 +48,7 @@ export interface Fragment {
   text: string
   ref?: string        // figure id the fragment points at
   counter?: boolean   // a counter-example — trails keep those too
+  draft?: boolean     // proposed by the agent during a session, not yet ratified
 }
 export interface Trail {
   id: string
@@ -59,6 +64,7 @@ export interface LooseNote {
   origin: 'you' | 'guide'
   text: string
   ref?: string
+  draft?: boolean
 }
 
 export interface SedimentOutput { id: string; kind: 'figure' | 'table'; title: string; flagged?: boolean }
@@ -73,6 +79,10 @@ export interface SedimentEntry {
   retention: 'kept' | 'temporary' | 'at-risk'
   site?: string
   trailRef?: string
+  /** label of the working session that produced this run (⟲ chip) */
+  sessionRef?: string
+  /** landed during the session on screen — highlighted as just-arrived */
+  isNew?: boolean
 }
 
 export interface Prov {

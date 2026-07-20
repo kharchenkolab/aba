@@ -1,0 +1,62 @@
+/* Storyboard chrome — a slim director's bar above full Record scenes.
+   Deliberately NOT part of the Record's visual identity: dark, sans,
+   utilitarian — so it reads as the frame, never the artifact. */
+
+.story { height: 100vh; display: flex; flex-direction: column; }
+
+.story__bar {
+  display: flex; align-items: center; gap: 22px;
+  background: #22262e; color: #e7e4dc;
+  padding: 8px 18px;
+  font-family: var(--sans); font-size: 11px;
+  flex-shrink: 0;
+}
+.story__title { line-height: 1.3; margin-right: 8px; white-space: nowrap; }
+.story__title b { font-size: 13px; }
+.story__subtitle { display: block; color: #9aa0ab; font-size: 10px; font-style: italic; }
+
+.story__group { display: flex; flex-direction: column; gap: 2px; }
+.story__glabel {
+  font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: #9aa0ab;
+}
+.story__pills { display: flex; gap: 4px; }
+.story__pill {
+  color: #c9cdd5; font-size: 10.5px; padding: 2px 8px; border-radius: 7px;
+  border: 1px solid #3a4150; white-space: nowrap;
+}
+.story__pill:hover { border-color: #9aa0ab; color: #fff; }
+.story__pill.is-on { background: #0f766e; border-color: #0f766e; color: #fff; font-weight: 600; }
+.story__pillnum { opacity: 0.6; font-size: 9.5px; }
+
+.story__nav { margin-left: auto; display: flex; gap: 6px; }
+.story__nav button {
+  color: #e7e4dc; border: 1px solid #3a4150; border-radius: 7px;
+  padding: 2px 12px; font-size: 13px;
+}
+.story__nav button:disabled { opacity: 0.3; cursor: default; }
+.story__nav button:not(:disabled):hover { border-color: #9aa0ab; }
+
+.story__caption {
+  display: flex; align-items: baseline; gap: 12px;
+  background: #2c313b; color: #d6d3cb;
+  padding: 7px 18px;
+  font-family: var(--sans); font-size: 12px; line-height: 1.5;
+  flex-shrink: 0;
+}
+.story__step {
+  font-weight: 700; color: #6ee7db; font-size: 11px; letter-spacing: 0.08em;
+  flex-shrink: 0;
+}
+.story__narration { flex: 1; }
+.story__hint { color: #fbbf24; white-space: nowrap; font-weight: 600; }
+
+/* the scenes fill the rest; the Record inside sizes to the frame */
+.story__scene { flex: 1; min-height: 0; }
+.story__scene .rec { height: 100%; }
+.story__scene .bare { height: 100%; }
+.story__scene .bench, .story__scene .wpanel { height: 100%; }
+
+@media (max-width: 1180px) {
+  .story__subtitle { display: none; }
+  .story__title { margin-right: 0; }
+}

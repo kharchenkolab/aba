@@ -16,13 +16,22 @@
  *  - the prolific/rare asymmetry: a 104-output QC run is ONE sediment line
  *  - focus spectrum: the same machinery renders the p-value visitor's
  *    one-pager (view toggle) — no modes, no minimum thickness
+ *
+ * WORK LOOP (the storyboard's subject): the document is where you stand,
+ * sessions are where you reach. A working panel opens OVER the document,
+ * scoped by where you summoned it (project / question / trail / figure);
+ * runs land in the sediment at launch; session close distills; the
+ * transcript files under its anchor. Renders from World.desk / World.panel /
+ * World.archive — absent in the plain notebook, present in storyboard
+ * scenes.
+ *
+ * The renderer is parameterized over a World (see world.ts): /notebook.html
+ * renders coastalWorld; /workflow.html renders storyboard scenes.
  */
 import { Fragment as F, useMemo, useState, type ReactNode } from 'react'
-import {
-  project, whatsNew, pendingDrafts, claims, sections, trails, looseNotes,
-  sediment, provenance, figureTitles, bench, benchFallback, onePager,
-  type BenchMsg, type Section, type Trail,
-} from './fixture'
+import { type Section, type Trail, type SedimentEntry } from './fixture'
+import { coastalWorld, type World } from './world'
+import WorkPanel from './WorkPanel'
 
 const ART = (id: string) => `/artifacts/coastal/${id}.svg`
 
@@ -33,15 +42,18 @@ const MATURITY_GLYPH: Record<string, string> = {
 // ---------------------------------------------------------------- ref parsing
 
 interface RefCtx {
+  w: World
   openBench: (id: string, label: string) => void
   toggleDisclose: (id: string) => void
   disclosed: Set<string>
   scrollTo: (domId: string) => void
+  openArchive: () => void
 }
 
 /** Render prose with [[kind:id|label]] live references. Block-level
  *  [[figure:id]] tokens are handled by splitBlocks() before this runs. */
 function renderRefs(text: string, ctx: RefCtx): ReactNode[] {
+  const { w } = ctx
   const out: ReactNode[] = []
   const re = /\[\[(fig|claim|run|trail):([^\]|]+)(?:\|([^\]]+))?\]\]/g
   let last = 0, m: RegExpExecArray | null, k = 0
@@ -50,12 +62,12 @@ function renderRefs(text: string, ctx: RefCtx): ReactNode[] {
     const [, kind, id, label] = m
     if (kind === 'fig') {
       out.push(
-        <button key={k++} className="ref ref--fig" title={`${figureTitles[id] ?? id} — click to open the figure and its provenance`}
+        <button key={k++} className="ref ref--fig" title={`${w.figureTitles[id] ?? id} — click to open the figure and its provenance`}
                 onClick={() => ctx.toggleDisclose(id)}>
-          {label ?? figureTitles[id] ?? id}
+          {label ?? w.figureTitles[id] ?? id}
         </button>)
     } else if (kind === 'claim') {
-      const c = claims[id]
+      const c = w.claims[id]
       out.push(
         <button key={k++} className="ref ref--claim"
                 title={c ? `${c.maturity} · ${c.evidence} evidence · caveats: ${c.caveats.join('; ')}` : id}
@@ -71,7 +83,7 @@ function renderRefs(text: string, ctx: RefCtx): ReactNode[] {
           {label ?? id}{id === 'run_holdout' ? <span className="ref__live">▶</span> : null}
         </button>)
     } else if (kind === 'trail') {
-      const t = trails.find(x => x.id === id)
+      const t = w.trails.find(x => x.id === id)
       out.push(
         <button key={k++} className="ref ref--trail" title={t ? `trail: ${t.title} (${t.fragments.length} fragments)` : id}
                 onClick={() => ctx.scrollTo(`el-${id}`)}>
@@ -100,8 +112,8 @@ function splitBlocks(text: string): { kind: 'text' | 'figure'; value: string }[]
 
 // ------------------------------------------------------------- figure + prov
 
-function ProvDrawer({ figId }: { figId: string }) {
-  const p = provenance[figId]
+function ProvDrawer({ figId, ctx }: { figId: string; ctx: RefCtx }) {
+  const p = ctx.w.provenance[figId]
   const [tab, setTab] = useState<'code' | 'params' | 'env' | 'log'>('code')
   if (!p) return null
   return (
@@ -131,44 +143,75 @@ function ProvDrawer({ figId }: { figId: string }) {
 
 function FigureEmbed({ figId, ctx, caption }: { figId: string; ctx: RefCtx; caption?: string }) {
   const open = ctx.disclosed.has(figId)
+  const title = ctx.w.figureTitles[figId] ?? figId
   return (
     <figure className="fig" id={`el-${figId}`}>
-      <img src={ART(figId)} alt={figureTitles[figId] ?? figId} />
+      <img src={ART(figId)} alt={title} />
       <figcaption>
-        <span>{caption ?? figureTitles[figId] ?? figId}</span>
+        <span>{caption ?? title}</span>
         <span className="fig__actions">
           <button onClick={() => ctx.toggleDisclose(figId)} title="the technical record: producing run, code, params, environment, log">
             {open ? 'close ▴' : 'how was this made? ▾'}
           </button>
-          <button onClick={() => ctx.openBench(figId, figureTitles[figId] ?? figId)} title="open the margin bench on this element">
+          <button onClick={() => ctx.openBench(figId, title)} title="open the margin bench on this element">
             ask ✦
           </button>
         </span>
       </figcaption>
-      {open && <ProvDrawer figId={figId} />}
+      {open && <ProvDrawer figId={figId} ctx={ctx} />}
     </figure>
   )
 }
 
 // ------------------------------------------------------------------ sections
 
-function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified }: {
+function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWork }: {
   s: Section; ctx: RefCtx
   methods: boolean; onMethods: () => void
   onRatify: (id: string) => void
   ratified: Set<string>
+  onWork?: (sectionId: string) => void
 }) {
+  const { w } = ctx
   const phaseNote = { early: 'early — mostly noticing', mid: 'mid — condensing', late: 'late — writing up' }[s.phase]
   return (
     <section className="nsec" id={`el-${s.id}`}>
       <div className="nsec__head">
         <h3>{s.question}</h3>
         <span className="nsec__phase" title="phase is per-question, derived from content — a young question in an old project is simply early">{phaseNote}</span>
-        <button className={`nsec__methods ${methods ? 'is-on' : ''}`} onClick={onMethods}
-                title="expand every referenced result into its methods detail — generated from provenance, never hand-maintained">
-          methods mode
-        </button>
+        {s.paragraphs.length > 0 && (
+          <button className={`nsec__methods ${methods ? 'is-on' : ''}`} onClick={onMethods}
+                  title="expand every referenced result into its methods detail — generated from provenance, never hand-maintained">
+            methods mode
+          </button>
+        )}
+        {w.work && (
+          <button className="nsec__work" onClick={() => onWork?.(s.id)}
+                  title="open a working session on this question — the agent starts with the question, its evidence, and its trails already in scope">
+            work ▸
+          </button>
+        )}
       </div>
+      {s.sessions && s.sessions.length > 0 && (
+        <div className="nsec__sessions">
+          {s.sessions.map(x => (
+            <button key={x.label} className="sess" onClick={() => ctx.openArchive()}
+                    title="the raw working exchange, filed under this question — read-only; its products are already in the strata">
+              ⟲ {x.label} · {x.when} · {x.meta} — transcript
+            </button>
+          ))}
+        </div>
+      )}
+      {s.paragraphs.length === 0 && (
+        <div className="nsec__stub">
+          <p>Nothing ratified yet — the story is written from evidence, not ahead of it.</p>
+          {s.open && s.open.length > 0 && (
+            <ul className="nsec__open">
+              {s.open.map(o => <li key={o}>{o}</li>)}
+            </ul>
+          )}
+        </div>
+      )}
       {s.paragraphs.map(p => (
         <div className="npara" key={p.id} id={`el-${p.id}`}>
           {splitBlocks(p.text).map((b, i) =>
@@ -182,9 +225,9 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified }: {
             <div className="npara__methods">
               {extractFigRefs(p.text).map(fid => (
                 <div key={fid} className="npara__method">
-                  <span className="npara__method-fig">{figureTitles[fid] ?? fid}:</span>{' '}
-                  {provenance[fid]
-                    ? `${provenance[fid].runTitle} — ${Object.entries(provenance[fid].params).map(([k, v]) => `${k}=${v}`).join(', ')} · ${provenance[fid].env.packages.join(', ')} · ${provenance[fid].env.fingerprint}`
+                  <span className="npara__method-fig">{w.figureTitles[fid] ?? fid}:</span>{' '}
+                  {w.provenance[fid]
+                    ? `${w.provenance[fid].runTitle} — ${Object.entries(w.provenance[fid].params).map(([k, v]) => `${k}=${v}`).join(', ')} · ${w.provenance[fid].env.packages.join(', ')} · ${w.provenance[fid].env.fingerprint}`
                     : 'no exec record'}
                 </div>
               ))}
@@ -204,7 +247,7 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified }: {
               <div className="addendum__actions">
                 <button className="btn btn--primary" onClick={() => onRatify(a.id)}>Ratify</button>
                 <button className="btn" title="dismissals are remembered">Dismiss</button>
-                <button className="btn" onClick={() => ctx.openBench(a.id, 'addendum — winter contradiction')}>discuss ✦</button>
+                <button className="btn" onClick={() => ctx.openBench(a.id, `addendum — ${s.question}`)}>discuss ✦</button>
               </div>
             )}
           </div>
@@ -248,9 +291,10 @@ function TrailCard({ t, ctx, drafted, onDraft }: {
               {f.text}
               {f.ref && (
                 <button className="ref ref--fig frag__ref" onClick={() => ctx.toggleDisclose(f.ref!)}>
-                  {figureTitles[f.ref] ?? f.ref}
+                  {ctx.w.figureTitles[f.ref] ?? f.ref}
                 </button>
               )}
+              {f.draft && <span className="draftb" title="drafted by the agent during a working session — enters the trail when you ratify it">draft</span>}
             </span>
           </div>
         ))}
@@ -279,7 +323,7 @@ function TrailCard({ t, ctx, drafted, onDraft }: {
 // ------------------------------------------------------------------ sediment
 
 function SedimentRow({ e, ctx, open, onToggle }: {
-  e: (typeof sediment)[number]; ctx: RefCtx; open: boolean; onToggle: () => void
+  e: SedimentEntry; ctx: RefCtx; open: boolean; onToggle: () => void
 }) {
   const ret = {
     kept: { label: `kept ✓${e.site ? ` on ${e.site}` : ''}`, cls: 'ok' },
@@ -287,7 +331,7 @@ function SedimentRow({ e, ctx, open, onToggle }: {
     'at-risk': { label: 'at risk', cls: 'risk' },
   }[e.retention]
   return (
-    <div className={`sed ${e.state === 'failed' ? 'sed--failed' : ''}`} id={`el-${e.id}`}>
+    <div className={`sed ${e.state === 'failed' ? 'sed--failed' : ''} ${e.isNew ? 'sed--new' : ''}`} id={`el-${e.id}`}>
       <button className="sed__line" onClick={onToggle} title={open ? 'collapse' : `expand ${e.nOutputs} outputs`}>
         <span className="sed__date">{e.date}</span>
         <span className={`sed__state sed__state--${e.state}`}>
@@ -297,6 +341,12 @@ function SedimentRow({ e, ctx, open, onToggle }: {
         <span className="sed__verdict">{e.verdict}</span>
         <span className="sed__n">{e.nOutputs > 0 ? `${e.nOutputs} outputs` : ''}</span>
         {e.trailRef && <span className="sed__trail" title={`feeds trail ${e.trailRef}`}>⋱ {e.trailRef}</span>}
+        {e.sessionRef && (
+          <span className="sed__sess" title={`produced in session “${e.sessionRef}” — open the transcript`}
+                onClick={ev => { ev.stopPropagation(); ctx.openArchive() }}>
+            ⟲ {e.sessionRef}
+          </span>
+        )}
         <span className={`sed__ret sed__ret--${ret.cls}`}>{ret.label}</span>
       </button>
       {open && e.shown.length > 0 && (
@@ -323,11 +373,11 @@ function SedimentRow({ e, ctx, open, onToggle }: {
 
 // -------------------------------------------------------------- margin bench
 
-function MarginBench({ target, onClose }: {
-  target: { id: string; label: string }; onClose: () => void
+function MarginBench({ w, target, onClose }: {
+  w: World; target: { id: string; label: string }; onClose: () => void
 }) {
-  const canned = bench[target.id] ?? benchFallback
-  const [extra, setExtra] = useState<BenchMsg[]>([])
+  const canned = w.bench[target.id] ?? w.benchFallback
+  const [extra, setExtra] = useState<{ role: 'you' | 'guide'; text: string }[]>([])
   const [draft, setDraft] = useState('')
   const send = () => {
     if (!draft.trim()) return
@@ -366,42 +416,97 @@ function MarginBench({ target, onClose }: {
 // -------------------------------------------------------------------- search
 
 interface Hit { domId: string; label: string; stratum: string }
-function searchRecord(q: string, scope: 'story' | 'noticed' | 'everything'): Hit[] {
+function searchRecord(w: World, q: string, scope: 'story' | 'noticed' | 'everything'): Hit[] {
   const needle = q.toLowerCase()
   const hits: Hit[] = []
   const has = (s: string) => s.toLowerCase().includes(needle)
   if (scope === 'story' || scope === 'everything') {
-    for (const s of sections) {
+    for (const s of w.sections) {
       for (const p of s.paragraphs) if (has(p.text) || has(s.question)) {
         hits.push({ domId: `el-${p.id}`, label: `${s.question} — §`, stratum: 'story' }); break
       }
-      for (const a of s.addenda) if (has(a.text)) hits.push({ domId: `el-${a.id}`, label: 'addendum (winter contradiction)', stratum: 'story' })
+      for (const a of s.addenda) if (has(a.text)) hits.push({ domId: `el-${a.id}`, label: `addendum (${s.question})`, stratum: 'story' })
     }
   }
   if (scope === 'noticed' || scope === 'everything') {
-    for (const t of trails) if (has(t.title) || t.fragments.some(f => has(f.text)))
+    for (const t of w.trails) if (has(t.title) || t.fragments.some(f => has(f.text)))
       hits.push({ domId: `el-${t.id}`, label: `${t.id} · ${t.title}`, stratum: 'noticed' })
-    for (const n of looseNotes) if (has(n.text))
+    for (const n of w.looseNotes) if (has(n.text))
       hits.push({ domId: `el-note-${n.id}`, label: n.text.slice(0, 48) + '…', stratum: 'noticed' })
   }
   if (scope === 'everything') {
-    for (const e of sediment) if (has(e.title) || has(e.verdict))
+    for (const e of w.sediment) if (has(e.title) || has(e.verdict))
       hits.push({ domId: `el-${e.id}`, label: `${e.date} · ${e.title}`, stratum: 'sediment' })
   }
   return hits.slice(0, 8)
 }
 
+// ----------------------------------------------------------------- desk strip
+
+function DeskStrip({ w, onOpenArchive }: { w: World; onOpenArchive: () => void }) {
+  const d = w.desk!
+  return (
+    <div className="desk" title="the present tense: open sessions, running work, where you left off">
+      <span className="desk__kicker">at the desk</span>
+      <span className="desk__line">{d.line}</span>
+      {d.items.map(i => (
+        <button key={i.label} className={`desk__item ${i.live ? 'is-live' : ''}`}
+                onClick={() => { if (w.archive) onOpenArchive() }}>
+          {i.live ? '▶ ' : ''}{i.label}
+          <span className="desk__meta"> · {i.meta}</span>
+          {i.action && <span className="desk__act"> {i.action}</span>}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+// ------------------------------------------------------------------ day zero
+
+/** The day-0 face: a new project is a composer, not a document. */
+function BareStart({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void }) {
+  const [draft, setDraft] = useState('')
+  return (
+    <div className="bare">
+      <div className="bare__box">
+        <h1>{w.project.title}</h1>
+        <div className="bare__sub">a record co-written by you and Guide · started today</div>
+        <div className="bare__composer">
+          <input autoFocus value={draft}
+                 placeholder="What are we working with? Describe the study, point at data, or ask the first question…"
+                 onChange={e => setDraft(e.target.value)}
+                 onKeyDown={e => { if (e.key === 'Enter') onAdvance?.('start') }} />
+          <button className="btn btn--primary" onClick={() => onAdvance?.('start')}>begin ↑</button>
+        </div>
+        <div className="bare__note">
+          There is nothing to set up and nothing to fill in. The document will build
+          itself from the work — the first run lands in the sediment the moment it
+          launches, notes accrete as you notice things, and the story is written
+          from evidence later. This box is the whole interface.
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ---------------------------------------------------------------------- root
 
-export default function Record() {
+export default function Record(props: { world?: World; onAdvance?: (t: string) => void }) {
+  const w = props.world ?? coastalWorld
+  if (w.bare) return <BareStart w={w} onAdvance={props.onAdvance} />
+  return <RecordDoc w={w} onAdvance={props.onAdvance} />
+}
+
+function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void }) {
   const [benchFor, setBenchFor] = useState<{ id: string; label: string } | null>(null)
+  const [archOpen, setArchOpen] = useState(false)
   const [disclosed, setDisclosed] = useState<Set<string>>(new Set())
   const [methodsOn, setMethodsOn] = useState<Set<string>>(new Set())
-  const [openSed, setOpenSed] = useState<Set<string>>(new Set(['run_qc']))
+  const [openSed, setOpenSed] = useState<Set<string>>(new Set(w.openSediment ?? []))
   const [ratified, setRatified] = useState<Set<string>>(new Set())
   const [drafted, setDrafted] = useState<Set<string>>(new Set())
   const [view, setView] = useState<'record' | 'onepager'>(
-    () => new URLSearchParams(window.location.search).get('view') === 'onepager' ? 'onepager' : 'record')
+    () => new URLSearchParams(window.location.search).get('view') === 'onepager' && w.onePager ? 'onepager' : 'record')
   const [newOpen, setNewOpen] = useState(false)
   const [q, setQ] = useState('')
   const [scope, setScope] = useState<'story' | 'noticed' | 'everything'>('everything')
@@ -410,9 +515,10 @@ export default function Record() {
   // TOC tracks the reader's position: the anchor nearest above the upper
   // third of the document column is "where you are".
   const ANCHORS = [
-    ...sections.map(s => `el-${s.id}`),
-    ...trails.map(t => `el-${t.id}`),
-    'el-loose', 'el-sediment',
+    ...w.sections.map(s => `el-${s.id}`),
+    ...w.trails.map(t => `el-${t.id}`),
+    ...(w.looseNotes.length ? ['el-loose'] : []),
+    'el-sediment',
   ]
   const onDocScroll = (e: React.UIEvent<HTMLElement>) => {
     const doc = e.currentTarget
@@ -436,18 +542,21 @@ export default function Record() {
     const n = new Set(set); if (n.has(id)) n.delete(id); else n.add(id); return n
   }
   const ctx: RefCtx = {
+    w,
     openBench: (id, label) => setBenchFor({ id, label }),
     toggleDisclose: id => setDisclosed(s => toggle(s, id)),
     disclosed,
     scrollTo,
+    openArchive: () => { if (w.archive) setArchOpen(true) },
   }
-  const hits = useMemo(() => (q.trim() ? searchRecord(q, scope) : []), [q, scope])
-  const behindLine = pendingDrafts > 0
-    ? `${pendingDrafts} drafts waiting — the record is ~${Math.max(1, Math.round(pendingDrafts * 1.2))} days behind the work`
+  const hits = useMemo(() => (q.trim() ? searchRecord(w, q, scope) : []), [w, q, scope])
+  const behindLine = w.pendingDrafts > 0
+    ? `${w.pendingDrafts} draft${w.pendingDrafts === 1 ? '' : 's'} waiting — the record is ~${Math.max(1, Math.round(w.pendingDrafts * 1.2))} day${Math.round(w.pendingDrafts * 1.2) === 1 ? '' : 's'} behind the work`
     : 'the record is current'
 
   // ------------------------------------------------ one-pager (§2.4)
-  if (view === 'onepager') {
+  if (view === 'onepager' && w.onePager) {
+    const op = w.onePager
     return (
       <div className="rec rec--onepager">
         <main className="doc doc--onepager">
@@ -455,15 +564,15 @@ export default function Record() {
             <button className="btn" onClick={() => setView('record')}>← full record</button>
             <span className="doc__viewnote">the p-value visitor's render — same machinery, thin project; nothing was imposed to get here</span>
           </div>
-          <h1>{project.title}</h1>
-          <p className="op__data"><b>Data.</b> {onePager.dataLine}</p>
-          <p className="op__method"><b>Method.</b> {onePager.methodLine}</p>
-          <div className="op__number">{onePager.number}</div>
-          <p className="op__caveat"><b>Caveat.</b> {onePager.caveat}</p>
-          <div className="op__sig">assembled from the record · {sediment.length} runs in the sediment appendix · print and take it to the meeting</div>
+          <h1>{w.project.title}</h1>
+          <p className="op__data"><b>Data.</b> {op.dataLine}</p>
+          <p className="op__method"><b>Method.</b> {op.methodLine}</p>
+          <div className="op__number">{op.number}</div>
+          <p className="op__caveat"><b>Caveat.</b> {op.caveat}</p>
+          <div className="op__sig">assembled from the record · {w.sediment.length} runs in the sediment appendix · print and take it to the meeting</div>
           <section className="op__appendix">
             <h2>Sediment appendix</h2>
-            {sediment.map(e => (
+            {w.sediment.map(e => (
               <div key={e.id} className="op__sedline">
                 <span className="sed__date">{e.date}</span> {e.title} — {e.verdict}
               </div>
@@ -474,40 +583,55 @@ export default function Record() {
     )
   }
 
+  // right column: the margin bench wins (same instrument, narrower scope);
+  // otherwise an archived transcript if opened; otherwise the live session.
+  const rightPanel = benchFor
+    ? <MarginBench w={w} key={`b-${benchFor.id}`} target={benchFor} onClose={() => setBenchFor(null)} />
+    : archOpen && w.archive
+      ? <WorkPanel key="arch" panel={w.archive} onClose={() => setArchOpen(false)} />
+      : w.panel
+        ? <WorkPanel key="live" panel={w.panel} onAdvance={onAdvance} />
+        : null
+  const recCls = benchFor ? 'rec rec--bench' : rightPanel ? 'rec rec--work' : 'rec'
+
   return (
-    <div className={`rec ${benchFor ? 'rec--bench' : ''}`}>
+    <div className={recCls}>
       {/* ---------- contents rail ---------- */}
       <nav className="toc">
         <div className="toc__title">The Record</div>
-        <div className="toc__project">{project.title}</div>
-        <div className="toc__since">since {project.started.slice(0, 7)}</div>
+        <div className="toc__project">{w.project.title}</div>
+        <div className="toc__since">since {w.project.started.slice(0, 7)}</div>
 
-        <div className="toc__group">story so far</div>
-        {sections.map(s => (
+        {w.sections.length > 0 && <div className="toc__group">story so far</div>}
+        {w.sections.map(s => (
           <button key={s.id} className={`toc__item ${activeAnchor === `el-${s.id}` ? 'is-active' : ''}`} onClick={() => scrollTo(`el-${s.id}`)}>
             <span className={`toc__phase toc__phase--${s.phase}`} />
             {s.question}
           </button>
         ))}
-        <div className="toc__group">field notes</div>
-        {trails.map(t => (
+        {(w.trails.length > 0 || w.looseNotes.length > 0) && <div className="toc__group">field notes</div>}
+        {w.trails.map(t => (
           <button key={t.id} className={`toc__item ${activeAnchor === `el-${t.id}` ? 'is-active' : ''}`} onClick={() => scrollTo(`el-${t.id}`)}>
             <span className="toc__trail">⋱</span> {t.id} · {t.title}
           </button>
         ))}
-        <button className={`toc__item ${activeAnchor === 'el-loose' ? 'is-active' : ''}`} onClick={() => scrollTo('el-loose')}>
-          <span className="toc__trail">·</span> loose notes
-        </button>
+        {w.looseNotes.length > 0 && (
+          <button className={`toc__item ${activeAnchor === 'el-loose' ? 'is-active' : ''}`} onClick={() => scrollTo('el-loose')}>
+            <span className="toc__trail">·</span> loose notes
+          </button>
+        )}
         <div className="toc__group">sediment</div>
         <button className={`toc__item ${activeAnchor === 'el-sediment' ? 'is-active' : ''}`} onClick={() => scrollTo('el-sediment')}>
-          {sediment.length} runs · complete · automatic
+          {w.sediment.length} run{w.sediment.length === 1 ? '' : 's'} · complete · automatic
         </button>
 
         <div className="toc__spacer" />
-        <button className="toc__onepager" onClick={() => setView('onepager')}
-                title="the same record rendered for the one-number visitor (§ focus spectrum)">
-          view as one-pager
-        </button>
+        {w.onePager && (
+          <button className="toc__onepager" onClick={() => setView('onepager')}
+                  title="the same record rendered for the one-number visitor (§ focus spectrum)">
+            view as one-pager
+          </button>
+        )}
         <div className="toc__search">
           <input value={q} onChange={e => setQ(e.target.value)} placeholder="search the record…" />
           <div className="toc__scopes">
@@ -533,85 +657,101 @@ export default function Record() {
       {/* ---------- the document ---------- */}
       <main className="doc" onScroll={onDocScroll}>
         <header className="doc__head">
-          <h1>{project.title}</h1>
+          <h1>{w.project.title}</h1>
           <div className="doc__sub">
             a record co-written by you and Guide · narrative is yours to ratify · sediment keeps itself
           </div>
         </header>
 
+        {/* the present tense: open sessions, where you left off */}
+        {w.desk && <DeskStrip w={w} onOpenArchive={() => setArchOpen(true)} />}
+
         {/* what's new */}
-        <section className={`wnew ${newOpen ? 'is-open' : ''}`}>
-          <button className="wnew__head" onClick={() => setNewOpen(o => !o)}>
-            <span className="wnew__count">what's new since {whatsNew.since} · {whatsNew.items.length}</span>
-            <span className="wnew__peek">
-              {whatsNew.items.filter(i => i.loud || i.live).map((i, k) => (
-                <span key={k} className={`wnew__chip ${i.loud ? 'is-loud' : ''} ${i.live ? 'is-live' : ''}`}>
-                  {i.live ? '▶ ' : i.loud ? '⚡ ' : ''}
-                  {i.loud ? 'contradiction — R12 opposes R9' : i.text.split(' — ')[0]}
-                </span>
-              ))}
-            </span>
-            <span className="wnew__behind" title="degradation is visible and recoverable, never silent rot">{behindLine}</span>
-            <span>{newOpen ? '▾' : '▸'}</span>
-          </button>
-          {newOpen && (
-            <div className="wnew__body">
-              {whatsNew.items.map((i, k) => (
-                <div key={k} className={`wnew__item ${i.loud ? 'is-loud' : ''}`}>
-                  <span className="wnew__ts">{i.ts}</span>{i.text}
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
+        {w.whatsNew && (
+          <section className={`wnew ${newOpen ? 'is-open' : ''}`}>
+            <button className="wnew__head" onClick={() => setNewOpen(o => !o)}>
+              <span className="wnew__count">what's new since {w.whatsNew.since} · {w.whatsNew.items.length}</span>
+              <span className="wnew__peek">
+                {w.whatsNew.items.filter(i => i.loud || i.live).map((i, k) => (
+                  <span key={k} className={`wnew__chip ${i.loud ? 'is-loud' : ''} ${i.live ? 'is-live' : ''}`}>
+                    {i.live ? '▶ ' : i.loud ? '⚡ ' : ''}
+                    {i.loud ? 'contradiction — R12 opposes R9' : i.text.split(' — ')[0]}
+                  </span>
+                ))}
+              </span>
+              <span className="wnew__behind" title="degradation is visible and recoverable, never silent rot">{behindLine}</span>
+              <span>{newOpen ? '▾' : '▸'}</span>
+            </button>
+            {newOpen && (
+              <div className="wnew__body">
+                {w.whatsNew.items.map((i, k) => (
+                  <div key={k} className={`wnew__item ${i.loud ? 'is-loud' : ''}`}>
+                    <span className="wnew__ts">{i.ts}</span>{i.text}
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
 
         {/* ---------- stratum 1: narrative ---------- */}
-        <div className="stratum">
-          <div className="stratum__rule"><span>the story so far</span><em>ratified · sparse · load-bearing</em></div>
-          {sections.map(s => (
-            <NarrativeSection key={s.id} s={s} ctx={ctx}
-              methods={methodsOn.has(s.id)}
-              onMethods={() => setMethodsOn(x => toggle(x, s.id))}
-              onRatify={id => setRatified(x => new Set(x).add(id))}
-              ratified={ratified} />
-          ))}
-        </div>
+        {w.sections.length > 0 && (
+          <div className="stratum">
+            <div className="stratum__rule"><span>the story so far</span><em>ratified · sparse · load-bearing</em></div>
+            {w.sections.map(s => (
+              <NarrativeSection key={s.id} s={s} ctx={ctx}
+                methods={methodsOn.has(s.id)}
+                onMethods={() => setMethodsOn(x => toggle(x, s.id))}
+                onRatify={id => setRatified(x => new Set(x).add(id))}
+                ratified={ratified}
+                onWork={id => onAdvance?.(`work:${id}`)} />
+            ))}
+          </div>
+        )}
 
         {/* ---------- stratum 2: field notes & trails ---------- */}
-        <div className="stratum">
-          <div className="stratum__rule"><span>field notes & trails</span><em>noticed ≠ believed · cheap · revisable</em></div>
-          {trails.map(t => (
-            <TrailCard key={t.id} t={t} ctx={ctx}
-              drafted={drafted.has(t.id)}
-              onDraft={() => setDrafted(x => new Set(x).add(t.id))} />
-          ))}
-          <div className="loose" id="el-loose">
-            {looseNotes.map(n => (
-              <div key={n.id} className="lnote" id={`el-note-${n.id}`}>
-                <span className="lnote__ts">{n.ts}</span>
-                <span className={`lnote__who lnote__who--${n.origin}`}>{n.origin === 'guide' ? '✦ Guide' : 'you'}</span>
-                <span className="lnote__text">
-                  {n.text}
-                  {n.ref && (
-                    <button className="ref ref--fig frag__ref" onClick={() => ctx.toggleDisclose(n.ref!)}>
-                      {figureTitles[n.ref] ?? n.ref}
-                    </button>
-                  )}
-                </span>
+        {(w.trails.length > 0 || w.looseNotes.length > 0) && (
+          <div className="stratum">
+            <div className="stratum__rule"><span>field notes & trails</span><em>noticed ≠ believed · cheap · revisable</em></div>
+            {w.trails.map(t => (
+              <TrailCard key={t.id} t={t} ctx={ctx}
+                drafted={drafted.has(t.id)}
+                onDraft={() => setDrafted(x => new Set(x).add(t.id))} />
+            ))}
+            {w.looseNotes.length > 0 && (
+              <div className="loose" id="el-loose">
+                {w.looseNotes.map(n => (
+                  <div key={n.id} className="lnote" id={`el-note-${n.id}`}>
+                    <span className="lnote__ts">{n.ts}</span>
+                    <span className={`lnote__who lnote__who--${n.origin}`}>{n.origin === 'guide' ? '✦ Guide' : 'you'}</span>
+                    <span className="lnote__text">
+                      {n.text}
+                      {n.ref && (
+                        <button className="ref ref--fig frag__ref" onClick={() => ctx.toggleDisclose(n.ref!)}>
+                          {w.figureTitles[n.ref] ?? n.ref}
+                        </button>
+                      )}
+                      {n.draft && <span className="draftb" title="drafted by the agent during a working session — not yet ratified">draft</span>}
+                    </span>
+                  </div>
+                ))}
+                {w.looseNotes.map(n => n.ref && disclosed.has(n.ref) && (
+                  <FigureEmbed key={n.ref} figId={n.ref} ctx={ctx} />
+                ))}
+                <div className="loose__sweep">free-floating notes get a weekly file-or-fade sweep — attach to a trail, a question, or let them fade</div>
               </div>
-            ))}
-            {looseNotes.map(n => n.ref && disclosed.has(n.ref) && (
-              <FigureEmbed key={n.ref} figId={n.ref} ctx={ctx} />
-            ))}
-            <div className="loose__sweep">free-floating notes get a weekly file-or-fade sweep — attach to a trail, a question, or let them fade</div>
+            )}
           </div>
-        </div>
+        )}
 
         {/* ---------- stratum 3: sediment ---------- */}
         <div className="stratum" id="el-sediment">
           <div className="stratum__rule"><span>sediment</span><em>every run · one line each · nothing lost, nothing demands reading</em></div>
+          {w.sediment.length === 0 && (
+            <div className="sed-empty">nothing has run yet — the first run writes the first line</div>
+          )}
           <div className="sed-list">
-            {sediment.map(e => (
+            {w.sediment.map(e => (
               <SedimentRow key={e.id} e={e} ctx={ctx}
                 open={openSed.has(e.id)}
                 onToggle={() => setOpenSed(x => toggle(x, e.id))} />
@@ -628,10 +768,10 @@ export default function Record() {
         </footer>
       </main>
 
-      {/* ---------- margin bench ---------- */}
+      {/* ---------- right margin: bench / working session / transcript ---------- */}
       {/* keyed by anchor: each element's margin conversation is its own —
           switching targets must never carry the previous exchange along */}
-      {benchFor && <MarginBench key={benchFor.id} target={benchFor} onClose={() => setBenchFor(null)} />}
+      {rightPanel}
     </div>
   )
 }
