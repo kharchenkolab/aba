@@ -872,6 +872,28 @@ def _is_kernel_target(t) -> bool:
     return isinstance(t, str) and t.startswith("krn_")
 
 
+def _safe_join(base: Optional[str], rel: str) -> Optional[str]:
+    """Join a caller-controlled `rel` under `base`, refusing escapes: an absolute
+    `rel` or any `..` segment is rejected, and the normalized candidate must stay
+    under `base`. Returns the joined path, or None on rejection — NEVER raises into
+    a route. Pure lexical (normpath), so it is valid for a remote abs path (a
+    kernel sandbox) as well as a local cache dir. Callers must treat None as
+    'refuse' (no cache read, no cache write, no fetch)."""
+    import os as _os
+    if not base or not rel:
+        return None
+    r = str(rel).replace("\\", "/")
+    if r.startswith("/") or _os.path.isabs(r):
+        return None
+    if any(seg == ".." for seg in r.split("/")):
+        return None
+    baser = _os.path.normpath(base)
+    cand = _os.path.normpath(_os.path.join(baser, r))
+    if cand != baser and not cand.startswith(baser + _os.sep):
+        return None
+    return cand
+
+
 @lru_cache(maxsize=32)
 def _site_root(site: str) -> Optional[str]:
     """A registered site's weft root abs path (from its capabilities/config) —
@@ -890,26 +912,30 @@ def _kernel_abs_path(target: str, site: str, rel: str) -> Optional[str]:
     (`<root>/kernels/<kernel_id>/<rel>`) — the handle the data-plane
     (`register_source → fetch`) needs to bring a store/large file home from an
     OPEN run (the retain lane defers on a live kernel; the read lane caps at
-    8 MB). None when the site root is unknown or the target isn't a kernel."""
+    8 MB). None when the site root is unknown, the target isn't a kernel, or
+    `rel` escapes the kernel sandbox (absolute / `..` — the normpath must stay
+    under `<root>/kernels/<target>/`)."""
     if not _is_kernel_target(target):
         return None
     root = _site_root(site)
     if not root:
         return None
-    return f"{root.rstrip('/')}/kernels/{target}/{rel}"
+    return _safe_join(f"{root.rstrip('/')}/kernels/{target}", rel)
 
 
-def _data_plane_fetch(abs_path: str, site: str, dest: str) -> bool:
+def _data_plane_fetch(abs_path: str, site: str, dest: str,
+                      *, force: bool = False) -> bool:
     """Bring a remote abs path (file or directory) home to `dest` over the
     datasets data-plane (`register_source → fetch`) — one transfer, all sizes,
-    size-gated by the same `FETCH_GUARDRAIL_BYTES` fetch enforces. True on a
-    complete local copy. The transport datasets already use; not a new one."""
+    size-gated by the same `FETCH_GUARDRAIL_BYTES` fetch enforces (`force=True`
+    bypasses that gate for an explicit forced bring-back). True on a complete
+    local copy. The transport datasets already use; not a new one."""
     try:
         import os as _os
         from core.data import datasets as _ds
         _os.makedirs(_os.path.dirname(dest) or ".", exist_ok=True)
         meta = _ds.register_source(abs_path, site=site)
-        res = _ds.fetch(meta, dest)
+        res = _ds.fetch(meta, dest, force=force)
         return bool(res.get("ok")) and _os.path.exists(dest)
     except Exception as e:  # noqa: BLE001
         _log.debug("_data_plane_fetch(%s@%s) failed: %s", abs_path, site, e)
@@ -982,26 +1008,15 @@ def _run_remote_targets(run_id: str) -> list:
     return out
 
 
-def _remote_locate(run_id: str, rel: str) -> Optional[tuple]:
-    """`(target, site, size)` for a single Run FILE whose bytes live on a
-    NON-local site, or None — confirms existence + size with `file_stat`
-    (live-aware for an open kernel). Never raises."""
-    for t, site in _run_remote_targets(run_id):
-        st = _live_file_stat(t, rel)
-        if st.get("exists"):
-            return (t, site, st.get("bytes"))
-    return None
-
-
 def run_output_site(run_id: str, rel: str) -> Optional[str]:
     """The site where a Run output's bytes live, when that is NOT this controller —
     for honest "on <site>" messaging in the serving routes. None when the file is
     local, unknown, or the substrate is unreachable. Best-effort, never raises."""
     try:
-        hit = _remote_locate(run_id, rel)
+        loc = locate_run_output(run_id, rel)
     except Exception:  # noqa: BLE001
         return None
-    return hit[1] if hit else None
+    return loc["site"] if loc and loc.get("locality") == "remote" else None
 
 
 def _fetched_cache_dir(run_id: str):
@@ -1015,98 +1030,25 @@ def _fetched_cache_dir(run_id: str):
     return scratch_dir(pid, f"{run_id}-fetched")
 
 
-def _fetch_remote_file(run_id: str, rel: str, target: str,
-                       size: Optional[int]) -> Optional[str]:
-    """Fetch one remote Run file's bytes to the local cache and return the path,
-    or None. Small files (≤ the 8 MB preview cap) ride the `file_read` channel;
-    larger ones (≤ the transparent 50 MB gate) travel the data plane via
-    `retention.retain(dest="@workspace")` — the same location-axis copy bring-back
-    uses. Cache-hit is checked by the caller before we ever fetch."""
-    import os as _os
-    from core.compute import retention
-    dest = _os.path.join(str(_fetched_cache_dir(run_id)), rel)
-    _os.makedirs(_os.path.dirname(dest) or ".", exist_ok=True)
-    if size is not None and size <= _PREVIEW_CAP:
-        try:
-            rd = retention.file_read(target, rel, max_bytes=_PREVIEW_CAP)
-        except Exception:  # noqa: BLE001
-            return None
-        b64 = rd.get("bytes_b64")
-        if b64 is None or rd.get("truncated"):
-            return None
-        import base64
-        with open(dest, "wb") as fh:
-            fh.write(base64.b64decode(b64))
-        return dest
-    # 8–50 MB: location-axis copy into the local workspace, then read it back.
-    try:
-        res = retention.retain(target, include=[rel], dest="@workspace",
-                               label=run_id, background=False)
-    except Exception:  # noqa: BLE001
-        return None
-    loc = retention.location_path(res)
-    if not loc:
-        return None
-    for cand in (_os.path.join(loc, rel), _os.path.join(loc, rel.rsplit("/", 1)[-1])):
-        real = _os.path.realpath(cand)
-        if _os.path.isfile(real):
-            return real
-    return None
-
-
 def resolve_run_file(run_id: str, rel: str) -> Optional[str]:
-    """Absolute on-disk path for one of a Run's files, resolved across tiers
-    (misc/output_durability.md §6.2): weft's retained tree (a `done` row's
-    `location`) first, then the live sandbox (`artifact_path`), then — when the
-    bytes live on a NON-local site — a size-gated fetch of a local copy into the
-    `<run_id>-fetched` cache (fetch-on-open == bring-a-copy-home). Files above the
-    transparent 50 MB gate stay remote (None → the /file route reports "on <site>,
-    bring it home"). None if not resolvable. Rejects path escapes on every base;
-    all remote failures degrade to None, never raise into the caller."""
-    import os as _os
-    from core.compute import retention
+    """Absolute on-disk path for one of a Run's FILES at its EXACT rel — the
+    serve/archive policy over the canonical pair: `locate_run_output`
+    (match="exact" — a same-named file elsewhere must never answer a /file
+    request) + a transparent `materialize_run_output` under the request-blocking
+    gate (`_MAX_HARVEST_BYTES` — these surfaces block an HTTP request on the
+    fetch, so their budget is small). Files above the gate — and of UNKNOWN
+    size — stay remote (None → the route names the site honestly). Never
+    raises."""
     from core.exec.run import _MAX_HARVEST_BYTES
-
-    def _under(base: Optional[str]) -> Optional[str]:
-        if not base:
-            return None
-        baser = _os.path.realpath(base)
-        cand = _os.path.realpath(_os.path.join(baser, rel))
-        if (cand == baser or cand.startswith(baser + _os.sep)) and _os.path.isfile(cand):
-            return cand
-        return None
-
     try:
-        for row in (retention.retained(label=run_id) or []):
-            if row.get("state") != "done":
-                continue
-            hit = _under(retention.location_path(row))
-            if hit:
-                return hit
-    except Exception as e:  # noqa: BLE001
-        _log.warning("resolve_run_file: retained() failed for %s: %s", run_id, e)
-    ent = get_entity(run_id)
-    local = _under((ent or {}).get("artifact_path"))
-    if local:
-        return local
-    # Remote tier — only when the local tiers missed AND the index/live sandbox
-    # place the file on a non-local site. Transparent below the fetch-on-open gate;
-    # bigger outputs are left for the route to name honestly.
-    try:
-        hit = _remote_locate(run_id, rel)
-        if not hit:
+        loc = locate_run_output(run_id, rel, match="exact")
+        if not loc or loc.get("kind") != "file":
             return None
-        target, _site, size = hit
-        # cache-hit BEFORE fetching: a prior open already brought it home.
-        cached = _os.path.join(str(_fetched_cache_dir(run_id)), rel)
-        if _os.path.isfile(cached) and (size is None or _os.path.getsize(cached) == size):
-            return cached
-        if size is not None and size > _MAX_HARVEST_BYTES:
-            return None                       # too big to pull transparently
-        return _fetch_remote_file(run_id, rel, target, size)
-    except Exception as e:  # noqa: BLE001 — remote tier degrades to the local result
-        _log.debug("resolve_run_file: remote tier failed for %s/%s: %s",
-                   run_id, rel, e)
+        if loc.get("local_path"):
+            return loc["local_path"]
+        return materialize_run_output(loc, max_bytes=_MAX_HARVEST_BYTES)
+    except Exception as e:  # noqa: BLE001 — a resolver must degrade, not raise
+        _log.debug("resolve_run_file failed for %s/%s: %s", run_id, rel, e)
         return None
 
 
@@ -1249,22 +1191,40 @@ def _sidecar_resolve(loc: str, name: str) -> Optional[str]:
     return None
 
 
-def resolve_output(run_id: str, name: str) -> Optional[dict]:
-    """P3 serving facade: resolve a Run output (FILE or DIRECTORY store) matching
-    `name` (basename or rel) across tiers, catalog-first —
+def locate_run_output(run_id: str, name: str, *, match: str = "name",
+                      remote: bool = True) -> Optional[dict]:
+    """THE canonical Run-output resolver: answers WHERE an output lives and how
+    big it is, and NEVER moves bytes — a lookup must not transfer; only
+    `materialize_run_output` (the one mover) may, on an action surface's
+    explicit budget. Every consumption surface (serve, list, view, render,
+    download) resolves through here, so the local-or-remote decision has
+    exactly one home.
 
-        {local_path, rel, root, locality, durability, kind}
+        {run_id, rel, kind: "file"|"dir", locality: "local"|"remote",
+         local_path, root, durability, site, target, size, mtime, digest}
 
-    Tiers, in order: weft retained tree (`done` rows — resolved from the catalog
-    sidecar, walk only as fallback; durability="retained") → the live weft jobdir(s)
-    (durability="live"; `rel` is sandbox-relative, i.e. retain-include ready) → the
-    run sandbox `artifact_path` (jupyter / non-weft; durability="scratch").
-    `locality` is hard-wired "local" until the remote arms (P6). `kind` is
-    "dir" | "file". Escape-safe on every tier. None when not locally resolvable
-    (in-sandbox on a REMOTE site, or swept). aba serves IN PLACE from `local_path`
-    — weft is the system of record; nothing here copies bytes."""
+    LOCAL tiers first (bytes on this machine → `local_path` set, site "local"),
+    catalog-first: weft retained tree (`done` rows; durability="retained") →
+    the live weft jobdir(s) ("live"; `rel` is sandbox-relative, retain-include
+    ready) → the run sandbox `artifact_path` ("scratch") → weft's own
+    (run, rel) key (`run_file_stat.abs_path` — catches keeps under another
+    label / moved by PLACE; exact-rel, weft confines traversal). Then the
+    REMOTE tier: the Run's non-local targets, confirmed by live-aware
+    `file_stat` (a file) or inventory membership (a directory store) —
+    `local_path` None, `size` None when unknown/truncated (readers treat that
+    as too-big-to-move), `digest` the store's freshness identity (hashed
+    member path/bytes/mtime — the same idiom as the data-plane fingerprint).
+
+    `match="name"` resolves a logical name (exact rel, then store-dir prefix,
+    then basename — the viewer/lookup semantic); `match="exact"` joins the
+    exact rel only (the serve/archive/keep semantic — a same-named file
+    elsewhere must NOT answer). `remote=False` skips the remote tier (for a
+    bounded scan's cheap local pass). Escape-safe on every tier; never
+    raises."""
     import os as _os
     from core.compute import retention
+    ent = get_entity(run_id)
+    md = (ent or {}).get("metadata") or {}
     tiers: list = []                                   # (root, durability, catalog_first)
     try:
         for row in (retention.retained(label=run_id) or []):
@@ -1273,56 +1233,113 @@ def resolve_output(run_id: str, name: str) -> Optional[dict]:
                 if loc:
                     tiers.append((loc, "retained", True))
     except Exception as e:  # noqa: BLE001
-        _log.debug("resolve_output: retained() failed for %s: %s", run_id, e)
+        _log.debug("locate_run_output: retained() failed for %s: %s", run_id, e)
     tiers.extend((d, "live", False) for d in _run_jobdirs(run_id))
-    ent = get_entity(run_id)
     ap = (ent or {}).get("artifact_path")
     if ap:
         tiers.append((ap, "scratch", False))           # jupyter / non-weft fallback
+
+    def _exact_under(root: str) -> Optional[str]:
+        baser = _os.path.realpath(root)
+        cand = _os.path.realpath(_os.path.join(baser, name))
+        if (cand == baser or cand.startswith(baser + _os.sep)) and _os.path.exists(cand):
+            return cand
+        return None
+
     for root, durability, catalog_first in tiers:
-        hit = (_sidecar_resolve(root, name) if catalog_first else None) \
-            or _search_root_for(root, name)
+        if match == "exact":
+            hit = _exact_under(root)
+        else:
+            hit = (_sidecar_resolve(root, name) if catalog_first else None) \
+                or _search_root_for(root, name)
         if hit:
             rootr = _os.path.realpath(root)
-            return {"local_path": hit,
+            isdir = _os.path.isdir(hit)
+            size = None
+            if not isdir:
+                try:
+                    size = _os.path.getsize(hit)
+                except OSError:
+                    size = None
+            return {"run_id": run_id,
                     "rel": _os.path.relpath(hit, rootr).replace(_os.sep, "/"),
-                    "root": rootr,
-                    "locality": "local",
+                    "root": rootr, "local_path": hit,
+                    "locality": "local", "site": "local",
                     "durability": durability,
-                    "kind": "dir" if _os.path.isdir(hit) else "file"}
+                    "kind": "dir" if isdir else "file",
+                    "size": size, "mtime": None, "target": None, "digest": None}
     # retention2 fallback: the (run, relpath) KEY, resolved by weft itself
-    # (run_file_stat answers sandbox-or-keep with `at`) — catches states the
-    # tier walk misses: kernel row gone, keep under a different label, keep
-    # moved by PLACE. Exact-rel only; weft confines traversal to the jobdir.
+    # (run_file_stat answers sandbox-or-keep with `at` + a LOCAL abs_path).
     try:
         from core.compute.adapter import get_compute
         comp = get_compute()
-        for t2 in ((ent or {}).get("metadata") or {}).get("weft_targets") or []:
+        for t2 in md.get("weft_targets") or []:
             st = comp.sync_call("run_file_stat", t2, name)
             pth = st.get("abs_path")
             if st.get("exists") and pth and _os.path.exists(pth):
                 real = _os.path.realpath(pth)
-                return {"local_path": real,
-                        "rel": name,
-                        "root": _os.path.dirname(real),
-                        "locality": "local",
+                return {"run_id": run_id, "rel": name,
+                        "root": _os.path.dirname(real), "local_path": real,
+                        "locality": "local", "site": "local",
                         "durability": ("retained" if st.get("at") == "retained"
                                        else "live"),
-                        "kind": "dir" if _os.path.isdir(real) else "file"}
+                        "kind": "dir" if _os.path.isdir(real) else "file",
+                        "size": st.get("bytes"), "mtime": st.get("mtime"),
+                        "target": t2, "digest": None}
     except Exception as e:  # noqa: BLE001 — a fallback must stay a fallback
-        _log.debug("resolve_output (run,rel) fallback failed for %s: %s",
+        _log.debug("locate_run_output (run,rel) fallback failed for %s: %s",
                    run_id, e)
+    if not remote:
+        return None
+    # REMOTE tier — the bytes exist, on a non-local site. Locate-only:
+    # existence + size + freshness identity; never a transfer.
+    try:
+        for target, site in _run_remote_targets(run_id):
+            st = _live_file_stat(target, name)
+            if st.get("exists"):
+                return {"run_id": run_id, "rel": name,
+                        "root": None, "local_path": None,
+                        "locality": "remote", "site": site,
+                        "durability": ("retained" if st.get("at") == "retained"
+                                       else "live" if _is_kernel_target(target)
+                                       else "scratch"),
+                        "kind": "file", "size": st.get("bytes"),
+                        "mtime": st.get("mtime"), "target": target,
+                        "digest": _file_digest(st.get("bytes"), st.get("mtime"))}
+            mem = _store_members(target, name)
+            if mem:
+                return {"run_id": run_id, "rel": name,
+                        "root": None, "local_path": None,
+                        "locality": "remote", "site": site,
+                        "durability": ("live" if _is_kernel_target(target)
+                                       else "scratch"),
+                        "kind": "dir",
+                        "size": (None if mem["truncated"]
+                                 else mem["total_bytes"]),
+                        "mtime": None, "target": target,
+                        "digest": mem["digest"]}
+    except Exception as e:  # noqa: BLE001 — the remote tier degrades to None
+        _log.debug("locate_run_output remote tier failed for %s/%s: %s",
+                   run_id, name, e)
     return None
+
+
+def resolve_output(run_id: str, name: str) -> Optional[dict]:
+    """P3 serving facade — an alias of the canonical `locate_run_output`
+    (match="name"). NOTE the honest-locality contract: a REMOTE-only output now
+    returns locality="remote" with local_path=None (it used to be None
+    outright); path consumers use `resolve_run_output_path` (still
+    local-or-None) or materialize explicitly."""
+    return locate_run_output(run_id, name)
 
 
 def resolve_run_output_path(run_id: str, name: str) -> Optional[str]:
     """Absolute LOCAL path to a Run output FILE or DIRECTORY matching `name` (basename or rel),
-    across tiers: weft retained tree (`done` location) → the live weft jobdir(s) → the run
-    sandbox. Directory-aware — a `.zarr` STORE resolves (unlike `resolve_run_file`, which is
-    file-only) — and escape-safe. None when not locally resolvable (in-sandbox on a REMOTE site,
-    or swept). Thin wrapper over the P3 `resolve_output` facade (path only)."""
-    info = resolve_output(run_id, name)
-    return info["local_path"] if info else None
+    across the canonical local tiers (retained tree → live jobdir(s) → sandbox → weft's
+    (run,rel) key). Directory-aware and escape-safe. None when not locally resolvable
+    (in-sandbox on a REMOTE site, or swept) — this wrapper never moves bytes."""
+    info = locate_run_output(run_id, name)
+    return info.get("local_path") if info else None
 
 
 def resolve_entity_output(entity_id: str) -> Optional[dict]:
@@ -1358,31 +1375,56 @@ def resolve_entity_output(entity_id: str) -> Optional[dict]:
         return None
 
 
-def resolve_project_run_output(name: str, *, max_runs: int = 12) -> Optional[tuple]:
-    """`(run_id, abs_path)` for a project Run output matching `name`, searching Runs newest-first
-    (capped). Backs open_viewer / the viewer-launch route resolving a fresh weft output that
-    isn't in the entity-graph files tree yet — so the user needn't `data_register` it first."""
+def _locate_project_run_output(name: str, *, max_runs: int = 12) -> Optional[tuple]:
+    """Locate a project Run output matching `name` WITHOUT moving bytes:
+    `(run_id, site, size, is_remote)` for a confident match, or None. A cheap
+    LOCAL-only locate pass over recent Runs first; then the remote tier over a
+    bounded few weft-target candidates. When only remote candidates match and
+    MORE THAN ONE run has the output (a bare-basename collision across runs),
+    the result is ambiguous → None — run A's output never silently answers a
+    request that could be run B's."""
     scanned = 0
-    remote_cands: list = []          # target-bearing runs, for the remote pass
+    remote_cands: list = []
     for e in reversed(list_entities(type_filter="analysis", include_archived=False)):
-        hit = resolve_run_output_path(e["id"], name)
-        if hit:
-            return (e["id"], hit)
+        rid = e["id"]
+        loc = locate_run_output(rid, name, remote=False)
+        if loc and loc.get("local_path"):
+            return (rid, "local", loc.get("size"), False)
         if (e.get("metadata") or {}).get("weft_targets"):
-            remote_cands.append(e["id"])
+            remote_cands.append(rid)
         scanned += 1
         if scanned >= max_runs:
             break
-    # Remote pass, only after EVERY local scan missed: the output may live on a
-    # remote node's sandbox/retained tree (the same seam the launch route fixed —
-    # a `path=` lookup must not 404 a real remote output). Constrained: only
-    # runs with weft targets, capped, size-gated inside resolve_run_store, and
-    # any failure degrades to the local-miss answer (None), never raises.
+    matches: list = []
     for rid in remote_cands[:4]:
-        local = resolve_run_store(rid, name)
-        if local:
-            return (rid, local)
-    return None
+        loc = locate_run_output(rid, name)
+        if loc and loc.get("locality") == "remote":
+            matches.append((rid, loc))
+    if len(matches) == 1:                     # unambiguous remote hit
+        rid, loc = matches[0]
+        return (rid, loc["site"], loc.get("size"), True)
+    return None                               # no match, or ambiguous across runs
+
+
+def resolve_project_run_output(name: str, *, max_runs: int = 12) -> Optional[tuple]:
+    """`(run_id, abs_path)` for a project Run output matching `name` — a LOOKUP
+    that NEVER moves bytes (it backs the viewer menu GET `/api/viewers/for`,
+    download, and open_viewer). A local output returns its real on-disk path. A
+    REMOTE output returns `(run_id, name)` — a REMOTE MARKER where `abs_path`
+    is the logical name, NOT an on-disk file — so the viewer LAUNCH path
+    (pagoda3._resolve_source → `resolve_run_store`) performs the size-gated,
+    freshness-revalidated fetch. (Deliberately no cached-copy fast path here: a
+    marker forces the launch to revalidate, so a stale cache of a still-growing
+    output can't be handed out as the real thing.) None when no Run confidently
+    has the output."""
+    loc = _locate_project_run_output(name, max_runs=max_runs)
+    if not loc:
+        return None
+    run_id, _site, _size, is_remote = loc
+    if not is_remote:
+        hit = resolve_run_output_path(run_id, name)
+        return (run_id, hit) if hit else None
+    return (run_id, name)                      # remote marker — launch fetches, not the lookup
 
 
 def run_id_for_entity(entity_id: str) -> Optional[str]:
@@ -1415,91 +1457,263 @@ def _rel_under_store(path: Optional[str], name: str) -> bool:
             or path == base or path.startswith(base + "/"))
 
 
-def _bring_back_store(run_id: str, target: str, site: str, name: str,
-                      *, force: bool = False) -> Optional[str]:
-    """Bring a whole remote DIRECTORY store home into the workspace cache,
-    size-gated by the same guardrail (never a silent multi-GB transfer). Returns
-    the local store dir, or None when it's too big / unresolvable (caller then
-    reports "on <site>"). Two transports, both reusing existing primitives:
-      * LIVE KERNEL (open run): the store sits in the kernel sandbox; retain there
-        is pinned-pending and the read channel caps at 8 MB — so bring it home over
-        the datasets data-plane on the sandbox abs path (`register_source → fetch`),
-        one transfer, all sizes.
-      * FINISHED target (job): a location-axis `retain(dest="@workspace")` places it."""
-    import os as _os
-    from core.compute import retention
-    from core.data.datasets import FETCH_GUARDRAIL_BYTES
-    cache = str(_fetched_cache_dir(run_id))
-    base = name.rsplit("/", 1)[-1]
-
-    if _is_kernel_target(target):
-        abs_path = _kernel_abs_path(target, site, name)
-        if not abs_path:
-            return None
-        dest = _os.path.join(cache, name)            # preserve the store's own name
-        if _os.path.isdir(dest) and _os.listdir(dest):
-            return _os.path.realpath(dest)           # cache hit (atomic → complete)
-        # Fetch to a .partial sibling, then atomic-rename — so `dest` existing
-        # always means a COMPLETE store (a viewer never opens a half-fetched dir).
-        import shutil as _sh
-        tmp = dest + ".partial"
-        _sh.rmtree(tmp, ignore_errors=True)
-        if _data_plane_fetch(abs_path, site, tmp) and _os.path.isdir(tmp):
-            try:
-                _os.replace(tmp, dest)
-            except OSError:                          # dest raced in — use it
-                _sh.rmtree(tmp, ignore_errors=True)
-            return _os.path.realpath(dest) if _os.path.isdir(dest) else None
-        _sh.rmtree(tmp, ignore_errors=True)
-        return None                                  # gate/failure → honest "on <site>"
-
-    # Finished target: size-gate off the recorded inventory, then location-copy.
+def _store_members(target: str, name: str) -> Optional[dict]:
+    """The store addressed by `name` in a target's inventory (live-aware):
+    `{n_files, total_bytes, truncated, digest}`, or None when it has no members
+    there. `digest` hashes the sorted member (path, bytes, mtime) lines — the
+    store's freshness identity AS LISTED NOW (the same idiom as the data-plane
+    fingerprint: any write, including a same-size rewrite, changes it; a
+    FINISHED target's inventory is frozen, so its digest never changes). None
+    digest when the inventory was truncated — an undercount can't identify
+    anything, so readers treat the copy as unverifiable. Never raises."""
     try:
         inv = _live_inventory(target)
-        under = [e for e in (inv.get("entries") or inv.get("files") or [])
-                 if isinstance(e, dict) and _rel_under_store(e.get("path"), name)]
     except Exception:  # noqa: BLE001
-        under = []
-    if not under:
         return None
-    if not force and sum(e.get("bytes", 0) for e in under) > FETCH_GUARDRAIL_BYTES:
+    entries = [e for e in (inv.get("entries") or inv.get("files") or [])
+               if isinstance(e, dict) and _rel_under_store(e.get("path"), name)]
+    if not entries:
+        return None
+    truncated = bool(inv.get("truncated"))
+    digest = None
+    if not truncated:
+        import hashlib as _hl
+        lines = sorted(f"{e.get('path')}\t{e.get('bytes', 0)}\t{e.get('mtime', 0)}"
+                       for e in entries)
+        digest = _hl.sha1("\n".join(lines).encode()).hexdigest()
+    return {"n_files": len(entries),
+            "total_bytes": sum(e.get("bytes", 0) for e in entries),
+            "truncated": truncated, "digest": digest}
+
+
+def _file_digest(size, mtime) -> str:
+    """Freshness digest for a single remote file — its live (bytes, mtime)
+    pair. Same role as the store digest: equality ⇒ a fetched copy is
+    current; any rewrite (even same-size) changes it."""
+    return f"{size or 0}:{mtime or 0}"
+
+
+def _stamp_read(dest: str) -> Optional[str]:
+    """The freshness digest a fetched-home copy at `dest` was stamped with, or
+    None (no stamp / unreadable → the copy counts as stale)."""
+    import json
+    try:
+        with open(dest + ".stamp") as fh:
+            d = json.load(fh)
+        return d.get("digest") if isinstance(d, dict) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _stamp_write(dest: str, digest: Optional[str]) -> None:
+    """Record the SOURCE freshness digest the copy at `dest` was fetched
+    against — captured at locate time, BEFORE the fetch, so a store that grew
+    mid-transfer can never validate as current. No digest (unknown/truncated
+    source) → no stamp → the next open re-fetches. Best-effort."""
+    if not digest:
+        return
+    import json
+    try:
+        with open(dest + ".stamp", "w") as fh:
+            json.dump({"digest": digest}, fh)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def materialize_run_output(loc: Optional[dict], *, max_bytes: int,
+                           force: bool = False, progress=None) -> Optional[str]:
+    """THE single byte-mover for Run outputs. Takes a `locate_run_output`
+    result and returns a LOCAL path — as-is for a local hit, otherwise by
+    bringing the bytes home. Movement is always deliberate: the CALLER (an
+    action surface — a serve route, a viewer launch, a download) chooses
+    `max_bytes` as its own budget; an unknown size (None — including a
+    truncated store inventory) or an over-budget output is refused (None)
+    unless `force` (the user's explicit override). `progress` (optional
+    callable) receives human-readable phase strings for the action's UI.
+
+    Caching: fetched copies land in the run's `<run_id>-fetched` scratch cache,
+    installed ATOMICALLY and stamped with the source's freshness digest; every
+    later open revalidates against the CURRENT digest. A finished target's
+    digest never changes → cache hits forever; an OPEN run's changes on any
+    write → re-fetch — a frozen first fetch can never masquerade as current.
+    Never raises."""
+    if not loc:
+        return None
+    if loc.get("local_path"):
+        return loc["local_path"]
+    if loc.get("locality") != "remote":
         return None
     try:
-        res = retention.retain(target, include=[name], dest="@workspace",
+        size = loc.get("size")
+        if not force and (size is None or size > max_bytes):
+            return None                       # unknown or over-budget ⇒ honest refusal
+        if loc.get("kind") == "dir":
+            return _materialize_store(loc, force=force, progress=progress)
+        return _materialize_file(loc, force=force, progress=progress)
+    except Exception as e:  # noqa: BLE001 — a mover must degrade, not raise
+        _log.debug("materialize_run_output failed for %s/%s: %s",
+                   loc.get("run_id"), loc.get("rel"), e)
+        return None
+
+
+def _materialize_file(loc: dict, *, force: bool = False, progress=None) -> Optional[str]:
+    """Bring one remote Run FILE home (the caller's gate already passed).
+    Lanes: ≤ 8 MB → the `file_read` preview channel; bigger on a LIVE KERNEL →
+    the datasets data-plane on the sandbox abs path (the retain lane defers on
+    a live kernel); bigger on a FINISHED target → a location-axis
+    `retention.retain(dest="@workspace")` copy, which lands in the retained
+    tree — the local tier serves it from then on. Cache-dir writes are ATOMIC
+    (unique .partial + os.replace — a reader never sees a half-written file)
+    and digest-stamped for revalidation."""
+    import os as _os
+    import uuid as _uuid
+    from core.compute import retention
+    run_id, rel = loc["run_id"], loc["rel"]
+    target, site = loc["target"], loc["site"]
+    size = loc.get("size") or 0
+    digest = loc.get("digest") or _file_digest(loc.get("size"), loc.get("mtime"))
+    dest = _safe_join(str(_fetched_cache_dir(run_id)), rel)
+    if not dest:
+        return None
+    if _os.path.isfile(dest) and _stamp_read(dest) == digest:
+        return _os.path.realpath(dest)        # a current copy is already home
+    sp = progress or (lambda *_: None)
+    _os.makedirs(_os.path.dirname(dest) or ".", exist_ok=True)
+    if size <= _PREVIEW_CAP:
+        try:
+            rd = retention.file_read(target, rel, max_bytes=_PREVIEW_CAP)
+        except Exception:  # noqa: BLE001
+            return None
+        b64 = rd.get("bytes_b64")
+        if b64 is None or rd.get("truncated"):
+            return None
+        import base64
+        tmp = f"{dest}.partial.{_os.getpid()}.{_uuid.uuid4().hex}"
+        with open(tmp, "wb") as fh:
+            fh.write(base64.b64decode(b64))
+        _os.replace(tmp, dest)                # atomic: never a half-written dest
+        _stamp_write(dest, digest)
+        return _os.path.realpath(dest)
+    if _is_kernel_target(target):
+        abs_path = _kernel_abs_path(target, site, rel)
+        if not abs_path:
+            return None
+        sp(f"Fetching {rel} from {site} ({size / 1e6:.0f} MB)…")
+        tmp = f"{dest}.partial.{_os.getpid()}.{_uuid.uuid4().hex}"
+        if _data_plane_fetch(abs_path, site, tmp, force=force) and _os.path.isfile(tmp):
+            _os.replace(tmp, dest)
+            _stamp_write(dest, digest)
+            return _os.path.realpath(dest)
+        try:
+            _os.remove(tmp)
+        except OSError:
+            pass
+        return None
+    # Finished target past the preview cap: place via retention into the
+    # workspace retained tree (immutable bytes — the retained tier serves the
+    # copy from now on; no cache stamp needed).
+    sp(f"Fetching {rel} from {site} ({size / 1e6:.0f} MB)…")
+    try:
+        res = retention.retain(target, include=[rel], dest="@workspace",
                                label=run_id, background=False)
-        loc = retention.location_path(res)
     except Exception:  # noqa: BLE001
-        loc = None
-    if loc:
-        for cand in (_os.path.join(loc, name), _os.path.join(loc, base), loc):
+        return None
+    lp = retention.location_path(res)
+    if not lp:
+        return None
+    for cand in (_os.path.join(lp, rel), _os.path.join(lp, rel.rsplit("/", 1)[-1])):
+        real = _os.path.realpath(cand)
+        if _os.path.isfile(real):
+            return real
+    return None
+
+
+def _materialize_store(loc: dict, *, force: bool = False, progress=None) -> Optional[str]:
+    """Bring a remote DIRECTORY store home (the caller's gate already passed).
+    LIVE KERNEL → the datasets data-plane on the sandbox abs path (retain
+    defers there; the read channel caps at 8 MB); FINISHED target → a
+    location-axis `retain(dest="@workspace")` into the retained tree. Data-
+    plane installs are atomic (unique temp dir → swap) and stamped with the
+    digest captured at LOCATE time — a store that grew during the transfer
+    reads as stale on the next open, never as current. At install time a
+    `dest` that already matches the CURRENT digest is kept (a concurrent open
+    won) rather than destroyed — the swap can only ever replace stale bytes."""
+    import os as _os
+    import shutil as _sh
+    import uuid as _uuid
+    from core.compute import retention
+    run_id, rel = loc["run_id"], loc["rel"]
+    target, site = loc["target"], loc["site"]
+    digest = loc.get("digest")
+
+    if _is_kernel_target(target):
+        abs_path = _kernel_abs_path(target, site, rel)
+        if not abs_path:                             # unknown root or escaping name
+            return None
+        dest = _safe_join(str(_fetched_cache_dir(run_id)), rel)
+        if not dest:
+            return None
+        if _os.path.isdir(dest) and digest and _stamp_read(dest) == digest:
+            return _os.path.realpath(dest)           # current copy already home
+        size = loc.get("size")
+        sp = progress or (lambda *_: None)
+        sp(f"Fetching {rel.rsplit('/', 1)[-1]} from {site}"
+           + (f" ({size / 1e6:.0f} MB)…" if size else "…"))
+        _os.makedirs(_os.path.dirname(dest) or ".", exist_ok=True)
+        tmp = f"{dest}.partial.{_os.getpid()}.{_uuid.uuid4().hex}"
+        if _data_plane_fetch(abs_path, site, tmp, force=force) and _os.path.isdir(tmp):
+            try:
+                if _os.path.isdir(dest):
+                    if digest and _stamp_read(dest) == digest:
+                        _sh.rmtree(tmp, ignore_errors=True)   # concurrent open won
+                        return _os.path.realpath(dest)
+                    trash = f"{dest}.stale.{_uuid.uuid4().hex}"
+                    _os.rename(dest, trash)                   # supersede stale bytes
+                    _sh.rmtree(trash, ignore_errors=True)
+                _os.replace(tmp, dest)
+                _stamp_write(dest, digest)                    # locate-time digest
+                return _os.path.realpath(dest) if _os.path.isdir(dest) else None
+            except OSError:                                   # dest raced in — keep theirs
+                _sh.rmtree(tmp, ignore_errors=True)
+                return _os.path.realpath(dest) if _os.path.isdir(dest) else None
+        _sh.rmtree(tmp, ignore_errors=True)
+        return None                                  # failure → honest "on <site>"
+
+    # Finished target: location-copy into the workspace retained tree
+    # (immutable bytes — the retained tier serves the copy from now on).
+    try:
+        res = retention.retain(target, include=[rel], dest="@workspace",
+                               label=run_id, background=False)
+        lp = retention.location_path(res)
+    except Exception:  # noqa: BLE001
+        lp = None
+    if lp:
+        base = rel.rsplit("/", 1)[-1]
+        for cand in (_os.path.join(lp, rel), _os.path.join(lp, base), lp):
             real = _os.path.realpath(cand)
             if _os.path.isdir(real):
                 return real
     return None
 
 
-def resolve_run_store(run_id: str, name: str, *, force: bool = False) -> Optional[str]:
+def resolve_run_store(run_id: str, name: str, *, force: bool = False,
+                      progress=None) -> Optional[str]:
     """Local path to a Run output — FILE or DIRECTORY store — matching `name`,
-    fetching a remote copy home when the local tiers miss (durability +
-    resolvability converge on one transport). Order: local dir-aware tiers
-    (`resolve_run_output_path`) → a remote FILE fetched transparently
-    (`resolve_run_file`) → a remote store dir brought home under the size gate.
-    None when unresolvable or past the guardrail; never raises."""
+    bringing a remote one home when the local tiers miss. This is the
+    EXPLICIT-OPEN action (a viewer launch, a deliberate store download): its
+    budget is the transfer guardrail (`FETCH_GUARDRAIL_BYTES`), it reports
+    fetch progress to the action's UI, and `force=True` is the user's explicit
+    override past the gate. None when unresolvable or refused (the caller then
+    names the site honestly); never raises."""
+    from core.data.datasets import FETCH_GUARDRAIL_BYTES
     try:
-        local = resolve_run_output_path(run_id, name)
-        if local:
-            return local
-        f = resolve_run_file(run_id, name)      # remote single-file, transparent gate
-        if f:
-            return f
-        # DIRECTORY store (or a file file_stat can't see): try the size-gated
-        # dir bring-back against each remote target — keyed on the Run's targets,
-        # NOT on a per-file stat (a store is a directory, so file_stat misses it).
-        for target, site in _run_remote_targets(run_id):
-            got = _bring_back_store(run_id, target, site, name, force=force)
-            if got:
-                return got
-        return None
+        loc = locate_run_output(run_id, name)
+        if not loc:
+            return None
+        if loc.get("local_path"):
+            return loc["local_path"]
+        return materialize_run_output(loc, max_bytes=FETCH_GUARDRAIL_BYTES,
+                                      force=force, progress=progress)
     except Exception as e:  # noqa: BLE001 — a resolver must degrade, not raise
         _log.debug("resolve_run_store failed for %s/%s: %s", run_id, name, e)
         return None
@@ -1678,7 +1892,6 @@ def run_durable_view(run_id: str) -> dict:
         large = bool(size and size > _MAX_HARVEST_BYTES)
         site = None
         remote = False                            # bytes live on a site, not on this controller
-        local_servable = False                    # is the file readable on THIS box (→ /file works)?
         # Weft durability is the truth and comes FIRST — done, then pinned-pending (saving) —
         # so a file already retained by weft never mislabels as a mere serving copy. aba's
         # artifact store (`url`) is only a serving cache (in-store), below weft. Then the live
@@ -1686,7 +1899,6 @@ def run_durable_view(run_id: str) -> dict:
         if rel in done_files:                     # weft retained tree, local (sidecar readable here)
             d = done_files[rel]; site = d["site"]; remote = bool(d["in_place"]) and site != "local"
             state = "retained"; badge = f"kept ✓ · on {site}" if remote else "kept ✓"
-            local_servable = True                 # location dir is on this box → resolve_run_file finds it
         elif (dm := _sel_match(rel, done_sel)):   # remote in-place durable retain (§5.1)
             site = dm["site"]; remote = bool(dm["in_place"]) and site != "local"
             state = "retained"
@@ -1724,12 +1936,12 @@ def run_durable_view(run_id: str) -> dict:
         if state in ("cleared", "unknown"):
             view_url = None
         elif state == "retained":
-            # A LOCALLY-servable retained file (weft's durable tree on this box, incl. a local
-            # in-place store) is served straight from weft's durable tier via /file. A REMOTE
-            # in-place retain has no local sidecar and B4 fetch-on-open isn't wired
-            # (resolve_run_file → None), so a /file link would 404 — leave it None rather than
-            # hand out a dead link (review finding #2); the `on <site>` badge says where it is.
-            view_url = weft_url if local_servable else None
+            # Served straight from weft's durable tier via /file — which resolves
+            # REMOTE bytes too (canonical locate + a transparent bring-home under
+            # the gate, an honest site-naming 413 above it), so a remote in-place
+            # keep gets a LIVE link; the `on <site>` badge still says where the
+            # bytes durably live (presentation parity with the recorded truth).
+            view_url = weft_url
         else:
             view_url = url or weft_url
         files.append({"rel": rel, "bytes": size, "kind": kind, "state": state,

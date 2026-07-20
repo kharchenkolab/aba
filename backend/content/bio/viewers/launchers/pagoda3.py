@@ -252,7 +252,7 @@ def _run_id_for_node(node: dict) -> "str | None":
     return None
 
 
-def _resolve_source(node: dict, pid: str) -> Path:
+def _resolve_source(node: dict, pid: str, set_phase=None) -> Path:
     """Resolve the node to an on-disk source. Local candidates first — an absolute
     `artifact_path`, project-relative joins, then a basename scan of the project's
     work dirs (a `.lstar.zarr` **directory** store shows at the LOGICAL output path
@@ -283,10 +283,13 @@ def _resolve_source(node: dict, pid: str) -> Path:
         if matches:
             return matches[0]
     # Canonical resolver — handles a directory store AND a remote fetch home.
+    # The launch is an EXPLICIT user open, so the fetch runs on the guardrail
+    # budget and reports progress to the launch page (the action layer owns
+    # consent + progress; the resolver only moves what this action asked for).
     run_id = _run_id_for_node(node)
     if run_id and name:
         from content.bio.lifecycle.runs import resolve_run_store, run_output_site
-        hit = resolve_run_store(run_id, name)
+        hit = resolve_run_store(run_id, name, progress=set_phase)
         if hit:
             return Path(hit)
         site = run_output_site(run_id, name)
@@ -315,7 +318,7 @@ def launch(node: dict, ctx: dict) -> LaunchResult:
         ok, err = install_and_wait("viewer-pagoda3", on_progress=lambda m: set_phase(m))
         if not ok:
             raise RuntimeError(err or "The pagoda3 viewer failed to install.")
-    src = _resolve_source(node, pid)
+    src = _resolve_source(node, pid, set_phase)
     if not src.exists():
         raise FileNotFoundError(
             f"pagoda3: source not found for {node.get('name') or node.get('path')!r}")

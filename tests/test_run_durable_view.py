@@ -266,9 +266,12 @@ def test_durable_view_dedups_repeated_filename(tmp_path, monkeypatch):
     assert view["summary"]["total"] == 1 and view["summary"]["in_store"] == 1
 
 
-def test_durable_view_remote_in_place_has_no_local_file_url(tmp_path, monkeypatch):
-    """A remote in-place `kept` file (no local sidecar) must NOT advertise a
-    /api/runs/{id}/file URL — resolve_run_file can't read it, so the link 404s."""
+def test_durable_view_remote_in_place_gets_live_file_url(tmp_path, monkeypatch):
+    """Presentation parity: a remote in-place `kept` file surfaces WITH a live
+    /api/runs/{id}/file URL — the route resolves remote bytes through the
+    canonical locate/materialize pair (transparent under the gate, an honest
+    site-naming 413 above it) — and the `on <site>` badge names where the
+    bytes durably live."""
     monkeypatch.setattr(runsmod, "get_entity",
                         lambda rid: {"id": rid, "metadata": {"weft_targets": ["krn_r"]}})
     monkeypatch.setattr(retmod, "retained", lambda **kw: [{
@@ -281,7 +284,8 @@ def test_durable_view_remote_in_place_has_no_local_file_url(tmp_path, monkeypatc
         {"original_name": "big.h5ad", "url": None, "kind": "file", "size": _BIG}])
     f = runsmod.run_durable_view("run-r2")["files"][0]
     assert f["state"] == "retained" and f["site"] == "hpc"
-    assert f["url"] is None                     # not locally servable → no dead link
+    assert "on hpc" in f["badge"]               # location is information, on the surface
+    assert f["url"] == "/api/runs/run-r2/file?rel=big.h5ad"   # live link, not a dead None
 
 
 def test_durable_view_selection_glob_does_not_span_slash(tmp_path, monkeypatch):
@@ -365,7 +369,7 @@ _TESTS = [test_durable_view_states,
           test_durable_tree_nests_with_durable_fields,
           test_durable_view_remote_in_place_kept_via_selection,
           test_durable_view_dedups_repeated_filename,
-          test_durable_view_remote_in_place_has_no_local_file_url,
+          test_durable_view_remote_in_place_gets_live_file_url,
           test_durable_view_selection_glob_does_not_span_slash,
           test_durable_view_temporary_by_absence_while_open,
           test_read_run_file_previews_in_sandbox,

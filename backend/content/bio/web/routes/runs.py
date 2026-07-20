@@ -180,6 +180,12 @@ def run_file(rid: str, rel: str, download: int = 0):
         where = (f" It lives on {site} — bring it home to view it (Keep it, then "
                  f"download)." if site else " Keep it to retain, then download.")
         raise HTTPException(413, f"{rel!r} is {total} bytes — too large to preview.{where}")
+    if site:
+        # The retention index places the bytes on a site we can't read right now —
+        # say so; "no file in the run" would be a lie about a kept output.
+        raise HTTPException(404, f"{rel!r} lives on {site} and isn't reachable "
+                                 f"from here right now — try again, or open it "
+                                 f"with a viewer (which fetches it home)")
     raise HTTPException(404, f"no file {rel!r} in the run (retained or sandbox)")
 
 

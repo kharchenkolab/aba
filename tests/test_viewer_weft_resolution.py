@@ -99,10 +99,14 @@ def test_resolve_project_run_output_newest_first(monkeypatch):
     # list_entities is created_at ASC; resolve_project_run_output reverses → newest first
     monkeypatch.setattr(runs, "list_entities", lambda **kw: [{"id": "old"}, {"id": "new"}])
     seen = []
-    def _r(rid, name):
+    def _loc(rid, name, **kw):
         seen.append(rid)
-        return "/abs/x.zarr" if rid == "new" else None
-    monkeypatch.setattr(runs, "resolve_run_output_path", _r)
+        return ({"run_id": rid, "rel": name, "local_path": "/abs/x.zarr",
+                 "locality": "local", "size": None}
+                if rid == "new" else None)
+    monkeypatch.setattr(runs, "locate_run_output", _loc)
+    monkeypatch.setattr(runs, "resolve_run_output_path",
+                        lambda rid, name: "/abs/x.zarr" if rid == "new" else None)
     assert runs.resolve_project_run_output("x.zarr") == ("new", "/abs/x.zarr")
     assert seen[0] == "new"
 

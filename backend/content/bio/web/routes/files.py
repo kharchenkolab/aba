@@ -16,6 +16,36 @@ from core.web.deps import require_project_context
 router = APIRouter()
 
 
+def _entity_disk_fallback(node: dict) -> Path | None:
+    """When a tree node's `artifact_path` is dangling (the /artifacts copy is a
+    size-capped serving CACHE, not the durable tier), resolve the backing
+    entity's own reference through the canonical Run resolver — bringing a
+    REMOTE-produced file home under the request-blocking gate. None when the
+    node isn't entity-backed or the bytes can't be served from here; raises an
+    honest site-naming 413 for a remote file past the gate (never a silent
+    404 while the bytes durably exist)."""
+    eid = node.get("entity_id")
+    if not eid:
+        return None
+    from content.bio.lifecycle.runs import resolve_entity_output, materialize_run_output
+    from core.exec.run import _MAX_HARVEST_BYTES
+    info = resolve_entity_output(eid)
+    if not info or info.get("kind") != "file":
+        return None
+    p = info.get("local_path") or materialize_run_output(
+        info, max_bytes=_MAX_HARVEST_BYTES)
+    if p:
+        return Path(p)
+    if info.get("locality") == "remote":
+        size = info.get("size")
+        sz = f" ({size / 1e6:.0f} MB)" if size else ""
+        raise HTTPException(
+            413, f"this file lives on {info.get('site')}{sz} — too large to "
+                 f"serve through the controller; open it with a viewer, or "
+                 f"Keep it and place it here first")
+    return None
+
+
 @router.get("/api/files/tree")
 def files_tree(include_archived: bool = False, project_id: str | None = None):
     require_project_context(project_id)
@@ -78,6 +108,9 @@ def files_download_zip(path: str = ""):
             src = _resolve_artifact_disk_path(node["artifact_path"])
             if src and src.exists():
                 return FileResponse(str(src), filename=name, media_type=None)
+        src = _entity_disk_fallback(node)          # canonical resolver (remote-aware)
+        if src and src.exists():
+            return FileResponse(str(src), filename=name, media_type=None)
         raise HTTPException(404, f"file at {path!r} is not on disk")
 
     leaves = iter_files(node)
@@ -183,6 +216,8 @@ def files_content(path: str, download: int = 0):
         raise HTTPException(404, f"no node at {path!r}")
     src = _resolve_artifact_disk_path(node.get("artifact_path"))
     if src is None or not src.exists():
+        src = _entity_disk_fallback(node)          # canonical resolver (remote-aware)
+    if src is None or not src.exists():
         raise HTTPException(404, f"file content missing on disk: {node.get('artifact_path')}")
     media = mimetypes.guess_type(src.name)[0] or "application/octet-stream"
     headers = {"Content-Disposition": f'attachment; filename="{src.name}"'} if download else {}
@@ -223,6 +258,8 @@ def files_raw(path: str, offset: int = 0, max_lines: int = 200):
 
     artifact = node.get("artifact_path")
     src = _resolve_artifact_disk_path(artifact)
+    if src is None or not src.exists():
+        src = _entity_disk_fallback(node)          # canonical resolver (remote-aware)
     if src is None or not src.exists():
         raise HTTPException(404, f"file content missing on disk: {artifact}")
 

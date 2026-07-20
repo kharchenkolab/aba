@@ -438,11 +438,26 @@ def entities_download(entity_id: str):
         # not weft-managed — an evicted (or never-copied, link-only oversize)
         # artifact leaves this path dangling while weft still holds the bytes
         # durably. Resolve the entity's own reference (exec_id → run → rel)
-        # through the P3 facade before declaring it missing.
-        from content.bio.lifecycle.runs import resolve_entity_output
+        # through the canonical resolver before declaring it missing; a
+        # REMOTE-produced file is brought home under the request-blocking gate,
+        # a bigger one gets an honest "on <site>" answer instead of a 404.
+        from content.bio.lifecycle.runs import (resolve_entity_output,
+                                                materialize_run_output)
         info = resolve_entity_output(entity_id)
-        if info and info["kind"] == "file":
-            path = Path(info["local_path"])
+        if info and info.get("kind") == "file":
+            from core.exec.run import _MAX_HARVEST_BYTES
+            p = info.get("local_path") or materialize_run_output(
+                info, max_bytes=_MAX_HARVEST_BYTES)
+            if p:
+                path = Path(p)
+            elif info.get("locality") == "remote":
+                size = info.get("size")
+                sz = f" ({size / 1e6:.0f} MB)" if size else ""
+                raise HTTPException(
+                    413, f"this file lives on {info.get('site')}{sz} — too large "
+                         f"to download through the controller; open it with a "
+                         f"viewer (which fetches under a guardrail), or Keep it "
+                         f"and place it here first")
     if not path.exists() or not path.is_file():
         raise HTTPException(404, "artifact file is missing on disk")
     # Suggest a reasonable filename based on the entity's title.

@@ -71,8 +71,11 @@ def _resolve_files_node(entity_id: str | None, path: str | None) -> dict:
         # Not in the entity-graph tree — a fresh weft Run output (e.g. a `.lstar.zarr` store in
         # the live kernel jobdir). Resolve it directly from the Run's outputs (retained tree /
         # jobdir / sandbox), the same fallback the open_viewer tool uses, so launch/download work
-        # without a prior data_register. resolve_project_run_output is escape-safe (paths stay
-        # under sanctioned Run roots), so an arbitrary `path=` can't reach outside them.
+        # without a prior data_register. This is a LOOKUP: resolve_project_run_output confirms
+        # existence WITHOUT moving bytes — a remote output not yet local comes back as a marker
+        # (`artifact_path` is the logical name, not an on-disk file); the viewer LAUNCH path
+        # fetches it under the size gate. `..`/absolute components are refused at the resolver's
+        # cache/sandbox joins (`_safe_join`), so a crafted `path=` can't read outside the caches.
         from content.bio.lifecycle.runs import resolve_project_run_output
         hit = resolve_project_run_output(path)
         if hit is not None:
