@@ -398,7 +398,127 @@ advance through their own affordances — typing in the day-0 composer,
   epitaphs, rolled-up periphery; descend into one question and find the
   whole earlier prototype there.
 
-## 13 · Deliberate scope cuts and open questions
+## 13 · Coexistence — the Record as a face over live ABA projects
+
+*Grounded in a read-only pass over the main repo (2026-07): `docs/arch/`
++ targeted reads of `core/graph/`, `content/bio/entity_types/`,
+`guide.py`. File references below are into `aba/backend/`.*
+
+The strategic question: can the Record run as an **alternative UI layer
+over the same projects** driven by the existing workspace UI (or its
+successor) — so that scientists can try different faces, on real
+projects, and the winning UX can be discovered rather than guessed? The
+substrate audit says **yes, and more cheaply than expected**: most of
+what the Record renders already exists in the waist, the platform's
+extension points are exactly the ones needed, and the three invariants
+coexistence requires are *already enforced platform properties*.
+
+### 13.1 What the substrate already provides
+
+| Record concept | Substrate reality |
+|---|---|
+| additive ontology | new entity types are YAML registrations in the content pack, "no core edit, no column, no migration" (`core/entity_types/registry.py`; `content/bio/entity_types/`) |
+| questions | **threads are questions already**: `thread.yaml` carries `title` + `question` + `open_questions` + lifecycle `open / parked / concluded` (+ `conclude_wrap`, `question_source`). open → active section · parked → held · concluded → closed |
+| claim maturity | `claim.yaml` `confidence_model`: preliminary / supported / validated / contested / **refuted** (terminal), with a `status_log` audit trail — maps nearly 1:1 onto ○◐●◮, and *refuted* feeds epitaphs |
+| prose, notes | `narrative` (long-form prose as first-class entity) and `note` (incl. the `keep_message` gesture — pin a chat message as a note) already exist |
+| needs-you tray | a **`proposals` table + store** exists: `status='pending'`, accept / dismiss / **undo** plumbing, thread-scoped, per-role — with signature dedup whose docstring states the Record's rule verbatim: *"a dismissed idea doesn't re-nag until the world changes (which yields a new signature)"* (`core/graph/proposals_store.py`) |
+| agent drafting | the **advisors framework** is the proposal-writer pattern already running: skeptic (fires when a claim's evidence weakens), methodologist (confidence transitions), stylist (prose nudges) — YAML-spec'd roles feeding the proposals table (`content/bio/advisors/`) |
+| what's-new | an append-only **`events` table** with `entity_id` per event (`core/graph/audit.py: log_event / list_events`) — the doors come for free |
+| turn-grade provenance | every entity carries `actor` (`agent:<run_id>`) + `derivation(exec_id)` — **enforced ~100% by CI ratchet + backfill**; `execution_records` rows carry `thread_id / run_id / tool_use_id`; `runs` rows carry `thread_id / session_id / turn_index`; messages are ordered rows per thread. The sediment line → "▷ turn N" jump is a **join, not new capture** |
+| downward disclosure | `GET /api/entities/{id}/provenance` already assembles method / inputs / environment / attribution / lineage from the exec sidecar (`core/graph/provenance_evidence.py`) — the "how was this made?" drawer's exact backend |
+| leftovers shelf | computable as the edge-complement: artifact entities with no `includes`/`supports` edges and no proposal/mention — the negative definition needs no new data |
+| retention | promoted/registered vs. scratch-tier substrate (`core/data/store.py`) maps to kept vs. temporary |
+| alternative faces | the Contact plane is registry-based (focus-views, viewers, labels) behind a typed API seam, with URL-canonical state; "multi-surface consistency falls out for free" is its own stated design goal (`docs/arch/contact-surface.md`) |
+| organ-level telemetry | `tool_invocations` + `llm_generations` tables already measure usage; `proposals.status` transitions measure ratification behavior directly |
+
+The three invariants coexistence requires turn out to already hold:
+**single write path** (the UI reads/writes only through the model API —
+lint-ratcheted), **shared pending store** (the proposals table *is*
+cross-face by construction), **entry provenance** (derivation + actor
+enforced at create, human vs. agent attribution recorded on every row).
+
+### 13.2 The honest deltas
+
+What the Record needs that the substrate does not have today, smallest
+first:
+
+1. **Render mappings, not schema**: maturity glyphs over the existing
+   confidence ladder; epitaph = a concluded thread whose `conclude_wrap`
+   carries a negative verdict + killing-run ref (additive metadata).
+2. **New types by registration**: `trail` (+ fragments), later `arc`
+   (a *view over* threads, per §10). YAML drop-ins.
+3. **New proposal kinds** for record-writes — addendum, fragment
+   placement, structure promotion (§10's descend/arc/abstract moments).
+   The `plan` entity's present→approve gate is the existing template
+   for exactly this propose→ratify shape.
+4. **Prose ratification + supersede**: `narrative` entities exist, but
+   revision machinery (`wasRevisionOf`, `set_current_revision`) is
+   figure/table-only today (a known gap in `provenance.md`). Extending
+   it to narrative gives the synthesis supersede-and-archive chain;
+   ratification metadata (drafted-by / ratified-by / immutable-after)
+   is additive.
+5. **The sitting is not first-class** — the one real modeling delta.
+   ABA's thread conflates the *question* with its *one continuous
+   conversation*; the Record wants many bounded sittings per question
+   (open → work → distill → file). The raw material exists (`messages.
+   thread_id`, `runs.thread_id/session_id/turn_index`, exec records),
+   so sittings are **derivable by clustering** for a first face, and a
+   lightweight `sitting` entity (grouping run ids, holding the
+   distillation record) is the eventual honest home. Notably the
+   classic UI would benefit from the same episode structure on long
+   threads — this delta is an improvement to the shared substrate, not
+   a Record-private need.
+6. **Events coverage + cursor**: `log_event` is best-effort by design
+   (never raises) — audit per-kind coverage before trusting it as the
+   what's-new source, and add a per-user last-visit cursor.
+7. **Advisor roles for the accretion discipline**: drafting-during-work,
+   distillation-at-close, trail-coherence — new advisor specs + skills
+   on the existing framework, with drafting intensity a project-level
+   setting so classic-UI users aren't flooded (their faces already have
+   a Proposals surface to catch what does get drafted).
+
+Nothing in this list is core surgery; items 1–3 and 6 are small, 4 and
+7 are moderate content-pack work, 5 is the one genuine design decision.
+
+### 13.3 Phased rollout — each phase independently useful
+
+1. **Read-only Record face** over any existing project. A World-assembler
+   service projects the graph into the shape the prototype already
+   renders (`altui2 world.ts` is the draft response contract): sediment
+   from exec records + jobs, work record by thread/turn, what's-new from
+   events, story stubs from threads (question, open questions,
+   lifecycle), claims with confidence, transcripts with turn jumps,
+   leftovers by edge-complement, provenance drawer via the existing
+   endpoint. Zero writes, zero new entities, works on every project on
+   day one — and already tests the core orientation claim.
+2. **Shared triage**: render the proposals table as the needs-you tray
+   (accept/dismiss/undo already exist; batch-file = bulk accept of
+   routine kinds), wire the last-visit cursor, audit event coverage.
+   From here on, ratifying in the Record and ratifying in the classic
+   UI are literally the same row.
+3. **Authoring strata**: register `trail`; add the record-write proposal
+   kinds; add the drafting/distillation advisor roles; extend revisions
+   to narrative for ratified prose. Enable per-project.
+4. **The spine**: arcs, the rolling synthesis, per-question descent —
+   which by then is purely a rendering decision, since threads are
+   already the question-grain unit.
+
+### 13.4 The experiment this architecture buys
+
+Because faces are renderings over one substrate, the UX question ("what
+actually helps scientists?") becomes answerable **within-subject on live
+projects**: a scientist flips workspace ⇄ Board ⇄ Record on the same
+project mid-week, with no data forked and no cohort confound. Better,
+instrumentation lands at the **organ** level, which is the granularity
+that matters — not "Record vs. classic" but: do addenda get ratified,
+and how fast (proposals.status transitions)? do trails accumulate or
+rot? does the tray get used or bypassed? do session-page visits happen
+(the leftovers bet)? Each organ earns or loses its place on evidence,
+and the end state may well be a recombination of faces rather than a
+winner — which the shared-organ architecture (§11) accommodates by
+construction.
+
+## 14 · Deliberate scope cuts and open questions
 
 Cut from the prototype (mimed, not wired): real chat; ratification and
 draft state beyond the client; prose editing (the co-writing loop);
