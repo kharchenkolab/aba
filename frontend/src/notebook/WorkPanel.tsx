@@ -24,7 +24,7 @@ const SCOPE_CLS: Record<string, string> = {
   project: 'proj', question: 'q', trail: 'trail', figure: 'fig', result: 'fig',
 }
 
-function Msg({ m }: { m: PanelMsg }) {
+export function Msg({ m }: { m: PanelMsg }) {
   if (m.note) return <div className="wpanel__sysnote">✦ {m.note}</div>
   if (m.run) {
     return (
@@ -54,10 +54,14 @@ function Msg({ m }: { m: PanelMsg }) {
   )
 }
 
-export default function WorkPanel({ panel, onClose, onAdvance }: {
+export default function WorkPanel({ panel, onClose, onAdvance, onExpand, continuable }: {
   panel: PanelState
   onClose?: () => void
   onAdvance?: (t: string) => void
+  /** docked transcripts can expand into the session's full page */
+  onExpand?: () => void
+  /** a filed session is not dead — reading it and continuing it are the same surface */
+  continuable?: boolean
 }) {
   const [extra, setExtra] = useState<PanelMsg[]>([])
   const [draft, setDraft] = useState('')
@@ -91,6 +95,10 @@ export default function WorkPanel({ panel, onClose, onAdvance }: {
               : 'working session'}
           </div>
           {panel.status && !archived && <div className="wpanel__status">{panel.status}</div>}
+          {onExpand && (
+            <button className="wpanel__close" onClick={onExpand}
+                    title="open as a full page — for sifting artifacts, reading the whole exchange">⤢</button>
+          )}
           {onClose && <button className="wpanel__close" onClick={onClose}>✕</button>}
         </div>
         <div className="wpanel__scope" title="what the agent already has in hand — decided by WHERE you opened the session, not by re-explaining">
@@ -132,9 +140,11 @@ export default function WorkPanel({ panel, onClose, onAdvance }: {
         </div>
       </div>
 
-      {!archived && !panel.closing && (
+      {(continuable || (!archived && !panel.closing)) && (
         <div className="wpanel__foot">
-          <input value={draft} placeholder="Ask, or ask for work — runs launch from here…"
+          <input value={draft}
+                 placeholder={archived ? 'Continue this line — reopening parks it back on the desk…'
+                                       : 'Ask, or ask for work — runs launch from here…'}
                  onChange={e => setDraft(e.target.value)}
                  onKeyDown={e => { if (e.key === 'Enter') send() }} />
           <button className="btn btn--primary" onClick={send}>↑</button>
@@ -142,7 +152,7 @@ export default function WorkPanel({ panel, onClose, onAdvance }: {
       )}
       <div className="wpanel__note">
         {archived
-          ? 'read-only — its products are already in the strata; nothing here needs re-mining'
+          ? 'filed, not dead — its products are in the strata; continuing reopens the line'
           : 'runs land in the sediment as they launch · the transcript files under its anchor at close'}
       </div>
     </aside>

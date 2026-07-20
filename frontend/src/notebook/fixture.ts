@@ -49,6 +49,8 @@ export interface Fragment {
   ref?: string        // figure id the fragment points at
   counter?: boolean   // a counter-example — trails keep those too
   draft?: boolean     // proposed by the agent during a session, not yet ratified
+  /** the exchange that drafted this — provenance for prose, at turn grain */
+  src?: { sess: string; turn: number }
 }
 export interface Trail {
   id: string
@@ -79,8 +81,10 @@ export interface SedimentEntry {
   retention: 'kept' | 'temporary' | 'at-risk'
   site?: string
   trailRef?: string
-  /** label of the working session that produced this run (⟲ chip) */
+  /** id of the working session that produced this run (⟲ chip) */
   sessionRef?: string
+  /** the turn within that session that launched/reported this run */
+  turnRef?: number
   /** landed during the session on screen — highlighted as just-arrived */
   isNew?: boolean
 }

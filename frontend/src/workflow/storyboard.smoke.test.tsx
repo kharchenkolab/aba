@@ -5,7 +5,7 @@
  * the renderer no longer reads (or vice versa) fails here, not on stage.
  */
 import { describe, it, expect } from 'vitest'
-import { render } from '@testing-library/react'
+import { render, fireEvent } from '@testing-library/react'
 import Record from '../notebook/Record'
 import Storyboard from './Storyboard'
 import { SCENES } from './scenes'
@@ -52,6 +52,36 @@ describe('workflow storyboard', () => {
     const { getAllByText, getByText, unmount } = render(<Record world={SCENES[9].world} />)
     getByText(/⟲ winter dig · Jul 20 · 5 runs · 1 fragment · 1 draft — transcript/)
     expect(getAllByText(/⟲ winter dig/).length).toBeGreaterThan(1) // section + sediment ⟲ chips
+    unmount()
+  })
+
+  it('M5 renders the work record at session grain with leftovers counted', () => {
+    const { getByText, unmount } = render(<Record world={SCENES[9].world} />)
+    getByText('by session')
+    getByText(/2 unexamined/)
+    getByText(/outside sessions/)
+    unmount()
+  })
+
+  it('M6 opens the session page: distillate, leftovers shelf, addressable turns, continue composer', () => {
+    const { getByText, getByPlaceholderText, unmount } = render(<Record world={SCENES[10].world} />)
+    getByText(/what entered the record from here/)
+    getByText(/leftovers — produced here, never pinned/)
+    getByText(/may bear on Q2/)
+    getByText(/continues ←/)
+    getByPlaceholderText(/Continue this line/)
+    unmount()
+  })
+
+  it('transcript search finds what was SAID and tags the session stratum', () => {
+    // covered via the world's sessions: "never serviced" occurs only in the
+    // winter-dig transcript, not in any stratum text
+    const { getByPlaceholderText, container, unmount } = render(<Record world={SCENES[9].world} />)
+    const input = getByPlaceholderText('search the record…') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'never serviced' } })
+    const hit = container.querySelector('.toc__hit-stratum--session')
+    expect(hit).toBeTruthy()
+    expect(hit!.parentElement!.textContent).toContain('winter dig')
     unmount()
   })
 

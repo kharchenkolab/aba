@@ -30,8 +30,9 @@
  */
 import { Fragment as F, useMemo, useState, type ReactNode } from 'react'
 import { type Section, type Trail, type SedimentEntry } from './fixture'
-import { coastalWorld, type World } from './world'
+import { coastalWorld, type World, type SessionRec } from './world'
 import WorkPanel from './WorkPanel'
+import SessionPage from './SessionPage'
 
 const ART = (id: string) => `/artifacts/coastal/${id}.svg`
 
@@ -47,7 +48,8 @@ interface RefCtx {
   toggleDisclose: (id: string) => void
   disclosed: Set<string>
   scrollTo: (domId: string) => void
-  openArchive: () => void
+  /** open a session — its full page by default, at a specific turn when known */
+  openSession: (id: string, turn?: number) => void
 }
 
 /** Render prose with [[kind:id|label]] live references. Block-level
@@ -195,8 +197,8 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
       {s.sessions && s.sessions.length > 0 && (
         <div className="nsec__sessions">
           {s.sessions.map(x => (
-            <button key={x.label} className="sess" onClick={() => ctx.openArchive()}
-                    title="the raw working exchange, filed under this question — read-only; its products are already in the strata">
+            <button key={x.label} className="sess" onClick={() => ctx.openSession(x.label)}
+                    title="the working exchange, filed under this question — the full episode: transcript, artifacts, leftovers; continuable">
               ⟲ {x.label} · {x.when} · {x.meta} — transcript
             </button>
           ))}
@@ -295,6 +297,12 @@ function TrailCard({ t, ctx, drafted, onDraft }: {
                 </button>
               )}
               {f.draft && <span className="draftb" title="drafted by the agent during a working session — enters the trail when you ratify it">draft</span>}
+              {f.src && (
+                <button className="frag__turn" onClick={() => ctx.openSession(f.src!.sess, f.src!.turn)}
+                        title="provenance for prose: the exchange that drafted this fragment">
+                  ⟲ turn {f.src.turn}
+                </button>
+              )}
             </span>
           </div>
         ))}
@@ -342,8 +350,9 @@ function SedimentRow({ e, ctx, open, onToggle }: {
         <span className="sed__n">{e.nOutputs > 0 ? `${e.nOutputs} outputs` : ''}</span>
         {e.trailRef && <span className="sed__trail" title={`feeds trail ${e.trailRef}`}>⋱ {e.trailRef}</span>}
         {e.sessionRef && (
-          <span className="sed__sess" title={`produced in session “${e.sessionRef}” — open the transcript`}
-                onClick={ev => { ev.stopPropagation(); ctx.openArchive() }}>
+          <span className="sed__sess"
+                title={`produced in session “${e.sessionRef}”${e.turnRef ? ` — jump to turn ${e.turnRef}` : ' — open the session'}`}
+                onClick={ev => { ev.stopPropagation(); ctx.openSession(e.sessionRef!, e.turnRef) }}>
             ⟲ {e.sessionRef}
           </span>
         )}
@@ -415,7 +424,11 @@ function MarginBench({ w, target, onClose }: {
 
 // -------------------------------------------------------------------- search
 
-interface Hit { domId: string; label: string; stratum: string }
+interface Hit {
+  label: string; stratum: string
+  domId?: string
+  sess?: { id: string; turn?: number }
+}
 function searchRecord(w: World, q: string, scope: 'story' | 'noticed' | 'everything'): Hit[] {
   const needle = q.toLowerCase()
   const hits: Hit[] = []
@@ -437,13 +450,32 @@ function searchRecord(w: World, q: string, scope: 'story' | 'noticed' | 'everyth
   if (scope === 'everything') {
     for (const e of w.sediment) if (has(e.title) || has(e.verdict))
       hits.push({ domId: `el-${e.id}`, label: `${e.date} · ${e.title}`, stratum: 'sediment' })
+    // what was SAID, not just what was kept — episodic recall is a first-class
+    // entry path ("did we ever discuss…" lands on the turn)
+    for (const s of w.sessions ?? []) {
+      let turn = 0
+      for (const m of s.msgs) {
+        const isTurn = !!m.text && (m.role === 'you' || m.role === 'guide')
+        if (isTurn) turn++
+        if (m.text && has(m.text)) {
+          const at = m.text.toLowerCase().indexOf(needle)
+          const snippet = m.text.slice(Math.max(0, at - 12), at + needle.length + 24)
+          hits.push({
+            sess: { id: s.id, turn: isTurn ? turn : Math.max(1, turn) },
+            label: `“…${snippet}…” — ${s.label} · ${s.when}`,
+            stratum: 'session',
+          })
+          break
+        }
+      }
+    }
   }
   return hits.slice(0, 8)
 }
 
 // ----------------------------------------------------------------- desk strip
 
-function DeskStrip({ w, onOpenArchive }: { w: World; onOpenArchive: () => void }) {
+function DeskStrip({ w, onOpenSession }: { w: World; onOpenSession: (id: string) => void }) {
   const d = w.desk!
   return (
     <div className="desk" title="the present tense: open sessions, running work, where you left off">
@@ -451,7 +483,7 @@ function DeskStrip({ w, onOpenArchive }: { w: World; onOpenArchive: () => void }
       <span className="desk__line">{d.line}</span>
       {d.items.map(i => (
         <button key={i.label} className={`desk__item ${i.live ? 'is-live' : ''}`}
-                onClick={() => { if (w.archive) onOpenArchive() }}>
+                onClick={() => { if (i.sessionId) onOpenSession(i.sessionId) }}>
           {i.live ? '▶ ' : ''}{i.label}
           <span className="desk__meta"> · {i.meta}</span>
           {i.action && <span className="desk__act"> {i.action}</span>}
@@ -499,7 +531,11 @@ export default function Record(props: { world?: World; onAdvance?: (t: string) =
 
 function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void }) {
   const [benchFor, setBenchFor] = useState<{ id: string; label: string } | null>(null)
-  const [archOpen, setArchOpen] = useState(false)
+  // a session renders full-page (sifting/review) or docked in the right
+  // column (side-by-side working mode) — each converts into the other
+  const [sessPage, setSessPage] = useState<{ id: string; turn?: number } | null>(w.openSession ?? null)
+  const [sessDock, setSessDock] = useState<string | null>(null)
+  const [grain, setGrain] = useState<'run' | 'session'>(w.sedimentGrain ?? 'run')
   const [disclosed, setDisclosed] = useState<Set<string>>(new Set())
   const [methodsOn, setMethodsOn] = useState<Set<string>>(new Set())
   const [openSed, setOpenSed] = useState<Set<string>>(new Set(w.openSediment ?? []))
@@ -541,13 +577,15 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
   const toggle = (set: Set<string>, id: string) => {
     const n = new Set(set); if (n.has(id)) n.delete(id); else n.add(id); return n
   }
+  const findSession = (id: string): SessionRec | undefined =>
+    (w.sessions ?? []).find(s => s.id === id || s.label === id)
   const ctx: RefCtx = {
     w,
     openBench: (id, label) => setBenchFor({ id, label }),
     toggleDisclose: id => setDisclosed(s => toggle(s, id)),
     disclosed,
     scrollTo,
-    openArchive: () => { if (w.archive) setArchOpen(true) },
+    openSession: (id, turn) => { if (findSession(id)) { setSessDock(null); setSessPage({ id, turn }) } },
   }
   const hits = useMemo(() => (q.trim() ? searchRecord(w, q, scope) : []), [w, q, scope])
   const behindLine = w.pendingDrafts > 0
@@ -584,15 +622,23 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
   }
 
   // right column: the margin bench wins (same instrument, narrower scope);
-  // otherwise an archived transcript if opened; otherwise the live session.
+  // otherwise a docked session transcript; otherwise the live session.
+  const docked = sessDock ? findSession(sessDock) : undefined
   const rightPanel = benchFor
     ? <MarginBench w={w} key={`b-${benchFor.id}`} target={benchFor} onClose={() => setBenchFor(null)} />
-    : archOpen && w.archive
-      ? <WorkPanel key="arch" panel={w.archive} onClose={() => setArchOpen(false)} />
+    : docked
+      ? <WorkPanel key={`d-${docked.id}`} continuable
+          panel={{ archived: { label: docked.label, when: docked.when }, scope: docked.scope, msgs: docked.msgs }}
+          onExpand={() => { setSessDock(null); setSessPage({ id: docked.id }) }}
+          onClose={() => setSessDock(null)} />
       : w.panel
         ? <WorkPanel key="live" panel={w.panel} onAdvance={onAdvance} />
         : null
-  const recCls = benchFor ? 'rec rec--bench' : rightPanel ? 'rec rec--work' : 'rec'
+  // a session's full page replaces the document column (the TOC stays);
+  // ⇥ sends it to the right column and brings the document back
+  const pageSess = sessPage ? findSession(sessPage.id) : undefined
+  const showRight = pageSess ? (benchFor ? rightPanel : null) : rightPanel
+  const recCls = benchFor ? 'rec rec--bench' : showRight ? 'rec rec--work' : 'rec'
 
   return (
     <div className={recCls}>
@@ -644,7 +690,17 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
           {hits.length > 0 && (
             <div className="toc__hits">
               {hits.map((h, i) => (
-                <button key={i} className="toc__hit" onClick={() => { scrollTo(h.domId); setQ('') }}>
+                <button key={i} className="toc__hit"
+                        onClick={() => {
+                          if (h.sess) ctx.openSession(h.sess.id, h.sess.turn)
+                          else if (h.domId) {
+                            // the doc must be back on stage before we can scroll it
+                            setSessPage(null)
+                            const id = h.domId
+                            setTimeout(() => scrollTo(id), 80)
+                          }
+                          setQ('')
+                        }}>
                   <span className={`toc__hit-stratum toc__hit-stratum--${h.stratum}`}>{h.stratum}</span>
                   {h.label}
                 </button>
@@ -654,7 +710,12 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
         </div>
       </nav>
 
-      {/* ---------- the document ---------- */}
+      {/* ---------- the document (or a session's full page) ---------- */}
+      {pageSess ? (
+        <SessionPage key={`${pageSess.id}-${sessPage?.turn ?? ''}`} sess={pageSess} focusTurn={sessPage?.turn}
+          onBack={() => setSessPage(null)}
+          onDock={() => { setSessDock(pageSess.id); setSessPage(null) }} />
+      ) : (
       <main className="doc" onScroll={onDocScroll}>
         <header className="doc__head">
           <h1>{w.project.title}</h1>
@@ -664,7 +725,7 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
         </header>
 
         {/* the present tense: open sessions, where you left off */}
-        {w.desk && <DeskStrip w={w} onOpenArchive={() => setArchOpen(true)} />}
+        {w.desk && <DeskStrip w={w} onOpenSession={id => ctx.openSession(id)} />}
 
         {/* what's new */}
         {w.whatsNew && (
@@ -744,18 +805,82 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
           </div>
         )}
 
-        {/* ---------- stratum 3: sediment ---------- */}
+        {/* ---------- stratum 3: the work record ---------- */}
+        {/* two grains over the same substance: BY RUN (flat chronology) or
+            BY SESSION (episodes — each session a super-row with its runs
+            nested; solo/automatic runs stand alone). The session is the
+            chain; sometimes the chain is what you remember. */}
         <div className="stratum" id="el-sediment">
-          <div className="stratum__rule"><span>sediment</span><em>every run · one line each · nothing lost, nothing demands reading</em></div>
+          <div className="stratum__rule">
+            <span>sediment — the work record</span>
+            <em>{grain === 'session'
+              ? 'every session and run · complete · leftovers counted, nothing lost'
+              : 'every run · one line each · nothing lost, nothing demands reading'}</em>
+            {(w.sessions?.length ?? 0) > 0 && (
+              <span className="sed-grain">
+                {(['run', 'session'] as const).map(g => (
+                  <button key={g} className={`sed-grain__btn ${grain === g ? 'is-on' : ''}`}
+                          title={g === 'session' ? 'group the work by sitting — the session is the chain' : 'flat chronology of runs'}
+                          onClick={() => setGrain(g)}>by {g}</button>
+                ))}
+              </span>
+            )}
+          </div>
           {w.sediment.length === 0 && (
             <div className="sed-empty">nothing has run yet — the first run writes the first line</div>
           )}
           <div className="sed-list">
-            {w.sediment.map(e => (
-              <SedimentRow key={e.id} e={e} ctx={ctx}
-                open={openSed.has(e.id)}
-                onToggle={() => setOpenSed(x => toggle(x, e.id))} />
-            ))}
+            {grain === 'session' && (w.sessions?.length ?? 0) > 0 ? (
+              <>
+                {(w.sessions ?? []).map(s => {
+                  const runs = w.sediment.filter(e => e.sessionRef === s.id)
+                  return (
+                    <div className="sedsess" key={s.id}>
+                      <button className="sedsess__head" onClick={() => ctx.openSession(s.id)}
+                              title="open the session — transcript, artifacts, leftovers">
+                        <span className="sed__date">{s.when}</span>
+                        <span className="sedsess__glyph">⟲</span>
+                        <span className="sedsess__title">{s.label}</span>
+                        <span className="sedsess__anchor">{s.anchor.label}</span>
+                        <span className="sedsess__meta">
+                          {s.turns} turns · {runs.length} run{runs.length === 1 ? '' : 's'} · {s.distillate.length} distilled
+                        </span>
+                        {s.leftovers.length > 0 && (
+                          <span className="sedsess__left" title="produced but never pinned, noted, or discussed — kept findable">
+                            {s.leftovers.length} unexamined
+                          </span>
+                        )}
+                        <span className={`sedsess__state sedsess__state--${s.state}`}>{s.state}</span>
+                      </button>
+                      {runs.map(e => (
+                        <SedimentRow key={e.id} e={e} ctx={ctx}
+                          open={openSed.has(e.id)}
+                          onToggle={() => setOpenSed(x => toggle(x, e.id))} />
+                      ))}
+                    </div>
+                  )
+                })}
+                {w.sediment.filter(e => !e.sessionRef || !findSession(e.sessionRef)).length > 0 && (
+                  <div className="sedsess sedsess--solo">
+                    <div className="sedsess__head sedsess__head--solo">
+                      <span className="sedsess__title">outside sessions</span>
+                      <span className="sedsess__meta">automatic / solo runs — pipelines, scheduled QC, one-offs</span>
+                    </div>
+                    {w.sediment.filter(e => !e.sessionRef || !findSession(e.sessionRef)).map(e => (
+                      <SedimentRow key={e.id} e={e} ctx={ctx}
+                        open={openSed.has(e.id)}
+                        onToggle={() => setOpenSed(x => toggle(x, e.id))} />
+                    ))}
+                  </div>
+                )}
+              </>
+            ) : (
+              w.sediment.map(e => (
+                <SedimentRow key={e.id} e={e} ctx={ctx}
+                  open={openSed.has(e.id)}
+                  onToggle={() => setOpenSed(x => toggle(x, e.id))} />
+              ))
+            )}
           </div>
           <div className="sed-foot">
             append-only · chronological · the machine keeps this stratum; retention rides on each line
@@ -767,11 +892,12 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
           insight-rate ≈ narrative growth-rate, and both are rare — that is correct, not a failure
         </footer>
       </main>
+      )}
 
-      {/* ---------- right margin: bench / working session / transcript ---------- */}
+      {/* ---------- right margin: bench / working session / docked transcript ---------- */}
       {/* keyed by anchor: each element's margin conversation is its own —
           switching targets must never carry the previous exchange along */}
-      {rightPanel}
+      {showRight}
     </div>
   )
 }

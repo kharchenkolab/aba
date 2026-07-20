@@ -19,7 +19,7 @@ import {
   provenance as coastalProv, benchFallback,
   type SedimentEntry, type Section, type Trail, type LooseNote, type Prov,
 } from '../notebook/fixture'
-import { coastalWorld, type World, type PanelState } from '../notebook/world'
+import { coastalWorld, type World, type PanelState, type PanelMsg, type SessionRec } from '../notebook/world'
 
 export interface Scene {
   id: string
@@ -241,15 +241,19 @@ const e5Sediment: SedimentEntry[] = [
   },
   { ...e3Sediment[0], isNew: false },
 ]
-const e5Archive: PanelState = {
-  archived: { label: 'seasonal first cut', when: 'Mar 03' },
+const seasonalCut: SessionRec = {
+  id: 'seasonal first cut', label: 'seasonal first cut', when: 'Mar 03', state: 'filed',
+  anchor: { kind: 'question', label: 'Q1 · calibration across seasons' },
   scope: [{ kind: 'question', label: 'Q1 · calibration across seasons' }],
+  turns: 2,
   msgs: [
     { role: 'you', text: 'Decomposition’s done — what does gain variance look like by season?' },
     { role: 'guide', text: 'Summer gain varies under 2% between batches; winter sits at 7–9%. The winter panels are also noisier than shot noise would predict — I drafted that onto a new trail (T1) rather than the story: it’s noticed, not believed.' },
     { run: { title: 'Gain variance by season', state: 'ok', meta: '2 min · hpc' }, role: 'system' },
     { note: 'fragment drafted → T1 · session filed under Q1 at close', role: 'system' },
   ],
+  distillate: [{ text: '“Winter panels noisier than shot noise alone would predict”', dest: 'trail T1' }],
+  leftovers: [{ id: 'fig_qc_ok2', title: 'Gain variance — station-level spread (unexamined)' }],
 }
 const e5: Scene = {
   id: 'e5', group: 'early', title: 'day 3 — lab diary',
@@ -277,9 +281,9 @@ const e5: Scene = {
     pendingDrafts: 1,
     desk: {
       line: 'no open session',
-      items: [{ label: 'yesterday: “seasonal first cut”', meta: 'under Q1 · 2 runs · 1 fragment', action: 'transcript ⟲' }],
+      items: [{ label: 'yesterday: “seasonal first cut”', meta: 'under Q1 · 2 runs · 1 fragment', action: 'transcript ⟲', sessionId: 'seasonal first cut' }],
     },
-    archive: e5Archive,
+    sessions: [seasonalCut],
     openSediment: ['e_seasonal'],
   },
 }
@@ -289,6 +293,26 @@ const e5: Scene = {
 // =======================================================================
 
 const mBase: World = { ...coastalWorld, work: true }
+
+/** The Jul 18 sitting under Q2 — filed, distilled, findable. */
+const anomalyDig: SessionRec = {
+  id: 'anomaly cluster dig', label: 'anomaly cluster dig', when: 'Jul 18', state: 'filed',
+  anchor: { kind: 'question', label: 'Q2 · anomaly cluster' },
+  scope: [{ kind: 'question', label: 'Q2 · anomaly cluster' }, { kind: 'trail', label: 'T2 · estuary/tides' }],
+  turns: 2,
+  msgs: [
+    { role: 'you', text: 'Join the daily anomaly counts against the tidal coefficient.' },
+    { role: 'guide', text: 'ρ = 0.61 (p = 0.002) — daily counts track the tidal coefficient. Drafted the third fragment onto T2; the trail now reads coherent across six weeks.' },
+    { run: { title: 'Tidal coefficient join', state: 'ok', meta: '2 min · hpc' }, role: 'system' },
+    { note: 'fragment drafted → T2 · session filed under Q2', role: 'system' },
+  ],
+  distillate: [{ text: '“Daily anomaly counts track the tidal coefficient (ρ = 0.61)”', dest: 'trail T2' }],
+  leftovers: [{ id: 'fig_qc_ok1', title: 'Join residuals by station (unexamined)' }],
+}
+
+/** Mature sediment: the Jul 18 join is marked with its producing session. */
+const matureSed = coastalWorld.sediment.map(e =>
+  e.id === 'run_springtide' ? { ...e, sessionRef: 'anomaly cluster dig', turnRef: 2 } : e)
 
 // ---- M1 · re-entry: orient, then start work from where you stand
 const m1: Scene = {
@@ -300,20 +324,12 @@ const m1: Scene = {
   advance: { on: 'work:q1', hint: 'click  work ▸  on the first question to open a session' },
   world: {
     ...mBase,
+    sediment: matureSed,
     desk: {
       line: 'no open sessions',
-      items: [{ label: 'last session: “anomaly cluster dig”', meta: 'Jul 18 · under Q2 · 3 runs', action: 'transcript ⟲' }],
+      items: [{ label: 'last session: “anomaly cluster dig”', meta: 'Jul 18 · under Q2 · 1 run', action: 'transcript ⟲', sessionId: 'anomaly cluster dig' }],
     },
-    archive: {
-      archived: { label: 'anomaly cluster dig', when: 'Jul 18' },
-      scope: [{ kind: 'question', label: 'Q2 · anomaly cluster' }, { kind: 'trail', label: 'T2' }],
-      msgs: [
-        { role: 'you', text: 'Join the daily anomaly counts against the tidal coefficient.' },
-        { role: 'guide', text: 'ρ = 0.61 (p = 0.002) — daily counts track the tidal coefficient. Drafted the third fragment onto T2; the trail now reads coherent across six weeks.' },
-        { run: { title: 'Tidal coefficient join', state: 'ok', meta: '2 min · hpc' }, role: 'system' },
-        { note: 'fragment drafted → T2 · session filed under Q2', role: 'system' },
-      ],
-    },
+    sessions: [anomalyDig],
   },
 }
 
@@ -321,7 +337,7 @@ const m1: Scene = {
 const m2NewSed: SedimentEntry = {
   id: 'run_excl', date: 'Jul 20', title: 'Winter refit — serviced stations excluded',
   state: 'running', verdict: 'running on hpc — n 402 → 311', nOutputs: 0, shown: [],
-  retention: 'temporary', site: 'hpc', isNew: true, sessionRef: 'winter dig',
+  retention: 'temporary', site: 'hpc', isNew: true, sessionRef: 'winter dig', turnRef: 2,
 }
 const m2Panel: PanelState = {
   scope: [
@@ -339,6 +355,16 @@ const m2Panel: PanelState = {
     { note: 'in the sediment already ↓ — tracked from launch, kept or not', role: 'system' },
   ],
 }
+/** The winter dig at successive moments — an OPEN session is on the record
+ *  too (the by-session work record shows it live). */
+const winterDigAt = (msgs: PanelMsg[], turns: number, state: SessionRec['state']): SessionRec => ({
+  id: 'winter dig', label: 'winter dig', when: 'Jul 20', state,
+  anchor: { kind: 'question', label: 'Q1 · calibration across seasons' },
+  scope: m2Panel.scope, msgs, turns,
+  distillate: [], leftovers: [],
+  continues: 'the winter subset re-fit (R12) · Jul 16',
+})
+
 const m2: Scene = {
   id: 'm2', group: 'mature', title: 'into a session',
   narration:
@@ -347,9 +373,10 @@ const m2: Scene = {
     'sediment’s top line landed at launch, marked with the session that produced it.',
   world: {
     ...mBase,
-    sediment: [m2NewSed, ...coastalWorld.sediment],
+    sediment: [m2NewSed, ...matureSed],
     panel: m2Panel,
-    desk: { line: '1 open session', items: [{ label: 'Q1 · winter dig', meta: 'started 09:40 · 1 run in flight', live: true }] },
+    sessions: [winterDigAt(m2Panel.msgs, 2, 'open'), anomalyDig],
+    desk: { line: '1 open session', items: [{ label: 'Q1 · winter dig', meta: 'started 09:40 · 1 run in flight', live: true, sessionId: 'winter dig' }] },
     openSediment: [],
   },
 }
@@ -359,12 +386,12 @@ const m3Sed: SedimentEntry[] = [
   {
     id: 'run_perstation', date: 'Jul 20', title: 'Per-station winter slopes',
     state: 'running', verdict: 'running on hpc — 48 stations', nOutputs: 0, shown: [],
-    retention: 'temporary', site: 'hpc', isNew: true, sessionRef: 'winter dig',
+    retention: 'temporary', site: 'hpc', isNew: true, sessionRef: 'winter dig', turnRef: 4,
   },
   {
     id: 'run_b11', date: 'Jul 20', title: 'Winter refit — B11 alone',
     state: 'ok', verdict: '−0.27 ± 0.19 — wide (one station), same sign',
-    nOutputs: 1, shown: [], retention: 'temporary', isNew: true, sessionRef: 'winter dig',
+    nOutputs: 1, shown: [], retention: 'temporary', isNew: true, sessionRef: 'winter dig', turnRef: 4,
   },
   { ...m2NewSed, state: 'ok', verdict: 'slope −0.29 ± 0.12 — flip persists (n = 311)', nOutputs: 2 },
 ]
@@ -385,7 +412,7 @@ const m3Trails: Trail[] = coastalWorld.trails.map(t => t.id !== 'T1' ? t : {
   ...t,
   fragments: [
     ...t.fragments,
-    { ts: 'Jul 20', text: 'Winter flip persists with serviced stations excluded (−0.29 ± 0.12) — the service-artifact reading weakens further.', ref: 'fig_winter', draft: true },
+    { ts: 'Jul 20', text: 'Winter flip persists with serviced stations excluded (−0.29 ± 0.12) — the service-artifact reading weakens further.', ref: 'fig_winter', draft: true, src: { sess: 'winter dig', turn: 4 } },
   ],
 })
 const m3: Scene = {
@@ -397,10 +424,11 @@ const m3: Scene = {
     'the session, not from an end-of-day writeup.',
   world: {
     ...mBase,
-    sediment: [...m3Sed, ...coastalWorld.sediment],
+    sediment: [...m3Sed, ...matureSed],
     trails: m3Trails,
     panel: m3Panel,
-    desk: { line: '1 open session', items: [{ label: 'Q1 · winter dig', meta: 'started 09:40 · 3 runs · 1 fragment drafted', live: true }] },
+    sessions: [winterDigAt(m3Panel.msgs, 4, 'open'), anomalyDig],
+    desk: { line: '1 open session', items: [{ label: 'Q1 · winter dig', meta: 'started 09:40 · 3 runs · 1 fragment drafted', live: true, sessionId: 'winter dig' }] },
     openSediment: [],
   },
 }
@@ -438,24 +466,41 @@ const m4: Scene = {
   advance: { on: 'file-close', hint: 'click  file & close  in the panel to finish the session' },
   world: {
     ...mBase,
-    sediment: [...m4Sed, ...coastalWorld.sediment],
+    sediment: [...m4Sed, ...matureSed],
     trails: m3Trails,
     panel: m4Panel,
-    desk: { line: '1 open session', items: [{ label: 'Q1 · winter dig', meta: 'closing — distillate proposed', live: true }] },
+    sessions: [winterDigAt(m4Panel.msgs, 5, 'open'), anomalyDig],
+    desk: { line: '1 open session', items: [{ label: 'Q1 · winter dig', meta: 'closing — distillate proposed', live: true, sessionId: 'winter dig' }] },
     openSediment: [],
   },
 }
 
 // ---- M5 · the morning after: findable from what it touched
 const m5Sed = m4Sed.map(e => ({ ...e, isNew: false }))
+
+/** The winter dig, filed: distillate recorded, leftovers counted, chain kept. */
+const winterDigFiled: SessionRec = {
+  ...winterDigAt(m4Panel.msgs, 5, 'filed'),
+  distillate: [
+    { text: '“Flip persists excluding serviced stations (−0.29 ± 0.12); 31/48 stations flip individually”', dest: 'trail T1' },
+    { text: 'Addendum for Q1 — service-visit explanation ruled out; hold-out pending', dest: 'Q1 · awaiting ratification' },
+    { text: 'Keep the two final refits durably; three exploratory outputs lapse in 30 d', dest: 'retention · awaiting ratification' },
+  ],
+  leftovers: [
+    { id: 'fig_qc_ok1', title: 'Per-station slopes vs distance to coast (unexamined)', note: 'gradient visible — may bear on Q2, the estuary cluster' },
+    { id: 'fig_qc_ok2', title: 'Excluded-refit residuals — QQ (unexamined)' },
+  ],
+}
+
 const m5: Scene = {
   id: 'm5', group: 'mature', title: 'next morning',
   narration:
-    'Next morning you do not reread a thread to resume — the DOCUMENT is the resume ' +
-    'point. Yesterday’s transcript is one click away from the section it served (⟲ under ' +
-    'Q1), from the desk, and from every sediment line it produced. Work is findable from ' +
-    'what it touched, not from when it happened. The addendum it drafted waits in the ' +
-    'prose, evidence attached.',
+    'Next morning the DOCUMENT is the resume point — and the work record now reads BY ' +
+    'SESSION: each sitting one super-row (turns · runs · distilled · UNEXAMINED count), ' +
+    'its runs nested, solo runs standing apart. Yesterday’s session is one click away ' +
+    'from Q1 (⟲), the desk, every sediment line it produced — and the T1 fragment now ' +
+    'carries “⟲ turn 4”: provenance for prose, at turn grain. Try searching “never ' +
+    'serviced” — what was SAID is findable, not just what was kept.',
   world: {
     ...mBase,
     project: { ...coastalWorld.project, lastVisit: '2026-07-19' },
@@ -482,21 +527,34 @@ const m5: Scene = {
     trails: m3Trails.map(t => t.id !== 'T1' ? t : {
       ...t, fragments: t.fragments.map(f => ({ ...f, draft: false })),
     }),
-    sediment: [...m5Sed, ...coastalWorld.sediment],
+    sediment: [...m5Sed, ...matureSed],
     desk: {
       line: 'no open sessions',
-      items: [{ label: 'yesterday: “winter dig”', meta: 'under Q1 · 5 runs · 1 fragment', action: 'transcript ⟲' }],
+      items: [{ label: 'yesterday: “winter dig”', meta: 'under Q1 · 5 runs · 1 fragment', action: 'transcript ⟲', sessionId: 'winter dig' }],
     },
-    archive: {
-      archived: { label: 'winter dig', when: 'Jul 20' },
-      scope: m2Panel.scope,
-      msgs: m4Panel.msgs,
-    },
+    sessions: [winterDigFiled, anomalyDig],
+    sedimentGrain: 'session',
     openSediment: [],
   },
 }
 
-export const SCENES: Scene[] = [e1, e2, e3, e4, e5, m1, m2, m3, m4, m5]
+// ---- M6 · the session page: the territory behind the map
+const m6: Scene = {
+  id: 'm6', group: 'mature', title: 'the session page',
+  narration:
+    'A session on its own terms — full page for sifting, docked panel for working ' +
+    '(⇥ / ⤢ convert between them). Distillate up top; the LEFTOVERS shelf: artifacts ' +
+    'produced but never pinned, noted, or discussed — including one the agent flags as ' +
+    'possibly bearing on Q2. Transcript turns are addressable (⟲ links land here, ' +
+    'highlighted), the chain edge records what this sitting continued, and the composer ' +
+    'at the foot means filed ≠ dead.',
+  world: {
+    ...m5.world,
+    openSession: { id: 'winter dig' },
+  },
+}
+
+export const SCENES: Scene[] = [e1, e2, e3, e4, e5, m1, m2, m3, m4, m5, m6]
 
 export const GROUPS: { id: 'early' | 'mature'; label: string }[] = [
   { id: 'early', label: 'I · early days (day 0–3)' },

@@ -51,7 +51,33 @@ export interface PanelState {
 export interface DeskState {
   /** e.g. "no open sessions" / "1 open session" */
   line: string
-  items: { label: string; meta: string; live?: boolean; action?: string }[]
+  items: { label: string; meta: string; live?: boolean; action?: string; sessionId?: string }[]
+}
+
+/**
+ * A session on the record — the full episode, not just its distillate.
+ * The redux is a map; sessions are the territory: they hold the whole
+ * exchange (addressable by turn), every artifact touched — including the
+ * LEFTOVERS nobody pinned, noted, or discussed — and they stay
+ * continuable. Findable by time (work record, by-session grain), by
+ * anchor (section lists, desk), and by what was SAID (transcript search).
+ */
+export interface SessionRec {
+  id: string                    // stable handle; sediment sessionRef points here
+  label: string                 // auto-titled, human-renamable ("winter dig")
+  when: string
+  state: 'open' | 'parked' | 'filed'
+  anchor: { kind: 'project' | 'question' | 'trail' | 'figure' | 'result'; label: string }
+  scope: PanelState['scope']
+  msgs: PanelMsg[]              // the transcript; you/guide msgs are numbered turns
+  turns: number
+  /** what entered the record from here (the distillate, post-ratification) */
+  distillate: { text: string; dest: string }[]
+  /** produced but never pinned / noted / discussed — surfaced for late review */
+  leftovers: { id: string; title: string; note?: string }[]
+  /** chain edges: this sitting picks up an earlier line of work */
+  continues?: string
+  continuedBy?: string
 }
 
 // -------------------------------------------------------------------- world
@@ -86,8 +112,12 @@ export interface World {
   desk?: DeskState
   /** a working panel open over the document */
   panel?: PanelState
-  /** an archived session transcript, openable from ⟲ links */
-  archive?: PanelState
+  /** the sessions on the record — episodes behind the redux (⟲ targets) */
+  sessions?: SessionRec[]
+  /** open this session's page on first render (storyboard scenes) */
+  openSession?: { id: string; turn?: number }
+  /** initial grain of the work-record stratum */
+  sedimentGrain?: 'run' | 'session'
   /** sediment entries expanded on first render */
   openSediment?: string[]
   /** render "work ▸" affordances on section heads (the work loop is wired) */
