@@ -885,18 +885,27 @@ def _r_module_block() -> dict | None:
     return None
 
 
-def _default_probe_python() -> str | None:
-    """The project's weft SESSION python that import-probes + installs run
-    against, or None when NO python base pack is declared (a python-less
-    deployment — the caller degrades). A weft error when a pack IS declared but
-    the session won't realize PROPAGATES (it is NOT swallowed into None): the
-    old swallow silently diverted installs onto the served-base/micromamba path
-    on a transient weft hiccup — the exact hybrid-revival bug W3.5 removes."""
+def _default_probe_argv():
+    """A topology-blind COMMAND BUILDER (`args -> argv`) for probing the
+    project's default python session, or None when NO python base pack is
+    declared (a python-less deployment — the caller degrades). Replaces the
+    raw-interpreter-path helper: a mounted/squashfs base has no path outside
+    its activation, so probes must compose through the session runtime
+    (`project_env.exec_argv`), exactly like the exec lane. The builder
+    re-resolves the runtime PER CALL — a post-install verify must see the
+    flipped (materialized) session, not the pre-install base. A weft error
+    when a pack IS declared but the session won't resolve PROPAGATES (it is
+    NOT swallowed into None): the old swallow silently diverted installs onto
+    the served-base/micromamba path on a transient weft hiccup — the exact
+    hybrid-revival bug W3.5 removes."""
     from core import projects
     from core.compute import base_env, project_env
     if not base_env.active("python"):
         return None
-    return str(project_env.interpreter(str(projects.current() or "_none"), "python"))
+    pid = str(projects.current() or "_none")
+    project_env.runtime(pid, "python")   # resolve NOW so unavailability raises here
+    return lambda args: project_env.exec_argv(
+        str(projects.current() or "_none"), "python", args)
 
 
 
@@ -1129,12 +1138,12 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         if _probes:
             from core.exec.verify import verify_python_imports
             try:
-                _probe_py = _default_probe_python()
+                _probe_cmd = _default_probe_argv()
             except Exception:  # noqa: BLE001 — no realizable session → skip the shortcut
-                _probe_py = None
-            if _probe_py is not None:
+                _probe_cmd = None
+            if _probe_cmd is not None:
                 for _p in _probes:
-                    _ok, _ = verify_python_imports([_p], python_exe=_probe_py)
+                    _ok, _ = verify_python_imports([_p], argv_builder=_probe_cmd)
                     if _ok:
                         return {"status": "ready", "name": name, "import_name": _p,
                                 "note": f"Already available — `import {_p}` works in run_python "
@@ -1263,16 +1272,16 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         from core import projects as _projects
         from core.compute import project_env as _penv
         try:
-            _probe_py = _default_probe_python()
+            _probe_cmd = _default_probe_argv()
         except (ComputeError, RuntimeError) as ce:
             return {"status": "error", "name": name,
                     "note": f"the python environment pack is not available: {ce}"}
-        if _probe_py is None:
+        if _probe_cmd is None:
             return {"status": "error", "name": name,
                     "note": "no python environment pack is declared for this deployment"}
         _imp0 = cap.get("import_name")
         if _imp0:
-            _ok, _ = verify_python_imports([_imp0], python_exe=_probe_py)
+            _ok, _ = verify_python_imports([_imp0], argv_builder=_probe_cmd)
             if _ok:
                 return _ready({"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
                         "archetype": cap.get("archetype"), "import_name": _imp0,
@@ -1303,7 +1312,10 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         # Verify the install actually LOADS before claiming ready — no more
         # "ready"-lies for ABI-broken / partial installs.
         if imp:
-            _ok, _detail = verify_python_imports([imp], python_exe=_probe_py)
+            # argv_builder re-resolves the runtime: after the install the lazy
+            # session has FLIPPED to its own clone — probing the stale
+            # pre-install runtime would import-check the base and miss it
+            _ok, _detail = verify_python_imports([imp], argv_builder=_probe_cmd)
             if not _ok:
                 return {"status": "error", "name": name, "import_name": imp,
                         "note": (f"Installed, but `import {imp}` fails to load — likely an ABI "
@@ -1348,10 +1360,12 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
                     "module": _mod, "note": f"Provided by cluster module '{_mod}' "
                     f"(loaded in background Slurm jobs); the local conda install {reason}."})
         try:
-            _probe_py = _default_probe_python()
+            # availability GATE only (the install itself rides session_install);
+            # the builder form works on prefix-less (mounted-base) topologies
+            _probe_cmd = _default_probe_argv()
         except Exception:  # noqa: BLE001 — no realizable session; handled below
-            _probe_py = None
-        if _probe_py is None:
+            _probe_cmd = None
+        if _probe_cmd is None:
             if _mod:
                 return _mod_covered("isn't needed there (no local python pack)")
             return {"status": "error", "name": name,

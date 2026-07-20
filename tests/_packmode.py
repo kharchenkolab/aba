@@ -22,7 +22,10 @@ def enable(monkeypatch, *, py: str | None = None, rscript: str | None = None):
 
     monkeypatch.setattr(_be, "pack_name",
                         lambda lang: {"python": "python-bio", "r": "r-bio"}.get(lang))
-    monkeypatch.setattr(_disc, "_default_probe_python", lambda: py)
+    # topology-blind probe seam: a BUILDER (args -> argv), mirroring
+    # project_env.exec_argv's direct-exec shape over the stub interpreter
+    monkeypatch.setattr(_disc, "_default_probe_argv",
+                        lambda: (lambda args: [py, *[str(a) for a in args]]))
 
     class _P:  # a Path-like the run lanes join "/bin/python" onto is not needed —
         pass   # they call project_env.interpreter directly (mocked below).

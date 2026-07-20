@@ -363,3 +363,44 @@ def test_env_overview_reports_eager_truthfully(monkeypatch):
     assert s["active"] is True and s["materialized"] is True
     assert s["prefix"] and Path(s["prefix"]).exists()
     base_env.reset_cache()
+
+
+# ── capability probes (the mounted-base extend bug) ──────────────────────────
+
+def test_capability_probe_builder_activation_only(lazy_activation_only):
+    """The field bug: on a mounted (squashfs/userns) base the default env has
+    no directly-usable prefix, and the capability layer's import probe resolved
+    a raw interpreter path — so ensure_capability's default-lane extend died on
+    session.no_direct_exec even though session_install itself is topology-
+    blind. The probe must compose through the session runtime like the exec
+    lane does."""
+    from content.bio.tools import discovery as d
+    builder = d._default_probe_argv()
+    assert builder is not None
+    argv = builder(["-c", "import json"])
+    assert argv[:2] == ["bash", "-c"]
+    assert BASE_ACT in argv[2] and "unshare -rm" in argv[2]
+
+
+def test_capability_probe_reresolves_after_flip(lazy):
+    """A post-install verify must probe the FLIPPED session (its own clone),
+    not the stale pre-install base — the builder re-resolves per call."""
+    from content.bio.tools import discovery as d
+    builder = d._default_probe_argv()
+    before = builder(["-c", "import x"])[0]
+    assert before == str(BASE_PREFIX / "bin" / "python")
+    project_env.install("_none", "python", ["toolz"], eco="pypi")
+    after = builder(["-c", "import x"])[0]
+    assert after != before and "sessions/" in after
+
+
+def test_verify_python_imports_argv_builder():
+    from core.exec.verify import verify_python_imports
+    ok, detail = verify_python_imports(
+        ["json"], argv_builder=lambda args: [sys.executable, *args])
+    assert ok, detail
+    # the builder wins over python_exe — a dangling path must never be exec'd
+    ok2, _ = verify_python_imports(
+        ["json"], python_exe="/nonexistent/bin/python",
+        argv_builder=lambda args: [sys.executable, *args])
+    assert ok2

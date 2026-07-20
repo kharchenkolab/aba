@@ -145,7 +145,8 @@ def test_ensure_capability_env_extends_even_when_importable_by_default(monkeypat
     monkeypatch.setattr(_catalog, "resolve_capability", lambda name, *a, **k: None)
     # make the default-env import probe SUCCEED — the trap the live bug fell into
     import content.bio.tools.discovery as d
-    monkeypatch.setattr(d, "_default_probe_python", lambda: "/usr/bin/python3")
+    monkeypatch.setattr(d, "_default_probe_argv",
+                        lambda: (lambda args: ["/usr/bin/python3", *args]))
     import core.exec.verify as _v
     monkeypatch.setattr(_v, "verify_python_imports", lambda names, **k: (True, ""))
     out = ensure_capability({"name": "pandas", "env": "grow"})

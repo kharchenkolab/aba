@@ -256,12 +256,16 @@ the install-time probe can't run.
   still says "wipeable overlay" and `core/exec/materialize.py`'s module header still describes the
   `ENVS_DIR/pylib` overlay — both pre-weft text; the code routes to `session_install` / raises.
   Trust the behavior described above, not those headers.
-- **Direct-path residue outside the default lane.** The default lane is topology-blind
-  (`argv_for_runtime`), but `named_envs.interpreter()` still hands out a bare prefix path
-  (mount-scoped named-env realizations would need the same activation treatment —
-  `named_envs.run_in` already routes through weft when no ready prefix exists), and a few
-  presentation/probe surfaces are direct-exec-only by construction (`env_layers` site-dir
-  scans, `_session_site_dirs`, the viewer launchers' interpreter resolution, run-lane env
-  fingerprints). All degrade honestly (typed refusal / omitted layer / skipped fingerprint)
-  rather than lie, but on an activation-only topology they under-report; migrating them to
-  argv/runtime consumption is backlog.
+- **Direct-path residue outside the default lane.** The default lane — including the
+  capability layer's import probes (`_default_probe_argv`, a per-call command builder
+  consumed by `verify_python_imports(argv_builder=…)`, so a post-install verify sees the
+  flipped session) — is topology-blind. Remaining residue: `named_envs.interpreter()` still
+  hands out a bare prefix path (mount-scoped named-env realizations would need the same
+  activation treatment — `named_envs.run_in` already routes through weft when no ready
+  prefix exists), and a few presentation surfaces are direct-exec-only by construction
+  (`env_layers` site-dir scans, `_session_site_dirs`, the viewer launchers' interpreter
+  resolution, run-lane env fingerprints). Presentation residue degrades honestly (omitted
+  layer / skipped fingerprint) and under-reports on activation-only topologies; migrating
+  it to argv/runtime consumption is backlog. Lesson recorded: a typed refusal is only
+  "honest degradation" where the caller has an alternative — on a lane with none it is an
+  outage (the mounted-base extend bug).

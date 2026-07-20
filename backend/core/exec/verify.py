@@ -24,6 +24,7 @@ def verify_python_imports(
     *,
     extra_paths: Optional[Sequence[str]] = None,
     python_exe: Optional[str] = None,
+    argv_builder=None,
     timeout_s: int = 180,
 ) -> tuple[bool, str]:
     """Actually import each name in a fresh subprocess on the target interpreter.
@@ -33,15 +34,20 @@ def verify_python_imports(
     missing system lib — i.e. the exact "find_spec says yes, import explodes"
     case. ``detail`` carries the traceback tail for the agent/operator.
 
-    ``python_exe`` is the interpreter to probe (a weft session / named-env python);
-    its own site-packages are authoritative, so ``extra_paths`` defaults to none.
-    Pass ``extra_paths`` to verify against a temp install prefix before merging it
-    (transactional installs).
+    Target selection: ``argv_builder`` (preferred for the DEFAULT env) is a
+    callable ``args -> full argv`` — the topology-blind path
+    (``project_env.exec_argv``): it composes the activation line for envs with
+    no directly-usable prefix (mounted/squashfs bases, lazy sessions) and
+    re-resolves the session runtime per call, so a post-install verify sees the
+    flipped (materialized) session, never the stale base. ``python_exe`` is a
+    bare interpreter path for envs that HAVE one (a named-env prefix). The
+    probed env's own site-packages are authoritative, so ``extra_paths``
+    defaults to none; pass it to verify against a temp install prefix before
+    merging (transactional installs).
     """
     names = [n for n in (import_names or []) if n]
     if not names:
         return True, ""
-    exe = python_exe or sys.executable
     if extra_paths is None:
         extra_paths = []          # the target interpreter's own site-packages win
     # append (not prepend) so the interpreter's own packages win
@@ -55,9 +61,13 @@ def verify_python_imports(
         "    importlib.import_module(_n)\n"
         "print('ABA_IMPORT_OK')\n"
     )
+    if argv_builder is not None:
+        cmd = list(argv_builder(["-c", script]))
+    else:
+        cmd = [python_exe or sys.executable, "-c", script]
     try:
         proc = subprocess.run(
-            [exe, "-c", script], capture_output=True, text=True, timeout=timeout_s
+            cmd, capture_output=True, text=True, timeout=timeout_s
         )
     except subprocess.TimeoutExpired:
         return False, f"import verification timed out after {timeout_s}s"
