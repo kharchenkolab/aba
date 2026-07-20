@@ -102,6 +102,14 @@ def main() -> int:
     check("body.language_version looks like X.Y.Z",
           (body.get("language_version") or "").count(".") >= 1)
     check("body.produced is a list", isinstance(body.get("produced"), list))
+    # Placement provenance (block-4 fix, guarded by mn_provenance_after_chain):
+    # the interactive exec record must carry a `compute` block naming WHERE it
+    # ran, so a Result traces back to its machine from the graph — not only from
+    # the conversation. Previously only the background lane recorded this.
+    _comp = body.get("compute")
+    check("body.compute records placement (site present)",
+          isinstance(_comp, dict) and bool(_comp.get("site")),
+          f"got {_comp!r}")
 
     print("\n[D] list_by_thread surfaces this exec")
     by_thread = exec_records.list_by_thread(thread_id)
