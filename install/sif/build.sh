@@ -196,6 +196,17 @@ if [ "$PROFILE" = "fat" ] || [ "$PROFILE" = "weft" ]; then
   fi
   echo "-- building conda venv ($ACCEL base, from $ENV_YML) --"
   "$MM" create -y -q --channel-priority strict -p "$STAGE/aba-venv" -f "$ENV_YML"
+  # Bake the squashfs MOUNT tooling into the controller venv. Without squashfuse + mksquashfs
+  # (and /dev/fuse) ON SITE, weft's squashfs_mode() returns None and it falls back to realizing
+  # each published env pack from its lockfile PER USER (slow, unshared) — defeating the whole
+  # point of the published read-only .sqfs packs. On a BeeGFS site with userns (CBE-next) these
+  # three flip squashfs_mode to `userns` (namespace mount, works over parallel FS). conda-forge
+  # builds are self-contained (own libfuse) — unlike the host apptainer libexec binaries, which
+  # link to /cvmfs compat libs and won't run in-image. Lands squashfuse_ll + mksquashfs on
+  # /opt/aba-venv/bin (PATH); /dev/fuse is bound into the session by the OOD launcher.
+  "$MM" install -y -q --channel-priority strict -c conda-forge -p "$STAGE/aba-venv" squashfuse squashfs-tools \
+    && echo "   squashfuse + squashfs-tools baked (weft can MOUNT published env packs, not re-realize)" \
+    || echo "WARNING: squashfuse/squashfs-tools bake failed — weft falls back to per-user env realize"
   # pip-install the weft substrate into the baked venv (W3.4). --no-user is
   # load-bearing on conda pythons (user-site is enabled → a bare pip would divert
   # to ~/.local and a user-site weft would shadow the image's). Non-fatal so a

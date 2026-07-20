@@ -83,6 +83,11 @@ if [ -n "${ABA_SIF:-}" ]; then
   # /cluster/aba, add a --bind for it here.)
   binds=( --bind "${PWD}/dist" )
   [ -d /groups ] && binds+=( --bind /groups )
+  # /dev/fuse: --containall does NOT expose it, but weft needs it to MOUNT published squashfs
+  # env packs read-only (its squashfs_mode probe checks `-e /dev/fuse`). Without it — even with
+  # squashfuse/mksquashfs baked in the image — weft falls back to realizing each pack from its
+  # lockfile PER USER (slow, unshared). Bind the host node's device in (it's world-rw).
+  [ -e /dev/fuse ] && binds+=( --bind /dev/fuse )
   # The share root (site.yaml, image, skeleton, institution bundle + its refs tier).
   # Derived, not hardcoded: a site may root the deployment anywhere its nodes can read.
   _share="${ABA_SHARE:-$(dirname "${ABA_SITE_CONFIG:-/cluster/aba/site.yaml}")}"
