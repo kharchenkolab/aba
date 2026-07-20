@@ -701,6 +701,31 @@ def main() -> int:
                     restart_client()
                 except Exception:
                     pass
+
+        # ---- scenario-end SURFACE-PARITY oracle (default-on) ----
+        # The per-step checks verify records; this walks the CONSUMPTION
+        # surfaces (durability listing URLs, artifact serving, entity
+        # downloads, viewer lookup) so "recorded right rows" can never again
+        # pass while "a person opens the result" fails. Opt out with a
+        # top-level `surfaces: false` in scenario.yaml.
+        if spec.get("surfaces", True):
+            try:
+                from harness.surfaces import surface_parity_failures
+            except ImportError:
+                from surfaces import surface_parity_failures
+            try:
+                sfails = surface_parity_failures(client, pid)
+            except Exception as e:  # noqa: BLE001 — the oracle itself must not crash the run
+                sfails = [f"surface:oracle_crash:{type(e).__name__}: {e}"]
+            verdict = "PASS" if not sfails else "FAIL"
+            print(f"[_surfaces] consumption-surface parity: [{verdict}] "
+                  f"{('; '.join(sfails)) if sfails else 'all advertised surfaces answer honestly'}\n")
+            report.append({"step": "_surfaces", "kind": "surface_parity",
+                           "actor": "oracle", "verdict": verdict,
+                           "fails": sfails, "rubric": None})
+            bundle_steps.append({"step": "_surfaces", "kind": "surface_parity",
+                                 "actor": "oracle", "verdict": verdict,
+                                 "fails": sfails})
     finally:
         try:
             client_cm.__exit__(None, None, None)

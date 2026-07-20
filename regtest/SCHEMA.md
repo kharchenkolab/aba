@@ -106,6 +106,20 @@ expected_overall:
   observable, not an invariant.
 - `checks` / `expected_overall.notes` carry the real judgement for a human/LLM grader.
 
+## Surface parity (scenario-end oracle, default ON)
+
+After the last step, the runner walks the CONSUMPTION surfaces for every run the
+scenario produced (`harness/surfaces.py`): each file the durability listing
+advertises must answer at its URL (200 with bytes, or an honest 413 naming
+where/why — never a dead link), a `retained` row must carry a live URL, produced
+artifacts with served URLs must stream, entity downloads must serve or refuse
+honestly, and the viewer lookup must see viewer-eligible outputs. Reported as a
+synthetic `_surfaces` step in the scorecard. Rationale: the per-step checks
+verify RECORDS; without this, a scenario can compute right answers and record
+right rows while every surface a person actually opens is broken. Opt out (rare
+— e.g. a scenario that deliberately ends with bytes reclaimed) with a top-level
+`surfaces: false`.
+
 ## Conventions (kept from v1)
 Biologist voice, never name the tool. Planted, checkable truth (fixed seeds). Each
 scenario directory is self-contained (`scenario.yaml` + optional `_make_data.py` + `data/`).
