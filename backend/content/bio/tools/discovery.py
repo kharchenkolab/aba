@@ -188,9 +188,16 @@ def make_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
         # lazy — the first run materializes the prefix.
         if named_envs.resolve(pid, name) is not None and packages:
             res = named_envs.extend(pid, name, packages)
+            # Extension mints a NEW frozen EnvID — a kernel already running on
+            # the old realization would never see the new packages (found live:
+            # in-session imports kept failing after a successful extend). Shut
+            # the env's live sessions down; the next step re-attaches to the
+            # new identity. In-kernel state is gone by design — say so below.
+            _restarted = _evict_env_kernels(name)
         else:
             res = named_envs.create(pid, name, language=lang, packages=packages,
                                     python_version=(input_.get("python_version") or None))
+            _restarted = 0
     except ComputeError as e:
         return {"status": "error", "name": name, "language": lang,
                 "error": e.to_payload(),
@@ -211,7 +218,21 @@ def make_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
                    f"{_run}(env={name!r}, code=…) — the first run materializes it. "
                    f"Calling make_isolated_env again with more packages LAYERS them on. "
                    f"Listed in inspect_env(); survives across threads.")
+    if _restarted:
+        out["note"] += (f" NOTE: the env's running session was restarted to pick "
+                        f"up the new packages — in-memory objects from earlier "
+                        f"steps in this env are gone; reload what you need.")
     return out
+
+
+def _evict_env_kernels(env_name: str) -> int:
+    """Shut down live kernel sessions attached to a named env (identity change
+    or disk evict). Best-effort — a pool failure must not fail the env op."""
+    try:
+        from core.exec.kernels import get_pool
+        return get_pool().evict_env_sessions(env_name)
+    except Exception:  # noqa: BLE001
+        return 0
 
 
 def run_in_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
@@ -286,6 +307,9 @@ def evict_env(input_: dict, ctx: dict | None = None) -> dict:
         return {"status": "error", "name": name,
                 "note": f"'{name}' is the active env — call set_active_env('default') before "
                         f"forgetting it (no disk was evicted)."}
+    # A live kernel session holds its realization's prefix open — shut the
+    # env's sessions down BEFORE evicting the bytes underneath them.
+    _evict_env_kernels(name)
     try:
         freed = named_envs.evict(pid, name, site=site)
     except ComputeError as e:
@@ -974,12 +998,19 @@ def _extend_into_named_env(env_name: str, packages: list[str], cap: dict) -> dic
     except Exception as e:  # noqa: BLE001
         return {"status": "error", "name": cap.get("name"), "env": env_name,
                 "note": f"could not extend env '{env_name}': {e}"}
+    # Identity changed → a kernel still running on the OLD realization would
+    # never see the new packages (found live: post-extend in-session imports
+    # failed while the registry was correct). Restart the env's live sessions.
+    restarted = _evict_env_kernels(env_name)
+    note = (f"Installed {', '.join(packages)} into isolated env '{env_name}' "
+            f"(new env_id {res['env_id']}). Frozen identities: extending mints a "
+            f"new id; history kept. Run in it with run_python(env='{env_name}', …).")
+    if restarted:
+        note += (" NOTE: the env's running session was restarted to pick up the "
+                 "new packages — in-memory objects from earlier steps in this "
+                 "env are gone; reload what you need.")
     return {"status": "ready", "name": cap.get("name"), "env": env_name,
-            "env_id": res["env_id"], "installed": list(packages),
-            "note": (f"Installed {', '.join(packages)} into isolated env '{env_name}' "
-                     f"(new env_id {res['env_id']}). Frozen identities: extending mints a "
-                     f"new id; history kept — the env's state carries over. Run in it with "
-                     f"run_python(env='{env_name}', …).")}
+            "env_id": res["env_id"], "installed": list(packages), "note": note}
 
 
 def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:

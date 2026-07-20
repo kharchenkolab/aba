@@ -128,6 +128,26 @@ class KernelPool:
                 except Exception:  # noqa: BLE001
                     pass
 
+    def evict_env_sessions(self, env_name: str) -> int:
+        """Shut down every live session attached to the named env (scope keys
+        carry `::env::<name>`, local AND remote lanes). Called when the env's
+        IDENTITY changes (extension mints a new frozen EnvID — a running kernel
+        stays on the old realization and new packages never appear in it;
+        found live by env_lifecycle_local) and before a disk evict (a kernel
+        holding the prefix open must not outlive its realization). Returns the
+        number of sessions shut down; in-memory state in those kernels is gone
+        by design — callers must SAY so in their result note."""
+        marker = f"::env::{env_name}"
+        n = 0
+        with self._lock:
+            for key in [k for k in self._sessions if marker in k[0]]:
+                try:
+                    self._sessions.pop(key).shutdown()
+                    n += 1
+                except Exception:  # noqa: BLE001
+                    pass
+        return n
+
     def owned_kernel_pids(self) -> list[int]:
         """OS pids of kernels this pool currently owns. Used by the
         SIGTERM/SIGINT handler to hard-kill them before uvicorn forcibly

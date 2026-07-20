@@ -261,3 +261,47 @@ def _standalone() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(_standalone())
+
+
+# ── 5. identity change / evict must restart the env's live kernels ──────────
+# (found live by env_lifecycle_local: after a successful extend, in-session
+# imports kept failing — the running kernel stayed on the OLD frozen EnvID)
+
+def test_pool_evict_env_sessions_matches_scope_keys():
+    from core.exec.kernels.pool import KernelPool
+
+    class _S:
+        alive, busy, last_used = True, False, 0.0
+        def __init__(self): self.down = False
+        def shutdown(self): self.down = True
+
+    p = KernelPool()
+    a, b, c = _S(), _S(), _S()
+    p._sessions = {("t1::env::hot", "python"): a,          # local lane
+                   ("t2@site::env::hot", "python"): b,     # remote lane
+                   ("t1", "python"): c}                    # unrelated thread kernel
+    n = p.evict_env_sessions("hot")
+    assert n == 2 and a.down and b.down and not c.down
+    assert ("t1", "python") in p._sessions and len(p._sessions) == 1
+
+
+def test_extend_and_evict_restart_env_kernels(monkeypatch):
+    _setup(monkeypatch)
+    named_envs.create("prjT", "hot", packages=["six"])
+    calls: list = []
+    import content.bio.tools.discovery as d
+    monkeypatch.setattr(d, "_evict_env_kernels",
+                        lambda name: calls.append(name) or 1)
+    # ensure_capability(env=…) extension path
+    r = d._extend_into_named_env("hot", ["click"], {"name": "click"})
+    assert r["status"] == "ready" and calls == ["hot"]
+    assert "restarted" in r["note"]          # the state-loss disclosure
+    # make_isolated_env layering path
+    calls.clear()
+    r2 = d.make_isolated_env({"name": "hot", "packages": ["attrs"]})
+    assert r2["status"] == "ok" and calls == ["hot"]
+    assert "restarted" in r2["note"]
+    # evict path (kernel must not outlive its realization)
+    calls.clear()
+    r3 = d.evict_env({"name": "hot"})
+    assert r3["status"] == "ok" and calls == ["hot"]
