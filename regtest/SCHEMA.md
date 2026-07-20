@@ -106,6 +106,22 @@ expected_overall:
   observable, not an invariant.
 - `checks` / `expected_overall.notes` carry the real judgement for a human/LLM grader.
 
+## Surface levels (automatic — scenarios opt OUT, not in)
+
+The harness enforces the consumption-surface level uniformly, driven by what a
+scenario already declares — authors cannot forget it and the 25 existing
+scenarios get it without edits:
+
+- **`produces` ⇒ served.** A step claiming `produces` implicitly promises those
+  artifacts are CONSUMABLE: every produced artifact with a served URL must
+  stream non-empty bytes at that step (200, or an honest 413) — a row that
+  exists but doesn't open is a failure (`produces_served:<kind> -> <status>`).
+  Per-step opt-out: `expect: {produces_served: false}`.
+- **pin ⇒ downloadable.** A user `pin` step implicitly promises the pinned
+  entity is reachable: its download must serve (200 with bytes / honest 413).
+  Explicit form for other steps: `state: {downloadable: {ref: sX, ok: true}}`;
+  `ok: false` asserts an HONEST refusal (4xx — never 200, never 5xx).
+
 ## Surface parity (scenario-end oracle, default ON)
 
 After the last step, the runner walks the CONSUMPTION surfaces for every run the

@@ -338,6 +338,24 @@ def run_checks(step, cap, cmetrics, prev_msgs, client, pid, tid, created, produc
         got = sum(1 for a in produced_arts if a.get("kind") == k)
         if got < n:
             fails.append(f"produces[{k}]>={n} but got {got}")
+    # AUTOMATIC surface level: a step that claims `produces` implicitly promises
+    # those artifacts are CONSUMABLE — every produced artifact with a served URL
+    # must stream non-empty bytes NOW (200, or an honest 413), not merely exist
+    # as a row. Opt out per step with `expect: {produces_served: false}`.
+    if exp.get("produces_served", bool(exp.get("produces"))):
+        for a in produced_arts:
+            url = a.get("url")
+            if not url:
+                continue
+            try:
+                r = client.get(url)
+                if r.status_code == 200 and r.content:
+                    continue
+                if r.status_code == 413:
+                    continue                      # honest over-budget refusal
+                fails.append(f"produces_served:{a.get('kind')} -> {r.status_code}")
+            except Exception as e:  # noqa: BLE001 — a crashed serve route is a failure
+                fails.append(f"produces_served:{a.get('kind')} -> crash:{type(e).__name__}")
     st = exp.get("state") or {}
     man = json.dumps(client.get(f"/api/threads/{tid}/manifest").json(), default=str).lower()
     ents = client.get("/api/entities", params={"project_id": pid, "include_archived": True}).json()
@@ -382,6 +400,50 @@ def run_checks(step, cap, cmetrics, prev_msgs, client, pid, tid, created, produc
         dr = (created.get(step["id"]) or {}).get("delete_revision") or {}
         if bool(dr.get("deleted")) != bool(st["revision_deleted"]):
             fails.append(f"revision_deleted={dr.get('deleted')} expected {st['revision_deleted']}")
+    # AUTOMATIC surface level: a PIN step implicitly promises the pinned entity
+    # is REACHABLE — its download must serve (200 with bytes, or an honest
+    # 413), because a pin the user can never open is the presentation-parity
+    # bug class. Explicit form: `state: {downloadable: {ref: sX, ok: true}}`
+    # (ok:false asserts an HONEST refusal — 4xx, never 200, never 5xx).
+    dl = st.get("downloadable")
+    if dl is None and step.get("kind") == "pin" and step.get("actor", "agent") == "user":
+        rec = created.get(step["id"]) or {}
+        if rec.get("result_id") or rec.get("entity_id"):
+            dl = {"ref": step["id"], "ok": True}
+    if dl and dl.get("ref"):
+        rec = created.get(dl["ref"]) or {}
+        eid = rec.get("result_id") or rec.get("entity_id")
+
+        def _dl(e):
+            try:
+                r = client.get(f"/api/entities/{e}/download")
+                return r.status_code, bool(r.content)
+            except Exception as ex:  # noqa: BLE001
+                return f"crash:{type(ex).__name__}", False
+
+        if not eid:
+            fails.append(f"downloadable:{dl['ref']} unresolved ref")
+        else:
+            code, body = _dl(eid)
+            ok = (code == 200 and body) or code == 413
+            if dl.get("ok", True):
+                if not ok:
+                    # a container result carries no artifact of its own — the
+                    # product opens it through its MEMBERS, so the pin counts
+                    # as reachable when at least one member serves
+                    try:
+                        ent = client.get(f"/api/entities/{eid}").json()
+                        refs = [m.get("ref") for m in
+                                ((ent.get("metadata") or {}).get("members") or [])
+                                if m.get("ref")]
+                    except Exception:  # noqa: BLE001
+                        refs = []
+                    ok = any(((c == 200 and b) or c == 413)
+                             for c, b in (_dl(x) for x in refs[:4]))
+                if not ok:
+                    fails.append(f"downloadable:{dl['ref']} -> {code} (no member serves either)")
+            elif code == 200 or (isinstance(code, int) and code >= 500):
+                fails.append(f"downloadable:{dl['ref']} expected honest refusal, got {code}")
     rv = st.get("revisions_min")   # {ref: sX, n: N}: the chain for that entity has >=N revisions
     if rv and rv.get("ref"):
         rec = created.get(rv["ref"]) or {}

@@ -35,6 +35,14 @@ regtest/
 
 ## Running
 
+> **Oracle upgrade note (2026-07):** the harness now enforces consumption-surface
+> levels automatically — per-step `produces`⇒served + pin⇒downloadable checks and
+> a scenario-end `_surfaces` parity walk (see SCHEMA.md). The first sweep after
+> this upgrade may fail scenarios that previously passed: those are latent
+> product-surface bugs becoming visible, not harness regressions — triage them as
+> product defects, then `--accept` a new baseline (the scorecard also gains one
+> `_surfaces` row per scenario, so totals shift).
+
 **First (or after a fresh clone): generate the data** — it's not committed.
 ```sh
 bash regtest/scenarios/_regen_all.sh          # cached; ABA_REGEN_FORCE=1 to rebuild all
