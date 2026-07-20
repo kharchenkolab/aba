@@ -24,3 +24,16 @@
 - ⚠ <%= w %>
 <% end %>
 <% end %>
+<%# Version footer — app release (full, incl. commit) + published env stacks (date only,
+    for compactness). App + envs version independently in the weft model, so both are shown. %>
+<% if status.is_a?(Hash) && (status["release"] || (status["envs"] && !status["envs"].empty?)) %>
+<%
+  _rel  = status["release"]
+  _envs = (status["envs"] || {}).map { |n, v| "#{n} #{v.to_s.rpartition('-').first}" }.join(", ")
+  _bits = []
+  _bits << "aba release #{_rel}" if _rel
+  _bits << "envs: #{_envs}" unless _envs.empty?
+%>
+
+<small style="color:#888"><%= _bits.join(" · ") %></small>
+<% end %>

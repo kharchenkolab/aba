@@ -273,3 +273,31 @@ def test_reset_removes_oauth_json(tmp_path, monkeypatch):
     env, aba_home = _run_creds(tmp_path, monkeypatch, personal=("oauth_json", "acc"), reset=True)
     assert not (aba_home / "oauth.json").exists()
     assert env["ANTHROPIC_API_KEY"] == "sk-ant-GROUP"
+
+
+def test_status_card_carries_release_and_env_versions(tmp_path, monkeypatch):
+    """The OOD session card surfaces the app release + the published env stacks (each
+    versioned independently). Guards aba_preflight writing both into status.yaml."""
+    g = tmp_path / "groups"
+    app = tmp_path / "app"; rel = app / "releases" / "2026.07.20-abc1234"
+    rel.mkdir(parents=True)
+    (app / "current").symlink_to(rel)                 # resolve_release_image reads this
+    envs = tmp_path / "envs"; envs.mkdir()
+    (envs / "catalog.json").write_text(_json.dumps({
+        "catalog_version": 1,
+        "envs": {"python-bio": {"latest": "2026.07.17-2dc733b3"},
+                 "r-bio": {"latest": "2026.07.16-3c281911"}}}))
+    site = f"""
+site: {{name: test}}
+image: {{release_root: "{app}"}}
+envs:  {{publish_tree: "{envs}"}}
+scopes:
+  group: {{enabled: true, root_path: "{g}/{{group}}/aba", auto_create_skeleton: true}}
+  user:  {{state_dir: "{g}/{{group}}/aba/users/{{user}}"}}
+credentials: {{order: [], on_missing: demo_mode}}
+"""
+    code, status, _ = _run_pf(tmp_path, monkeypatch, site)
+    assert code == 0
+    assert status["release"] == "2026.07.20-abc1234"
+    assert status["envs"] == {"python-bio": "2026.07.17-2dc733b3",
+                              "r-bio": "2026.07.16-3c281911"}

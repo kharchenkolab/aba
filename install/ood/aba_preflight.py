@@ -502,10 +502,29 @@ def main():
             lines.append(f'[ -f {shq(genv)} ] && set -a && . {shq(genv)} && set +a')
         (staged / "aba-env.sh").write_text("\n".join(lines) + "\n")
 
+    # ---- version info for the session card ----
+    # App release and the published env stacks version INDEPENDENTLY (weft model), so surface
+    # both. Computed here (not from the aba-env block, which is `if not blocked`) so a blocked
+    # card still shows which release it was launching. envs = the tree's OFFERED `latest`
+    # (a per-session ADOPTED version is a runtime fact the app footer shows, not preflight).
+    card_img = site.get("image") or {}
+    card_release = ""
+    if card_img.get("release_root"):
+        card_release = resolve_release_image(ex(card_img["release_root"])).get("ABA_RELEASE_ID", "")
+    card_envs = {}
+    _pt = (site.get("envs") or {}).get("publish_tree")
+    if _pt:
+        try:
+            _cat = json.load(open(os.path.join(ex(_pt), "catalog.json")))
+            card_envs = {n: (i or {}).get("latest", "") for n, i in (_cat.get("envs") or {}).items()}
+        except Exception:
+            pass
+
     # ---- status.yaml ----
     status = {
         "version": 1, "ready": not blocked, "user": user, "group": group or None,
         "mode": "direct", "blocked_on": blocked_reason,
+        "release": card_release or None, "envs": card_envs or None,
         "scopes": {
             "institution": {"state": inst_state, "detail": ex(inst_path) if inst_path else "not configured"},
             "group": {"state": group_state, "detail": group_detail, "bundle_present": bundle_present},
