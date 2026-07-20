@@ -50,10 +50,25 @@ def test_shipped_app_files_carry_no_template_tokens():
 
 def test_session_tmpdir_prefers_node_local_and_cleans_fallback():
     """The ENOSPC fix contract: TMPDIR prefers $SLURM_TMPDIR (node-local,
-    Slurm-purged); the parallel-FS fallback is per-session and removed by an
-    exit trap (no quota debris)."""
+    Slurm-purged); the parallel-FS fallback is per-session and removed by the
+    handler ACTUALLY installed on EXIT (no quota debris).
+
+    Behavioral, not textual: a standalone ``trap 'rm -rf …' EXIT`` is unsafe
+    because a LATER ``trap … EXIT`` silently replaces it (bash keeps one EXIT
+    handler). So we resolve the last-installed EXIT handler and require the
+    fallback cleanup to live inside it."""
     text = (APP / "template" / "script.sh.erb").read_text()
     assert "SLURM_TMPDIR" in text, "TMPDIR must prefer node-local job scratch"
-    assert re.search(r"trap\s+'rm -rf .*_sess_tmp.*'\s+EXIT", text), \
-        "the PFS fallback tmp dir must be cleaned by an EXIT trap"
     assert re.search(r'--env "TMPDIR=', text), "TMPDIR must be forwarded into the container"
+    # bash keeps a single EXIT handler — the LAST `trap … EXIT` wins.
+    exit_traps = re.findall(r'^\s*trap\s+(.+?)\s+((?:\w+\s+)*EXIT)\b', text, re.M)
+    assert exit_traps, "no EXIT trap found"
+    handler = exit_traps[-1][0].strip().strip("'\"")
+    body = handler                                   # inline handler: check its own text
+    fn = re.search(rf'^{re.escape(handler)}\s*\(\)\s*\{{(.*?)\n\}}', text, re.S | re.M)
+    if fn:                                           # named function: check its body
+        body = fn.group(1)
+    assert re.search(r'rm -rf\s+.*_sess_tmp', body), (
+        "the fallback TMPDIR must be removed by the EXIT-installed handler "
+        f"({handler!r}); a separate `trap 'rm -rf' EXIT` gets clobbered by a "
+        "later `trap … EXIT` and leaks the per-session dir")

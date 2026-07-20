@@ -114,15 +114,18 @@ if [ -n "${ABA_SIF:-}" ]; then
   # env.solve_conflict "No space left on device". Prefer NODE-LOCAL job scratch
   # ($SLURM_TMPDIR: fast local disk, purged by Slurm at job end); fall back to a
   # PER-SESSION dir under the user's runtime tree (real disk via the /groups bind —
-  # parallel-FS, so slower for many-small-file unpacks, and not auto-purged: the
-  # exit trap removes it so debris can't accrue against quota across sessions).
-  # The tmpfs /tmp stays for sockets/small files. weft's LocalAdapter inherits this.
+  # parallel-FS, so slower for many-small-file unpacks, and not auto-purged: it is
+  # removed by shutdown() below — the single EXIT handler — so debris can't accrue
+  # against quota across sessions. (A standalone `trap 'rm -rf' EXIT` here would be
+  # silently replaced by the later `trap shutdown … EXIT`, which is why cleanup lives
+  # in shutdown() instead.) The tmpfs /tmp stays for sockets/small files. weft's
+  # LocalAdapter inherits this env when it shells out.
   if [ -n "${SLURM_TMPDIR:-}" ] && [ -d "${SLURM_TMPDIR}" ]; then
-    _sess_tmp="${SLURM_TMPDIR}"
+    _sess_tmp="${SLURM_TMPDIR}"                       # node-local; Slurm purges it
   else
     _sess_tmp="${ABA_RUNTIME_DIR}/tmp/session-${SLURM_JOB_ID:-$$}"
     mkdir -p "$_sess_tmp"
-    trap 'rm -rf "$_sess_tmp"' EXIT
+    _sess_tmp_cleanup="$_sess_tmp"                    # only WE made it → shutdown() rm -rf's it
   fi
   envs+=( --env "TMPDIR=${_sess_tmp}" )
   # ABA_SIF + ABA_JOB_WRAP: forwarded so the containerized backend's slurm_submitter
@@ -232,6 +235,9 @@ shutdown() {
   killtree "$UV" TERM
   for _ in $(seq 1 8); do kill -0 "$UV" 2>/dev/null || break; sleep 1; done
   killtree "$UV" KILL
+  # remove the per-session parallel-FS TMPDIR fallback (never $SLURM_TMPDIR — Slurm
+  # owns that). Set only when we created it; the single EXIT trap makes this reliable.
+  [ -n "${_sess_tmp_cleanup:-}" ] && rm -rf "${_sess_tmp_cleanup}"
 }
 trap shutdown TERM INT EXIT
 wait "$UV"
