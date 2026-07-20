@@ -24,16 +24,36 @@
 - ⚠ <%= w %>
 <% end %>
 <% end %>
-<%# Version footer — app release (full, incl. commit) + published env stacks (date only,
-    for compactness). App + envs version independently in the weft model, so both are shown. %>
-<% if status.is_a?(Hash) && (status["release"] || (status["envs"] && !status["envs"].empty?)) %>
+<%# Version footer — DEPLOYMENT-SIDE (no SIF rebuild). The release is the one preflight
+    PINNED for THIS session (ABA_RELEASE_ID in aba-env.sh, more correct than reading
+    `current` at render time — an admin may have promoted since launch); env stacks come
+    from the publish-tree catalog (ABA_WEFT_PUBLISH_TREE). App + envs version independently,
+    so both are shown: release in full (incl. commit), env versions date-only for compactness.
+    (catalog.json is parsed with YAML — JSON is a YAML subset — to avoid a `require 'json'`.) %>
 <%
-  _rel  = status["release"]
-  _envs = (status["envs"] || {}).map { |n, v| "#{n} #{v.to_s.rpartition('-').first}" }.join(", ")
+  _release = nil; _tree = nil
+  begin
+    ef = staged_root.join("aba-env.sh")
+    File.read(ef).each_line do |ln|
+      _release = $1.strip.gsub(/\A['"]|['"]\z/, "") if ln =~ /^export ABA_RELEASE_ID=(.*)$/
+      _tree    = $1.strip.gsub(/\A['"]|['"]\z/, "") if ln =~ /^export ABA_WEFT_PUBLISH_TREE=(.*)$/
+    end if File.exist?(ef)
+  rescue => _e
+  end
+  _envs = []
+  begin
+    cat = YAML.safe_load(File.read(File.join(_tree, "catalog.json"))) if _tree
+    ((cat || {})["envs"] || {}).each do |n, i|
+      v = (i["latest"] || "").to_s
+      _envs << "#{n} #{v.rpartition('-').first}" unless v.empty?
+    end
+  rescue => _e
+  end
   _bits = []
-  _bits << "aba release #{_rel}" if _rel
-  _bits << "envs: #{_envs}" unless _envs.empty?
+  _bits << "aba release #{_release}" if _release && !_release.empty?
+  _bits << "envs: #{_envs.join(", ")}" unless _envs.empty?
 %>
+<% unless _bits.empty? %>
 
 <small style="color:#888"><%= _bits.join(" · ") %></small>
 <% end %>
