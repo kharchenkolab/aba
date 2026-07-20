@@ -4,8 +4,8 @@ category: Interactive Apps
 subcategory: Servers
 role: batch_connect
 description: |
+  __ABA_VERSION_LINE__
+
   AI Bioinformatics Agent — the ABA web app launched on a compute node and
   reverse-proxied to your browser. Pick your lab and instance size, then launch;
   connect your Anthropic subscription or API key in-session via Settings → Agent.
-
-  __ABA_VERSION_LINE__
