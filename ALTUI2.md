@@ -54,6 +54,45 @@ backend, no proxy. The original workspace app is untouched in this branch
   deliverable (Data · Method · THE number · Caveat · sediment appendix) from
   the same machinery — no modes, no imposed ceremony.
 
+## The work loop (PK: "where is the actual work done and tracked?")
+
+The Record as first prototyped rendered only the RESIDUE of work (sediment /
+notes / narrative are all downstream); the daily loop was invisible. The
+answer, made concrete in the **workflow storyboard** (`/workflow.html`):
+*the document is where you stand; sessions are where you reach.*
+
+- **Working sessions** are the chat, demoted from destination to instrument:
+  a panel opened OVER the document, scoped by where you summon it (project /
+  question / trail / figure — same instrument as the margin bench, wider
+  scope). Opened from Q1 it starts knowing the question, its evidence and
+  trails — zero context-setting.
+- **Runs land in the sediment at launch** (▶ line, marked ⟲ with their
+  session) — the document records actions as they happen; results return
+  into the conversation; fragments/notes are drafted into the strata DURING
+  the session (visible `draft` badges).
+- **Session close is a distillation moment**: the panel proposes what enters
+  the record (fragment → trail, addendum draft → question, keeps →
+  retention); nothing enters without ratification; the transcript files
+  under its anchor — reachable from the section head (⟲), the desk, and
+  every sediment line it produced. Work is findable from what it touched.
+- **The desk strip** is the document's present tense: open sessions, running
+  work, yesterday's resume point.
+
+**The storyboard** (`frontend/src/workflow/`) plays this as ten interactive
+scenes over the SAME Record renderer (now parameterized over a `World`,
+`src/notebook/world.ts` — `/notebook.html` is unchanged):
+*Part I, early days (day 0–3)* — the hard, nothing-to-anchor-on case: a new
+project is a composer, not a document (E1); the first exchange births the
+sediment (E2); noticing becomes notes (E3); the first question is born
+mid-conversation as a stub section (E4); day 3 reads as a lab diary (E5).
+*Part II, mature (month 4)* — re-entry and orientation (M1); a session
+opened from a question with scope in hand (M2); the churn loop with live
+accretion (M3); walking away = distillation (M4); the morning after —
+resume from the document, transcript one click away (M5).
+Some scenes advance through their own affordances (typing in the day-0
+composer, `work ▸` on a question, `file & close` in the panel) — the story
+moves the way the scientist would. Arrow keys / pills / `?step=` deep links.
+
 ## Deliberate scope cuts
 
 Chat is canned; drafts are fixture data; ratification/nudge state is
