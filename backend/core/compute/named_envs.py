@@ -637,10 +637,31 @@ def ensure_platform(project_id: str, name: str, platform_str: str) -> dict:
     res = _sync(_adapter.get_compute().env_ensure(base, update=True))
     env_id = res["env_id"]
     eco = "cran" if language == "r" else "pypi"
-    for layer in row.get("layers") or []:
-        lspec = {"name": f"aba-{project_id}-{name}", "extends_env": env_id,
-                 "deps": {eco: list(layer)}, "platforms": plats}
-        res = _sync(_adapter.get_compute().env_ensure(lspec))
+    try:
+        for layer in row.get("layers") or []:
+            lspec = {"name": f"aba-{project_id}-{name}", "extends_env": env_id,
+                     "deps": {eco: list(layer)}, "platforms": plats}
+            res = _sync(_adapter.get_compute().env_ensure(lspec))
+            env_id = res["env_id"]
+    except ComputeError as e:
+        if getattr(e, "code", "") != "env.layer_conflict":
+            raise
+        # FLATTEN fallback (F-ENV-2, found live): replaying the extension
+        # chain for a new platform re-solves each delta against a re-locked
+        # parent — and a delta that needs base version moves conflicts the
+        # same way it would have at extend time on that platform. The env's
+        # cumulative CONTENT is what the user asked for, not the chain shape:
+        # merge base deps + every layer into ONE spec and solve it fresh for
+        # the target platforms. Same frozen-identity semantics (new EnvID).
+        flat = {k: v for k, v in base.items() if k != "deps"}
+        deps = {k: list(v) for k, v in (base.get("deps") or {}).items()}
+        merged = list(deps.get(eco) or [])
+        for layer in row.get("layers") or []:
+            merged += [p for p in layer if p not in merged]
+        deps[eco] = merged
+        flat["deps"] = deps
+        flat["platforms"] = plats
+        res = _sync(_adapter.get_compute().env_ensure(flat, update=True))
         env_id = res["env_id"]
     now = time.time()
     _update(project_id, lambda data: data["envs"][name].update(

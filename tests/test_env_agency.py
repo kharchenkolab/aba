@@ -305,3 +305,47 @@ def test_extend_and_evict_restart_env_kernels(monkeypatch):
     calls.clear()
     r3 = d.evict_env({"name": "hot"})
     assert r3["status"] == "ok" and calls == ["hot"]
+
+
+# ── 6. cross-platform re-lock: chain replay conflicts → FLATTEN fallback ────
+# (F-ENV-2, found live: replaying an extension chain for a new platform
+# re-hits layer_conflict; the cumulative CONTENT must solve as one flat spec)
+
+def test_ensure_platform_flattens_on_layer_conflict(monkeypatch):
+    from core.compute.errors import ComputeError
+    fake = _setup(monkeypatch)
+    named_envs.create("prjT", "chainy", packages=["numpy"])
+    named_envs.extend("prjT", "chainy", ["pandas"])
+
+    orig = fake.env_ensure.__func__
+
+    async def ensure_with_conflict(self, spec, update=False, **kw):
+        if spec.get("extends_env") and spec.get("platforms"):
+            raise ComputeError("env.layer_conflict",
+                               "the delta does not fit on this parent",
+                               stage="solve")
+        return await orig(self, spec, update=update, **kw)
+
+    monkeypatch.setattr(_FakeCompute, "env_ensure", ensure_with_conflict)
+    out = named_envs.ensure_platform("prjT", "chainy", "linux-aarch64")
+    # the LAST solve must be the FLAT one: no extends_env, merged deps,
+    # target platforms included
+    flat = fake.ensured[-1]
+    assert not flat.get("extends_env")
+    assert "linux-aarch64" in (flat.get("platforms") or [])
+    merged = (flat.get("deps") or {}).get("pypi") or []
+    assert "numpy" in merged and "pandas" in merged
+    # registry row points at the flat solve's id
+    assert named_envs.resolve("prjT", "chainy")["env_id"] == out["env_id"]
+
+
+def test_ensure_platform_replay_still_used_when_it_fits(monkeypatch):
+    fake = _setup(monkeypatch)
+    named_envs.create("prjT", "fits", packages=["numpy"])
+    named_envs.extend("prjT", "fits", ["pandas"])
+    named_envs.ensure_platform("prjT", "fits", "linux-aarch64")
+    # no conflict → the layer REPLAY path ran (an extends_env spec was solved
+    # with platforms set) and no flat merge happened
+    replayed = [s for s in fake.ensured
+                if s.get("extends_env") and s.get("platforms")]
+    assert replayed, "layer replay should be attempted first"
