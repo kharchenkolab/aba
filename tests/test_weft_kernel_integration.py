@@ -219,9 +219,9 @@ def test_it_session_attach_live_install():
 
 def test_it_pool_weft_isolated_lane():
     """W-K1a: the KernelPool routes the isolated-env lane to a WeftKernelSession
-    when ABA_WEFT_KERNELS is on, the setup cell chdir's the kernel into the aba
-    scratch cwd (so a bare write lands where harvest looks — not the weft
-    sandbox), and state persists across cells."""
+    (the only transport since the cutover), the setup cell chdir's the kernel
+    into the aba scratch cwd (so a bare write lands where harvest looks — not
+    the weft sandbox), and state persists across cells."""
     if not _ENABLED:
         _skip("set ABA_WEFT_KERNEL_IT=1 to run the real-weft kernel integration test")
     import tempfile
@@ -241,8 +241,7 @@ def test_it_pool_weft_isolated_lane():
     # Route the isolated-env lane at a realized EnvID without needing a registered
     # named env: patch resolve → that EnvID, ensure_realized → no-op (already ready).
     import contextlib
-    saved = (cfg.WEFT_KERNELS, named_envs.resolve, named_envs.ensure_realized)
-    cfg.WEFT_KERNELS = True
+    saved = (named_envs.resolve, named_envs.ensure_realized)
     named_envs.resolve = lambda pid, name: {"env_id": env_id, "language": "python"}
     named_envs.ensure_realized = lambda eid, **k: None
     cwd = tempfile.mkdtemp(prefix="aba_wk1a_cwd_")
@@ -276,7 +275,7 @@ def test_it_pool_weft_isolated_lane():
         assert "again 42" in r3.stdout, r3
     finally:
         pool.shutdown_all()
-        cfg.WEFT_KERNELS, named_envs.resolve, named_envs.ensure_realized = saved
+        named_envs.resolve, named_envs.ensure_realized = saved
 
 
 def test_it_pool_weft_default_lane():
@@ -302,8 +301,7 @@ def test_it_pool_weft_default_lane():
     session_id = sess.get("session_id") or sess.get("id")
     assert session_id, sess
 
-    saved = (cfg.WEFT_KERNELS, project_env.ensure)
-    cfg.WEFT_KERNELS = True
+    saved = (project_env.ensure,)
     project_env.ensure = lambda pid, lang: {"session_id": session_id, "base_env_id": base}
     cwd = tempfile.mkdtemp(prefix="aba_wk1b_cwd_")
     pool = KernelPool(idle_ttl=10**9)
@@ -321,7 +319,7 @@ def test_it_pool_weft_default_lane():
         assert s.alive
     finally:
         pool.shutdown_all()
-        cfg.WEFT_KERNELS, project_env.ensure = saved
+        (project_env.ensure,) = saved
         try:
             ad.sync_call("session_stop", session_id)
         except Exception:  # noqa: BLE001

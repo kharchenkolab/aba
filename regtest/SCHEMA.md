@@ -122,6 +122,18 @@ scenarios get it without edits:
   Explicit form for other steps: `state: {downloadable: {ref: sX, ok: true}}`;
   `ok: false` asserts an HONEST refusal (4xx — never 200, never 5xx).
 
+## Transport truth (scenario-end oracle, default ON)
+
+After the last step the runner also walks the scenario's execution records over
+the mechanism-truth surface (`GET /api/runs/{id}/execs`, `harness/transport.py`)
+and asserts none self-identify as LEGACY executions (`compute.substrate` other
+than the substrate). Rationale: outcome oracles cannot see mechanism — the
+legacy local kernel lane and the substrate lane produce identical results,
+records, and surfaces, which is how the platform ran the legacy lane by default
+for months while every test stayed green. Reported as a synthetic `_transport`
+row carrying `checked` (records examined — a zero-checked pass proves nothing
+and should be treated as unproven). Opt out with a top-level `transport: false`.
+
 ## Surface parity (scenario-end oracle, default ON)
 
 After the last step, the runner walks the CONSUMPTION surfaces for every run the

@@ -66,7 +66,7 @@ def _weft_setup_code(lang: str, remote: bool = False) -> str:
     `remote=True`: the controller's project data dir does not exist on the
     kernel's machine — bind DATA_DIR to the sandbox too, so writes stay
     (run,rel)-addressable there instead of failing on a foreign path."""
-    from core.exec.kernels import jupyter as _j
+    from core.exec.kernels import setup_helpers as _j
     if lang == "r":
         from core.exec.r import cran_repo, _ppm_ua_expr
         repoline = f'options(repos=c(CRAN={cran_repo()!r})); {_ppm_ua_expr()}\n'
@@ -160,8 +160,9 @@ def _fit_walltime(e) -> str | None:
 
 def for_pool(scope_key: str, lang: str, *, cwd: str, env_name: str | None,
              site: str = _LOCAL_SITE):
-    """Build a WeftKernelSession for the pool, or return None to fall back to the
-    jupyter transport. Three lanes: ISOLATED (a frozen named EnvID, W-K1a),
+    """Build a WeftKernelSession for the pool, or return None for an unknown
+    named env (the pool raises the clear error — there is no other kernel
+    transport). Three lanes: ISOLATED (a frozen named EnvID, W-K1a),
     DEFAULT (env_name=None → a live project session, W-K1b), and BARE
     (env_name='system' → no env at all, the machine's own interpreter). A
     named env is realized by the caller before the pool lock.

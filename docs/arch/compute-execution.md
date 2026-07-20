@@ -14,10 +14,13 @@ many calls. Run-now must make that cheap **without** letting one investigation's
 state leak into another, and without ever silently losing a result. Everything
 below derives from a few invariants:
 
-- **Run-now sits behind a swappable `KernelSession` seam.** The pool and every
-  caller speak `execute`/`interrupt`/`shutdown` (`core/exec/kernels/base.py:10`);
-  no `jupyter_client` specifics leak past it. So kernels can move off-box (a
-  remote gateway/E2B impl) with no change above the seam.
+- **Run-now sits behind the `KernelSession` seam, and the substrate is the only
+  transport.** The pool and every caller speak `execute`/`interrupt`/`shutdown`
+  (`core/exec/kernels/base.py:10`); the one implementation is the weft kernel
+  protocol, local or remote — there is no legacy local lane and no silent
+  fallback (a substrate failure is a loud, typed refusal; the run tool degrades
+  to its one-shot lane and says so). Mechanism truth is stamped per exec
+  (`compute.substrate`) and guarded by the regtest transport oracle.
 - **Never evict a busy kernel.** A kernel executing a cell is another thread's
   live analysis; culling it to reclaim a slot destroys that work. Eviction and
   the idle reaper skip any session marked `busy`; at the hard cap we *refuse*
@@ -64,11 +67,9 @@ run_python/run_r ─► LocalRouter.decide() ─► "local"  ─► KernelPool.g
   line of inquiry) — or a sub-agent/scenario run id, or `thread::env::<name>` for
   an isolated-env kernel. State is shared within one investigation, isolated
   across them.
-- **`KernelSession`** — the transport-agnostic interface with two impls:
-  **`JupyterKernelSession`** (`core/exec/kernels/jupyter.py:405`), an
-  out-of-process IPython/IRkernel driven over `jupyter_client`, and
-  **`WeftKernelSession`** (`core/exec/kernels/weft.py`), weft's file-block
-  kernel protocol behind the same interface — local or **on a remote site**
+- **`KernelSession`** — the transport-agnostic interface, implemented by
+  **`WeftKernelSession`** (`core/exec/kernels/weft.py`): weft's file-block
+  kernel protocol behind the seam — local or **on a remote site**
   (`run_python(site=…)` without `background` holds a persistent interpreter
   THERE: `get_or_start(..., site=)` → `for_pool(site=)` → `kernel_start(site,
   lang, env_id=…)`, scope key `thread@site`). A remote kernel attaches a
@@ -84,11 +85,12 @@ run_python/run_r ─► LocalRouter.decide() ─► "local"  ─► KernelPool.g
   `env.platform_mismatch` so the retry can see it); its
   sandbox is a first-class weft inventory target, so new small outputs are
   fetched over the data plane post-exec for the standard harvest while big
-  ones stay kept-addressable on the site. A remote site NEVER falls back to
-  the jupyter transport (that would silently run "remote" code locally) —
-  kernel-start failure degrades to the one-shot remote sync lane. State
-  persists across `execute` calls; `interrupt` maps to SIGINT (state
-  survives); a crash is isolated from the backend.
+  ones stay kept-addressable on the site. Kernel-start failure — local or
+  remote — degrades to the one-shot lane with a loud warning, never to a
+  different kernel transport (there isn't one; silently running "remote" code
+  locally is the lie the placement rules exist to prevent). State persists
+  across `execute` calls; `interrupt` maps to SIGINT (state survives); a
+  kernel death is the substrate's to detect and ours to surface loudly.
 - **The stateless one-shot** — `run_python_code`/`run_r_code`
   (`core/exec/run.py:22`) write a self-contained `script.py`/`script.R` and run
   it via `MaterializingExecutor` (the runtime venv as launch harness + the run's
@@ -111,44 +113,31 @@ frugal:
   otherwise (`pool.py:31`).
 - **Per-user soft cap + LRU** = `KERNEL_MAX_LIVE` (5). Starting one over the cap
   evicts the least-recently-used **idle** session — never a busy one
-  (`pool.py:47`). When every over-cap session is busy, the pool bursts above the
+  (`pool.py:58`). When every over-cap session is busy, the pool bursts above the
   soft cap up to `KERNEL_HARD_MAX` (`MAX+3` = 8); past that it raises
   `KernelCapacityError` and the tool returns `at_capacity` rather than killing
-  running work (`pool.py:53`, surfaced at `run_exec.py:708`).
-- **Idle reaper.** A daemon thread (`_start_reaper`, `pool.py:115`) culls sessions
+  running work (`pool.py:69`, surfaced at `run_exec.py:708`).
+- **Idle reaper.** A daemon thread (`_start_reaper`, `pool.py:139`) culls sessions
   idle past `KERNEL_IDLE_TTL_S` (1 h) every 60 s; next use cold-starts. `busy`
-  is protected because `last_used` is touched throughout a long run
-  (`jupyter.py:593`).
-- **Bounded startup.** `get_or_start` holds the pool lock across the whole
-  session constructor, so a startup that *blocks* under resource pressure would
-  wedge every other kernel request. `_start_bounded` (`jupyter.py:448`) caps
-  `start_kernel`/`start_channels`/`wait_for_ready` (60/30/60 s) and fails fast,
-  releasing the lock, rather than hanging forever.
-- **Orphan hygiene.** Kernels are child processes that outlive a crashed uvicorn
-  worker (reparented to init) and leak GBs. Two layers reap them: an `atexit` +
-  FastAPI-shutdown `shutdown_all`, and a startup `_reap_orphan_kernels`
-  (`pool.py:157`) that SIGKILLs only processes proven ours (our uid, our launch
-  shape, a live connection file, an orphaned ppid chain). `kernel_pid()`
-  resolves the pid across `jupyter_client` 8.x provisioner shapes
-  (`jupyter.py:715`) — the accessor whose earlier gap let orphans accumulate
-  unreapable.
+  is protected because `last_used` is touched throughout a long run.
+- **Substrate-owned processes.** A weft kernel is a detached interpreter the
+  substrate holds on its node — the backend owns no kernel OS pids, so there is
+  nothing local to orphan when uvicorn dies. Cleanup is `shutdown_all` (atexit
+  + the FastAPI shutdown lifecycle), which stops each session through the
+  substrate (`kernel_stop`); stale substrate-side kernels are the substrate's
+  kernel lifecycle to reap.
 
-### The dead-kernel watchdog
+### Death and cancellation
 
-`execute` runs the blocking `execute_interactive` in a worker thread while the
-calling thread polls (`jupyter.py:586`). Each 0.2 s tick it flushes pending
-output, refreshes `last_used`, checks the cancel token, and calls
-`kernel_dead()` — a cheap `Popen.poll()`/`os.kill(pid, 0)`, no zmq heartbeat
-(`jupyter.py:728`). If the process exited mid-run, the watchdog stops waiting,
-shuts the session down (unblocking the daemon worker on its dead channels), drops
-it so the next call spawns fresh, and returns a failed `ExecResult` naming the
-likely cause (killed / crashed / OOM) — **loud, not a silent hang**
-(`jupyter.py:616`). `busy` is set for the duration and cleared in `finally`, so
-the watchdog window is exactly the never-evict-busy window.
-
-Cancellation escalates: a Stop registers `interrupt` (SIGINT, state-preserving);
-if the cell ignores it (`ABA_KERNEL_CANCEL_GRACE_S`, default 3 s) the session is
-hard-killed so an abandoned cell can't corrupt the next one (`jupyter.py:633`).
+Kernel death is surfaced, never hung on: `execute` drives the substrate's
+peek-streamed block protocol and reads `kernel_status` — a kernel that died
+mid-block (killed / crashed / OOM) comes back as a failed `ExecResult` naming
+the likely cause, the session is dropped, and the next call spawns fresh
+(`weft.py:507`,`:602`). `busy` is set for the duration and cleared in
+`finally`, so the death window is exactly the never-evict-busy window.
+Cancellation escalates: a Stop registers `interrupt` (SIGINT,
+state-preserving); if the cell ignores it the kernel is stopped so an
+abandoned cell can't corrupt the next one.
 
 ## run_python / run_r — the entry and the router
 
@@ -174,10 +163,10 @@ Each resolves the project + thread, then selects a lane —
   one-shot with a loud `kernel_warning` so the agent knows state and cwd no
   longer persist (`run_exec.py:777`).
 - **Resolved-`DATA_DIR` surfacing.** Both the kernel setup cell
-  (`_setup_code`/`_r_setup_code`, `jupyter.py:236`,`:172`) and the subprocess
-  preamble inject `DATA_DIR`/`WORK_DIR` into the namespace, and `_kernel_env`
-  exports them as real env vars so `os.environ[...]`/`Sys.getenv(...)` resolve
-  identically (`jupyter.py:353`). On a cwd shift or a fresh kernel, the
+  (`_weft_setup_code`, `kernels/weft.py:56`, helpers in
+  `kernels/setup_helpers.py`) and the subprocess preamble inject
+  `DATA_DIR`/`WORK_DIR` into the namespace so both languages resolve them
+  identically. On a cwd shift or a fresh kernel, the
   orientation preamble prepends a banner to stdout naming the **resolved**
   `DATA_DIR` and the input files actually on disk — so the agent doesn't
   conclude "no data, ask the user to upload" when files are present but
@@ -185,16 +174,15 @@ Each resolves the project + thread, then selects a lane —
 - **Output cap + stream coalesce.** stdout/stderr are middle-snipped to
   `TOOL_OUTPUT_CAP_CHARS` (50k) at result-build time — head+tail kept, middle
   replaced by a recovery marker (scientific output is informative at both ends,
-  `core/exec/output_cap.py:27`). Live iopub chunks are batched by a `Coalescer`
-  into 10 KB / 0.5 s bursts for the output drawer, plus a throttled one-line
-  progress tick — millisecond chunks would only flood the wire
-  (`core/exec/stream_coalesce.py`, `jupyter.py:479`).
-- **CPU/BLAS thread pinning.** `_kernel_env` sets `OMP/MKL/OPENBLAS/NUMEXPR/…
-  _NUM_THREADS` at kernel launch (torch/numpy read them at import) to
-  `default_thread_cap()` (`core/exec/cpu.py:100`): the explicit allocation
-  (Slurm/cgroup/`ABA_CPU_LIMIT`) honored in full, else `min(cpu, 8)` on an
-  unscheduled box. `pin_blas_threads()` sets the same process-wide at startup so
-  every child (kernels, `Rscript`, micromamba) inherits a sane cap.
+  `core/exec/output_cap.py:27`). Live output rides the substrate's peek
+  streaming (offset-batched reads), coalesced for the output drawer
+  (`core/exec/stream_coalesce.py`).
+- **CPU/BLAS thread pinning.** `pin_blas_threads()` sets `OMP/MKL/OPENBLAS/…
+  _NUM_THREADS` process-wide at startup to `default_thread_cap()`
+  (`core/exec/cpu.py:100`) so backend children (one-shot runs, converters)
+  inherit a sane cap; a substrate-spawned kernel is NOT a backend child — its
+  thread budget comes from its env activation and the node's allocation (see
+  Known gaps).
 
 `run_python` and `run_r` are near-parallel across both the entry impl and the
 stateless core; the shared machinery (router, harvest, exec record, preamble) is
@@ -238,8 +226,9 @@ entities with provenance ([`entity-model.md`](entity-model.md),
 | Where | What |
 |---|---|
 | `core/exec/kernels/base.py` | `KernelSession` protocol — the transport-agnostic seam |
-| `core/exec/kernels/pool.py` | `KernelPool`: lazy start, LRU + never-evict-busy, hard cap, idle reaper, orphan reaper, `KernelCapacityError` |
-| `core/exec/kernels/jupyter.py` | `JupyterKernelSession`: bounded startup, `execute` worker + dead-kernel watchdog, `busy` flag, setup cells, `_kernel_env` thread pinning, kernelspec management |
+| `core/exec/kernels/pool.py` | `KernelPool`: lazy start, LRU + never-evict-busy, hard cap, idle reaper, `KernelCapacityError`; single transport seam (`weft.for_pool`) |
+| `core/exec/kernels/weft.py` | `WeftKernelSession` (the only transport): local/remote attach (session, EnvID, bare), setup cells, peek streaming, death surfacing, platform re-lock retry |
+| `core/exec/kernels/setup_helpers.py` | shared setup-code builders (`DATA_DIR` resolution, `harvest_table()` injection) |
 | `core/exec/run.py` | stateless `run_python_code`/`run_r_code` (fresh + background body); `harvest_artifacts` (path-agnostic scan, blank-PNG + PDF handling) |
 | `content/bio/tools/run_exec.py` | agent-facing impl: lane selection, interactive kernel drive, exec record, namespace preview + `DATA_DIR` orientation preamble |
 | `content/bio/mcp_servers/aba_core/tools/run_exec.py` | the `run_python`/`run_r` MCP tool surface (docstrings, placement estimate params) |
@@ -256,12 +245,16 @@ entities with provenance ([`entity-model.md`](entity-model.md),
   genuinely diverge (kernelspec, preamble, libpaths, future/BLAS env), it's the
   critical path, and it's hard to verify safely without a live kernel. Kept
   in sync by hand today.
-- **Intermittent kernel hangs under load.** Despite the watchdog and bounded
-  startup, heavy concurrent load has produced turn-timeouts / apparent kernel
-  wedges. The bounded-startup caps address the *pool-lock-held-during-startup*
-  wedge specifically; a lingering worry is unbounded contention when many
-  threads request kernels at once (single-consumer per session, but pool
-  acquisition serializes on one lock).
+- **Intermittent kernel hangs under load.** Heavy concurrent load has produced
+  turn-timeouts / apparent kernel wedges; a lingering worry is unbounded
+  contention when many threads request kernels at once (single-consumer per
+  session, but pool acquisition serializes on one lock, held across a kernel
+  start that now includes substrate round-trips).
+- **Thread pinning inside substrate kernels.** The retired legacy transport set
+  `OMP/…_NUM_THREADS` at kernel launch; a substrate-spawned kernel gets no such
+  launch env from the backend, so its BLAS thread budget currently depends on
+  the env activation and node allocation alone. Wants a substrate-side setup
+  hook (or setup-cell pinning) sized by `default_thread_cap()`.
 - **`display_data` images aren't captured inline.** Rich `execute_result`/
   `display_data` payloads are folded into stdout text; a plot shown but never
   `savefig`'d in a kernel cell isn't registered.

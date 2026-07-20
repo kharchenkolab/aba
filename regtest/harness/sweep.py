@@ -95,7 +95,13 @@ def run_scenario(sid, mode):
             bj = json.loads((rep / "bundle.json").read_text())
             errs = " ".join(json.dumps(st.get("errors") or []) for st in bj.get("steps", []))
             d["_infra"] = sum(errs.count(p) for p in
-                              ("OAuthTokenUnavailable", "RateLimitError", "rate_limit", "overloaded_error"))
+                              ("OAuthTokenUnavailable", "RateLimitError", "rate_limit",
+                               "overloaded_error",
+                               # a mid-session credential rejection is infra too —
+                               # this signature slipped past the detector in a live
+                               # sweep and would have been baked into an --accept
+                               "AuthenticationError", "OAuth token rejected",
+                               "authentication_error"))
         except Exception:
             d["_infra"] = 0
         return d

@@ -788,6 +788,33 @@ def main() -> int:
             bundle_steps.append({"step": "_surfaces", "kind": "surface_parity",
                                  "actor": "oracle", "verdict": verdict,
                                  "fails": sfails})
+
+        # ---- scenario-end TRANSPORT (mechanism-truth) oracle (default-on) ----
+        # Outcome oracles cannot see MECHANISM: the legacy and substrate lanes
+        # produce identical results, so only the exec records' compute stamps
+        # say how each block actually ran. Every scenario asserts none of its
+        # executions self-identify as legacy. Opt out with `transport: false`.
+        if spec.get("transport", True):
+            try:
+                from harness.transport import transport_truth
+            except ImportError:
+                from transport import transport_truth
+            try:
+                tt = transport_truth(client, pid)
+                tfails = tt["failures"]
+                tchecked = tt["checked"]
+            except Exception as e:  # noqa: BLE001
+                tfails, tchecked = [f"transport:oracle_crash:{type(e).__name__}: {e}"], 0
+            verdict = "PASS" if not tfails else "FAIL"
+            print(f"[_transport] mechanism truth: [{verdict}] checked={tchecked} "
+                  f"{('; '.join(tfails)) if tfails else 'every stamped execution ran on the substrate'}\n")
+            report.append({"step": "_transport", "kind": "transport_truth",
+                           "actor": "oracle", "verdict": verdict,
+                           "fails": tfails, "rubric": None,
+                           "checked": tchecked})
+            bundle_steps.append({"step": "_transport", "kind": "transport_truth",
+                                 "actor": "oracle", "verdict": verdict,
+                                 "fails": tfails, "checked": tchecked})
     finally:
         try:
             client_cm.__exit__(None, None, None)

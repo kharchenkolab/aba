@@ -185,18 +185,9 @@ def test_no_pack_run_errors_never_served_base(no_packs):
     assert not r.get("stdout"), "no-pack run must not execute on a served base"
 
 
-# ── kernel spec content contract ─────────────────────────────────────────────
-
-def test_base_kernelspec_requires_ipykernel(generic_packs, monkeypatch):
-    from core.compute import project_env
-    from core.exec.kernels import jupyter as jk
-    prefix = _plant_prefix()          # bare venv — no ipykernel
-    monkeypatch.setattr(project_env, "ensure",
-                        lambda pid, lang: {"session_id": "ses_test",
-                                           "prefix": prefix,
-                                           "base_env_id": "env:v1:x"})
-    with pytest.raises(RuntimeError, match="ipykernel"):
-        jk._ensure_base_python_kernelspec()
+# (The jupyter-era kernelspec content contract — ipykernel baked into the base
+# pack for `ipykernel install` — retired with that transport: weft kernels run
+# the substrate's own file-block protocol, no kernelspec registration.)
 
 
 # ── LIVE: real weft solve/realize of a tiny generic base (opt-in) ────────────
