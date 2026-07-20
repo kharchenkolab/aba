@@ -27,6 +27,9 @@ from typing import Optional
 from .ctx_read import _ctx_thread
 from .run_exec import _run_scratch_cwd, _prior_run_files_preamble
 
+import logging
+_log = logging.getLogger(__name__)
+
 
 def _infer_scope(input_: dict, ctx: dict | None) -> str:
     """Default-by-signal placement (refs.md §3.3): an explicit scope always
@@ -1258,11 +1261,25 @@ def keep_outputs_tool(input_: dict, ctx: dict | None = None) -> dict:
     would drop that you want to KEEP. Paths/globs are relative to the Run's output dir."""
     from content.bio.lifecycle.runs import active_run_id, set_keep_decision
     rid = (input_.get("run_id") or "").strip() or None
+    tid = _ctx_thread(ctx) if not rid else None
+    if not rid and tid:
+        rid = active_run_id(tid)
+    if not rid and tid:
+        # F11: a "keep this for the project" in a quick / no-plan flow, where the
+        # user never opened a Run, previously hard-errored here — so the keep
+        # silently no-op'd and the file was never durably kept. Lazily
+        # resolve-or-create the thread's AMBIENT Run via the SAME mechanism the
+        # artifact-registration hook uses (registry._ensure_analysis): its
+        # artifact_path IS the thread scratch dir where run_python just wrote
+        # these files, so the keep attaches to the Run that actually holds them.
+        try:
+            from content.bio.lifecycle.registry import _ensure_analysis
+            rid = _ensure_analysis((ctx or {}).get("focus_entity_id"), {}, tid)
+        except Exception as e:  # noqa: BLE001 — fall through to the honest error
+            _log.warning("keep_outputs: ambient-run resolution failed: %s", e)
     if not rid:
-        tid = _ctx_thread(ctx)
-        rid = active_run_id(tid) if tid else None
-    if not rid:
-        return {"error": "no open run — open_run first (or pass run_id)"}
+        return {"error": "no run to keep into — pass run_id, or run a step in "
+                         "this thread first so its outputs can be kept"}
     keep = input_.get("keep") or []
     drop = input_.get("drop") or []
     if isinstance(keep, str):
