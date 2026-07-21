@@ -134,3 +134,41 @@ deleting a fresh copy out from under a viewer.
   execs share a directory (or ran in the thread scratch dir), a `name` lookup for
   `results.csv` can resolve a *different* exec's same-named file. `match="exact"`
   is unaffected (exact join, no walk); serve/archive/keep use exact.
+
+## The project-wide name door (`content/bio/project_locate.py`)
+
+Agent-facing contract, in full: **refer to files by the name your code used;
+the platform finds them.** `locate_project_files(pattern)` is the single
+project-scoped name→file resolver; every name-based agent surface routes
+through it — `find_files` (whose storage-root parameter is gone), the
+read-path anchor fallback in `_resolve_project_path` (bare names that don't
+anchor), and `register_dataset`'s bare-name tail. The walk is
+platform-internal, over the custody chain: live kernel sandboxes first (local
+jobdirs walked; remote kernels matched against the per-turn inventory the
+scrape already holds — a lookup never moves bytes), then run manifests across
+recent executions (including link-only rows: over-cap and skipped-shape
+outputs that never came home keep their names real), then user data and
+scratch trees.
+
+Honesty rules, each guarded (`tests/test_project_locate.py`):
+
+- **Bounds are declared on hits and misses** — a bounded search that doesn't
+  state its coverage reads as exhaustive (the silent-truncation class).
+- **Unreachable tiers are UNKNOWN, never absent** — a manifest-known file on
+  a dead site is still listed, marked unavailable.
+- **Collisions return labeled candidates** (producing run, tier, locality) —
+  never a silent newest-wins. Identity stays `(run, rel)` / content digest;
+  names are queries.
+- **Every hit names its tier and what opening costs** ("fetches from <site>
+  on open") — affordances, not architecture, so the agent needs no storage
+  model.
+- **No private tree-walks**: a guard enumerates every `os.walk`/`rglob` in
+  the agent-tools layer against a rationale-annotated allowlist (the door,
+  the run-scoped resolver it delegates to, and listing enumerators) — a new
+  hand-rolled walker fails with its location.
+
+**Known gaps.** Listing enumerators (data-file listing, the orientation
+banner's tree) still walk their own dirs rather than sourcing from the door;
+the recorded-scenario coverage (`file_lookup`) enters the accepted baseline
+only after the next provisioned sweep; recipe-pack idioms ship separately via
+the bundle update.

@@ -32,6 +32,7 @@ FILES=(
   tests/test_wire_contract.py
   # output / env-layer unit guards
   tests/test_harvest_identity.py
+  tests/test_project_locate.py
   tests/test_vision_refs.py
   tests/test_env_integrity.py
   tests/test_modules_pack_ready.py

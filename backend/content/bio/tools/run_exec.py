@@ -398,7 +398,8 @@ def _prior_run_files_preamble(project_id: str, thread_id: str,
             _dd = _pdd(str(project_id))
             _df = [p for p in sorted(_dd.rglob("*")) if p.is_file() and _keep(p.name)][:max_files]
             if _df:
-                lines.append(f"DATA_DIR = {_dd}  (input data is here; load via DATA_DIR/<name>):")
+                lines.append(f"Input data present ({_dd}) — refer to files by NAME; "
+                             f"find_files('<name>') locates anything anywhere:")
                 for _p in _df:
                     lines.append(f"  - {_p.relative_to(_dd).as_posix()}")
         except Exception:  # noqa: BLE001
@@ -843,8 +844,9 @@ def _run_remote_kernel(input_: dict, ctx: dict | None, project_id: str,
                  "If you needed printed values, assign them to variables and "
                  "read them in the next call, or write results to a file.")
     if remote_only:
-        note += (f". {len(remote_only)} larger output(s) stayed on {site} "
-                 f"(kept-addressable): " + ", ".join(remote_only[:5])
+        note += (f". {len(remote_only)} larger output(s) remain on {site} — still "
+                 f"yours by NAME (find_files finds them; opening fetches on demand): "
+                 + ", ".join(remote_only[:5])
                  + ("…" if len(remote_only) > 5 else ""))
     out = {"stdout": snip_middle(res.stdout or ""),
            "stderr": snip_middle(res.stderr or ""),
