@@ -1,0 +1,60 @@
+id: file_lookup
+title: Name-first file lookup — over-cap outputs and same-name collisions stay findable
+domain: _infra
+gpu: false
+summary: Validates the name-first file contract end to end on a live agent. An
+  output too large to auto-copy must remain findable and honestly located by
+  name; a same-name collision across runs must surface labeled candidates,
+  never a silent wrong pick. Generic synthetic sensor data; cheap steps.
+data_files: [readings.csv]
+
+steps:
+  - id: s1
+    kind: analyze
+    actor: agent
+    prompt: >
+      Load the sensor readings CSV that's registered in this project and compute
+      per-sensor mean temperature and humidity. Save the summary as
+      sensor_summary.csv. Then also write a large binary archive of the raw
+      readings replicated 3000 times as readings_archive.npz (it should come
+      out well over 60MB — that's intentional). Tell me what files you produced.
+    expect:
+      produces: { table: 1 }
+      must_mention: ["sensor_summary.csv", "readings_archive.npz"]
+      context: { msgs_grow: true, cache_breakpoints: true }
+      checks: >
+        Both files are produced and reported. The oversize archive is not
+        silently dropped from the reply — the agent relays that it exists and
+        remains available even though it was too large to copy inline.
+
+  - id: s2
+    kind: examine
+    actor: agent
+    prompt: >
+      Where exactly is readings_archive.npz right now? Locate it and tell me
+      how I'd open it — don't guess, check.
+    expect:
+      must_mention: ["readings_archive.npz"]
+      must_not: ["not found", "does not exist", "no such file"]
+      context: { msgs_grow: true, cache_read: true }
+      checks: >
+        The agent uses the file-lookup tool (not a shell find, not a guessed
+        path), reports a real location with its tier/labels, and does NOT
+        claim the file is missing — the file exists and must be found.
+
+  - id: s3
+    kind: analyze
+    actor: agent
+    prompt: >
+      Now compute a per-hour average across all sensors and save it as
+      sensor_summary.csv too (yes, the same name — this is a different
+      summary). Afterwards, find sensor_summary.csv and tell me which one is
+      which.
+    expect:
+      must_mention: ["sensor_summary.csv"]
+      context: { msgs_grow: true, cache_read: true }
+      checks: >
+        Two same-named files now exist from different steps. The agent's
+        lookup surfaces BOTH as labeled candidates (by producing run/step) and
+        it distinguishes them for the user — it does not silently present one
+        as the only match.
