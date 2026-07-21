@@ -611,6 +611,31 @@ def main() -> int:
         if src.is_dir():
             stage_into(pid, list(src.iterdir()))   # files AND subdirs (e.g. coloc/)
 
+        # Seed-staging guard: a scenario whose declared `data_files` are not all
+        # present in DATA_DIR runs the agent against INCOMPLETE inputs — it then
+        # (correctly) refuses to fabricate, and every downstream produce/pin step
+        # fails as if the PRODUCT under-performed. That masquerade cost a full
+        # investigation (a network-fetched, gitignored input silently absent on a
+        # clean checkout). Fail LOUDLY as a setup error instead: a missing seed is
+        # the harness's fault, not the agent's or the platform's. Exit 3 =
+        # SETUP-ERROR (distinct from a scenario regression), so a sweep can skip
+        # it rather than bake a fixture gap into the baseline.
+        _declared = [d if isinstance(d, str) else (d.get("name") or d.get("path") or "")
+                     for d in (spec.get("data_files") or [])]
+        _declared = [Path(d).name for d in _declared if d]
+        if _declared:
+            from core.config import project_data_dir as _pdd
+            _present = {p.name for p in Path(_pdd(pid)).iterdir()} if Path(_pdd(pid)).is_dir() else set()
+            _missing = [d for d in _declared if d not in _present]
+            if _missing:
+                print(f"[SETUP-ERROR] {SCENARIO}: {len(_missing)} declared data_files "
+                      f"absent from DATA_DIR after staging (a generator/fetch step did "
+                      f"not run, or the file is gitignored + uncommitted). The scenario "
+                      f"is UNRUNNABLE — skipping so it is not misread as agent "
+                      f"under-production. Missing: {_missing}. Fix the scenario's "
+                      f"make_data/staging so every declared input is reproduced.")
+                return 3
+
         def restart_client():
             nonlocal client, client_cm
             try:

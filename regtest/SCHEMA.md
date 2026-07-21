@@ -41,6 +41,13 @@ requires: slurm                # optional — skip the scenario unless this subm
 summary: <one sentence>
 data_files: [ ... ]            # staged into DATA_DIR at start
 make_data: _make_data.py       # optional deterministic generator (seed=0)
+#   Every declared data_files entry MUST be present in DATA_DIR after staging,
+#   which means `make_data` must REPRODUCE it deterministically+offline — do not
+#   depend on a gitignored, network-fetched artifact that a clean checkout won't
+#   have. The runner asserts this before step 1: a missing seed exits 3
+#   (SETUP-ERROR), which the sweep treats as unscored/infra (never a 0-score
+#   regression, never baked into a baseline) — because a missing input makes the
+#   agent refuse to fabricate, which must not be misread as product failure.
 
 steps:
   - id: s1

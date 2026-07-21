@@ -76,10 +76,19 @@ def run_scenario(sid, mode):
         env.pop("ABA_SCENARIO_MODEL", None)
     t0 = time.time()
     try:
-        subprocess.run([PY, "-u", str(RUNNER)], env=env, timeout=PER_SCENARIO_TIMEOUT_S,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, cwd=str(ROOT))
+        rc = subprocess.run([PY, "-u", str(RUNNER)], env=env, timeout=PER_SCENARIO_TIMEOUT_S,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            cwd=str(ROOT)).returncode
     except subprocess.TimeoutExpired:
         return {"_error": f"scenario process timed out after {PER_SCENARIO_TIMEOUT_S}s"}
+    # exit 3 = SETUP-ERROR from the runner's seed-staging guard: a declared input
+    # is not staged, so the scenario is UNRUNNABLE. Treat it like infra (never
+    # scored, never baked into a baseline) rather than a 0-score regression — a
+    # missing seed is a fixture bug, not a product one.
+    if rc == 3:
+        return {"_error": "SETUP-ERROR: declared data_files missing from DATA_DIR "
+                          "(scenario fixture/staging gap — not a product failure)",
+                "_setup_error": True, "_infra": 1}
     # the runner wrote report.json into the latest _runs/<sid>-<ts>/ dir
     runs = sorted(RUNS.glob(f"{sid}-*"), key=lambda p: p.stat().st_mtime)
     fresh = [r for r in runs if r.stat().st_mtime >= t0 - 5]
@@ -112,8 +121,12 @@ def run_scenario(sid, mode):
 def score_of(rep):
     """Collapse a report.json into the scorecard row."""
     if rep.get("_error"):
+        # a setup-error carries infra=1 so --accept never bakes it in (same
+        # treatment as an OAuth/rate-limit failure — the run told us nothing
+        # about product quality)
         return {"mech_pass": 0, "mech_total": None, "rubric_overall": None,
-                "fails": [f"ERROR:{rep['_error']}"], "bundle": rep.get("_bundle"), "infra": 0}
+                "fails": [f"ERROR:{rep['_error']}"], "bundle": rep.get("_bundle"),
+                "infra": 1 if rep.get("_setup_error") else rep.get("_infra", 0)}
     mech = rep.get("mechanical") or {}
     fails = [f"{r['step']}:{';'.join(r.get('fails') or [])}"
              for r in (rep.get("report") or []) if r.get("verdict") == "FAIL"]
