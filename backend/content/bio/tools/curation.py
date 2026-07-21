@@ -657,6 +657,20 @@ def _weft_adopt(abspath: str, title: str) -> tuple[str, dict]:
     return dest, md
 
 
+def _paths_set_source_key(paths_list, site) -> str | None:
+    """Semantic identity of a multi-file registration: the sorted member
+    paths, order-free. ONE function for the dedup check AND the stored
+    metadata — the SET shape had no dedup at all (check-time key, nothing
+    persisted), and the register-on-landing rule funnels agents onto exactly
+    this shape, so a retried fetch or resumed session minted duplicate
+    entities with no backstop."""
+    if not paths_list or not all(os.path.isabs(str(x)) for x in paths_list):
+        return None
+    from core.data import datasets as _wds
+    return _wds.source_key(
+        "|".join(sorted(os.path.normpath(str(x)) for x in paths_list)), site)
+
+
 def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
     import os
     from core.config import DATA_DIR
@@ -692,9 +706,14 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
     # of re-fetching / minting a duplicate entity.
     from core.data import datasets as _wds
     try:
-        _skey = _wds.source_key(url) if url else (
-            _wds.source_key(os.path.normpath(str(path)), site)
-            if path and os.path.isabs(str(path)) else None)
+        if url:
+            _skey = _wds.source_key(url)
+        elif path and os.path.isabs(str(path)):
+            _skey = _wds.source_key(os.path.normpath(str(path)), site)
+        elif paths_list:
+            _skey = _paths_set_source_key(paths_list, site)
+        else:
+            _skey = None
         if _skey:
             from core.graph.entities import find_entities
             hits = find_entities(type="dataset", not_deleted=True,
@@ -748,6 +767,11 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
             )
         else:
             bundle_note = f" Bundle has {len(present)} file(s) linked into DATA_DIR."
+        # Persist the SAME set identity the dedup check computes — a key that
+        # is checked but never stored can never match a prior registration.
+        _set_key = _paths_set_source_key(paths_list, site)
+        if _set_key:
+            weft_md["source_key"] = _set_key
     else:
         abspath = _resolve_dataset_path(str(path), ctx)
         exists = os.path.exists(abspath)

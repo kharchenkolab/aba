@@ -137,3 +137,17 @@ def test_registration_rule_precedes_the_curation_prohibition():
     assert reg < cur, (
         "the curation prohibition precedes the registration rule again — the "
         "offer template will out-compete it")
+
+
+def test_registration_exemption_names_its_target():
+    """The reorder that moved registration ABOVE the curation rule left its
+    'exempt from the rule above' pointing at output-verification — a linear
+    reader could parse registration as licensed to skip confirming outputs.
+    Directional references rot on reorder; the exemption must NAME its target."""
+    for f in ("backend/system_bundle/rules/behavior.md",
+              "backend/system_bundle/rules/behavior_slim.md"):
+        text = (ROOT / f).read_text()
+        assert "exempt from the rule above" not in text, \
+            f"{f}: directional cross-reference — anchor it by name"
+    full = (ROOT / "backend/system_bundle/rules/behavior.md").read_text()
+    assert "curation offer-rule" in full, "exemption no longer names its target"
