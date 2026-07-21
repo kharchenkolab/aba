@@ -51,6 +51,22 @@ PER_SCENARIO_TIMEOUT_S = int(os.environ.get("ABA_REGTEST_SCENARIO_TIMEOUT_S", "2
 RUBRIC_REGRESSION = 0.3        # a rubric_overall drop beyond this counts as a regression
 
 
+def inert_smoke_tags() -> list[str]:
+    """Scenarios tagged `smoke: true` that discovery can never return (no v2
+    `steps`). The tag reads as coverage while selecting nothing — a silently
+    inert tag is how a tier shrinks without anyone noticing."""
+    import yaml
+    out = []
+    for f in sorted(SCEN.glob("*/scenario.yaml")):
+        try:
+            spec = yaml.safe_load(f.read_text()) or {}
+        except Exception:
+            continue
+        if spec.get("smoke") and not spec.get("steps"):
+            out.append(f.parent.name)
+    return out
+
+
 def discover(only, exclude, smoke=False):
     import yaml
     out = []
@@ -373,6 +389,12 @@ def main() -> int:
         subprocess.run(["bash", str(REGEN)], cwd=str(ROOT))
 
     scenarios = discover(only, exclude, smoke=args.smoke)
+    if args.smoke:
+        _inert = inert_smoke_tags()
+        if _inert:
+            print(f"[sweep] ⚠ {len(_inert)} scenario(s) carry `smoke: true` but have no "
+                  f"v2 steps — the tag selects NOTHING and the tier is smaller than it "
+                  f"looks: {_inert}", flush=True)
     if args.smoke and len(scenarios) < 2:
         print("[sweep] SETUP-ERROR: --smoke found <2 tagged scenarios — the "
               "smoke tier is unarmed (tag scenarios with `smoke: true`).")

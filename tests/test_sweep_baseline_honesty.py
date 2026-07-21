@@ -287,6 +287,28 @@ def test_shared_predicate_covers_declaration_shapes(tmp_path):
     assert declared_inputs({}) == []
 
 
+def test_inert_smoke_tags_are_surfaced(monkeypatch, tmp_path):
+    """A `smoke: true` tag on a scenario discovery can never return selects
+    NOTHING — the tier is smaller than the tag count suggests. Phantom coverage
+    is the failure mode this whole file exists to prevent, so it must be named."""
+    monkeypatch.setattr(sweep, "SCEN", tmp_path)
+    for name, body in (("live", "smoke: true\nsteps: [a]\n"),
+                       ("inert", "smoke: true\n"),          # tagged, but v1-only
+                       ("plain", "steps: [a]\n")):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "scenario.yaml").write_text(body)
+    assert sweep.inert_smoke_tags() == ["inert"]
+    assert sweep.discover(set(), set(), smoke=True) == ["live"]
+
+
+def test_live_tree_smoke_tags_are_all_effective():
+    """…and on the REAL tree: every smoke tag must actually select its scenario.
+    (One tag sat on a v1-only scenario, quietly making a '6-scenario' tier 5.)"""
+    inert = sweep.inert_smoke_tags()
+    assert not inert, (f"smoke tags that select nothing: {inert} — give the "
+                       f"scenario v2 steps or move the tag")
+
+
 def test_smoke_tier_filters_and_is_armed():
     """--smoke selects only tagged scenarios; the tier must be ARMED (≥2 tagged
     in the tree) and a strict subset of the full discovery — an empty or

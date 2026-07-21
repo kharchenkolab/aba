@@ -1,5 +1,4 @@
 id: liftover
-smoke: true
 title: Coordinate liftover hg19 → hg38
 domain: genomics
 prompt: I have some genomic positions in the old hg19 assembly in DATA_DIR/positions.bed. Convert them
