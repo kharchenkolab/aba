@@ -76,7 +76,7 @@ EVENTS: dict[str, EventSpec] = {s.name: s for s in [
         {"tool_use_id": "string", "stream": "'stdout' | 'stderr'", "text": "string",
          "bytes_total": "number", "elapsed_s": "number"}),
     _ev("tool_result", "turn", "A finished tool call's result envelope.",
-        {"name": "string", "result": "Record<string, unknown>", "tool_use_id": "string"}),
+        {"name": "string", "result": "Record<string, unknown>", "tool_use_id": "string"}),  # noqa: seam — wire field name, not the entity type
     _ev("entity_registered", "turn",
         "A new entity was minted during the turn (artifact registrar / create_scenario).",
         {"entity": "Entity"}),

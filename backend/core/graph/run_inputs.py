@@ -17,6 +17,7 @@ import re
 from pathlib import Path
 
 from core.graph._schema import WORKSPACE_ID
+from core.graph.kinds import DATASET
 
 # Common RNG-seed calls. We RECORD a seed the code already set (descriptive), we do
 # not inject one on the interactive path (that would silently change user results —
@@ -80,7 +81,7 @@ def resolve_inputs(code: str | None, focus_entity_id: str | None = None) -> list
     if code:
         try:
             for e in list_entities(include_archived=False):
-                if e.get("type") != "dataset":
+                if e.get("type") != DATASET:
                     continue
                 md = e.get("metadata") or {}
                 p = (e.get("artifact_path") or "").strip()
@@ -89,7 +90,7 @@ def resolve_inputs(code: str | None, focus_entity_id: str | None = None) -> list
                 did = e.get("id") or ""
                 if ((p and p in code) or (hp and hp in code)
                         or (base and base in code) or (did and did in code)):
-                    _add(did, "dataset", e.get("title"), p or hp or None)
+                    _add(did, DATASET, e.get("title"), p or hp or None)
                     if md.get("ref") and inputs and inputs[-1]["ref"] == did:
                         inputs[-1]["content_ref"] = md["ref"]
         except Exception:  # noqa: BLE001

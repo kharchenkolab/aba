@@ -22,6 +22,8 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+from core.graph.kinds import DATASET
+
 _log = logging.getLogger("aba.ledger")
 
 
@@ -61,7 +63,7 @@ def _durable_map() -> dict:
 def _dataset_items(durable: dict) -> list[dict]:
     from core.graph.entities import list_entities
     items = []
-    for e in list_entities(type_filter="dataset", include_archived=False):
+    for e in list_entities(type_filter=DATASET, include_archived=False):
         md = e.get("metadata") or {}
         home = md.get("home") or md.get("weft_home") or {}
         site = home.get("site")
@@ -89,7 +91,7 @@ def _dataset_items(durable: dict) -> list[dict]:
         else:
             state = "safe"   # registered + local, no home = workspace-managed
             why = "managed in the workspace"
-        items.append({"entity_id": e["id"], "kind": "dataset", "title": e.get("title"),
+        items.append({"entity_id": e["id"], "kind": DATASET, "title": e.get("title"),
                       "state": state, "site": site, "bytes": bytes_, "why": why})
     return items
 
@@ -170,7 +172,7 @@ def site_holdings(site: str) -> dict:
     keeps, keeps_ok = _keep_items(durable, site=site)
     from core.graph.entities import list_entities
     homes = []
-    for e in list_entities(type_filter="dataset", include_archived=False):
+    for e in list_entities(type_filter=DATASET, include_archived=False):
         md = e.get("metadata") or {}
         home = md.get("home") or md.get("weft_home") or {}
         if home.get("site") == site:
