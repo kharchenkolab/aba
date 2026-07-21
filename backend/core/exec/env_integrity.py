@@ -267,7 +267,7 @@ def env_layers(project_id: Optional[str] = None) -> dict:
                 r_layers.append({"tier": "session", "scope": "project",
                                  "project_id": project_id, "delivery": "weft",
                                  "mutable": True, "mode": "rlib-overlay",
-                                 "path": str(_rl),
+                                 "path": str(_rrt["rlib"]),
                                  "packages": [{"name": n, "version": ""} for n in _names]})
             elif _rrt.get("direct_exec") and _rinfo["prefix"] is not None:
                 r_sess = _rinfo["prefix"]

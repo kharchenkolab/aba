@@ -139,6 +139,23 @@ def get_active(project_id, lang: str = "python") -> str:
 
 
 def set_active(project_id: str, name: str, lang: str = "python") -> dict:
+    """Bind `name` as the active env for `lang`'s lane. Reserved names
+    ('default', …) reset the pointer to the served stack. A real name must
+    exist and match the slot's language — a silent cross-language binding
+    would point one language's lane at another language's env."""
+    name = (name or "").strip()
+    if not is_reserved_name(name):
+        row = resolve(project_id, name)
+        if row is None:
+            raise ComputeError(
+                "unknown_env", f"no named env {name!r} in this project",
+                stage="aba", hints={"available": list_names(project_id)})
+        row_lang = row.get("language") or "python"
+        if row_lang != lang:
+            raise ComputeError(
+                "env.language_mismatch",
+                f"{name!r} is a {row_lang} env — it cannot be the active "
+                f"{lang} env", stage="aba")
     _update(project_id, lambda data: data["active"].__setitem__(lang, name))
     return {"lang": lang, "active": name}
 
