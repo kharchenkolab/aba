@@ -32,11 +32,13 @@ manifest_role: primary
 # without removing any callable function. The agent can fetch the
 # verbose description for any compacted tool via `describe_tool`.
 prompt_mode: lean
-# Full reach — all 60 tools are visible to the model. The catalog
-# rendering (compact vs full per-tool) is governed by prompt_mode +
-# the priority list in guide.py, not by this field.
-tool_allowlist: ['*', '!evict_env', '!run_nextflow']   # lean sheds the advanced
-                                       # (half-window budget; standard keeps it)
+# Full reach — the ENTIRE tool catalog is visible to the model (the standing
+# decision, all tiers alike; guard: tests/test_tool_allowlist.py). Tiers
+# compress PROSE (prompt_mode + the priority list in guide.py), never shed
+# callable tools. Deployment-specific capabilities (e.g. pipeline launch)
+# refuse honestly at call time — availability is a deployment fact, not a
+# tier fact.
+tool_allowlist: ['*']
 # Tier-2 history summarization fires when the conversation
 # (post-Tier-1 pruning) exceeds this many CHARACTERS. The global
 # default (400k, matching CC's autoCompactWindow) never fires inside

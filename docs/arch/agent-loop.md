@@ -60,7 +60,10 @@ The loop's nouns, and where each lives:
 - **`AgentSpec`** (`core/runtime/agent.py`) — the declaration that binds a turn:
   `model`, `runtime` (direct/sdk/openai/fake), `prompt_mode`, `tool_allowlist`,
   summary budgets. The **model catalog** (`core/llm_catalog.py`) maps a
-  user-picked model → its spec.
+  user-picked model → its spec. Every interactive guide tier surfaces the
+  **full** tool catalog (`tool_allowlist: ['*']`) — tiers compress prose via
+  `prompt_mode`, never shed callable tools; a bare `'!'` exclusion list implies
+  `'*'` (guards: `tests/test_tool_allowlist.py`).
 
 ```
 POST /api/chat ─► start_turn() ─► asyncio task ══► guide.stream_response()  (durable)

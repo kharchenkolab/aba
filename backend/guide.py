@@ -262,9 +262,14 @@ _PRIORITY_TOOLS: tuple[str, ...] = (
     "run_python", "run_r",
     "Skill", "search_skills",
     "present_plan", "ask_clarification",
-    "register_dataset", "list_data_files", "find_files",
+    "register_dataset", "list_data_files",
     "ensure_capability", "describe_tool",
 )
+# find_files rides summary-rendering: its full docstring is the catalog's
+# largest and list_data_files covers the common case; full prose stays one
+# describe_tool away. This set is the budget lever for the lean half-window
+# ceiling (tests/test_lean_summary_budget.py) — trim HERE, never the
+# tool_allowlist (full-surface parity is guarded).
 
 
 def _assemble_active_tools(tools_all: list, spec) -> list:
