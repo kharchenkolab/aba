@@ -677,13 +677,16 @@ def main() -> int:
         # the harness's fault, not the agent's or the platform's. Exit 3 =
         # SETUP-ERROR (distinct from a scenario regression), so a sweep can skip
         # it rather than bake a fixture gap into the baseline.
-        _declared = [d if isinstance(d, str) else (d.get("name") or d.get("path") or "")
-                     for d in (spec.get("data_files") or [])]
-        _declared = [Path(d).name for d in _declared if d]
+        # ONE definition of presence, shared with the sweep's pre-flight (see
+        # harness/fixtures.py) — when these two drifted, the sweep skipped
+        # scenarios the runner would have run AND the runner killed scenarios
+        # whose nested inputs were staged perfectly well.
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from fixtures import declared_inputs, missing_inputs
+        _declared = declared_inputs(spec)
         if _declared:
             from core.config import project_data_dir as _pdd
-            _present = {p.name for p in Path(_pdd(pid)).iterdir()} if Path(_pdd(pid)).is_dir() else set()
-            _missing = [d for d in _declared if d not in _present]
+            _missing = missing_inputs(_declared, Path(_pdd(pid)))
             if _missing:
                 print(f"[SETUP-ERROR] {SCENARIO}: {len(_missing)} declared data_files "
                       f"absent from DATA_DIR after staging (a generator/fetch step did "

@@ -65,6 +65,64 @@ def discover(only, exclude, smoke=False):
     return out
 
 
+MIN_INSTALLED_SKILLS = int(os.environ.get("ABA_REGTEST_MIN_SKILLS", "50"))
+
+
+def check_eval_home() -> list[str]:
+    """Is the eval home PROVISIONED? Refuse to measure with an empty toolbox.
+
+    An ABA_HOME with no deployed installation still runs: the agent simply has
+    a near-empty skill catalog and refuses work it cannot ground, so all 31
+    scenarios fail for one reason that has nothing to do with the product. A
+    full sweep once burned hours that way (a dozen skills visible instead of
+    ~300, and scores of capability refusals) and the output looked like a
+    catastrophic product regression. A run that CANNOT measure must fail loudly
+    up front, not produce a confident zero."""
+    problems = []
+    home = Path(os.environ.get("ABA_HOME") or (Path.home() / ".aba"))
+    inst = home / "installation"
+    if not inst.exists():
+        problems.append(f"ABA_HOME={home} has no installation/ — the eval home is "
+                        f"UNPROVISIONED (symlink or deploy one before sweeping)")
+        return problems
+    n_skills = len(list((inst / "skills").rglob("*.md"))) if (inst / "skills").is_dir() else 0
+    if n_skills < MIN_INSTALLED_SKILLS:
+        problems.append(f"only {n_skills} skill files under {inst}/skills "
+                        f"(< {MIN_INSTALLED_SKILLS}) — catalog looks UNPROVISIONED; "
+                        f"every scenario would fail on capability refusals, not product bugs")
+    if not (home / "config.env").is_file():
+        problems.append(f"{home}/config.env missing — runtime config unprovisioned")
+    return problems
+
+
+def preflight_fixtures(scenarios) -> dict:
+    """Predict the runner's seed-staging guard STATICALLY, in milliseconds.
+
+    Staging copies `scenarios/<sid>/data/` into DATA_DIR, so a declared input
+    absent from that tree is absent after staging — the runner then exits 3,
+    but only after a full app boot, and in a sweep that verdict arrives hours
+    in. Same predicate, paid up front."""
+    import yaml
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from fixtures import declared_inputs, missing_inputs
+    gaps, examined = {}, 0
+    for sid in scenarios:
+        try:
+            spec = yaml.safe_load((SCEN / sid / "scenario.yaml").read_text()) or {}
+        except Exception:
+            continue
+        declared = declared_inputs(spec)
+        if not declared:
+            continue
+        examined += 1
+        missing = missing_inputs(declared, SCEN / sid / "data")
+        if missing:
+            gaps[sid] = missing
+    # ARMED: a check that examined nothing proves nothing. If no selected
+    # scenario declares inputs at all, say so rather than reporting a clean bill.
+    return {"gaps": gaps, "examined": examined}
+
+
 def run_scenario(sid, mode):
     """Run one scenario in a fresh process; return its report.json dict (or an error rec)."""
     env = dict(os.environ)
@@ -289,6 +347,10 @@ def main() -> int:
     ap.add_argument("--smoke", action="store_true",
                     help="run only scenarios tagged `smoke: true` — the ~15-min "
                          "routine tier; the full set is the nightly instrument")
+    ap.add_argument("--allow-unprovisioned", action="store_true",
+                    help="run even if the eval home looks unprovisioned "
+                         "(pre-flight normally refuses — the scorecard would be "
+                         "meaningless)")
     ap.add_argument("--workers", type=int,
                     default=int(os.environ.get("ABA_REGTEST_WORKERS", "1")),
                     help="parallel scenario processes (each is already an "
@@ -308,10 +370,48 @@ def main() -> int:
         print("[sweep] SETUP-ERROR: --smoke found <2 tagged scenarios — the "
               "smoke tier is unarmed (tag scenarios with `smoke: true`).")
         return 2
-    ts = time.strftime("%Y%m%d-%H%M%S", time.localtime())
-    print(f"[sweep] mode={mode}  scenarios={len(scenarios)}  ts={ts}\n", flush=True)
+    # ---- PRE-FLIGHT: never spend hours on a run that cannot measure ----------
+    home_problems = check_eval_home()
+    if home_problems and not args.allow_unprovisioned:
+        print("[sweep] SETUP-ERROR: eval home is not provisioned —")
+        for p in home_problems:
+            print(f"          · {p}")
+        print("        Every scenario would fail for this one reason and the "
+              "scorecard would read as a product collapse. Provision the home "
+              "(or pass --allow-unprovisioned if you truly mean it).")
+        return 2
 
-    rows = {}
+    pf = preflight_fixtures(scenarios)
+    fixture_gaps = pf["gaps"]
+    if fixture_gaps:
+        print(f"[sweep] ⚠ PRE-FLIGHT: {len(fixture_gaps)} scenario(s) have declared "
+              f"inputs absent from their data/ tree — UNRUNNABLE (fixture gap, not a "
+              f"product failure). Skipping them up front instead of discovering it "
+              f"one boot at a time:", flush=True)
+        for sid, missing in sorted(fixture_gaps.items()):
+            print(f"          · {sid}: {len(missing)} missing")
+        print(f"        Fix: regenerate/commit the inputs "
+              f"(`bash regtest/scenarios/_regen_all.sh`), or correct the "
+              f"scenario's data_files declaration.", flush=True)
+    elif pf["examined"] == 0:
+        print("[sweep] note: pre-flight examined 0 scenarios with declared "
+              "data_files — the fixture check is VACUOUS for this selection.",
+              flush=True)
+
+    runnable = [s for s in scenarios if s not in fixture_gaps]
+    ts = time.strftime("%Y%m%d-%H%M%S", time.localtime())
+    print(f"[sweep] mode={mode}  scenarios={len(scenarios)}"
+          f"{f' ({len(runnable)} runnable)' if fixture_gaps else ''}  ts={ts}\n",
+          flush=True)
+
+    # Pre-flight-skipped scenarios still get their row — identical to what the
+    # runner's exit-3 would have produced — so the accounting never quietly
+    # shrinks (a sweep that reports 27/27 because 4 vanished is a lie).
+    rows = {sid: score_of({"_error": f"SETUP-ERROR: {len(fixture_gaps[sid])} declared "
+                                     f"data_files absent from the scenario's data/ tree "
+                                     f"(pre-flight; scenario never started)",
+                           "_setup_error": True, "_infra": 1})
+            for sid in fixture_gaps}
 
     def _one(sid):
         rep = run_scenario(sid, mode)
@@ -324,19 +424,19 @@ def main() -> int:
         print(f"[sweep] {args.workers} parallel workers", flush=True)
         done = 0
         with ThreadPoolExecutor(max_workers=args.workers) as pool:
-            futs = {pool.submit(_one, sid): sid for sid in scenarios}
+            futs = {pool.submit(_one, sid): sid for sid in runnable}
             for fut in as_completed(futs):
                 sid, row = fut.result()
                 rows[sid] = row
                 done += 1
                 mech = f"{row['mech_pass']}/{row['mech_total']}" if row["mech_total"] is not None else "ERR"
                 tag = f"  ⚠INFRA({row['infra']})" if row.get("infra") else ""
-                print(f"[{done}/{len(scenarios)}] {sid}  {mech}  "
+                print(f"[{done}/{len(runnable)}] {sid}  {mech}  "
                       f"rubric={row['rubric_overall']}  fails={len(row['fails'])}{tag}",
                       flush=True)
     else:
-        for i, sid in enumerate(scenarios, 1):
-            print(f"[{i}/{len(scenarios)}] {sid} …", flush=True)
+        for i, sid in enumerate(runnable, 1):
+            print(f"[{i}/{len(runnable)}] {sid} …", flush=True)
             sid, row = _one(sid)
             rows[sid] = row
             mech = f"{row['mech_pass']}/{row['mech_total']}" if row["mech_total"] is not None else "ERR"

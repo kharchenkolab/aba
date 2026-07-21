@@ -161,6 +161,132 @@ def test_setup_error_cause_survives_into_the_row():
     assert creds["setup_error"] is False
 
 
+def test_unprovisioned_eval_home_is_refused(monkeypatch, tmp_path):
+    """ARMED — the disaster this exists for: a sweep against an ABA_HOME with no
+    deployed installation runs happily, the agent refuses work for lack of a
+    catalog, and 31 scenarios fail for one reason that is not the product. A run
+    that CANNOT measure must refuse, not report a confident zero."""
+    monkeypatch.setenv("ABA_HOME", str(tmp_path))
+    assert sweep.check_eval_home(), "unprovisioned home passed pre-flight"
+    # …and the near-miss shape: installation present but the catalog is a stub
+    inst = tmp_path / "installation" / "skills"
+    inst.mkdir(parents=True)
+    for i in range(5):
+        (inst / f"s{i}.md").write_text("x")
+    (tmp_path / "config.env").write_text("x")
+    problems = sweep.check_eval_home()
+    assert problems and "UNPROVISIONED" in " ".join(problems), problems
+
+
+def test_provisioned_eval_home_passes(monkeypatch, tmp_path):
+    """The other side: a real home must not be refused, or the guard gets
+    disabled the first time it cries wolf."""
+    monkeypatch.setenv("ABA_HOME", str(tmp_path))
+    inst = tmp_path / "installation" / "skills"
+    inst.mkdir(parents=True)
+    for i in range(sweep.MIN_INSTALLED_SKILLS + 1):
+        (inst / f"s{i}.md").write_text("x")
+    (tmp_path / "config.env").write_text("x")
+    assert sweep.check_eval_home() == []
+
+
+def test_preflight_predicts_missing_fixture(monkeypatch, tmp_path):
+    """Static predictor of the runner's exit-3 staging guard: a declared input
+    absent from the scenario's data/ tree cannot survive staging. Catching it
+    here costs milliseconds; the runner catches it after a full app boot, and in
+    a sweep that verdict lands hours later."""
+    monkeypatch.setattr(sweep, "SCEN", tmp_path)
+    ok, bad = tmp_path / "ok", tmp_path / "bad"
+    (ok / "data").mkdir(parents=True)
+    (ok / "data" / "in.csv").write_text("x")
+    (ok / "scenario.yaml").write_text("data_files: [in.csv]\nsteps: [a]\n")
+    (bad / "data").mkdir(parents=True)
+    (bad / "scenario.yaml").write_text("data_files: [in.csv, gone.csv]\nsteps: [a]\n")
+    pf = sweep.preflight_fixtures(["ok", "bad"])
+    assert set(pf["gaps"]) == {"bad"}
+    assert pf["gaps"]["bad"] == ["in.csv", "gone.csv"]
+    assert pf["examined"] == 2
+
+
+def test_preflight_handles_nested_declarations(monkeypatch, tmp_path):
+    """WIDE — the degenerate shape that broke the original guard. A declaration
+    may carry a subdirectory ("sub/in.csv"); staging copies the subdir in
+    wholesale. A top-level-only listing sees just "sub" and calls every nested
+    input missing — a false SETUP-ERROR that silently deleted two fully-working
+    scenarios from a sweep. Nested must resolve; genuinely-absent must not."""
+    monkeypatch.setattr(sweep, "SCEN", tmp_path)
+    s = tmp_path / "nested"
+    (s / "data" / "sub").mkdir(parents=True)
+    (s / "data" / "sub" / "in.csv").write_text("x")
+    (s / "scenario.yaml").write_text(
+        "data_files: ['sub/in.csv']\nsteps: [a]\n")
+    pf = sweep.preflight_fixtures(["nested"])
+    assert pf["gaps"] == {}, f"nested declaration falsely flagged: {pf['gaps']}"
+    assert pf["examined"] == 1
+    # …and the guard still bites when a nested input is truly absent
+    (s / "scenario.yaml").write_text(
+        "data_files: ['sub/in.csv', 'sub/gone.csv']\nsteps: [a]\n")
+    assert sweep.preflight_fixtures(["nested"])["gaps"] == {"nested": ["sub/gone.csv"]}
+
+
+def test_preflight_reports_when_it_examined_nothing(monkeypatch, tmp_path):
+    """ARMED, degenerate: scenarios declaring no inputs make the check vacuous.
+    A clean bill from a check that inspected nothing is the failure mode this
+    convention exists to stop."""
+    monkeypatch.setattr(sweep, "SCEN", tmp_path)
+    (tmp_path / "s1").mkdir()
+    (tmp_path / "s1" / "scenario.yaml").write_text("steps: [a]\n")
+    pf = sweep.preflight_fixtures(["s1"])
+    assert pf["gaps"] == {} and pf["examined"] == 0
+
+
+def test_preflight_skipped_scenario_still_gets_a_row(monkeypatch, tmp_path):
+    """Accounting must not quietly shrink: a pre-flight skip produces the SAME
+    row the runner's exit-3 would have. A sweep reporting 27/27 because four
+    scenarios vanished from the denominator is a lie."""
+    row = sweep.score_of({"_error": "SETUP-ERROR: 2 declared data_files absent",
+                          "_setup_error": True, "_infra": 1})
+    assert row["mech_total"] is None and row["infra"] == 1
+    assert row["setup_error"] is True
+    _, skipped = sweep.bakeable_rows({"x": row})
+    assert skipped == ["x"], "pre-flight row would have been baked into a baseline"
+
+
+def test_fixture_presence_has_exactly_one_definition():
+    """The drift invariant. The sweep's pre-flight and the runner's post-staging
+    guard answer the SAME question and must answer it identically — when they
+    diverged, the sweep skipped scenarios the runner would have run and the
+    runner killed scenarios that were staged correctly. Both must route through
+    harness/fixtures.py rather than growing a private copy of the rule."""
+    import re
+    for f in ("regtest/harness/sweep.py", "regtest/harness/runner.py"):
+        src = (ROOT / f).read_text()
+        assert "from fixtures import" in src, f"{f}: not using the shared predicate"
+        # a private re-derivation of "which declared inputs are present"
+        assert not re.search(r"data_files.*\n.*for d in", src), \
+            f"{f}: re-deriving declared inputs locally — use declared_inputs()"
+
+
+def test_shared_predicate_covers_declaration_shapes(tmp_path):
+    """WIDE, on the helper itself: flat, nested, mapping-spelled, and absent."""
+    sys.path.insert(0, str(ROOT / "regtest" / "harness"))
+    from fixtures import declared_inputs, missing_inputs
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "flat.csv").write_text("x")
+    (tmp_path / "sub" / "deep.csv").write_text("x")
+    assert missing_inputs(["flat.csv"], tmp_path) == []
+    assert missing_inputs(["sub/deep.csv"], tmp_path) == []
+    assert missing_inputs(["deep.csv"], tmp_path) == []          # basename match
+    assert missing_inputs(["absent.csv"], tmp_path) == ["absent.csv"]
+    assert missing_inputs([], tmp_path) == []
+    assert missing_inputs(["flat.csv"], tmp_path / "nope") == ["flat.csv"]
+    # both spellings a scenario.yaml may use
+    assert declared_inputs({"data_files": ["a.csv", {"name": "b.csv"},
+                                           {"path": "sub/c.csv"}]}) == \
+        ["a.csv", "b.csv", "sub/c.csv"]
+    assert declared_inputs({}) == []
+
+
 def test_smoke_tier_filters_and_is_armed():
     """--smoke selects only tagged scenarios; the tier must be ARMED (≥2 tagged
     in the tree) and a strict subset of the full discovery — an empty or
