@@ -151,11 +151,26 @@ def _build_stub(tool_name: str, content: Any) -> str:
     return " | ".join(bits)
 
 
+def _quantized_stub_count(n: int, keep: int, batch: int) -> int:
+    """How many of the OLDEST items to demote: 0 until n exceeds `keep`, then
+    the largest multiple of `batch` ≤ (n - keep). Monotonic in n, so over an
+    append-only history previously-demoted items stay demoted and the output
+    changes only at batch boundaries (prefix-stability between epochs)."""
+    if keep <= 0:
+        return n
+    over = n - keep
+    if over <= 0 or batch <= 0:
+        return max(0, over)
+    return (over // batch) * batch
+
+
 def prune_transcript(
     messages: list[dict],
     *,
     k_tool_keep: int = K_TOOL_KEEP_DEFAULT,
     k_text_keep: int = K_TEXT_KEEP_DEFAULT,
+    stub_batch: int | None = None,
+    drop_batch: int | None = None,
 ) -> list[dict]:
     """Return a pruned copy of `messages`:
       - The most recent K_TOOL_KEEP tool_result blocks keep their content
@@ -174,6 +189,10 @@ def prune_transcript(
     untouched)."""
     if not messages:
         return []
+    if stub_batch is None:
+        stub_batch = max(1, k_tool_keep // 3)
+    if drop_batch is None:
+        drop_batch = max(1, k_text_keep // 2)
 
     tu_index = _tool_use_index(messages)
 
@@ -188,9 +207,21 @@ def prune_transcript(
             if isinstance(b, dict) and b.get("type") == "tool_result":
                 tool_result_positions.append((i, j))
 
-    # The set of positions whose CONTENT we'll keep (the last K, plus any
-    # always-keep tools wherever they appear).
-    keep_positions: set[tuple[int, int]] = set(tool_result_positions[-k_tool_keep:])
+    # The set of positions whose CONTENT we'll keep: everything except the
+    # QUANTIZED count of oldest results (plus always-keep tools anywhere).
+    # Quantization is the caching fix (bug #2b): a plain `[-k:]` recency
+    # window moves every generation, flipping one result verbatim→stub per
+    # generation — a mid-list rewrite that re-bills the cached suffix on
+    # every call once the history holds >k results. Stubbing in batches of
+    # `stub_batch` makes the boundary advance in rare jumps: between jumps
+    # the output is byte-identical over an append-only input (prefix-stable,
+    # the property prompt caching needs), and each jump is one sanctioned
+    # epoch rewrite. Costs at most `stub_batch` extra verbatim results held
+    # beyond k — bounded, and far cheaper than the per-generation rebill.
+    n_stub = _quantized_stub_count(len(tool_result_positions), k_tool_keep,
+                                   stub_batch)
+    keep_positions: set[tuple[int, int]] = \
+        set(tool_result_positions[n_stub:])
     for (i, j) in tool_result_positions:
         if (i, j) in keep_positions:
             continue
@@ -199,10 +230,13 @@ def prune_transcript(
         if tu.get("name") in _ALWAYS_KEEP_TOOLS:
             keep_positions.add((i, j))
 
-    # Second pass: enumerate pure-text assistant messages. The last
-    # K_TEXT_KEEP keep; older ones get dropped.
+    # Second pass: pure-text assistant messages — same quantized boundary
+    # (dropping a message shifts every later position, so an unquantized drop
+    # is an even harsher prefix break than a stub flip).
     text_only_indices = [i for i, m in enumerate(messages) if _is_text_only_assistant(m)]
-    drop_text_indices: set[int] = set(text_only_indices[:-k_text_keep] if k_text_keep > 0 else text_only_indices)
+    n_drop = _quantized_stub_count(len(text_only_indices), k_text_keep,
+                                   drop_batch)
+    drop_text_indices: set[int] = set(text_only_indices[:n_drop])
 
     # Build the output.
     out: list[dict] = []

@@ -139,19 +139,22 @@ def test_tier1_prune_prefix_stability_documented():
     hist: list = []
     prev = None
     diverged_at: list = []
-    for i in range(30):
+    for i in range(40):
         _grow(hist, i)
-        eff = prune_transcript(list(hist), k_tool_keep=5, k_text_keep=3)
+        eff = prune_transcript(list(hist), k_tool_keep=5, k_text_keep=3,
+                               stub_batch=5, drop_batch=3)
         if prev is not None and not _is_prefix(prev, eff):
             diverged_at.append(i)
         prev = eff
-    # Current truth (measured, not assumed): the recency window makes a
-    # tool_result flip verbatim→stub when it falls off the K-recent window —
-    # a mid-list rewrite on essentially every generation past K. This is
-    # caching bug #2b: same class as Tier-2's sliding window, smaller radius
-    # (invalidates from ~K pairs back, not from message 0). Recorded here as
-    # a failing-direction sentinel: when Tier-1 is fixed (freeze stubs once
-    # made), flip this to assert `not diverged_at`.
-    assert diverged_at, (
-        "Tier-1 measured prefix-STABLE with the window engaged — the #2b bug "
-        "appears fixed: flip this test to assert stability permanently")
+    # Fixed (#2b): the demotion boundary is QUANTIZED, so between batch
+    # boundaries the output is a strict prefix-extension; divergence happens
+    # only at epoch jumps. 40 generations with stub_batch=5 → a handful of
+    # epochs, never per-generation.
+    assert len(diverged_at) <= 9, (
+        f"Tier-1 diverged at {len(diverged_at)} generations {diverged_at} — "
+        f"the sliding window is back (bug #2b): demotion must advance in "
+        f"quantized batches, not per generation")
+    assert diverged_at, "window never engaged — test measured nothing"
+    gaps = [b - a for a, b in zip(diverged_at, diverged_at[1:])]
+    assert gaps and min(gaps) >= 2, (
+        f"epoch jumps every generation ({diverged_at}) — quantization inert")
