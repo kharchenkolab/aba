@@ -174,13 +174,25 @@ def main() -> int:
                   str(rr.get("stderr") or "")[-300:])
             projects.set_current(pid)
             from content.bio.tools.run_exec import run_r
+            tidr = f"envchk-r-{pid}"
             outr = run_r({"code": "cat('BARE_R=', R.home(), '\\n', sep='')"},
-                         {"thread_id": f"envchk-r-{pid}"})
+                         {"thread_id": tidr})
             check("BARE run_r executes inside the promoted R env",
-                  outr.get("execution_mode") == "isolated"
-                  and "BARE_R=" in (outr.get("stdout") or ""),
-                  f"mode={outr.get('execution_mode')} "
+                  "BARE_R=" in (outr.get("stdout") or "")
+                  and outr.get("env") == "renvchk"
+                  and not outr.get("kernel_warning"),
+                  f"mode={outr.get('execution_mode')} env={outr.get('env')} "
+                  f"warn={str(outr.get('kernel_warning') or '')[:150]} "
                   f"note={str(outr.get('note') or outr.get('error') or '')[:200]}")
+            # THE point of kernel parity: state persists across bare calls.
+            run_r({"code": "x <- 41"}, {"thread_id": tidr})
+            out2 = run_r({"code": "cat('STATE=', x + 1, '\\n', sep='')"},
+                         {"thread_id": tidr})
+            check("bare run_r state persists across calls (persistent kernel)",
+                  "STATE=42" in (out2.get("stdout") or ""),
+                  f"mode={out2.get('execution_mode')} "
+                  f"warn={str(out2.get('kernel_warning') or '')[:150]} "
+                  f"stderr={str(out2.get('stderr') or '')[:200]}")
             named_envs.set_active(pid, "default", "r")
 
     finally:

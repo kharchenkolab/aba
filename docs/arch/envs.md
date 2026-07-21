@@ -276,10 +276,11 @@ the install-time probe can't run.
 - **Stale in-code docstrings.** `core/exec/materialize.py`'s module header still describes the
   `ENVS_DIR/pylib` overlay — pre-weft text; the code raises. Trust the behavior described
   above, not that header.
-- **A promoted R env is stateless per call.** Python named envs carry a persistent per-env
-  kernel; R named envs run as one-shots (`named_envs.run_in`), so with an active R env
-  promoted, bare `run_r` state does not persist between calls. Honest but surprising —
-  a per-named-env R kernel is the fix, unbuilt.
+- **Pre-parity named R envs lack `r-irkernel`.** New named R envs bake it (as python bakes
+  `ipykernel`), so named/promoted R runs get a persistent per-env kernel; an env created
+  before that parity has no kernel package, so its kernel can't start and runs degrade to
+  the env's own stateless one-shot with a loud warning naming the one-time remedy
+  (`ensure_capability('r-irkernel', env=name)`). No automatic migration.
 - **Two consumers still compare against the default session regardless of the pointer**
   (census-allowlisted, with rationale): the provenance env-diff (`lifecycle/revisions.py`,
   "current env" = default session — a pointer-aware diff is backlog) and the viewer

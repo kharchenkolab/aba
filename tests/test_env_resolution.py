@@ -380,19 +380,25 @@ def test_run_python_bare_call_lands_in_promoted_env(registry, monkeypatch):
     assert out.get("execution_mode") == "isolated"
 
 
-def test_run_r_bare_call_lands_in_promoted_env(registry, monkeypatch):
-    """Full run_r() entry: the r pointer promotes an isolated R env for bare
-    calls — the campaign's acceptance wiring (system-lib case)."""
-    from content.bio.tools import run_exec as rex
-    from core import projects
+def _r_local_lane(monkeypatch):
+    """Force run_r into the local sync lane."""
     from core.exec import compute_env as _cemod, router as _router
-    named_envs.set_active(PID, "renv", "r")
-    monkeypatch.setattr(projects, "current", lambda: PID)
-    monkeypatch.setattr(_cemod, "compute_env", lambda: {"mode": "local"})
 
     class _Choice:
         location, rationale = "local", "test"
+    monkeypatch.setattr(_cemod, "compute_env", lambda: {"mode": "local"})
     monkeypatch.setattr(_router, "decide", lambda **k: _Choice())
+
+
+def test_run_r_bare_call_lands_in_promoted_env(registry, monkeypatch):
+    """Full run_r() entry, kernels OFF: the r pointer promotes an isolated R
+    env for bare calls; the one-shot fallback receives it."""
+    from content.bio.tools import run_exec as rex
+    from core import config as _cfg, projects
+    named_envs.set_active(PID, "renv", "r")
+    monkeypatch.setattr(projects, "current", lambda: PID)
+    monkeypatch.setattr(_cfg, "KERNEL_ENABLED", False)
+    _r_local_lane(monkeypatch)
     captured = {}
 
     def _fake_named(env, code, lang, timeout_s):
@@ -406,22 +412,100 @@ def test_run_r_bare_call_lands_in_promoted_env(registry, monkeypatch):
 
 def test_run_r_explicit_env_still_wins(registry, monkeypatch):
     from content.bio.tools import run_exec as rex
-    from core import projects
-    from core.exec import compute_env as _cemod, router as _router
+    from core import config as _cfg, projects
     named_envs.set_active(PID, "renv", "r")
+    named_envs._save(PID, {**named_envs._load(PID)})   # keep registry intact
     monkeypatch.setattr(projects, "current", lambda: PID)
-    monkeypatch.setattr(_cemod, "compute_env", lambda: {"mode": "local"})
-
-    class _Choice:
-        location, rationale = "local", "test"
-    monkeypatch.setattr(_router, "decide", lambda **k: _Choice())
+    monkeypatch.setattr(_cfg, "KERNEL_ENABLED", False)
+    _r_local_lane(monkeypatch)
     captured = {}
     monkeypatch.setattr(
         rex, "_run_in_named_env",
         lambda env, code, lang, t: (captured.update(env=env)
                                     or {"status": "ok"}))
+    # 'otherenv' must exist now that the named lane validates up front
+    named_envs._save(PID, {**named_envs._load(PID),
+                           "envs": {**named_envs._load(PID)["envs"],
+                                    "otherenv": {"env_id": "e:9",
+                                                 "language": "r"}}})
     rex.run_r({"code": "1", "env": "otherenv"}, {"thread_id": "t1"})
     assert captured == {"env": "otherenv"}
+
+
+# ── 7. R kernel parity: a promoted R env is STATEFUL ─────────────────────────
+
+def test_named_r_spec_bakes_irkernel():
+    """New named R envs carry r-irkernel so the per-env persistent kernel can
+    start — parity with ipykernel on the python side."""
+    spec = named_envs._spec_for("prjX", "n", "r", ["somepkg"])
+    assert "r-irkernel" in spec["deps"]["conda"]
+    # no duplicate when the caller already pins it
+    spec2 = named_envs._spec_for("prjX", "n", "r", ["r-irkernel =1.3"])
+    assert sum(1 for p in spec2["deps"]["conda"]
+               if p.split()[0] == "r-irkernel") == 1
+    # python spec unchanged
+    specp = named_envs._spec_for("prjX", "n", "python", ["numpy"])
+    assert "ipykernel" in specp["deps"]["conda"]
+
+
+def test_run_r_promoted_env_gets_persistent_kernel(registry, monkeypatch):
+    """Kernels ON: a bare run_r with a promoted env attaches the env's OWN
+    persistent kernel (distinct scope key, env_name passed) — not a one-shot."""
+    from content.bio.tools import run_exec as rex
+    from core import config as _cfg, projects
+    from core.exec import kernels as _k
+    named_envs.set_active(PID, "renv", "r")
+    monkeypatch.setattr(projects, "current", lambda: PID)
+    monkeypatch.setattr(_cfg, "KERNEL_ENABLED", True)
+    monkeypatch.setattr(named_envs, "ensure_ready",
+                        lambda env_id, **kw: None)
+    _r_local_lane(monkeypatch)
+    captured = {}
+
+    class _FakePool:
+        def get_or_start(self, scope_key, lang, *, cwd, env_name=None, **kw):
+            captured.update(scope_key=scope_key, lang=lang, env_name=env_name)
+            raise _k.KernelCapacityError("halt-after-capture")
+    monkeypatch.setattr(_k, "get_pool", lambda: _FakePool())
+    oneshot = []
+    monkeypatch.setattr(rex, "_run_in_named_env",
+                        lambda *a, **kw: oneshot.append(a) or {"status": "ok"})
+    out = rex.run_r({"code": "1"}, {"thread_id": "t1"})
+    assert captured == {"scope_key": "t1::env::renv", "lang": "r",
+                        "env_name": "renv"}
+    assert out.get("at_capacity") is True    # armed: the kernel lane ran
+    assert oneshot == []                     # and never fell into a one-shot
+
+
+def test_run_r_pre_parity_env_degrades_loudly(registry, monkeypatch):
+    """A named env whose kernel cannot start (pre-parity, no irkernel)
+    degrades to the env's OWN one-shot with a warning naming the remedy —
+    never the default stack."""
+    from content.bio.tools import run_exec as rex
+    from core import config as _cfg, projects
+    from core.exec import kernels as _k
+    named_envs.set_active(PID, "renv", "r")
+    monkeypatch.setattr(projects, "current", lambda: PID)
+    monkeypatch.setattr(_cfg, "KERNEL_ENABLED", True)
+    monkeypatch.setattr(named_envs, "ensure_ready",
+                        lambda env_id, **kw: None)
+    _r_local_lane(monkeypatch)
+
+    class _DeadPool:
+        def get_or_start(self, *a, **kw):
+            raise RuntimeError("no kernel for you")
+
+        def restart(self, *a, **kw):
+            pass
+    monkeypatch.setattr(_k, "get_pool", lambda: _DeadPool())
+    captured = {}
+    monkeypatch.setattr(
+        rex, "_run_in_named_env",
+        lambda env, code, lang, t: (captured.update(env=env)
+                                    or {"status": "ok", "stdout": ""}))
+    out = rex.run_r({"code": "1"}, {"thread_id": "t1"})
+    assert captured == {"env": "renv"}       # degraded into the SAME env
+    assert "r-irkernel" in out.get("kernel_warning", "")   # remedy named
 
 
 def test_ensure_capability_targets_promoted_env(registry, monkeypatch):

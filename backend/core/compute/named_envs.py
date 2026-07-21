@@ -196,9 +196,11 @@ def resolve_env(project_id, language: str, explicit=None) -> Optional[str]:
 def _spec_for(project_id: str, name: str, language: str,
               packages: list[str], python_version: Optional[str] = None,
               conda_packages: Optional[list[str]] = None) -> dict:
-    """A fresh named-env spec. Python envs bake ipykernel so the per-env
-    persistent kernel works without ever installing into the frozen env; R envs
-    get the cran layer for CRAN-style specs. `python_version` (e.g. "3.10")
+    """A fresh named-env spec. Python envs bake ipykernel and R envs bake
+    r-irkernel so the per-env persistent kernel works without ever installing
+    into the frozen env (an env without its kernel package is one-shot-only —
+    useless for stateful work); R envs also get the cran layer for CRAN-style
+    specs. `python_version` (e.g. "3.10")
     pins the interpreter — the whole point of an isolated env is often a
     DIFFERENT python than the base (an old package that needs <3.11); a fresh
     env has no frozen base to conflict, so weft picks the matching build.
@@ -210,7 +212,10 @@ def _spec_for(project_id: str, name: str, language: str,
     if language == "r":
         conda = [p for p in packages if p.startswith(("r-", "bioconductor-"))]
         cran = [p for p in packages if not p.startswith(("r-", "bioconductor-"))]
-        deps: dict = {"conda": ["r-base =4.4.*", *conda, *(conda_packages or [])]}
+        _all_conda = [*conda, *(conda_packages or [])]
+        kern = ([] if any(p.split()[0] == "r-irkernel" for p in _all_conda)
+                else ["r-irkernel"])
+        deps: dict = {"conda": ["r-base =4.4.*", *kern, *_all_conda]}
         if cran:
             deps["cran"] = cran
         return {"name": label, "deps": deps}

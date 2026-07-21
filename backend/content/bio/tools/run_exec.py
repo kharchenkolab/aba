@@ -1337,12 +1337,29 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
                     f"turn here rather than polling its status.",
         }
 
-    # Synchronous isolated R env (not backgrounded) — the one-shot in the env.
+    # Synchronous named R env (not backgrounded): the env's own PERSISTENT
+    # kernel — parity with the python lane (new named R envs bake r-irkernel;
+    # a pre-parity env whose kernel can't start degrades to the stateless
+    # one-shot in the self-heal below, loudly, naming the one-time remedy).
     if env_name:
-        return _run_in_named_env(env_name, code, "r", timeout_s)
-
-    # Synchronous kernel path (default).
-    if not KERNEL_ENABLED:
+        from core.compute import named_envs
+        from core.compute.errors import ComputeError as _CE
+        _row = named_envs.resolve(str(project_id), env_name)
+        if _row is None:
+            return {"status": "error", "env": env_name, "language": "r",
+                    "note": f"No isolated env '{env_name}'. Create it with "
+                            f"make_isolated_env(name='{env_name}', language='r')."}
+        if not KERNEL_ENABLED:      # kernels off → stateless one-shot fallback
+            return _run_in_named_env(env_name, code, "r", timeout_s)
+        # Realize before the pool lock (see the python lane: a first-use
+        # realization under the pool lock would wedge every acquisition).
+        try:
+            named_envs.ensure_ready(_row["env_id"], language="r")
+        except _CE as ce:
+            return {"status": "error", "env": env_name, "error": ce.to_payload(),
+                    "note": f"env '{env_name}' could not be realized: "
+                            f"{ce.detail or ce.code}"}
+    elif not KERNEL_ENABLED:
         return {"error": "R runs in a persistent kernel, which is currently disabled. "
                          "Pass background=True to run as a queued Rscript job instead."}
     try:
@@ -1354,22 +1371,30 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
         cwd = _run_scratch_cwd(str(project_id), str(thread_id))
         start_ts = _time.time()
         started_iso = _dt.now(_tz.utc).isoformat()
-        # W3.0: base-pack R lane — realize before the pool lock (see python lane).
-        from core.compute import base_env, project_env
-        from core.compute.errors import ComputeError
-        try:
-            base_env.require("r")           # weft-only: no served-base fallback
-            project_env.ensure(str(project_id), "r")
-        except ComputeError as ce:
-            return {"status": "error", "error": ce.to_payload(),
-                    "note": f"the R environment pack is not available: "
-                            f"{ce.detail or ce.code}"}
-        except RuntimeError as re_:
-            return {"status": "error", "note": str(re_)}
+        # §11.3 parity: an isolated env gets its own persistent R kernel
+        # (distinct scope-key + the env's R); default lane shares the thread
+        # kernel over the base pack.
+        scope_key = str(thread_id) if not env_name else f"{thread_id}::env::{env_name}"
+        if not env_name:
+            # W3.0: base-pack R lane — realize before the pool lock (see
+            # python lane). An isolated env needs no base pack: its EnvID was
+            # ensure_ready'd above.
+            from core.compute import base_env, project_env
+            from core.compute.errors import ComputeError
+            try:
+                base_env.require("r")       # weft-only: no served-base fallback
+                project_env.ensure(str(project_id), "r")
+            except ComputeError as ce:
+                return {"status": "error", "error": ce.to_payload(),
+                        "note": f"the R environment pack is not available: "
+                                f"{ce.detail or ce.code}"}
+            except RuntimeError as re_:
+                return {"status": "error", "note": str(re_)}
         from core.exec.kernels import KernelCapacityError
         try:
-            sess = get_pool().get_or_start(str(thread_id), "r",
-                                           cwd=str(scratch_dir(str(project_id), f"thread-{thread_id}")))
+            sess = get_pool().get_or_start(scope_key, "r",
+                                           cwd=str(scratch_dir(str(project_id), f"thread-{thread_id}")),
+                                           env_name=env_name)
         except KernelCapacityError as _cap:
             return {"error": str(_cap), "at_capacity": True}
         _ensure_kernel_cwd(sess, "r", cwd)
@@ -1386,11 +1411,25 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
         print(f"[run_r] kernel attempt {_ktries + 1} failed: {e}")
         try:
             from core.exec.kernels import get_pool as _gp
-            _gp().restart(str(thread_id), "r")
+            _gp().restart(str(thread_id) if not env_name
+                          else f"{thread_id}::env::{env_name}", "r")
         except Exception:  # noqa: BLE001
             pass
         if _ktries < 1:
             return run_r({**input_, "_kernel_tries": _ktries + 1}, ctx)
+        if env_name:
+            # The env's kernel won't start (typically a pre-parity env with no
+            # r-irkernel baked). Degrade to the env's OWN stateless one-shot —
+            # never the default stack — and name the one-time remedy.
+            result = _run_in_named_env(env_name, code, "r", timeout_s)
+            if isinstance(result, dict):
+                result["kernel_warning"] = (
+                    f"⚠ Ran as a STATELESS one-shot in env '{env_name}' — its "
+                    f"persistent kernel could not start (envs created before "
+                    f"kernel parity lack r-irkernel; fix once with "
+                    f"ensure_capability('r-irkernel', env='{env_name}')). "
+                    f"Objects from earlier run_r calls are NOT available here.")
+            return result
         from core.exec.run import run_r_code
         _rid = ((ctx or {}).get("run_id")
                 or getattr(cancel_token, "run_id", None) or uuid.uuid4().hex)
@@ -1421,6 +1460,8 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
     out = {"stdout": snip_middle(res.stdout or ""), "stderr": snip_middle(res.stderr or ""),
            "returncode": res.returncode, "plots": plots, "tables": tables,
            "files": files, "execution_mode": "session"}
+    if env_name:
+        out["env"] = env_name          # the promoted/named env this session runs in
     # Stage 1 exec record (parity with run_python). Best-effort; logged on
     # failure, never blocks the tool result.
     _eid = _write_exec_record(
