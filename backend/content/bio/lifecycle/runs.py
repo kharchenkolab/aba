@@ -2235,6 +2235,55 @@ def _human_size(n: int) -> str:
     return f"{n} B"
 
 
+def _collapse_store_members(outputs: list[dict], run_id: str) -> list[dict]:
+    """Fold the members of a directory-shaped store (a `.zarr`/etc chunk tree
+    is ONE logical output, not its hundreds of shards) into a single `store`
+    entry. Without this the manifest is dominated by internal shard rows
+    (`axes/x/zarr.json`, chunk files …) — noise for the user, and since a
+    store is one artifact every shard row carried the SAME artifact_id, which
+    broke per-output addressing (live 2026-07-21). The store entry keeps the
+    store's own artifact_id (if any), a member count, and a summed size; its
+    href points at the store root so a viewer/download resolves the unit."""
+    from urllib.parse import quote as _q
+    stores: dict[str, dict] = {}          # store-root rel → aggregate
+    kept: list[dict] = []
+    for o in outputs:
+        rel = o.get("label") or ""
+        root = None
+        for part_end in _store_root_of(rel):
+            root = part_end
+            break
+        if root is None:
+            kept.append(o)
+            continue
+        agg = stores.get(root)
+        if agg is None:
+            agg = stores[root] = {"kind": "store", "label": root,
+                                  "href": f"/api/runs/{run_id}/file?rel={_q(root)}",
+                                  "n_members": 0, "_bytes": 0, "artifact_id": None}
+        agg["n_members"] += 1
+        # the row whose label IS the store root carries the store's identity
+        if rel == root and o.get("artifact_id"):
+            agg["artifact_id"] = o["artifact_id"]
+    for root, agg in stores.items():
+        if agg.get("artifact_id") is None:
+            agg.pop("artifact_id", None)
+        agg.pop("_bytes", None)
+        kept.append(agg)
+    return kept
+
+
+def _store_root_of(rel: str):
+    """Yield the store-root prefix of `rel` if it lies under (or is) a
+    store-suffix directory, else yield nothing. e.g. `out/x.zarr/axes/0` →
+    `out/x.zarr`; `out/x.zarr` → `out/x.zarr`; `fig.png` → (nothing)."""
+    parts = rel.split("/")
+    for i, p in enumerate(parts):
+        if p.lower().endswith(_STORE_DIR_SUFFIXES):
+            yield "/".join(parts[:i + 1])
+            return
+
+
 def refresh_output_manifest(run_id: str, *, plot_urls_by_name: Optional[dict] = None,
                             ensure_names: Optional[list] = None) -> None:
     """Scan the Run's output directory and write a `metadata.run` manifest
@@ -2275,16 +2324,36 @@ def refresh_output_manifest(run_id: str, *, plot_urls_by_name: Optional[dict] = 
     # on basename as a safe lowest common denominator; collisions across
     # subdirs prefer the most recently produced exec.
     from core.exec.artifacts import artifacts_for_run
+    # Two maps: REL PATH (authoritative — a distinct output has a distinct id)
+    # and basename (fallback only when the leaf is UNIQUE across the run). The
+    # basename-only map collapsed every store member sharing a leaf (e.g. the
+    # per-subdir `zarr.json` of a chunked store) onto ONE artifact_id, so
+    # pin/dedup/address couldn't tell them apart (live 2026-07-21). Rel-path
+    # first fixes that; the basename fallback is dropped for any leaf that
+    # occurs more than once.
+    rel_to_artifact: dict[str, str] = {}
+    _leaf_counts: dict[str, int] = {}
     name_to_artifact: dict[str, str] = {}
     run_artifacts: list = []
     try:
         run_artifacts = artifacts_for_run(run_id)
         for a in run_artifacts:
-            leaf = (a.get("original_name") or "").rsplit("/", 1)[-1]
-            if leaf:
-                name_to_artifact[leaf] = a["artifact_id"]
+            on = (a.get("original_name") or "").strip()
+            if not on:
+                continue
+            rel_to_artifact[Path(on).as_posix()] = a["artifact_id"]
+            leaf = on.rsplit("/", 1)[-1]
+            _leaf_counts[leaf] = _leaf_counts.get(leaf, 0) + 1
+            name_to_artifact[leaf] = a["artifact_id"]
+        # a leaf that maps ambiguously must NOT lend its id to a basename match
+        name_to_artifact = {k: v for k, v in name_to_artifact.items()
+                            if _leaf_counts.get(k, 0) == 1}
     except Exception as e:  # noqa: BLE001 — manifest refresh must not fail
         _log.warning("refresh_output_manifest: artifact lookup failed: %s", e)
+
+    def _artifact_for(rel: str, name: str) -> Optional[str]:
+        # rel-path match is authoritative; fall back to a UNIQUE basename
+        return rel_to_artifact.get(Path(rel).as_posix()) or name_to_artifact.get(name)
 
     def _entry(f: Path) -> Optional[dict]:
         if not f.is_file() or f.name.startswith("."):
@@ -2300,7 +2369,7 @@ def refresh_output_manifest(run_id: str, *, plot_urls_by_name: Optional[dict] = 
         rel = f.relative_to(base).as_posix()
         ext = f.suffix.lower().lstrip(".")
         url = f"/api/runs/{run_id}/file?rel={quote(rel)}"
-        artifact_id = name_to_artifact.get(f.name)
+        artifact_id = _artifact_for(rel, f.name)
         if ext in _FIG_EXT:
             # PDF: rasterize page 1 to a sibling preview PNG + use that
             # as the thumb URL so the Plots grid can actually render it.
@@ -2358,7 +2427,7 @@ def refresh_output_manifest(run_id: str, *, plot_urls_by_name: Optional[dict] = 
             out = {"kind": "file", "label": rel, "href": url + "&download=1"}
         if sz is not None:
             out["size"] = _human_size(sz)
-        artifact_id = name_to_artifact.get(name)
+        artifact_id = _artifact_for(rel, name)
         if artifact_id:
             out["artifact_id"] = artifact_id
         return out
@@ -2386,6 +2455,7 @@ def refresh_output_manifest(run_id: str, *, plot_urls_by_name: Optional[dict] = 
         if e:
             outputs.append(e)
             seen_rel.add(e["label"])
+    outputs = _collapse_store_members(outputs, run_id)
     outputs.sort(key=lambda o: o["label"])
     bulk = None
     if len(outputs) > _MANIFEST_CAP:

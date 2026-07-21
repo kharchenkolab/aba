@@ -437,7 +437,24 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0,
 
     def _copy_and_record(f: Path, bucket: list, ext: str) -> None:
         if max_files is not None and len(_created) >= max_files:
+            # Cap reached: DON'T copy into the served store, but still ADVERTISE
+            # the file (link-only) so it lands in produced[] → a retain candidate,
+            # browsable + downloadable from the sandbox/retained tier via the
+            # tier-resolving /file route. The prior behavior only bumped a counter
+            # and dropped the entry entirely, so a capped output vanished from the
+            # manifest — the agent said "wrote X" and the user had no way to get it
+            # (live 2026-07-21). Same shape as the oversize link-only branch.
             _skipped_cap[0] += 1
+            try:
+                display = str(f.relative_to(scratch))
+            except ValueError:
+                display = f.name
+            try:
+                nbytes = f.stat().st_size
+            except OSError:
+                nbytes = 0
+            bucket.append({"url": None, "original_name": display,
+                           "bytes": nbytes, "link_only": True})
             return
         dest_name = f"{uuid.uuid4().hex}{ext}"
         _created.add(dest_name)
