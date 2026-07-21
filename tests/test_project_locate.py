@@ -203,6 +203,84 @@ def test_read_path_remote_only_names_the_fate(monkeypatch):
     assert err and "not local" in err and "siteB" in err
 
 
+def test_sandboxed_write_resolver_refuses_outside_door_hits(monkeypatch, tmp_path):
+    """Containment invariant: the door fallback is a READ convenience — it must
+    never hand a WRITE resolver (enforce_sandbox=True, i.e. edit_file) a path
+    outside the project's editable roots. A unique same-name hit in a served
+    store copy (content-addressed bytes) or a live kernel jobdir (possibly
+    another project's) would otherwise be edited IN PLACE."""
+    from content.bio.tools.file_io import _resolve_project_path
+    outside = tmp_path / "elsewhere" / "m.csv"
+    outside.parent.mkdir(parents=True)
+    outside.write_text("x")
+    monkeypatch.setattr(
+        "content.bio.project_locate.locate_project_files",
+        lambda pat, limit=6, ctx=None: {"matches": [
+            {"path": str(outside), "tier": "run output"}]})
+    got, err = _resolve_project_path("m.csv", {"thread_id": "t"},
+                                     must_exist=True, enforce_sandbox=True)
+    assert got == "" and err, "door hit outside the sandbox resolved for a write"
+    assert "sandbox" in err, err
+    assert "run output" in err, "the hit's fate/tier is not named"
+
+
+def test_sandboxed_write_resolver_accepts_contained_hit(monkeypatch):
+    """The other side: a door hit INSIDE the editable roots still resolves for
+    writes — otherwise the guard gets disabled the first time it cries wolf."""
+    from content.bio.tools.file_io import _resolve_project_path
+    from core.config import project_work_dir
+    from core import projects
+    pid = projects.current() or "default"
+    inside = Path(str(project_work_dir(pid))) / "sub" / "w_inside.csv"
+    inside.parent.mkdir(parents=True, exist_ok=True)
+    inside.write_text("x")
+    monkeypatch.setattr(
+        "content.bio.project_locate.locate_project_files",
+        lambda pat, limit=6, ctx=None: {"matches": [
+            {"path": str(inside), "tier": "work scratch"}]})
+    got, err = _resolve_project_path("w_inside.csv", {"thread_id": "t"},
+                                     must_exist=True, enforce_sandbox=True)
+    assert err is None and got == str(inside), (got, err)
+
+
+def test_sandboxed_write_mixed_hits_resolves_the_contained_one(monkeypatch, tmp_path):
+    """WIDE: one hit inside + one outside must resolve to the inside one — the
+    outside hit was never a legal write target, so it must not manufacture an
+    ambiguity error (nor, worse, win the resolution)."""
+    from content.bio.tools.file_io import _resolve_project_path
+    from core.config import project_work_dir
+    from core import projects
+    pid = projects.current() or "default"
+    inside = Path(str(project_work_dir(pid))) / "mix.csv"
+    inside.parent.mkdir(parents=True, exist_ok=True)
+    inside.write_text("x")
+    outside = tmp_path / "mix.csv"
+    outside.write_text("y")
+    monkeypatch.setattr(
+        "content.bio.project_locate.locate_project_files",
+        lambda pat, limit=6, ctx=None: {"matches": [
+            {"path": str(outside), "tier": "run output"},
+            {"path": str(inside), "tier": "work scratch"}]})
+    got, err = _resolve_project_path("mix.csv", {"thread_id": "t"},
+                                     must_exist=True, enforce_sandbox=True)
+    assert err is None and got == str(inside), (got, err)
+
+
+def test_read_resolver_still_reaches_outside_hits(monkeypatch, tmp_path):
+    """Degenerate guard on the fix itself: with enforce_sandbox=False (reads),
+    outside hits must STILL resolve — the containment filter is write-scoped."""
+    from content.bio.tools.file_io import _resolve_project_path
+    outside = tmp_path / "r.csv"
+    outside.write_text("x")
+    monkeypatch.setattr(
+        "content.bio.project_locate.locate_project_files",
+        lambda pat, limit=6, ctx=None: {"matches": [
+            {"path": str(outside), "tier": "run output"}]})
+    got, err = _resolve_project_path("r.csv", {"thread_id": "t"},
+                                     must_exist=True, enforce_sandbox=False)
+    assert err is None and got == str(outside)
+
+
 def test_prompt_surfaces_teach_name_first_on_all_tiers():
     """Documentation defaults are behavior: the paths guidance must teach the
     name-first contract on EVERY prompt tier (full/standard AND the slim file

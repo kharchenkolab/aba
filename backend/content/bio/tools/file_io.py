@@ -480,15 +480,36 @@ def _resolve_project_path(path_str: str, ctx: dict | None,
                         f"{work_root} (WORK_DIR) and {data_root} (DATA_DIR). "
                         f"Got: {p}")
     if must_exist and not p.exists():
-        # Door fallback (read paths only — writes anchor at cwd): the name may
-        # live in a sandbox, a prior run's outputs, or another searched tier.
-        # One unambiguous LOCAL hit resolves; several → the caller gets labeled
-        # candidates to choose from; none → not-found WITH the search bounds,
-        # so absent is never conflated with unsearched.
+        # Door fallback: the name may live in a sandbox, a prior run's outputs,
+        # or another searched tier. One unambiguous ELIGIBLE hit resolves;
+        # several → the caller gets labeled candidates; none → not-found WITH
+        # the search bounds, so absent is never conflated with unsearched.
+        #
+        # Under enforce_sandbox the door stays a READ convenience: a hit outside
+        # the editable roots is never a write target. A unique same-name file in
+        # a served store copy (content-addressed — editing it in place breaks the
+        # digest↔bytes invariant and every hardlinked sibling) or a live kernel
+        # jobdir (the kernel list is deployment-wide, so possibly ANOTHER
+        # project's) is reported as out-of-sandbox, not resolved.
         try:
             from content.bio.project_locate import locate_project_files
             found = locate_project_files(Path(raw).name, limit=6, ctx=ctx)
             local = [h for h in found.get("matches", []) if h.get("path")]
+            excluded: list = []
+            if enforce_sandbox:
+                def _in_roots(pp: str) -> bool:
+                    try:
+                        rp = Path(pp).resolve()
+                    except (OSError, ValueError):
+                        return False
+                    try:
+                        return rp.is_relative_to(work_root) or rp.is_relative_to(data_root)
+                    except AttributeError:
+                        s = str(rp)
+                        return (s.startswith(str(work_root) + os.sep)
+                                or s.startswith(str(data_root) + os.sep))
+                excluded = [h for h in local if not _in_roots(h["path"])]
+                local = [h for h in local if _in_roots(h["path"])]
             if len(local) == 1:
                 return local[0]["path"], None
             if len(local) > 1:
@@ -498,6 +519,13 @@ def _resolve_project_path(path_str: str, ctx: dict | None,
                 return "", (f"ambiguous name {Path(raw).name!r} — "
                             f"{len(local)} matches: {opts}. Pass the full path "
                             f"of the one you mean.")
+            if excluded:
+                h = excluded[0]
+                return "", (f"{Path(raw).name!r} exists but outside the editable "
+                            f"sandbox (tier: {h.get('tier')}, at {h['path']}) — "
+                            f"writes stay under {work_root} (WORK_DIR) or "
+                            f"{data_root} (DATA_DIR). Copy it into the project "
+                            f"first, or pass a path inside the sandbox.")
             remote = [h for h in found.get("matches", []) if not h.get("path")]
             if remote:
                 h = remote[0]
