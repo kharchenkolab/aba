@@ -45,9 +45,16 @@ def _walk_match(root: Path, pattern: str, hits: list, tier: str,
         dirnames[:] = [d for d in dirnames
                        if d not in _SKIP_DIRS and not d.startswith(".")]
         for name in filenames:
-            if name.startswith(".") or not fnmatch.fnmatchcase(name, pattern):
+            if name.startswith("."):
                 continue
             fp = Path(dirpath) / name
+            # Tier parity: remote and manifest tiers match basename OR rel
+            # path — the local walks must too, or 'sub/x.csv' resolves a
+            # manifest row and a remote file but never the same file on disk.
+            rel = str(fp.relative_to(root)).replace(os.sep, "/")
+            if not (fnmatch.fnmatchcase(name, pattern)
+                    or fnmatch.fnmatchcase(rel, pattern)):
+                continue
             try:
                 st = fp.stat()
             except OSError:
@@ -163,28 +170,37 @@ def locate_project_files(pattern: str, limit: int = 50,
     searched: dict = {}
     unsearched: list[str] = []
 
-    _live_sandbox_tier(pattern, hits, searched, unsearched, limit)
-    _manifest_tier(pattern, hits, searched, limit)
+    # Tiers collect to limit+1: capping AT the limit made the total unable to
+    # exceed it, so `truncated` was structurally False — silent truncation,
+    # the exact class this module's honesty rules disclaim. One extra slot is
+    # enough to know the cut happened; the slice below restores the limit.
+    cap = limit + 1
+    _live_sandbox_tier(pattern, hits, searched, unsearched, cap)
+    _manifest_tier(pattern, hits, searched, cap)
 
     try:
         from core.config import project_data_dir, project_work_dir
         from core.projects import current_project_id
         pid = str(current_project_id() or "default")
         _walk_match(Path(str(project_data_dir(pid))), pattern, hits,
-                    "user data", limit)
+                    "user data", cap)
         _walk_match(Path(str(project_work_dir(pid))), pattern, hits,
-                    "work scratch", limit)
+                    "work scratch", cap)
         searched["dirs"] = ["data", "work"]
     except Exception:  # noqa: BLE001
         unsearched.append("user data/work dirs unavailable")
 
     truncated = len(hits) > limit
     hits = hits[:limit]
-    # scoped-first presentation: live-sandbox and newest first
+    # Scoped-first presentation: tier rank, then RECENCY. ISO-8601 strings in
+    # one timezone sort lexicographically by time (a fractional second sorts
+    # after its whole second — later within it), so plain string order is the
+    # recency order; rows without an mtime sort last in their tier. Two-pass
+    # stable sort: recency first, tier second, so tier dominates.
     _tier_rank = {"live sandbox": 0, "run output": 1,
                   "user data": 2, "work scratch": 3}
-    hits.sort(key=lambda h: (_tier_rank.get(h["tier"], 9),
-                             -(len(h.get("mtime") or ""))))
+    hits.sort(key=lambda h: h.get("mtime") or "", reverse=True)
+    hits.sort(key=lambda h: _tier_rank.get(h["tier"], 9))
     out = {"pattern": pattern, "matches": hits,
            "searched": {**searched,
                         "note": f"manifest tier covers the {_RECENT_EXECS} "

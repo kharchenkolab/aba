@@ -534,6 +534,12 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0,
     for f in _iter_kept(scratch, None, since_ts):
         if f.suffix.lower() in _known or f.name in _created:
             continue
+        # The runner's own wrapper is the since_ts reference stamp (its mtime
+        # EQUALS since_ts, so the freshness filter keeps it) — without this it
+        # landed in produced[] on every stateless run and find_files matched
+        # the harness's machinery across all recent runs.
+        if f.parent == scratch and f.name in ("script.py", "script.R"):
+            continue
         try:
             st = f.stat()
         except OSError:

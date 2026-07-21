@@ -163,6 +163,13 @@ def test_no_private_tree_walks_outside_the_door():
         "backend/content/bio/skills/__init__.py",      # skill discovery, not file lookup
         "backend/content/bio/web/routes/datasets.py",  # dataset listing route (enumerator)
         "backend/content/bio/mcp_servers/aba_core/tools/entity_ops.py",  # artifact-member listing
+        # Enumerators of their OWN known directories — package/registry
+        # discovery and display listings, not name→file resolution:
+        "backend/content/bio/services.py",             # tool-module discovery (*.py in its code dir)
+        "backend/content/bio/tools/discovery.py",      # dist-info enumeration inside an env prefix
+        "backend/content/bio/tools/__init__.py",       # tool-registry package walk
+        "backend/content/bio/advisors/__init__.py",    # advisor yaml discovery in its own package dir
+        "backend/content/bio/lifecycle/revisions.py",  # bundle-dir file listing for display
     }
     offenders = []
     for f in (ROOT / "backend/content/bio").rglob("*.py"):
@@ -170,7 +177,12 @@ def test_no_private_tree_walks_outside_the_door():
         if "mcp_servers" in rel and "tools/file_io" in rel:
             continue                        # registration shim only
         src = f.read_text()
-        if re.search(r"\bos\.walk\(|\brglob\(", src) and rel not in allowed:
+        # Every idiom that can privately answer "where is this file" — the
+        # original os.walk/rglob pair let a newest-wins `.glob()` resolver
+        # slip straight past the invariant.
+        if re.search(r"\bos\.walk\(|\brglob\(|\.glob\(|\biterdir\(\)"
+                     r"|\bos\.scandir\(|\bos\.listdir\(|\bglob\.glob\(",
+                     src) and rel not in allowed:
             offenders.append(rel)
     assert not offenders, (
         f"new private tree-walk(s) outside the door: {offenders} — route "
@@ -201,6 +213,76 @@ def test_read_path_remote_only_names_the_fate(monkeypatch):
     _, err = _resolve_project_path("m.h5", {"thread_id": "t"}, must_exist=True,
                                    enforce_sandbox=False)
     assert err and "not local" in err and "siteB" in err
+
+
+def test_truncation_is_confessed_not_silent(monkeypatch):
+    """PROVEN: every tier capped the shared hits list AT the limit, so the
+    total could never exceed it and `truncated` was structurally False — the
+    exact silent-truncation class the module docstring disclaims."""
+    _no_kernels(monkeypatch)
+    monkeypatch.setattr(pl, "_manifest_tier", lambda *a, **k: None)
+    from core.config import project_data_dir
+    from core.projects import current_project_id
+    d = Path(str(project_data_dir(str(current_project_id() or "default"))))
+    d.mkdir(parents=True, exist_ok=True)
+    for i in range(5):
+        (d / f"trunc_probe_{i}.csv").write_text("x")
+    out = pl.locate_project_files("trunc_probe_*.csv", limit=3)
+    assert len(out["matches"]) == 3
+    assert out["truncated"] is True, \
+        "5 matches, limit 3, truncated False — silent truncation"
+
+
+def test_collision_order_is_recency_not_string_length(monkeypatch, tmp_path):
+    """PROVEN: 'newest first' sorted by LEN(iso-string) — i.e. by whether the
+    timestamp happened to carry microseconds — not by time. An older file with
+    a fractional mtime outranked a file 100s newer."""
+    _no_kernels(monkeypatch)
+    monkeypatch.setattr(pl, "_manifest_tier", lambda *a, **k: None)
+    from core.config import project_data_dir
+    from core.projects import current_project_id
+    d = Path(str(project_data_dir(str(current_project_id() or "default"))))
+    d.mkdir(parents=True, exist_ok=True)
+    older = d / "order_a.csv"; newer = d / "order_b.csv"
+    older.write_text("x"); newer.write_text("y")
+    os.utime(older, (1_700_000_000.5, 1_700_000_000.5))   # fractional → longer iso
+    os.utime(newer, (1_700_000_100.0, 1_700_000_100.0))   # whole-second → shorter iso
+    out = pl.locate_project_files("order_*.csv")
+    assert [h["name"] for h in out["matches"]] == ["order_b.csv", "order_a.csv"], \
+        [(h["name"], h["mtime"]) for h in out["matches"]]
+
+
+def test_relpath_pattern_matches_local_tiers(monkeypatch):
+    """PROVEN tier-parity: remote and manifest tiers match rel paths, the local
+    walks matched basenames only — same glob, different tiers, different
+    answers. 'sub/x.csv' must find the file in a walked local tier too."""
+    _no_kernels(monkeypatch)
+    monkeypatch.setattr(pl, "_manifest_tier", lambda *a, **k: None)
+    from core.config import project_data_dir
+    from core.projects import current_project_id
+    d = Path(str(project_data_dir(str(current_project_id() or "default"))))
+    (d / "subq").mkdir(parents=True, exist_ok=True)
+    (d / "subq" / "rp_probe.csv").write_text("x")
+    out = pl.locate_project_files("subq/rp_probe.csv")
+    assert out["matches"], "rel-path pattern found nothing in a walked tier"
+
+
+def test_exec_wrapper_never_lands_in_produced(tmp_path):
+    """PROVEN: the runner's own wrapper script (mtime == since_ts — it IS the
+    reference stamp) leaked into produced[] as a skipped-shape row on every
+    stateless run, so every run advertised the harness's machinery as a user
+    output and find_files matched it across all recent runs."""
+    from core.exec.run import harvest_artifacts
+    scratch = tmp_path / "s"
+    scratch.mkdir()
+    wrapper = scratch / "script.py"
+    wrapper.write_text("print('x')")
+    since = wrapper.stat().st_mtime
+    (scratch / "model_state.ckpt").write_bytes(b"\1" * 64)
+    _, _, files, _ = harvest_artifacts(scratch, since_ts=since, project_id="prjWr")
+    names = [x.get("original_name") for x in files]
+    assert "script.py" not in names, f"wrapper leaked into produced[]: {names}"
+    assert "model_state.ckpt" in names, "real skipped-shape output vanished"
 
 
 def test_sandboxed_write_resolver_refuses_outside_door_hits(monkeypatch, tmp_path):

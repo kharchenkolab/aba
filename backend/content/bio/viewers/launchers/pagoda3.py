@@ -343,13 +343,21 @@ def _resolve_source(node: dict, pid: str, set_phase=None) -> Path:
         if cand.exists():
             return cand
     # Fallback: a run wrote the source into its work dir (work/<ana_id>/<name>),
-    # which the logical output-tree path doesn't map to. Match by basename.
+    # which the logical output-tree path doesn't map to. Resolve by NAME through
+    # the project door, and take a hit only when it is UNAMBIGUOUS — the private
+    # glob this replaces silently took newest-wins across same-named files from
+    # different runs, the exact anti-pattern the door exists to end. Ambiguity
+    # falls through to the run-scoped resolver below: provenance beats mtime.
     name = Path(raw).name
-    work = project_root(pid) / "work"
-    if name and work.exists():
-        matches = sorted(work.glob(f"*/{name}"), key=lambda m: m.stat().st_mtime, reverse=True)
-        if matches:
-            return matches[0]
+    if name:
+        try:
+            from content.bio.project_locate import locate_project_files
+            loc = [h for h in locate_project_files(name, limit=6).get("matches", [])
+                   if h.get("path")]
+            if len(loc) == 1:
+                return Path(loc[0]["path"])
+        except Exception:  # noqa: BLE001 — fallback resolution is best-effort
+            pass
     # Canonical resolver — handles a directory store AND a remote fetch home.
     # The launch is an EXPLICIT user open, so the fetch runs on the guardrail
     # budget and reports progress to the launch page (the action layer owns
