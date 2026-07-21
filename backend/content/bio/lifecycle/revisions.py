@@ -821,11 +821,18 @@ def diff_env(entity_id: str) -> dict:
         # nothing to compare against.
         from core.compute import base_env as _bev, project_env as _penv
         from core import projects as _projects
+        now = {}
         if _bev.active("r"):
-            _rs = _penv.interpreter(str(_projects.current() or "_none"), "r")
-            now = package_versions_for_interpreter(str(_rs), "r")
-        else:
-            now = {}
+            # On an activation-only / mount-scoped R base, interpreter() raises
+            # a typed refusal (session.no_direct_exec) rather than yielding a raw
+            # exec path — mirror the `then` side and degrade to an empty `now`
+            # (honest under-report: the diff omits the fingerprint) instead of
+            # crashing diff_env for every R entity on that topology.
+            try:
+                _rs = _penv.interpreter(str(_projects.current() or "_none"), "r")
+                now = package_versions_for_interpreter(str(_rs), "r")
+            except Exception:  # noqa: BLE001 — no directly-usable R interpreter here
+                now = {}
     else:
         now = package_versions_for_interpreter(sys.executable, "python")
     now.pop("__lang_version__", None)

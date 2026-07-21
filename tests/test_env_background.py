@@ -230,6 +230,38 @@ def test_provenance_phase4_5_diff_and_export():
     assert {"script.py", "requirements.txt", "exec_record.json", "inputs.json", "README.md"} <= files, b
 
 
+def test_diff_env_r_activation_only_degrades_not_crashes(monkeypatch):
+    """On an activation-only / mount-scoped R base, project_env.interpreter()
+    raises a typed refusal (session.no_direct_exec) instead of yielding a raw
+    exec path. diff_env's R 'now' side must catch that and degrade to an empty
+    fingerprint — an honest under-report — NOT propagate the refusal and crash
+    the whole tool for every R entity on that topology (found in review)."""
+    from content.bio.lifecycle import revisions as rv
+    from core.compute import base_env, project_env
+    from core.compute.errors import ComputeError
+
+    monkeypatch.setattr(rv, "get_entity", lambda eid: {"id": eid, "exec_id": "x1"})
+
+    class _ER:
+        @staticmethod
+        def get(_x):
+            return {"language": "r", "package_versions": {"pkgA": "1.0"}}
+    monkeypatch.setattr(rv, "exec_records", _ER)
+    monkeypatch.setattr(base_env, "active", lambda lang: True)
+
+    def _refuse(_pid, _lang):
+        raise ComputeError("session.no_direct_exec",
+                           "no directly-usable interpreter on a mounted base",
+                           stage="resolve")
+    monkeypatch.setattr(project_env, "interpreter", _refuse)
+
+    d = rv.diff_env("ent-r")                      # must NOT raise
+    assert isinstance(d, dict) and d["language"] == "r"
+    # R now-side empty → the recorded pkg reads as removed, nothing added/changed
+    assert d["added"] == {} and d["changed"] == {}
+    assert d["removed"] == {"pkgA": "1.0"} and d["n_changed"] == 1
+
+
 def test_provenance_phase3_envelope_generalizes():
     """Phase 3 foundation: the exec-record envelope holds non-script producers
     uniformly (kind: cli/workflow + engine + params + container env). Full
