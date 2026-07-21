@@ -76,6 +76,31 @@ def build_cached_blocks(system: str, tools: list, *, cc_marker: bool):
     return sys_blocks, tool_blocks
 
 
+# ── Wire tripwire (prep/sent hash parity) ────────────────────────────────────
+# guide.py hashes the effective history at prep ([llm-prep]); _RealStream hashes
+# the SAME boundary (pre-tail, cache-marks stripped) at send ([llm-sent]). Any
+# unsanctioned mutation between them makes the sent hash miss the recent-prep
+# set. Counted here — and EXPOSED via /api/admin (a tripwire nobody watches is
+# decoration: this one sat red for 73 straight requests once, detected only by
+# hand). Deque membership (not last-value equality) keeps concurrent threads'
+# interleaved prep/sent pairs from counting as false mismatches.
+from collections import deque as _deque
+_RECENT_PREP_SHAS: "_deque[str]" = _deque(maxlen=64)
+_WIRE_DIAG: dict = {"hash_match": 0, "hash_mismatch": 0, "last_mismatch": ""}
+
+
+def _note_wire_hash(sent_sha: str) -> None:
+    """Score one sent-side hash against the recent prep-side set. No-op until
+    the first prep hash arrives (so runtimes that bypass guide never count)."""
+    if not _RECENT_PREP_SHAS:
+        return
+    if sent_sha in _RECENT_PREP_SHAS:
+        _WIRE_DIAG["hash_match"] += 1
+    else:
+        _WIRE_DIAG["hash_mismatch"] += 1
+        _WIRE_DIAG["last_mismatch"] = sent_sha
+
+
 def place_volatile_tail(messages: list, tail: str) -> tuple[list, bool]:
     """Deliver the turn's VOLATILE context (project snapshot, focus/thread preambles,
     the intent-sliced recipe catalog, the live compute-env line) as a trailing block on
@@ -243,6 +268,7 @@ class _RealStream:
                     sort_keys=True, default=str,
                 ).encode("utf-8")
                 _hist_sha = _hashlib.sha256(_canon).hexdigest()[:12]
+                _note_wire_hash(_hist_sha)
                 _full_sys = (self._system or "") + (self._dynamic_system or "")
                 # sys_sha over the STABLE block alone — same boundary as
                 # [llm-prep]'s (the dynamic tail is per-turn by design; its size

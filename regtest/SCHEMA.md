@@ -111,6 +111,10 @@ expected_overall:
 - **context** (from the turn's raw API request + `usage`):
   `cache_breakpoints: true` (system stable prefix + last message carry cache_control),
   `cache_read: true` (this turn read from cache — empirical hit; only meaningful on turns ≥2).
+  `cache_hit_min: 0.8` (threshold on this turn's hit fraction cr/(cr+cw+in) — fails on a
+  caching REGRESSION, not just a total miss. Armed: if the check is requested and usage
+  wasn't captured, that is a loud UNMEASURED failure, never a silent pass. Use on late
+  steps of long warm scenarios; turn 1 is always a cold write.)
   NOTE: `msgs_grow` is recorded as telemetry but is NOT a pass/fail gate — ABA does
   not monotonically accumulate messages; a `resume` rehydrates a compact, bounded
   context (e.g. 45 → 16 msgs) that then stays roughly flat. Treat n_msgs as an

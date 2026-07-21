@@ -40,7 +40,15 @@ def admin_tool_stats(days: int = 30, project_id: str | None = None):
     from core.runtime.tool_telemetry import stats, generation_stats
     cm = projects.bind(project_id) if project_id else contextlib.nullcontext()
     with cm:
-        return {"tools": stats(days=days), "generations": generation_stats(days=days)}
+        # In-process alarm counters ride along: an alarm no surface carries is
+        # decoration (the Tier-2 `saturated` counter is THE live tell for
+        # oversized content retained in history; the wire tripwire sat red for
+        # 73 requests once because nothing watched it).
+        from core.summarize.budget_summary import _TIER2_DIAG
+        from core.llm import _WIRE_DIAG
+        return {"tools": stats(days=days), "generations": generation_stats(days=days),
+                "history_compression": dict(_TIER2_DIAG),
+                "wire": dict(_WIRE_DIAG)}
 
 
 @router.get("/api/admin/tool_invocations")

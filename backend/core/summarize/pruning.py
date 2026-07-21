@@ -26,8 +26,10 @@ from typing import Any
 # to stop aging out tool_results inside the cached prefix during normal recipe
 # execution. See core/config.py:HISTORY_K_TOOL_KEEP for the cache-interaction
 # rationale.
-from core.config import HISTORY_K_TOOL_KEEP, HISTORY_K_TEXT_KEEP
+from core.config import (HISTORY_K_TOOL_KEEP, HISTORY_K_TEXT_KEEP,
+                         HISTORY_K_IMAGE_KEEP)
 K_TOOL_KEEP_DEFAULT = HISTORY_K_TOOL_KEEP
+K_IMAGE_KEEP_DEFAULT = HISTORY_K_IMAGE_KEEP
 K_TEXT_KEEP_DEFAULT = HISTORY_K_TEXT_KEEP
 
 # Tools whose tool_result we ALWAYS keep verbatim regardless of position
@@ -196,7 +198,7 @@ def prune_transcript(
     k_text_keep: int = K_TEXT_KEEP_DEFAULT,
     stub_batch: int | None = None,
     drop_batch: int | None = None,
-    k_image_keep: int = 4,
+    k_image_keep: int = K_IMAGE_KEEP_DEFAULT,
 ) -> list[dict]:
     """Return a pruned copy of `messages`:
       - The most recent K_TOOL_KEEP tool_result blocks keep their content

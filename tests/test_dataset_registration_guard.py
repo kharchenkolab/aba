@@ -77,3 +77,25 @@ def test_entities_of_type_max_can_fail():
     ents2 = [{"type": "dataset", "status": "active", "id": "d1"},
              {"type": "dataset", "status": "archived", "id": "d2"}]
     assert entity_type_bounds({"entities_of_type_max": {"dataset": 1}}, ents2) == []
+
+
+def test_cache_hit_check_threshold_and_arming():
+    """cache_hit_min ctx check: threshold on the turn's hit fraction, ARMED —
+    requested-but-unmeasured is a loud failure, never a silent pass."""
+    sys.path.insert(0, str(ROOT / "regtest" / "harness"))
+    from runner import cache_hit_check   # noqa: E402
+    # not requested → no-op regardless of usage
+    assert cache_hit_check({}, None) == []
+    # healthy warm turn passes
+    ok = cache_hit_check({"cache_hit_min": 0.8},
+                         {"cache_read": 9000, "cache_write": 500, "input": 400})
+    assert ok == []
+    # regression fails with the numbers in the message
+    bad = cache_hit_check({"cache_hit_min": 0.8},
+                          {"cache_read": 5000, "cache_write": 4000, "input": 1000})
+    assert bad and "caching regression" in bad[0] and "0.500" in bad[0]
+    # ARMED: requested but nothing measured → loud distinct failure
+    unmeasured = cache_hit_check({"cache_hit_min": 0.8}, None)
+    assert unmeasured and "UNMEASURED" in unmeasured[0]
+    assert cache_hit_check({"cache_hit_min": 0.8}, {"cache_read": 0}) \
+        and "UNMEASURED" in cache_hit_check({"cache_hit_min": 0.8}, {})[0]

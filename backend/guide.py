@@ -838,6 +838,8 @@ async def stream_response(
                 print(f"[llm-prep] run={turn.run_id} sys_sha={_sys_sha} "
                       f"hist_sha={_hist_sha} n_raw={len(history)} n_eff={len(llm_history)}",
                       flush=True)
+                from core.llm import _RECENT_PREP_SHAS
+                _RECENT_PREP_SHAS.append(_hist_sha)   # arms the wire tripwire
             except Exception:  # noqa: BLE001
                 pass
 

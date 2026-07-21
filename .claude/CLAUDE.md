@@ -22,4 +22,9 @@ These are cross-cutting inputs to EVERY agent decision — a change has platform
 - **Tool-catalog rendering** is governed by ONE policy — `core/runtime/mcp/presentation.py` (per `prompt_mode`), consumed only by `gateway.list_tools(mode=…)`. Change a tier's rendering by editing its `_POLICY` entry, never by adding an `if compact` branch. See `misc/tool_presentation.md`.
 - **Invariant:** the calling CONTRACT (param names/types/required/enum/default) is identical across all modes; only PROSE (docstrings, descriptions, titles) is tiered. Full prose is recoverable via `describe_tool`.
 - **Never cut one tier to fit another's budget.** `standard` (grounded_guide, production, opus/1M) keeps full param prose; `lean`/`lean_small` (small local models) drop it for their own tight window — isolated.
+- **Guards must be ARMED and PROVEN:** (a) a guard whose subject has a precondition
+  (a budget crossed, a window engaged, a path taken) asserts that precondition fired —
+  a run that measures nothing must fail, not pass (three instruments in one caching
+  investigation read "nothing measured" as green); (b) a new guard is shown to FAIL on
+  the code it guards against (stash-revert or equivalent) before it counts as coverage.
 - **Every change to a shared agent input ships a BEHAVIORAL guard, not just a byte/structural test:** contract-invariance (`test_tool_presentation.py`, `test_lean_catalog_compression.py`), the lean budget ceiling (`test_lean_summary_budget.py`, lean-scoped), and — for any tier in production use — tool-argument correctness in the regtest sweep (`regtest/placement/` covers `standard`). Structural-only PRs to these inputs are insufficient.

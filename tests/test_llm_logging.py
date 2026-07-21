@@ -298,3 +298,43 @@ def _run_open_and_consume_capture_stdout() -> str:
     finally:
         llm_mod._llm_client = orig_llm_client       # type: ignore[assignment]
     return buf.getvalue()
+
+
+# ── LOG-3: wire tripwire counters (prep/sent hash parity) ────────────────
+
+
+def test_wire_tripwire_unarmed_is_noop():
+    from core.llm import _WIRE_DIAG, _RECENT_PREP_SHAS, _note_wire_hash
+    _RECENT_PREP_SHAS.clear()
+    before = dict(_WIRE_DIAG)
+    _note_wire_hash("abc123")            # no prep hash ever recorded → no-op
+    assert _WIRE_DIAG == before, "unarmed tripwire must not count"
+
+
+def test_wire_tripwire_counts_match_and_mismatch():
+    from core.llm import _WIRE_DIAG, _RECENT_PREP_SHAS, _note_wire_hash
+    _RECENT_PREP_SHAS.clear()
+    _RECENT_PREP_SHAS.append("aaa")
+    _RECENT_PREP_SHAS.append("bbb")
+    m0, x0 = _WIRE_DIAG["hash_match"], _WIRE_DIAG["hash_mismatch"]
+    _note_wire_hash("bbb")               # concurrent-safe: membership, not last
+    _note_wire_hash("aaa")
+    _note_wire_hash("zzz")
+    assert _WIRE_DIAG["hash_match"] == m0 + 2
+    assert _WIRE_DIAG["hash_mismatch"] == x0 + 1
+    assert _WIRE_DIAG["last_mismatch"] == "zzz"
+
+
+def test_wire_tripwire_fires_from_the_real_dump_path():
+    """The hook must actually run inside _RealStream's dump block — an armed
+    tripwire that the send path never calls is the dead-diagnostic bug again."""
+    from core.llm import _WIRE_DIAG, _RECENT_PREP_SHAS
+    _RECENT_PREP_SHAS.clear()
+    _RECENT_PREP_SHAS.append("not-the-real-sha")     # armed, guaranteed mismatch
+    x0 = _WIRE_DIAG["hash_mismatch"]
+    with tempfile.TemporaryDirectory(prefix="dump_") as dump_dir:
+        capture, ctx = _make_ctx(dump_dir=dump_dir)
+        asyncio.run(_open_and_close(ctx))
+    assert _WIRE_DIAG["hash_mismatch"] == x0 + 1, \
+        "send path did not score its hash — tripwire not wired"
+    _RECENT_PREP_SHAS.clear()

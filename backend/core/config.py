@@ -703,6 +703,14 @@ HISTORY_K_TEXT_KEEP = setting(
     category="tuning", weft_fate="keep", reduction="merge:history",
     doc="Layer-A window: number of recent text turns kept verbatim.",
 ).get()
+HISTORY_K_IMAGE_KEEP = setting(
+    "history_k_image_keep", env="ABA_HISTORY_K_IMAGE_KEEP", type="int", default=4,
+    category="tuning", weft_fate="keep", reduction="merge:history",
+    doc="Vision payloads: number of recent tool_result blocks whose image "
+        "blocks stay verbatim; older ones demote to a re-view stub (a vision "
+        "payload is consumed once but bills full base64 weight per request "
+        "while retained). Tune up for vision-heavy deployments.",
+).get()
 HISTORY_SUMMARY_THRESHOLD_CHARS = setting(
     "history_summary_threshold_chars", env="ABA_HISTORY_SUMMARY_THRESHOLD_CHARS",
     type="int", default=400000, category="tuning", weft_fate="keep",

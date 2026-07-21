@@ -492,7 +492,33 @@ def run_checks(step, cap, cmetrics, prev_msgs, client, pid, tid, created, produc
         fails.append(f"cache_breakpoints absent: sys={cmetrics.get('sys_cc_pattern')} last={cmetrics.get('last_msg_cc')}")
     if ctx.get("cache_read") and not (cap.get("usage", {}).get("cache_read") or 0) > 0:
         fails.append("cache_read=0 (no cache hit)")
+    fails.extend(cache_hit_check(ctx, cap.get("usage")))
     return fails
+
+
+def cache_hit_check(ctx: dict, usage: dict | None) -> list[str]:
+    """`cache_hit_min: <frac>` ctx check — a THRESHOLD on this turn's cache hit
+    fraction cr/(cr+cw+in), not just the boolean cache_read gate. ARMED per the
+    guard convention: usage missing/empty when the check was requested is a
+    LOUD distinct failure (unmeasured ≠ passed) — the whole caching episode
+    began with instruments reading 'nothing measured' as green. Only meaningful
+    on turns ≥2 of a warm conversation; scenarios opt in on such steps."""
+    want = ctx.get("cache_hit_min")
+    if want is None:
+        return []
+    u = usage or {}
+    cr = u.get("cache_read") or 0
+    cw = u.get("cache_write") or 0
+    inp = u.get("input") or 0
+    denom = cr + cw + inp
+    if not denom:
+        return [f"cache_hit_min:{want}: usage not captured — UNMEASURED, "
+                f"cannot verify (a run that measures nothing must not pass)"]
+    frac = cr / denom
+    if frac < float(want):
+        return [f"cache_hit_frac={frac:.3f} < {want} "
+                f"(read={cr} write={cw} in={inp}) — caching regression"]
+    return []
 
 
 # ---------- LLM-judge (vision rubric) ----------
