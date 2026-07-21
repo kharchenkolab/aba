@@ -112,6 +112,35 @@ def bootstrap_env() -> None:
     sys.path.insert(0, str(ROOT / "backend"))
 
 
+def entity_type_bounds(st: dict, ents: list) -> list:
+    """Per-type entity-count assertions: `entities_of_type` (>= n) and
+    `entities_of_type_max` (<= n). Archived entities count for neither.
+
+    The ceiling is the OTHER half of a threshold check. `entities_of_type` is a
+    lower bound, so on its own it can only ever reward creating MORE: a scenario
+    asserting "the acquisition got registered" passes just as well when the agent
+    registers one entity per file, or mints one for a scratch/reference file —
+    i.e. it silently accepts "register everything", which is the entity-noise
+    failure the curation rule exists to prevent. Pair the two whenever the
+    behaviour under test has a threshold (2026-07-21).
+
+    Pure + side-effect-free so the guard itself is unit-testable
+    (tests/test_dataset_registration_guard.py) — a check that can't be shown to
+    FAIL is not a check.
+    """
+    fails: list = []
+    active = [e for e in ents if e.get("status") == "active"]
+    for k, n in (st.get("entities_of_type") or {}).items():
+        got = sum(1 for e in active if e.get("type") == k)
+        if got < n:
+            fails.append(f"entities_of_type[{k}]>={n} but {got}")
+    for k, n in (st.get("entities_of_type_max") or {}).items():
+        got = sum(1 for e in active if e.get("type") == k)
+        if got > n:
+            fails.append(f"entities_of_type_max[{k}]<={n} but {got}")
+    return fails
+
+
 def stage_into(pid: str, items) -> None:
     """Copy data files AND subdirectories into the project's real data dir (what
     the agent's DATA_DIR resolves to) AND the global fallback. Subdir support
@@ -378,10 +407,7 @@ def run_checks(step, cap, cmetrics, prev_msgs, client, pid, tid, created, produc
             e = next((x for x in ents if x.get("id") == eid), None)
             if not (e and ((e.get("status") == "active") == want_active)):
                 fails.append(f"{key}:{spec['ref']} -> {e.get('status') if e else 'missing'}")
-    for k, n in (st.get("entities_of_type") or {}).items():
-        got = sum(1 for e in ents if e.get("type") == k and e.get("status") == "active")
-        if got < n:
-            fails.append(f"entities_of_type[{k}]>={n} but {got}")
+    fails.extend(entity_type_bounds(st, ents))
     # --- provenance / versioning state ---
     if "reproduced" in st:   # checks THIS step's reproduce result (user-action `reproduce`)
         rr = (created.get(step["id"]) or {}).get("reproduce") or {}

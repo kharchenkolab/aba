@@ -98,7 +98,11 @@ expected_overall:
 - **produces** — `{figure: n, table: n}` ≥ counts from the turn's run-artifacts.
 - **state** (queried after the step via manifest + entities):
   `pinned_results_min`, `manifest_contains` / `manifest_not_contains`,
-  `entity_archived:{ref}`, `entity_active:{ref}`, `entities_of_type:{figure: n}`.
+  `entity_archived:{ref}`, `entity_active:{ref}`, `entities_of_type:{figure: n}` (>= n),
+  `entities_of_type_max:{dataset: n}` (<= n). Pair the two whenever the behaviour under
+  test has a THRESHOLD: `entities_of_type` alone can only reward creating more, so a
+  "register the right things" rule passes equally when the agent registers everything.
+  The ceiling is what makes such a guard two-sided.
 - **provenance / versioning state**:
   `reproduced: true|false` + `env_drift: true|false` (read THIS step's `reproduce` result),
   `superseded_min: n` (count of `status=superseded` entities — proves a non-destructive

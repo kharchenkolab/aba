@@ -1,0 +1,76 @@
+id: dataset_registration
+title: Dataset registration threshold — subject data becomes ONE dataset, a lookup table becomes none
+domain: genomics
+gpu: false
+summary: >
+  A working session over a three-unit acquisition plus a small lookup table. The agent
+  summarizes and analyzes the three sample tables, then uses the lookup to relabel the
+  output. Guards the THRESHOLD in the register-the-subject-data rule from both sides:
+  the acquisition must yield exactly one dataset entity spanning the files, and the
+  instrument-grade lookup must yield none.
+data_files:
+- sample_A.csv
+- sample_B.csv
+- sample_C.csv
+- feature_names.csv
+make_data: _make_data.py
+
+steps:
+- id: s1
+  kind: examine
+  actor: agent
+  prompt: >
+    The three measurement tables in DATA_DIR (sample_A.csv, sample_B.csv, sample_C.csv)
+    are the three units from one run of an experiment — same features in each, six
+    replicates per unit. Orient me before we do anything: how many features, how many
+    replicates, and how do the overall levels compare across the three?
+  expect:
+    must_not:
+    - "I cannot read"
+    - "placeholder"
+    state:
+      entities_of_type: {dataset: 1}
+      entities_of_type_max: {dataset: 1}
+    checks: >
+      The agent reads all three tables and reports 300 features x 6 replicates each,
+      with clearly different overall levels (means roughly 20 / 35 / 50, A < B < C).
+      THE GUARD: these three files are the subject of the analysis, so the agent must
+      register them as ONE dataset entity spanning the files before/while summarizing —
+      not zero (the provenance gap this scenario exists for) and not three (one per
+      file, which the "acquired as a SET" clause forbids). No fabricated numbers.
+
+- id: s2
+  kind: analyze
+  actor: agent
+  prompt: >
+    Good. Now compare the three units properly — for each feature, is there a consistent
+    difference in level across the three? Give me the summary table and a figure, and use
+    DATA_DIR/feature_names.csv to put the readable labels on the rows instead of the raw
+    ids.
+  expect:
+    must_not:
+    - "I cannot read"
+    produces: {figure: 1}
+    state:
+      entities_of_type: {dataset: 1}
+      entities_of_type_max: {dataset: 1}
+    checks: >
+      The agent produces a per-feature comparison across the three units plus a figure,
+      with rows labelled from the lookup. THE OTHER HALF OF THE GUARD: feature_names.csv
+      is an INSTRUMENT (a 300-row id->label map, nothing is measured in it, ~8 KB,
+      regenerable in seconds), so it must NOT be registered — the dataset count stays at
+      exactly 1. If it rises to 2 the threshold has collapsed into "register everything",
+      which is the entity-noise failure the curation rule guards against.
+
+expected_overall:
+  planted_truth: >
+    300 features (F0001..F0300) x 6 replicates in each of three sample tables, drawn from
+    a gamma-poisson with per-unit means ~20 (A), ~35 (B), ~50 (C) — so levels rise A < B < C
+    across essentially all features. feature_names.csv maps each of the 300 ids to
+    marker_001..marker_300 and contains no measurements.
+  notes: >
+    A fully correct session registers ONE dataset for the sample_A/B/C acquisition, keeps
+    it at one when the lookup is consumed, reports the real shapes and the A<B<C ordering
+    from observed values, and produces a labelled comparison table + figure. The scenario
+    is a threshold guard, not a capability test: the analysis itself is deliberately easy so
+    that the dataset counts are what distinguishes pass from fail.
