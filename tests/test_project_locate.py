@@ -231,3 +231,18 @@ def test_oversize_messages_name_the_working_handle(tmp_path):
     w = " ".join(warnings)
     assert "huge_out.parquet" in w and "find_files" in w, warnings
     assert "YOURS BY NAME" in w, warnings
+
+
+def test_skipped_shape_file_keeps_its_name_real(tmp_path):
+    """A new file whose suffix is outside every harvest keep-list must still
+    land in produced[] as a link-only row — previously it vanished with no
+    copy, no row, no warning, and its name stopped being real."""
+    from core.exec.run import harvest_artifacts
+    scratch = tmp_path / "s"
+    scratch.mkdir()
+    (scratch / "model_state.ckpt").write_bytes(b"\1" * 128)
+    _, _, files, _ = harvest_artifacts(scratch, since_ts=0, project_id="prjS")
+    row = next((x for x in files
+                if x.get("original_name") == "model_state.ckpt"), None)
+    assert row is not None, f"skipped-shape file vanished: {files}"
+    assert row.get("link_only") and row.get("skipped_shape")

@@ -356,7 +356,7 @@ def _iter_kept(scratch: Path, suffixes: tuple[str, ...], since_ts: float):
     plots into a subdir (e.g. pagoda2's pagoda2_GSM.../qc_*.png) — those
     used to be invisible to the chat tool-result even though they showed
     up in the Run view (2026-06-04)."""
-    suff = tuple(s.lower() for s in suffixes)
+    suff = tuple(s.lower() for s in suffixes) if suffixes else None  # None = ANY suffix
     for f in scratch.rglob("*"):
         # Skip any path under a transient subdir at any depth.
         if any(part in _HARVEST_SKIP_DIRS for part in f.parts):
@@ -371,7 +371,7 @@ def _iter_kept(scratch: Path, suffixes: tuple[str, ...], since_ts: float):
         # filtered so a re-harvest doesn't surface caches as content.
         if f.name.endswith(".thumb.png") or f.name.endswith(".preview.png"):
             continue
-        if f.suffix.lower() not in suff:
+        if suff is not None and f.suffix.lower() not in suff:
             continue
         try:
             if f.stat().st_mtime < since_ts:
@@ -521,6 +521,32 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0,
     # 2) Tables
     for f in _iter_kept(scratch, (".csv", ".tsv"), since_ts):
         _copy_and_record(f, tables, f.suffix.lower())
+
+    # 4) Skipped-shape files: anything new whose suffix is outside the
+    # harvest keep-lists. Previously these vanished COMPLETELY — no copy, no
+    # manifest row, no warning — so a name the agent just wrote stopped being
+    # real (the vanishing-name class; found by the producer-fed oversize
+    # guard). Record link-only rows: the name stays resolvable via the
+    # manifest tier, the file stays a retain candidate, and the search door
+    # can answer for it. Same caps discipline as everything else (counted,
+    # not silent).
+    _known = _FILE_EXTS + (".png", ".csv", ".tsv")
+    for f in _iter_kept(scratch, None, since_ts):
+        if f.suffix.lower() in _known or f.name in _created:
+            continue
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        try:
+            display = str(f.relative_to(scratch))
+        except ValueError:
+            display = f.name
+        if any(x.get("original_name") == display for x in files):
+            continue
+        files.append({"url": None, "original_name": display,
+                      "bytes": st.st_size, "link_only": True,
+                      "skipped_shape": True})
 
     # 3) Other useful files — PDFs, HTML, RDS, h5ad, etc. Cap each at
     # MAX_HARVEST_BYTES; oversize ones go to warnings so the agent can
