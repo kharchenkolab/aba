@@ -102,7 +102,26 @@ def check_eval_home() -> list[str]:
     catastrophic product regression. A run that CANNOT measure must fail loudly
     up front, not produce a confident zero."""
     problems = []
-    home = Path(os.environ.get("ABA_HOME") or (Path.home() / ".aba"))
+    home = os.environ.get("ABA_HOME")
+    if not home:
+        # Mirror the runner's resolution EXACTLY: when ABA_HOME is unset, each
+        # runner sources it from the ABA_LIVE_ENV creds file (NUL-separated
+        # k=v; see runner.bootstrap_env, ABA_HOME ∈ CRED_KEYS). Pre-flight must
+        # validate the home the runners will USE — checking ~/.aba while they
+        # run under the env-file home can green-light the exact confident-zero
+        # run this guard exists to prevent, or falsely abort a good one.
+        ef = Path(os.environ.get("ABA_LIVE_ENV", "/tmp/aba_8000.env"))
+        if ef.exists():
+            for kv in ef.read_bytes().split(b"\0"):
+                if b"=" in kv:
+                    k, v = kv.split(b"=", 1)
+                    if k == b"ABA_HOME":
+                        try:
+                            home = v.decode()
+                        except UnicodeDecodeError:
+                            pass
+                        break
+    home = Path(home or (Path.home() / ".aba"))
     inst = home / "installation"
     if not inst.exists():
         problems.append(f"ABA_HOME={home} has no installation/ — the eval home is "
@@ -276,8 +295,14 @@ def ratchet(clean: dict, prior: dict, allow_lower: bool = False):
         return out, lowered
     for sid, cur in clean.items():
         b = prior.get(sid) or {}
-        if b.get("mech_total") is not None and cur.get("mech_pass") is not None \
-                and (b.get("mech_pass") or 0) > cur["mech_pass"]:
+        if b.get("mech_total") is None or cur.get("mech_pass") is None:
+            continue
+        if b.get("mech_total") != cur.get("mech_total"):
+            # The scenario changed SHAPE (steps added/removed) — the prior row
+            # is a bar for a test that no longer exists. Keeping it pins a
+            # permanent phantom regression ("mech 12→8 of 8"); re-baseline.
+            continue
+        if (b.get("mech_pass") or 0) > cur["mech_pass"]:
             lowered.append(f"{sid} ({b['mech_pass']}→{cur['mech_pass']})")
             out[sid] = b
     return out, lowered
@@ -293,7 +318,14 @@ def diff_vs_baseline(scorecard, mode):
     base_p = BASELINES / f"{mode}.json"
     if not base_p.exists():
         return None, [], []
-    base = json.loads(base_p.read_text()).get("scenarios", {})
+    try:
+        base = json.loads(base_p.read_text()).get("scenarios", {})
+    except (json.JSONDecodeError, OSError) as e:
+        # LOUD, not a crash after a multi-hour run — and not a silent fresh-run
+        # either (that would hide every regression behind a corrupt file).
+        print(f"[sweep] ⚠ baseline {base_p} UNREADABLE ({e}) — diff skipped; "
+              f"restore it from git or re-accept a clean run")
+        return None, [], []
     # Mode-aware mech tolerance: Haiku's mechanical must_mention gates jitter ±2 steps
     # run-to-run (phrasing varies, occasional kernel-hang), so a small dip is noise, not
     # a regression — Haiku is a COARSE robustness net. Opus is deterministic → strict (0).
@@ -567,7 +599,8 @@ def main() -> int:
                          "full_pass": sum(1 for r in merged.values()
                                           if r.get("mech_total") and r["mech_pass"] == r["mech_total"])}
         bp.write_text(json.dumps(out, indent=2))
-        skip = f"  (skipped {len(infra_scen)} infra-failed, kept prior/absent)" if infra_scen else ""
+        skip = (f"  (skipped {len(skipped)} uninformative, kept prior/absent)"
+                if skipped else "")
         print(f"[sweep] baseline updated: baselines/{mode}.json{skip}")
 
     t = scorecard["totals"]

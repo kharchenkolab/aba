@@ -325,6 +325,52 @@ def test_ratchet_ignores_blind_prior_references():
     assert lowered == [], "a blind reference was treated as a bar"
 
 
+def test_ratchet_rebaselines_when_scenario_shape_changed():
+    """PROVEN: the ratchet keys on mech_pass alone; a scenario that legitimately
+    SHRINKS (prior 12/14, current fully-passing 8/8) must re-baseline to 8/8 —
+    keeping the stale 12/14 row pins a permanent phantom regression ('mech 12→8
+    of 8') that only --accept-lower could clear."""
+    prior = {"shrunk": _row(mech_pass=12, mech_total=14)}
+    clean = {"shrunk": _row(mech_pass=8, mech_total=8)}
+    out, lowered = sweep.ratchet(clean, prior)
+    assert out["shrunk"]["mech_total"] == 8, "stale total survived the ratchet"
+    assert out["shrunk"]["mech_pass"] == 8
+    assert lowered == [], "a reshape is not a lowering"
+    # same-total dips still ratchet (the original invariant holds)
+    out2, low2 = sweep.ratchet({"dip": _row(mech_pass=9, mech_total=14)},
+                               {"dip": _row(mech_pass=10, mech_total=14)})
+    assert out2["dip"]["mech_pass"] == 10 and len(low2) == 1
+
+
+def test_corrupt_baseline_is_loud_not_a_crash(monkeypatch, tmp_path, capsys):
+    """PROVEN: a truncated/corrupt baseline surfaces as a WARNING with the diff
+    skipped — not a JSONDecodeError after a multi-hour run, and not a silent
+    fresh-run that hides every regression."""
+    monkeypatch.setattr(sweep, "BASELINES", tmp_path)
+    (tmp_path / "haiku.json").write_text('{"scenarios": {"s1"')   # truncated
+    base, regressions, unmeasured = sweep.diff_vs_baseline(
+        {"scenarios": {"s1": _row()}}, "haiku")
+    assert base is None and regressions == [] and unmeasured == []
+    assert "unreadable" in capsys.readouterr().out.lower()
+
+
+def test_preflight_home_matches_runner_resolution(monkeypatch, tmp_path):
+    """PROVEN seam guard: pre-flight must validate the SAME home the runner
+    subprocesses will use. The runner sources ABA_HOME from the ABA_LIVE_ENV
+    creds file when unset in the environment — pre-flight checking ~/.aba while
+    runners use the env-file home can green-light the exact 'confident zero'
+    run it exists to prevent (or falsely abort a good one)."""
+    envfile_home = tmp_path / "envfile-home"          # unprovisioned on purpose
+    envfile = tmp_path / "live.env"
+    envfile.write_bytes(f"ABA_HOME={envfile_home}\0OTHER=x".encode())
+    monkeypatch.delenv("ABA_HOME", raising=False)
+    monkeypatch.setenv("ABA_LIVE_ENV", str(envfile))
+    # a provisioned ~/.aba must NOT mask the env-file home's emptiness
+    problems = sweep.check_eval_home()
+    assert problems, "pre-flight validated a different home than runners use"
+    assert str(envfile_home) in " ".join(problems)
+
+
 def test_inert_smoke_tags_are_surfaced(monkeypatch, tmp_path):
     """A `smoke: true` tag on a scenario discovery can never return selects
     NOTHING — the tier is smaller than the tag count suggests. Phantom coverage
@@ -345,6 +391,52 @@ def test_live_tree_smoke_tags_are_all_effective():
     inert = sweep.inert_smoke_tags()
     assert not inert, (f"smoke tags that select nothing: {inert} — give the "
                        f"scenario v2 steps or move the tag")
+
+
+def _run_main(argv, monkeypatch, tmp_path, rows_by_sid):
+    """Drive sweep.main() end-to-end with stubbed scenario execution — the
+    ORCHESTRATION guard. 25 helper-level tests stayed green while --accept
+    crashed on a leftover variable name: the suite proved the parts and never
+    the wiring. This exercises the wiring."""
+    monkeypatch.setattr(sweep, "BASELINES", tmp_path / "baselines")
+    monkeypatch.setattr(sweep, "REPORTS", tmp_path / "reports")
+    monkeypatch.setattr(sweep, "discover",
+                        lambda only, exclude, smoke=False: sorted(rows_by_sid))
+    monkeypatch.setattr(sweep, "check_eval_home", lambda: [])
+    monkeypatch.setattr(sweep, "preflight_fixtures",
+                        lambda scenarios: {"gaps": {}, "examined": len(scenarios)})
+    monkeypatch.setattr(sweep, "run_scenario",
+                        lambda sid, mode: rows_by_sid[sid])
+    monkeypatch.setattr(sweep, "prune_runs", lambda: 0)
+    monkeypatch.setattr(sys, "argv", ["sweep.py"] + argv)
+    return sweep.main()
+
+
+def test_accept_path_completes_and_reports(monkeypatch, tmp_path, capsys):
+    """PROVEN (NameError on pre-fix code): --accept must run to completion —
+    write the baseline, print the confirmation, and return an exit code. The
+    pre-fix crash happened AFTER the baseline write, so the operator saw a
+    traceback for an accept that had already happened."""
+    rc = _run_main(["--accept", "--no-prune"], monkeypatch, tmp_path, {
+        "s_ok": {"mechanical": {"pass": 3, "total": 3}, "report": []},
+        "s_bad": {"_error": "SETUP-ERROR: x", "_setup_error": True, "_infra": 1},
+    })
+    out = capsys.readouterr().out
+    assert rc == 0, f"accept run should exit 0, got {rc}"
+    assert "baseline updated" in out, "accept confirmation never printed"
+    bp = tmp_path / "baselines" / "haiku.json"
+    assert bp.exists()
+    baked = json.loads(bp.read_text())["scenarios"]
+    assert "s_ok" in baked and "s_bad" not in baked
+
+
+def test_plain_run_and_regression_exit_codes(monkeypatch, tmp_path):
+    """WIDE on the wiring: exit 0 on a clean run vs 1 on a real regression —
+    end-to-end through main(), not through diff_vs_baseline in isolation."""
+    rows = {"s1": {"mechanical": {"pass": 4, "total": 4}, "report": []}}
+    assert _run_main(["--accept", "--no-prune"], monkeypatch, tmp_path, rows) == 0
+    worse = {"s1": {"mechanical": {"pass": 0, "total": 4}, "report": []}}
+    assert _run_main(["--no-prune"], monkeypatch, tmp_path, worse) == 1
 
 
 def test_smoke_tier_filters_and_is_armed():
