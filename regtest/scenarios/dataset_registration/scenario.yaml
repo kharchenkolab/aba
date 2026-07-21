@@ -7,7 +7,10 @@ summary: >
   summarizes and analyzes the three sample tables, then uses the lookup to relabel the
   output. Guards the THRESHOLD in the register-the-subject-data rule from both sides:
   the acquisition must yield exactly one dataset entity spanning the files, and the
-  instrument-grade lookup must yield none.
+  instrument-grade lookup must yield none. A final fetch-and-stop step then covers the
+  LANDING regime: the agent generates a NEW data file mid-session and, with no analysis
+  requested, must register it the moment it lands — taking the dataset count from one to
+  exactly two, so registration is proven independent of any analysis being pending.
 data_files:
 - sample_A.csv
 - sample_B.csv
@@ -62,6 +65,32 @@ steps:
       exactly 1. If it rises to 2 the threshold has collapsed into "register everything",
       which is the entity-noise failure the curation rule guards against.
 
+- id: s3
+  kind: examine
+  actor: agent
+  prompt: >
+    Separate thing before we wrap up — I want to bring in a second data source. Generate a
+    fresh table of synthetic sensor readings: 40 sensors, one temperature and one humidity
+    value per hour across 7 days, and write it out as a CSV in the working directory. Just
+    get the file in place for now — don't summarize it or plot anything, we'll pick it up in
+    a later session.
+  expect:
+    must_not:
+    - "placeholder"
+    state:
+      entities_of_type: {dataset: 2}
+      entities_of_type_max: {dataset: 2}
+    checks: >
+      THE LANDING GUARD: the agent runs code that writes the sensor-readings CSV, and the
+      turn ends with no analysis requested (fetch-and-stop). The completed acquisition is
+      itself the trigger — the moment that file lands the agent must register it as ONE new
+      dataset entity, unprompted and without offering to. So the dataset count rises from 1
+      to exactly 2: not 1 (the fetch-and-stop provenance gap this step exists for — the file
+      lands but nothing is registered, or the agent merely OFFERS to register and waits) and
+      not 3+ (registering incidental intermediates alongside it — a single acquisition is
+      ONE dataset). Crucially NO analysis step follows: registration must not depend on an
+      analysis being pending. No fabricated file — the CSV is actually written.
+
 expected_overall:
   planted_truth: >
     300 features (F0001..F0300) x 6 replicates in each of three sample tables, drawn from
@@ -71,6 +100,8 @@ expected_overall:
   notes: >
     A fully correct session registers ONE dataset for the sample_A/B/C acquisition, keeps
     it at one when the lookup is consumed, reports the real shapes and the A<B<C ordering
-    from observed values, and produces a labelled comparison table + figure. The scenario
-    is a threshold guard, not a capability test: the analysis itself is deliberately easy so
+    from observed values, and produces a labelled comparison table + figure. Then, on the
+    fetch-and-stop step, it generates the sensor-readings file and registers it the moment
+    it lands — with no analysis asked for — taking the count to exactly two. The scenario is
+    a threshold guard, not a capability test: the analysis itself is deliberately easy so
     that the dataset counts are what distinguishes pass from fail.
