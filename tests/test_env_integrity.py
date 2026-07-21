@@ -44,6 +44,23 @@ def test_env_layers_structure():
     assert all(L["tier"] in ("session", "isolated") for L in d["r"]["layers"])
 
 
+def test_rlib_scan_skips_lock_and_temp_dirs(tmp_path):
+    """The cran-layer overlay scan must count only REAL package dirs (each has a
+    DESCRIPTION), never the installer's transient 00LOCK-/staging dirs — else a
+    crashed or in-flight install surfaces a phantom '00LOCK-foo' package."""
+    from core.exec.env_integrity import _rlib_package_names
+    (tmp_path / "charts").mkdir()
+    (tmp_path / "charts" / "DESCRIPTION").write_text("Package: charts\n")
+    (tmp_path / "frames").mkdir()
+    (tmp_path / "frames" / "DESCRIPTION").write_text("Package: frames\n")
+    (tmp_path / "00LOCK-charts").mkdir()                  # interrupted-install lock dir
+    (tmp_path / "00LOCK-charts" / "DESCRIPTION").write_text("x")   # even if it has one
+    (tmp_path / "file2a3f").mkdir()                       # staging temp, no DESCRIPTION
+    assert _rlib_package_names(tmp_path) == ["charts", "frames"]
+    from pathlib import Path
+    assert _rlib_package_names(Path(str(tmp_path / "missing"))) == []
+
+
 # ── env diagnostics (the agent's read layer for troubleshooting) ─────────────
 def test_python_package_status_good():
     from core.exec.env_integrity import python_package_status

@@ -185,6 +185,22 @@ def _r_packages_by_lib(lib_paths: Sequence, rscript: Optional[str] = None) -> di
     return by
 
 
+def _rlib_package_names(rlib: "Path") -> list[str]:
+    """Installed R package names in a flat R_LIBS overlay dir (the cran-layer
+    riding a base). A real package dir carries a DESCRIPTION at its root — gate
+    on it so the installer's transient `00LOCK-<pkg>` lock dirs and `file<hex>`
+    staging dirs (left in an R_LIBS tree during/after an interrupted install)
+    don't surface as phantom packages. Missing dir → []."""
+    if not rlib.exists():
+        return []
+    try:
+        return sorted(p.name for p in rlib.iterdir()
+                      if p.is_dir() and not p.name.startswith("00LOCK-")
+                      and (p / "DESCRIPTION").is_file())
+    except OSError:
+        return []
+
+
 def env_layers(project_id: Optional[str] = None) -> dict:
     """The layered Python + R environments with their packages — the data behind
     the (i) drawer's Env tab. Python via dist-info scan (fast); R via one
@@ -247,9 +263,7 @@ def env_layers(project_id: Optional[str] = None) -> dict:
             if _rrt.get("rlib"):
                 # cran layer riding the base (weft 80e609d): a session-owned
                 # R_LIBS dir — package dirs enumerate directly, no Rscript
-                _rl = Path(_rrt["rlib"])
-                _names = (sorted(p.name for p in _rl.iterdir() if p.is_dir())
-                          if _rl.exists() else [])
+                _names = _rlib_package_names(Path(_rrt["rlib"]))
                 r_layers.append({"tier": "session", "scope": "project",
                                  "project_id": project_id, "delivery": "weft",
                                  "mutable": True, "mode": "rlib-overlay",
