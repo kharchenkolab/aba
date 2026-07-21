@@ -353,10 +353,15 @@ class AgentSDKRuntime:
         # `type` field is 'user' or 'assistant'; 'message.content' is
         # the same shape as the Anthropic API.
         history = list(req.history)
-        # Option A (spike #4, +0.4% cache neutral): the dynamic recipes
-        # catalog rides as a synthetic <system-reminder>-wrapped user
-        # message BEFORE the conversation. The stable system stays in
-        # the SDK-cached system block.
+        # The volatile tail (sidebar/focus/thread state, recipe slice,
+        # compute-env line) rides as a synthetic <system-reminder>-wrapped user
+        # message AFTER the conversation — outside every cached prefix. It used
+        # to ride BEFORE the conversation, which was "+0.4% cache neutral" when
+        # the tail was the near-static recipes slice alone, but the tail now
+        # carries genuinely per-turn state: any changed byte ahead of the
+        # history re-bills the whole conversation (prefix caching — same
+        # invariant as core.llm.place_volatile_tail). The stable system stays
+        # in the SDK-cached system block.
         catalog_msg: dict | None = None
         if req.system.dynamic:
             catalog_msg = {
@@ -365,12 +370,12 @@ class AgentSDKRuntime:
             }
 
         async def _msg_stream():
-            if catalog_msg is not None:
-                yield {"type": "user", "message": catalog_msg,
-                       "parent_tool_use_id": None}
             for msg in history:
                 yield {"type": msg["role"],
                        "message": {"role": msg["role"], "content": msg["content"]},
+                       "parent_tool_use_id": None}
+            if catalog_msg is not None:
+                yield {"type": "user", "message": catalog_msg,
                        "parent_tool_use_id": None}
 
         # ── 4. Run the session; translate events ──

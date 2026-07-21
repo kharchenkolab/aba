@@ -157,13 +157,24 @@ reaches the Anthropic SDK, and it owns:
   message to `{role, content}` and strips UI-only blocks (e.g. the `attachments`
   chip) — the only sanctioned boundary; a validity-guard test asserts no
   disallowed block type ever escapes (`history_prep.py:49`).
-- **Three prompt-cache breakpoints.** The system prompt is sent as a **stable
-  cached prefix** (`cache_control: ephemeral`) plus an **uncached dynamic tail**
-  (the per-turn BM25 recipes catalog + compute-env line), so a per-intent change
-  invalidates only the small tail, not the ~26K prefix. `cache_control` also
-  marks the **last tool** and the **last message block** — 3 of the 4 available
-  breakpoints (`core/llm.py:77-112`). On `oauth_cc` credentials a byte-exact
-  Claude Code marker is prepended as the first (uncached) system block.
+- **The prompt-cache placement contract.** Caching is a byte-exact **prefix**
+  match over `tools → system → messages`, so the invariant is positional: the
+  `system` array carries the pack's **stable block alone** (byte-identical
+  across turns — guarded, including against per-turn gate flags leaking gated
+  blocks into it), and **everything per-turn** (project sidebar, focus/thread
+  preambles, gated blocks, the BM25 recipes slice, the compute-env line) rides a
+  `<system-reminder>`-wrapped trailing block on the **last user message**, after
+  every breakpoint (`place_volatile_tail`). All 4 breakpoints are used: stable
+  system, last tool, and the last **two** user messages
+  (`_mark_history_cached` — the second anchor keeps the prefix readable when one
+  agentic turn appends more than the 20-block lookback window). The same
+  placement holds on every runtime: the OpenAI lane appends the tail after the
+  translated history (`place_volatile_tail_openai` — vLLM's automatic prefix
+  caching is prefix-only too) and the SDK lane yields it as the last query
+  frame. Guards: `tests/test_catalog_caching.py`,
+  `tests/test_runtime_tail_parity.py`. On `oauth_cc` credentials a byte-exact
+  Claude Code marker is prepended as the first (uncached, constant) system
+  block.
 - **A replayable raw-request dump.** The exact kwargs (structured system, tools,
   messages — with cache_control) are written to `ABA_RAW_REQUEST_DIR`
   (default `/tmp/aba_llm_sent`), so `client.messages.create(**json.load(...))`

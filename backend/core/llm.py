@@ -91,38 +91,64 @@ def place_volatile_tail(messages: list, tail: str) -> tuple[list, bool]:
     grew with the conversation instead of staying flat. The compute-env line alone
     (20s TTL, node/queue state) guaranteed a miss on essentially every turn.
 
-    Call this LAST, after `_mark_last_block_cached`, so the tail lands AFTER the marked
+    Call this LAST, after `_mark_history_cached`, so the tail lands AFTER the marked
     block and stays outside the cached prefix. Appended only to a `user` message — a
     tail on an assistant message would fabricate model output — so the caller keeps it
-    in the system array on that (rare) shape rather than dropping it."""
+    in the system array on that (rare) shape rather than dropping it.
+
+    The tail is wrapped in <system-reminder> tags: it rides a user message, and
+    without the wrapper the model reads harness-injected state as something the
+    USER typed (and could be spoofed by content that merely looks like it). The
+    SDK runtime delivers the same tail with the same wrapper — keep them aligned."""
     if not tail:
         return messages, True                      # nothing to place
     if not (messages and messages[-1].get("role") == "user"
             and isinstance(messages[-1].get("content"), list)):
         return messages, False                     # caller falls back to the system array
     last = messages[-1]
+    wrapped = f"<system-reminder>\n{tail}\n</system-reminder>"
     messages = [*messages[:-1],
-                {**last, "content": [*last["content"], {"type": "text", "text": tail}]}]
+                {**last, "content": [*last["content"], {"type": "text", "text": wrapped}]}]
     return messages, True
 
 
-def _mark_last_block_cached(messages: list) -> list:
-    """Set cache_control on the last message's last block — the 3rd caching breakpoint —
-    UNLESS that block is an EMPTY text block. Anthropic 400s on cache_control over an
-    empty text block ("cache_control cannot be set for empty text blocks"), which the
-    last message can end in after an ask_clarification / plan halt+resume (a bare text
-    block). Skipping the marker there is harmless (one fewer cache breakpoint that turn);
-    sending it is a hard request failure. Returns messages (tail replaced in place)."""
-    if not (messages and isinstance(messages[-1].get("content"), list) and messages[-1]["content"]):
-        return messages
-    c = messages[-1]["content"]
+def _mark_message_tail_cached(messages: list, idx: int) -> None:
+    """Set cache_control on message idx's last block, UNLESS that block is an EMPTY
+    text block. Anthropic 400s on cache_control over an empty text block
+    ("cache_control cannot be set for empty text blocks"), which a message can end
+    in after an ask_clarification / plan halt+resume (a bare text block). Skipping
+    the marker there is harmless; sending it is a hard request failure. Mutates the
+    list entry (callers pass a fresh list of fresh dicts)."""
+    m = messages[idx]
+    if not (isinstance(m.get("content"), list) and m["content"]):
+        return
+    c = m["content"]
     last = c[-1]
     if not isinstance(last, dict):
-        return messages
+        return
     if last.get("type") == "text" and not (last.get("text") or "").strip():
-        return messages                                   # empty text block → don't mark
-    messages[-1] = {**messages[-1], "content": [*c[:-1], {**last, "cache_control": {"type": "ephemeral"}}]}
-    return messages
+        return                                            # empty text block → don't mark
+    messages[idx] = {**m, "content": [*c[:-1], {**last, "cache_control": {"type": "ephemeral"}}]}
+
+
+def _mark_history_cached(messages: list) -> list:
+    """Place the MESSAGE-side cache breakpoints: the last block of the last TWO
+    user messages (2 marks; with the system + last-tool marks that totals the
+    API's maximum of 4 breakpoints).
+
+    Why two, not one: a breakpoint only walks BACK 20 content blocks to find a
+    prior cache entry. A single sliding mark on the newest user message misses
+    whenever one agentic turn appends >20 blocks (10+ tool_use/tool_result pairs)
+    — the whole history re-bills, silently. The second mark re-anchors the
+    PREVIOUS request's breakpoint position, which always has a cache entry, so
+    the prefix up to there reads from cache no matter how many blocks the current
+    turn added; only the oversized delta bills fresh."""
+    out = list(messages)
+    user_idxs = [i for i in range(len(out) - 1, -1, -1)
+                 if out[i].get("role") == "user"][:2]
+    for i in user_idxs:
+        _mark_message_tail_cached(out, i)
+    return out
 
 
 # ---------- Real provider ----------
@@ -147,8 +173,9 @@ class _RealStream:
 
     async def __aenter__(self):
         # Prompt caching: everything stable sits in the cached prefix, everything
-        # per-turn rides the very end. Up to 4 breakpoints total: system, tools,
-        # last-message — 3 used. cache_control on the system block + last tool; only
+        # per-turn rides the very end. All 4 breakpoints used: system, last tool,
+        # and the last TWO user messages (see _mark_history_cached — the second
+        # anchor covers >20-block turns the lookback window would miss). Only
         # the OAuth CC marker stays uncached (see build_cached_blocks). oauth_cc mode:
         # the server gates non-Haiku on OAuth by a byte-exact first-system-block CC
         # marker check — so the marker is first, its own block, and uncached.
@@ -162,12 +189,11 @@ class _RealStream:
         # allow-list — that's the regression that would have caught the live 400.
         from core.runtime.history_prep import api_messages
         messages = api_messages(self._history)
-        # Cache_control on the last message's last block — the third (of
-        # three) caching breakpoint. Done BEFORE the dump so the persisted
-        # payload reflects what the API actually sees (was previously
-        # written without this marker, which made the dump misleading
-        # about caching behavior).
-        messages = _mark_last_block_cached(messages)
+        # Message-side breakpoints (last two user messages). Done BEFORE the
+        # dump so the persisted payload reflects what the API actually sees
+        # (was previously written without this marker, which made the dump
+        # misleading about caching behavior).
+        messages = _mark_history_cached(messages)
         # …then the per-turn volatile context AFTER that mark, so it sits outside
         # every cached prefix. Only a non-user last message (rare) sends it back to
         # the system array, where it costs a cache miss but is never dropped.

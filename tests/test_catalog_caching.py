@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
 from core.llm import (  # noqa: E402
-    build_cached_blocks, place_volatile_tail, _mark_last_block_cached, _CC_MARKER_BLOCK,
+    build_cached_blocks, place_volatile_tail, _mark_history_cached, _CC_MARKER_BLOCK,
 )
 
 pytestmark = pytest.mark.platform
@@ -35,7 +35,7 @@ def _cc(b):
 def _assemble(stable_system: str, volatile: str, tools: list, history: list):
     """Reproduce _RealStream.__aenter__'s block assembly (same order, same calls)."""
     system, tool_blocks = build_cached_blocks(stable_system, tools, cc_marker=False)
-    messages = _mark_last_block_cached([dict(m) for m in history])
+    messages = _mark_history_cached([dict(m) for m in history])
     messages, placed = place_volatile_tail(messages, volatile)
     if not placed and volatile:
         system = [*system, {"type": "text", "text": volatile}]
@@ -101,18 +101,48 @@ def test_volatile_change_leaves_the_cached_prefix_identical():
 
 
 def test_volatile_text_still_reaches_the_model():
-    """Placement must not silently drop content — the tail is delivered, just last."""
+    """Placement must not silently drop content — the tail is delivered, just last,
+    wrapped in <system-reminder> so harness-injected state isn't read as user text."""
     system, tools, messages = _assemble("STABLE", "VOLATILE-NOTE", TOOLS, _history(1))
     rendered = [b.get("text") for m in messages for b in m["content"]]
-    assert rendered[-1] == "VOLATILE-NOTE", "tail not delivered on the last message"
+    assert rendered[-1] == "<system-reminder>\nVOLATILE-NOTE\n</system-reminder>", \
+        "tail not delivered (or not wrapped) on the last message"
     assert "VOLATILE-NOTE" not in (system[0]["text"]), "tail leaked into the cached system"
 
 
 def test_tail_lands_after_the_cache_mark():
     _, _, messages = _assemble("STABLE", "TAIL", TOOLS, _history(1))
     content = messages[-1]["content"]
-    assert content[-1]["text"] == "TAIL" and _cc(content[-1]) is None
+    assert "TAIL" in content[-1]["text"] and _cc(content[-1]) is None
     assert _cc(content[-2]) == "ephemeral", "the mark must precede the volatile tail"
+
+
+def test_second_anchor_survives_an_oversized_turn():
+    """The lookback window is 20 blocks: if one agentic turn appends more than
+    that, the NEWEST mark can't find the prior cache entry. The mark on the
+    previous user message re-anchors the prior request's breakpoint position, so
+    the prefix up to there still reads from cache. Assert both anchors exist and
+    that the prefix up to the SECOND-newest mark is byte-stable when a huge turn
+    is appended."""
+    hist = _history(3)
+    before = _assemble("S", "tail-1", TOOLS, hist)
+    # one oversized agentic turn: assistant with 15 tool_use + user with 15 results
+    big_asst = {"role": "assistant", "content": [
+        {"type": "tool_use", "id": f"t{i}", "name": "a", "input": {}} for i in range(15)]}
+    big_user = {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": f"t{i}", "content": "ok"} for i in range(15)]}
+    after = _assemble("S", "tail-2", TOOLS, [*hist, big_asst, big_user])
+    marks_after = [b for m in after[2] for b in m["content"] if _cc(b)]
+    assert len(marks_after) == 2, "both user-message anchors must be marked"
+    # prefix up to the OLD anchor (last mark of `before`) is unchanged in `after`
+    old_prefix = _cached_prefix(*before)
+    flat_after = [*after[1], *after[0]]
+    for m in after[2]:
+        flat_after.extend(m["content"])
+    # strip marks for byte comparison of the shared span (marks may move)
+    def _bare(bs): return [{k: v for k, v in b.items() if k != "cache_control"} for b in bs]
+    assert _bare(flat_after[:len(old_prefix)]) == _bare(old_prefix), \
+        "an oversized turn must not disturb the previously cached span"
 
 
 def test_non_user_last_message_keeps_the_tail_in_system():
@@ -161,6 +191,48 @@ def test_build_system_prompt_stable_block_is_turn_invariant():
                                      "[PROJECT] 4 datasets\n", "[FOCUS fig_1]\n", "")
     assert s1 == s2 == "PACK-STABLE"
     assert d1 != d2                       # the change is real, it just moved to the tail
+
+
+# ── the pack-level contract: NO per-turn input may move the stable block ─────
+
+def test_pack_stable_block_invariant_across_all_per_turn_inputs():
+    """The REAL system builder, parametrized over every per-turn input build_system
+    accepts — intent and each prompt_ctx gate flag. The stable block must be
+    byte-identical across all of them: a gated block that renders into stable
+    busts system + whole-history cache on the turns the gate flips (the
+    focus-flip leak this guard was added for — 1.4KB of `highlighting` moved
+    the stable prefix whenever a figure took focus)."""
+    from core.runtime.mcp.gateway import register_inprocess_server, list_tools
+    from content.bio.mcp_servers.aba_core import make_server
+    from content.bio.prompts.build import build_system
+    try:
+        register_inprocess_server("aba_core", make_server,
+                                  expose_in_catalog=True,
+                                  strip_prefix_in_catalog=True)
+    except Exception:  # noqa: BLE001 — already registered in this process
+        pass
+    tools = list_tools(mode="standard")
+    base_ctx = {"thread_id": "t1", "focus_is_figure": False, "highlight_active": False}
+    variants = [
+        ("intent flip", "summarize the table", dict(base_ctx)),
+        ("figure focus", "i", {**base_ctx, "focus_is_figure": True}),
+        ("highlight", "i", {**base_ctx, "focus_is_figure": True, "highlight_active": True}),
+    ]
+    s_ref, _ = build_system(tools, role="primary", intent="i", ctx=base_ctx, mode="standard")
+    assert s_ref, "stable block came back empty — setup error, not a verdict"
+    for label, intent, ctx in variants:
+        s_var, d_var = build_system(tools, role="primary", intent=intent, ctx=ctx,
+                                    mode="standard")
+        assert s_var == s_ref, (
+            f"per-turn input ({label}) moved the STABLE block by "
+            f"{abs(len(s_var) - len(s_ref))} chars — gated content must ride the "
+            f"dynamic tail (set dynamic=True on the block)")
+    # the gated content still reaches the model — via the tail
+    _, d_fig = build_system(tools, role="primary", intent="i",
+                            ctx={**base_ctx, "focus_is_figure": True}, mode="standard")
+    _, d_base = build_system(tools, role="primary", intent="i", ctx=base_ctx,
+                             mode="standard")
+    assert len(d_fig) > len(d_base), "gated block was dropped instead of moved to the tail"
 
 
 if __name__ == "__main__":
