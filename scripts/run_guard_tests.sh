@@ -27,6 +27,8 @@ FILES=(
   tests/test_catalog_caching.py
   tests/test_runtime_tail_parity.py
   tests/test_cache_control_empty_block.py
+  tests/test_history_prefix_stability.py
+  tests/test_tier2_synth_real_path.py
   tests/test_wire_contract.py
   # output / env-layer unit guards
   tests/test_harvest_identity.py

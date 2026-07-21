@@ -164,6 +164,8 @@ _TIER2_DIAG: dict = {
     "ok":               0,    # synth returned non-empty wrapped text
     "skipped_no_prompt": 0,   # `thread_summary` registration absent
     "raised":           0,    # any Exception path
+    "reused":           0,    # stored summary served verbatim — NO LLM call
+    "reused_on_fail":   0,    # synth failed; stored summary served (not the cliff)
     "last_error":       "",
 }
 
@@ -270,32 +272,61 @@ def maybe_summarize(thread_id: Optional[str], messages: list[dict],
         # Not enough room to collapse meaningfully — bail.
         return messages
 
-    to_cover_n = len(messages) - eff_tail
-    old_block = messages[:to_cover_n]
-    tail = messages[to_cover_n:]
-
+    # The boundary derives from the STORE, not from the current length.
+    # Prompt caching is prefix-matched: if each call re-picked the boundary
+    # from `len(messages) - eff_tail`, the head would slide +2 every
+    # generation and the summary (message 0) would be re-synthesized over a
+    # different block each time — nothing before the tail would ever match,
+    # so a long turn re-billed its entire retained history per generation
+    # (measured live: 411k cache_write tokens in one turn) and paid an extra
+    # synchronous LLM call per generation. Instead: REUSE the stored
+    # (covered_until, summary) verbatim while the uncovered remainder still
+    # fits the budget — output stays a prefix-extension of the previous
+    # generation's — and ADVANCE the boundary (monotonically, re-synthesizing
+    # with the prior as seed) only when the remainder alone re-exceeds it.
     existing = _load(thread_id)
-    prior = existing[1] if existing else None
+    if existing:
+        cov_n, prior = existing
+        if 0 < cov_n <= len(messages) - 1:
+            remainder = messages[cov_n:]
+            if _message_chars(remainder) + len(prior) <= _threshold(budget_chars):
+                _TIER2_DIAG["reused"] += 1
+                return [_summary_message(prior), *remainder]
+        else:
+            cov_n, prior = 0, None      # store stale/misaligned → full re-derive
+    else:
+        cov_n, prior = 0, None
+
+    to_cover_n = max(len(messages) - eff_tail, cov_n)   # never move backwards
+    old_block = messages[cov_n:to_cover_n] if cov_n else messages[:to_cover_n]
+    tail = messages[to_cover_n:]
 
     summary_text = _synthesize(thread_id, old_block, prior_summary=prior)
     if not summary_text:
-        return messages   # synth failed; keep full pruned list
+        # Degrade to the STORED summary when one exists: stale-but-stable beats
+        # the bail-out cliff (dumping the full un-summarized history was the
+        # single largest cache_write of the measured run).
+        if prior and cov_n:
+            _TIER2_DIAG["reused_on_fail"] += 1
+            return [_summary_message(prior), *messages[cov_n:]]
+        return messages   # no store yet; keep full pruned list
 
     _save(thread_id, to_cover_n, summary_text)
 
-    # Single user-role message carries the summary, prefixed with the same
-    # handoff framing Claude Code uses on its own continuing-session injection
-    # ("This session is being continued from a previous conversation…").
-    # Pattern: the model has been trained on CC's transcripts where this
-    # exact framing appears at the start of a continued session — using it
-    # primes the model to read what follows as meta-context, not user request.
+    return [_summary_message(summary_text)] + tail
+
+
+def _summary_message(summary_text: str) -> dict:
+    """Single user-role message carrying the summary, prefixed with the same
+    handoff framing Claude Code uses on its own continuing-session injection
+    ("This session is being continued from a previous conversation…") — the
+    model reads it as meta-context, not user request. Byte-DETERMINISTIC for a
+    given summary text: this message is message 0 of every request while the
+    summary is live, so any variation here re-bills the whole history."""
     handoff = (
         "This session is being continued from a previous conversation that "
         "ran out of context. The summary below covers the earlier portion of "
         "the conversation.\n\n"
     )
-    summary_msg = {
-        "role": "user",
-        "content": [{"type": "text", "text": handoff + summary_text}],
-    }
-    return [summary_msg] + tail
+    return {"role": "user",
+            "content": [{"type": "text", "text": handoff + summary_text}]}
