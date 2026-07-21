@@ -136,7 +136,12 @@ def score_of(rep):
         # about product quality)
         return {"mech_pass": 0, "mech_total": None, "rubric_overall": None,
                 "fails": [f"ERROR:{rep['_error']}"], "bundle": rep.get("_bundle"),
-                "infra": 1 if rep.get("_setup_error") else rep.get("_infra", 0)}
+                "infra": 1 if rep.get("_setup_error") else rep.get("_infra", 0),
+                # the CAUSE survives into the row: a fixture gap and an expired
+                # token are both "infra" but want opposite remedies, and one
+                # banner advising "re-run under fresh creds" for both sends you
+                # chasing credentials over a missing seed file
+                "setup_error": bool(rep.get("_setup_error"))}
     mech = rep.get("mechanical") or {}
     fails = [f"{r['step']}:{';'.join(r.get('fails') or [])}"
              for r in (rep.get("report") or []) if r.get("verdict") == "FAIL"]
@@ -153,36 +158,62 @@ def git_commit():
         return "?"
 
 
+def is_informative(row: dict) -> bool:
+    """Did this row MEASURE anything about product quality?
+
+    THE single predicate behind both the baking path and the diff path. When
+    they disagree the harness lies in one direction or the other: a row we
+    refuse to bake (it told us nothing) but happily score against a baseline
+    becomes a phantom regression, because `score_of` gives an unrunnable
+    scenario `mech_pass=0` — subtract that from a real baseline and every such
+    row reads as a total product collapse. Four fixture-staging errors once
+    drowned two genuine regressions in a headline of six."""
+    return not row.get("infra") and row.get("mech_total") is not None
+
+
 def bakeable_rows(rows: dict) -> tuple[dict, list]:
     """Rows safe to promote into the accepted baseline: informative ones only.
     Excludes infra failures AND errored-no-report rows (mech_total None) — a
     null-total reference makes the diff permanently blind for that scenario."""
-    clean = {sid: r for sid, r in rows.items()
-             if not r.get("infra") and r.get("mech_total") is not None}
+    clean = {sid: r for sid, r in rows.items() if is_informative(r)}
     return clean, sorted(set(rows) - set(clean))
 
 
 def diff_vs_baseline(scorecard, mode):
+    """→ (baseline, regressions, unmeasured).
+
+    `unmeasured` = rows that HAD a baseline but measured nothing this run.
+    They are neither regressions (nothing ran, so nothing regressed) nor
+    silently dropped (lost coverage against a known reference is a real
+    result) — they get their own loud category."""
     base_p = BASELINES / f"{mode}.json"
     if not base_p.exists():
-        return None, []
+        return None, [], []
     base = json.loads(base_p.read_text()).get("scenarios", {})
     # Mode-aware mech tolerance: Haiku's mechanical must_mention gates jitter ±2 steps
     # run-to-run (phrasing varies, occasional kernel-hang), so a small dip is noise, not
     # a regression — Haiku is a COARSE robustness net. Opus is deterministic → strict (0).
     mech_tol = int(os.environ.get("ABA_REGTEST_MECH_TOL", "2" if mode == "haiku" else "0"))
-    regressions = []
+    regressions, unmeasured = [], []
     for sid, cur in scorecard["scenarios"].items():
         b = base.get(sid)
         if not b:
             continue                                       # new scenario, not a regression
+        if not is_informative(cur):
+            # Same predicate as bakeable_rows: this run told us nothing here.
+            # Report the LOST COVERAGE, do not manufacture a regression from a
+            # synthetic 0 (and name the cause — a fixture gap and a dead token
+            # want opposite remedies).
+            why = (cur.get("fails") or ["ERROR:unknown"])[0]
+            unmeasured.append((sid, why.split(" (")[0][:120]))
+            continue
         if cur["mech_pass"] is not None and b.get("mech_pass") is not None \
                 and (b["mech_pass"] - cur["mech_pass"]) > mech_tol:
             regressions.append((sid, f"mech {b['mech_pass']}→{cur['mech_pass']} (of {cur['mech_total']}, tol {mech_tol})"))
         cr, br = cur.get("rubric_overall"), b.get("rubric_overall")
         if isinstance(cr, (int, float)) and isinstance(br, (int, float)) and (br - cr) > RUBRIC_REGRESSION:
             regressions.append((sid, f"rubric {br}→{cr}"))
-    return base, regressions
+    return base, regressions, unmeasured
 
 
 def prune_runs():
@@ -203,7 +234,7 @@ def prune_runs():
     return removed
 
 
-def write_report(scorecard, base, regressions, mode, ts):
+def write_report(scorecard, base, regressions, mode, ts, unmeasured=()):
     REPORTS.mkdir(parents=True, exist_ok=True)
     (REPORTS / f"{mode}-{ts}.json").write_text(json.dumps(scorecard, indent=2))
     lines = [f"# regtest sweep — {mode} — {ts}", "",
@@ -222,6 +253,15 @@ def write_report(scorecard, base, regressions, mode, ts):
     lines += ["", f"**Regressions vs baseline: {len(regressions)}**"]
     for sid, why in regressions:
         lines.append(f"- ⚠ {sid}: {why}")
+    # Lost coverage is its own result — a scenario with a baseline that measured
+    # nothing this run is NOT a regression (nothing ran), but it is not a pass
+    # either, and collapsing it into either number is a lie.
+    if unmeasured:
+        lines += ["", f"**⚠ Unmeasured vs baseline: {len(unmeasured)} scenario(s) had a "
+                      f"reference but produced no measurement this run — coverage lost, "
+                      f"not product regression:**"]
+        for sid, why in unmeasured:
+            lines.append(f"- ∅ {sid}: {why}")
     # A baseline row with null totals is an errored/no-report reference — the
     # diff can NEVER flag a regression for that scenario. Say so in the headline
     # instead of letting the blindness hide in the per-row table.
@@ -313,8 +353,8 @@ def main() -> int:
                    "full_pass": sum(1 for r in rows.values()
                                     if r["mech_total"] and r["mech_pass"] == r["mech_total"])},
     }
-    base, regressions = diff_vs_baseline(scorecard, mode)
-    md = write_report(scorecard, base, regressions, mode, ts)
+    base, regressions, unmeasured = diff_vs_baseline(scorecard, mode)
+    md = write_report(scorecard, base, regressions, mode, ts, unmeasured)
 
     if not args.no_prune:
         print(f"\n[sweep] pruned {prune_runs()} old run bundles (keep {KEEP_RUNS_PER_SCENARIO}/scenario, <{MAX_RUN_AGE_DAYS}d)")
@@ -325,10 +365,20 @@ def main() -> int:
             env = dict(os.environ); env["ABA_SCENARIO"] = sid
             subprocess.run([PY, "-u", str(FORENSIC)], env=env, cwd=str(ROOT))
 
-    infra_scen = [sid for sid, r in rows.items() if r.get("infra")]
-    if infra_scen:
-        print(f"\n[sweep] ⚠ {len(infra_scen)} scenario(s) hit INFRA errors (OAuth expiry / rate limit), "
-              f"NOT science failures — re-run under fresh creds: {infra_scen}")
+    # Split the INFRA bucket by CAUSE — the remedies are different and a wrong
+    # one costs a debugging session: a staged-fixture gap is not fixed by fresh
+    # credentials, and no amount of re-running under a new token stages a
+    # missing seed file.
+    setup_scen = [sid for sid, r in rows.items() if r.get("setup_error")]
+    creds_scen = [sid for sid, r in rows.items()
+                  if r.get("infra") and not r.get("setup_error")]
+    if creds_scen:
+        print(f"\n[sweep] ⚠ {len(creds_scen)} scenario(s) hit CREDENTIAL/RATE-LIMIT errors, "
+              f"NOT product failures — re-run under fresh creds: {creds_scen}")
+    if setup_scen:
+        print(f"\n[sweep] ⚠ {len(setup_scen)} scenario(s) never ran: SETUP/FIXTURE gap "
+              f"(declared inputs absent after staging). Fresh creds will NOT help — "
+              f"fix the fixture/staging: {setup_scen}")
 
     if args.accept:
         BASELINES.mkdir(parents=True, exist_ok=True)
@@ -360,8 +410,10 @@ def main() -> int:
         print(f"[sweep] baseline updated: baselines/{mode}.json{skip}")
 
     t = scorecard["totals"]
+    unmeas = f" · unmeasured={len(unmeasured)}" if unmeasured else ""
     print(f"\n=== sweep {mode}: {t['full_pass']}/{len(scenarios)} scenarios full-pass, "
-          f"{t['mech_pass']}/{t['mech_total']} steps · regressions={len(regressions)} ===")
+          f"{t['mech_pass']}/{t['mech_total']} steps · "
+          f"regressions={len(regressions)}{unmeas} ===")
     print(f"    report: {md}")
     return 1 if regressions else 0
 
