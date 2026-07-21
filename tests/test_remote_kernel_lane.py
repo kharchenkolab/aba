@@ -210,6 +210,37 @@ def test_run_remote_kernel_state_persists_and_fetches():
           str(fetched))
 
 
+def test_directory_store_not_fetched_piecemeal_kept_whole():
+    """A directory-shaped store (a `.zarr` chunk tree) must NOT be brought back
+    file-by-file into the per-turn scratch dir: the per-file cap drops its
+    lexicographically-last root metadata file and a per-turn delta dir
+    never re-lands a root written earlier, so the copy would have subtrees but
+    no root — and that incomplete copy shadows the resolver's correct
+    whole-store bring-back. It must be SKIPPED here (kept-addressable) while a
+    plain sibling file is still fetched (live 2026-07-21, BRINGBACK-DROPS)."""
+    ctx = {"thread_id": "thrZ"}
+    code = ("WRITE:out/m.zarr/c/0/0:128\n"
+            "WRITE:out/m.zarr/c/0/1:128\n"
+            "WRITE:out/m.zarr/zarr.json:64\n"       # sorts LAST — the dropped root
+            "WRITE:plain.csv:32\nprint('ok')")
+    r = rex._run_remote_kernel({"code": code}, ctx, _PID, "thrZ", "mendel")
+    assert r is not None and r.get("returncode") == 0, str(r)[:200]
+    # no store member landed on disk anywhere under the runtime tree
+    store_files = []
+    plain_files = []
+    for root, _d, fns in os.walk(_TMP):
+        for f in fns:
+            p = os.path.join(root, f)
+            if ".zarr" in p and "thrZ" in p.replace(_TMP, ""):
+                store_files.append(p)
+            if f == "plain.csv":
+                plain_files.append(p)
+    assert store_files == [], f"store members were fetched piecemeal: {store_files}"
+    assert plain_files, "the plain sibling file should still be fetched for harvest"
+    # the store is surfaced as staying on the site (brought back whole on open)
+    assert "out/m.zarr" in (r.get("note") or ""), (r or {}).get("note", "")[:300]
+
+
 def test_oversized_output_stays_remote_but_is_reported():
     ctx = {"thread_id": "thrX"}
     big = rex._REMOTE_KERNEL_FETCH_BYTES + 1

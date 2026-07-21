@@ -703,12 +703,39 @@ def _fetch_new_kernel_files(kernel_id: str, inv0: dict, project_id: str,
     import time as _time
     from core.compute.adapter import get_compute
     from core.data.workspace import scratch_dir
+    from content.bio.lifecycle.runs import _STORE_DIR_SUFFIXES
     inv1 = _kernel_sandbox_inventory(kernel_id)
     new = [(rel, mt) for rel, mt in inv1.items()
            if not (rel.startswith("blocks/") or rel.startswith("kernel."))
            and (rel not in inv0 or mt > inv0.get(rel, 0))]
     if not new:
         return None, []
+    # A directory-shaped store (a chunked-array/columnar directory) is ONE output,
+    # not a bag of independent small files. It must NOT be brought back piecemeal
+    # here: (a) the per-file `new[:200]` cap truncates the lexicographically-last
+    # entry — which for a store is its root metadata/index file — so the
+    # copy lands with subtrees but no root; (b) a fresh per-turn dir never
+    # re-materializes a root written in an EARLIER turn (not in this turn's delta),
+    # yielding the same rootless store; and that incomplete copy then SHADOWS the
+    # resolver's correct whole-store bring-back (_materialize_store → data-plane
+    # fetch, digest-revalidated) because it sorts newest-mtime. Skip store members
+    # entirely — the store stays kept-addressable via the recorded kernel target
+    # and is fetched as a complete unit on demand (live 2026-07-21, BRINGBACK-DROPS).
+    def _store_root(rel: str):
+        parts = rel.split("/")
+        for i, p in enumerate(parts[:-1]):        # a MEMBER: some ANCESTOR dir is a store
+            if p.lower().endswith(_STORE_DIR_SUFFIXES):
+                return "/".join(parts[:i + 1])
+        return None
+    store_roots: set = set()
+    kept: list = []
+    for rel, mt in new:
+        root = _store_root(rel)
+        if root is not None:
+            store_roots.add(root)
+        else:
+            kept.append((rel, mt))
+    new = kept
     dest = None
     remote_only: list[str] = []
     comp = get_compute()
@@ -735,6 +762,9 @@ def _fetch_new_kernel_files(kernel_id: str, inv0: dict, project_id: str,
         os.makedirs(os.path.dirname(target), exist_ok=True)
         with open(target, "wb") as fh:
             fh.write(data)
+    # store dirs stay on the site as whole units — advertise them as
+    # kept-addressable (the resolver brings each back complete on open)
+    remote_only.extend(sorted(store_roots))
     return dest, remote_only
 
 
