@@ -197,8 +197,11 @@ def test_dump_has_cache_control_on_last_message_block():
         # The volatile tail is delivered LAST and stays uncached; the cache mark sits on
         # the block BEFORE it, so the tail falls outside every cached prefix. Ordering
         # is the whole point — a mark after the tail would put per-turn bytes back
-        # inside the cached prefix and re-bill the conversation each turn.
-        assert content[-1]["text"] == "DYN-TAIL", "volatile tail not delivered last"
+        # inside the cached prefix and re-bill the conversation each turn. The tail
+        # rides inside a <system-reminder> wrapper (harness-injected state, not user
+        # text — see place_volatile_tail).
+        assert content[-1]["text"] == "<system-reminder>\nDYN-TAIL\n</system-reminder>", \
+            "volatile tail not delivered last (or wrapper missing)"
         assert "cache_control" not in content[-1], "the volatile tail must stay uncached"
         assert content[-2]["cache_control"] == {"type": "ephemeral"}, \
             "cache mark must land on the last real block, ahead of the volatile tail"
