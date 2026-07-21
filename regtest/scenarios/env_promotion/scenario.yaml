@@ -1,0 +1,85 @@
+id: env_promotion
+title: Promote an isolated env to the project default, use it ambiently, then reset
+domain: technical
+gpu: false
+summary: >
+  A short environment-management session that exercises PROMOTION of an isolated env to the
+  project default. The user asks for a fresh isolated Python env named "sandbox" holding numpy
+  and to make it the default going forward (make_isolated_env + set_active_env); then verifies
+  numpy is usable by printing its version with a BARE run_python (no env= argument — the
+  promotion is what makes the env ambient); then switches the project's active env back to the
+  normal stack (set_active_env('default')). Fully local, compute-bound, no data files and no
+  network — the contract under test is "a promoted env becomes the ambient one, and resetting
+  returns to the base".
+lifecycle: []
+data_files: []
+
+steps:
+- id: s1
+  kind: analyze
+  actor: agent
+  prompt: >
+    Set up an isolated Python environment named "sandbox" containing numpy, and make it the
+    project's default environment going forward so I don't have to keep pointing at it.
+  expect:
+    tools_used: [make_isolated_env, set_active_env]
+    must_mention: ["sandbox"]
+    must_not: ["I cannot", "cannot create", "not able to"]
+    checks: >
+      The agent creates ONE isolated Python environment named 'sandbox' containing numpy
+      (make_isolated_env with name='sandbox' and packages including numpy), then promotes it to
+      the project default with set_active_env(name='sandbox') so a bare run_python runs there
+      from now on. numpy is the only package required. It must create the environment exactly
+      ONCE — repeatedly re-solving / re-building the same env (multiple make_isolated_env calls
+      for 'sandbox') is a failure mode. It must not refuse or claim it cannot manage envs.
+
+- id: s2
+  kind: analyze
+  actor: agent
+  prompt: >
+    Confirm numpy actually works in there by importing it and printing its version.
+  expect:
+    tools_used: [run_python]
+    must_mention: ["numpy"]
+    must_not: ["ModuleNotFoundError", "No module named", "not installed", "I cannot"]
+    checks: >
+      Because 'sandbox' was promoted to the active/default environment in s1, a BARE run_python
+      (no env= argument) resolves to 'sandbox', so numpy imports and its version prints cleanly.
+      The correct behaviour is to rely on the promotion — the agent should NOT need to pass
+      env='sandbox' explicitly, and passing it redundantly is a weaker response that shows the
+      agent did not trust the promotion it just made. The import must succeed (no
+      ModuleNotFoundError / "No module named numpy").
+
+- id: s3
+  kind: analyze
+  actor: agent
+  prompt: >
+    Great. Now switch the project back to the normal environment.
+  expect:
+    tools_used: [set_active_env]
+    must_mention: ["default"]
+    must_not: ["I cannot", "no active environment", "there is no"]
+    checks: >
+      The agent calls set_active_env(name='default') to reset the project's active Python
+      environment back to the normal served stack. After this a bare run_python runs in the base
+      environment again, not in 'sandbox'. The env named 'sandbox' still exists (it is not
+      deleted) — only the ACTIVE pointer moves back to default.
+
+expected_overall:
+  planted_truth: >
+    There is no dataset here — the ground truth is the environment-promotion contract itself. An
+    isolated env created with make_isolated_env is inert until promoted; set_active_env(name)
+    makes that env the ambient one for bare run_python / run_r until it is changed, and
+    set_active_env('default') returns the project to its normal served stack. numpy is an
+    ordinary package that installs cleanly into an isolated env, so importing it and printing its
+    __version__ must succeed once 'sandbox' is active.
+  notes: >
+    A correct 3-step session: (s1) make_isolated_env(name='sandbox', packages include numpy) ONCE,
+    then set_active_env(name='sandbox') to promote it — the env is built a single time, not
+    re-solved repeatedly. (s2) a BARE run_python (no env= argument) imports numpy and prints its
+    version, succeeding because the promotion made 'sandbox' ambient; passing env='sandbox'
+    explicitly is redundant and weaker, a hard failure would be ModuleNotFoundError. (s3)
+    set_active_env(name='default') resets the active env to the base without deleting 'sandbox'.
+    Failure modes: refusing to manage envs, rebuilding the env more than once, forgetting to
+    promote it (so bare run_python misses numpy), passing env='sandbox' explicitly instead of
+    trusting the promotion, or failing to reset to default at the end.
