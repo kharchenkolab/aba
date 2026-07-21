@@ -480,7 +480,36 @@ def _resolve_project_path(path_str: str, ctx: dict | None,
                         f"{work_root} (WORK_DIR) and {data_root} (DATA_DIR). "
                         f"Got: {p}")
     if must_exist and not p.exists():
-        return "", f"file not found: {p}"
+        # Door fallback (read paths only — writes anchor at cwd): the name may
+        # live in a sandbox, a prior run's outputs, or another searched tier.
+        # One unambiguous LOCAL hit resolves; several → the caller gets labeled
+        # candidates to choose from; none → not-found WITH the search bounds,
+        # so absent is never conflated with unsearched.
+        try:
+            from content.bio.project_locate import locate_project_files
+            found = locate_project_files(Path(raw).name, limit=6, ctx=ctx)
+            local = [h for h in found.get("matches", []) if h.get("path")]
+            if len(local) == 1:
+                return local[0]["path"], None
+            if len(local) > 1:
+                opts = "; ".join(f"{h['path']} [{h['tier']}"
+                                 + (f", {h.get('from_exec')}" if h.get('from_exec') else "")
+                                 + "]" for h in local)
+                return "", (f"ambiguous name {Path(raw).name!r} — "
+                            f"{len(local)} matches: {opts}. Pass the full path "
+                            f"of the one you mean.")
+            remote = [h for h in found.get("matches", []) if not h.get("path")]
+            if remote:
+                h = remote[0]
+                return "", (f"{Path(raw).name!r} exists but is not local: "
+                            f"{h.get('opens')} (tier: {h.get('tier')}, "
+                            f"site: {h.get('site', '?')}).")
+            searched = found.get("searched", {})
+            return "", (f"file not found: {p} (searched: {searched}"
+                        + (f"; UNKNOWN tiers: {found['unsearched']}"
+                           if found.get("unsearched") else "") + ")")
+        except Exception:  # noqa: BLE001 — fallback must never mask the plain error
+            return "", f"file not found: {p}"
     return str(p), None
 
 

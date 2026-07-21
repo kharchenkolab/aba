@@ -144,3 +144,60 @@ def test_collision_returns_labeled_candidates(monkeypatch):
     out = pl.locate_project_files("metrics.csv")
     assert len(out["matches"]) == 2
     assert {h["from_exec"] for h in out["matches"]} == {"exA", "exB"}
+
+
+def test_no_private_tree_walks_outside_the_door():
+    """The class-fix invariant: name-based resolvers must not grow their own
+    tree-walks back. Every os.walk/rglob in the agent-tools layer is either
+    the door itself or on the declared enumerator allowlist (listing surfaces,
+    not name-resolvers). A new walker fails here with its location."""
+    import re
+    allowed = {
+        "backend/content/bio/project_locate.py",       # THE door
+        "backend/content/bio/tools/file_io.py",        # list_data_files enumerator
+        "backend/content/bio/tools/curation.py",       # _describe_directory + hardlink copy
+        "backend/content/bio/tools/run_exec.py",       # orientation banner enumerator
+        "backend/content/bio/tools/plan_etc.py",       # run-output listing
+        "backend/content/bio/lifecycle/runs.py",       # the RUN-scoped resolver (door delegates to it)
+        "backend/content/bio/files/tree.py",           # file-tree listing endpoint (enumerator)
+        "backend/content/bio/skills/__init__.py",      # skill discovery, not file lookup
+        "backend/content/bio/web/routes/datasets.py",  # dataset listing route (enumerator)
+        "backend/content/bio/mcp_servers/aba_core/tools/entity_ops.py",  # artifact-member listing
+    }
+    offenders = []
+    for f in (ROOT / "backend/content/bio").rglob("*.py"):
+        rel = str(f.relative_to(ROOT)).replace(os.sep, "/")
+        if "mcp_servers" in rel and "tools/file_io" in rel:
+            continue                        # registration shim only
+        src = f.read_text()
+        if re.search(r"\bos\.walk\(|\brglob\(", src) and rel not in allowed:
+            offenders.append(rel)
+    assert not offenders, (
+        f"new private tree-walk(s) outside the door: {offenders} — route "
+        f"name lookups through project_locate instead")
+
+
+def test_read_path_ambiguity_lists_candidates(monkeypatch, tmp_path):
+    """Two same-named local files → the read resolver refuses with LABELED
+    candidates instead of silently picking one."""
+    from content.bio.tools.file_io import _resolve_project_path
+    monkeypatch.setattr(
+        "content.bio.project_locate.locate_project_files",
+        lambda pat, limit=6, ctx=None: {"matches": [
+            {"path": "/a/m.csv", "tier": "run output", "from_exec": "exA"},
+            {"path": "/b/m.csv", "tier": "user data"}]})
+    _, err = _resolve_project_path("m.csv", {"thread_id": "t"}, must_exist=True,
+                                   enforce_sandbox=False)
+    assert err and "ambiguous" in err and "exA" in err
+
+
+def test_read_path_remote_only_names_the_fate(monkeypatch):
+    from content.bio.tools.file_io import _resolve_project_path
+    monkeypatch.setattr(
+        "content.bio.project_locate.locate_project_files",
+        lambda pat, limit=6, ctx=None: {"matches": [
+            {"rel": "m.h5", "tier": "live sandbox", "site": "siteB",
+             "opens": "fetches from siteB on open"}]})
+    _, err = _resolve_project_path("m.h5", {"thread_id": "t"}, must_exist=True,
+                                   enforce_sandbox=False)
+    assert err and "not local" in err and "siteB" in err
