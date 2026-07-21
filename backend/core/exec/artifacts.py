@@ -120,6 +120,42 @@ def list_artifacts(exec_id: str, *, kind: Optional[str] = None) -> list[dict]:
     return out
 
 
+def find_by_produced_name(name: str, *, limit_execs: int = 400) -> list[dict]:
+    """Artifacts whose `original_name` matches `name` — newest exec first.
+
+    Matches on the recorded name OR its basename, because `original_name` keeps
+    the producing subdir ('run_x/qc.png') while a caller almost always holds the
+    bare leaf ('qc.png').
+
+    This is the index that makes a NAME resolvable at all. The served copy is
+    written under a generated id (harvest, run.py `_copy_and_record`) and the
+    file that still carries the human name lives in the execution sandbox, which
+    is not on the controller's filesystem — so name-based lookup that only globs
+    the disk finds nothing, for files the system is actively serving. Found live
+    2026-07-21: three `view_artifact` calls on names the agent itself had just
+    written all returned "artifact not found".
+    """
+    leaf = (name or "").rsplit("/", 1)[-1].strip()
+    if not leaf:
+        return []
+    out: list[dict] = []
+    try:
+        with exec_records._conn() as c:
+            rows = c.execute(
+                "SELECT exec_id FROM execution_records "
+                "ORDER BY started_at DESC LIMIT ?", (int(limit_execs),)).fetchall()
+    except Exception as e:  # noqa: BLE001 — lookup must never raise at a call site
+        _log.warning("find_by_produced_name: index read failed: %s", e)
+        return []
+    for r in rows:
+        ex_id = r["exec_id"] if not isinstance(r, tuple) else r[0]
+        for a in list_artifacts(ex_id):
+            on = (a.get("original_name") or "")
+            if on == name or on.rsplit("/", 1)[-1] == leaf:
+                out.append(a)
+    return out
+
+
 def artifacts_for_run(run_id: str, *,
                       kind: Optional[str] = None) -> list[dict]:
     """All artifacts produced by every exec attributed to this Run.

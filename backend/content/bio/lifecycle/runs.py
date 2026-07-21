@@ -2267,8 +2267,13 @@ def _collapse_store_members(outputs: list[dict], run_id: str) -> list[dict]:
     (`axes/x/zarr.json`, chunk files …) — noise for the user, and since a
     store is one artifact every shard row carried the SAME artifact_id, which
     broke per-output addressing (live 2026-07-21). The store entry keeps the
-    store's own artifact_id (if any), a member count, and a summed size; its
-    href points at the store root so a viewer/download resolves the unit."""
+    store's own artifact_id (if any) and a member count; its href points at the
+    store root so a viewer/download resolves the unit.
+
+    No aggregate size: by this point each member's `size` has already been
+    rendered human-readable ("1.2 MB"), so there are no raw byte counts left to
+    sum. Showing a store without a size is the honest option — deriving one
+    would mean re-statting the tree here, on a path that must stay cheap."""
     from urllib.parse import quote as _q
     stores: dict[str, dict] = {}          # store-root rel → aggregate
     kept: list[dict] = []
@@ -2285,7 +2290,7 @@ def _collapse_store_members(outputs: list[dict], run_id: str) -> list[dict]:
         if agg is None:
             agg = stores[root] = {"kind": "store", "label": root,
                                   "href": f"/api/runs/{run_id}/file?rel={_q(root)}",
-                                  "n_members": 0, "_bytes": 0, "artifact_id": None}
+                                  "n_members": 0, "artifact_id": None}
         agg["n_members"] += 1
         # the row whose label IS the store root carries the store's identity
         if rel == root and o.get("artifact_id"):
@@ -2293,7 +2298,6 @@ def _collapse_store_members(outputs: list[dict], run_id: str) -> list[dict]:
     for root, agg in stores.items():
         if agg.get("artifact_id") is None:
             agg.pop("artifact_id", None)
-        agg.pop("_bytes", None)
         kept.append(agg)
     return kept
 

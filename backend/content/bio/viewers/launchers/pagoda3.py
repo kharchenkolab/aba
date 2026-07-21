@@ -95,6 +95,48 @@ def pagoda3_dist_path() -> Path:
     return home / "vendor" / "pagoda3" / "dist"
 
 
+def _rscript_shim(pid: str) -> "str | None":
+    """An executable that runs the session's Rscript through its activation.
+
+    `LSTAR_RSCRIPT` is an interpreter PATH — lstar execs it — so on a base whose
+    prefix exists only inside its activation's mount namespace there is nothing
+    to hand over. A one-line shim closes that: the argv the substrate builds for
+    us (`project_env.exec_argv`, which is activation- and namespace-aware) is
+    written into a script file, and the file path is a perfectly ordinary
+    executable. Returns None if the argv can't be built at all.
+    """
+    import shlex
+    import stat
+    try:
+        from core.compute import project_env
+        from core.config import project_work_dir
+        rt = project_env.runtime(pid, "r")
+    except Exception:  # noqa: BLE001
+        return None
+    if rt.get("direct_exec") and rt.get("prefix"):
+        return None                       # execable already — no shim wanted
+    act = rt.get("activation")
+    if not act:
+        return None
+    # Mirror argv_for_runtime's shapes, but with the forwarded arguments INSIDE
+    # the activated shell. `bash -c <script> <argv0> "$@"` is the required idiom:
+    # words after the script become $0, $1, … for it, so appending "$@" outside
+    # the quoted script would hand the args to bash rather than to Rscript.
+    inner = f'{act} && exec Rscript "$@"'
+    body = f'bash -c {shlex.quote(inner)} aba-rscript-shim "$@"'
+    if rt.get("ns_wrap"):
+        body = f'unshare -rm {body}'
+    try:
+        d = Path(project_work_dir(pid)) / ".aba"
+        d.mkdir(parents=True, exist_ok=True)
+        p = d / "rscript-shim.sh"
+        p.write_text(f"#!/usr/bin/env bash\nexec {body}\n")
+        p.chmod(p.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP)
+        return str(p)
+    except OSError:
+        return None
+
+
 def _rscript(pid: "str | None" = None) -> "str | None":
     """The Rscript lstar's R bridge uses for `.rds` conversions. Two sources
     only: the R base pack's project session (the substrate-resolved
@@ -109,7 +151,23 @@ def _rscript(pid: "str | None" = None) -> "str | None":
         from core import projects
         if base_env.active("r"):
             _pid = str(pid or projects.current() or "_none")
-            cands.append(str(project_env.interpreter(_pid, "r")))
+            try:
+                cands.append(str(project_env.interpreter(_pid, "r")))
+            except Exception as e:  # noqa: BLE001
+                # A MOUNT-SCOPED R base has no interpreter path usable outside
+                # its activation, so `interpreter()` refuses (session.
+                # no_direct_exec) — the same topology that broke the Python side.
+                # Swallowing that silently dropped the .rds bridge with no
+                # signal at all. Wrap the session instead: a tiny exec shim that
+                # activates and hands off to Rscript IS a real executable path,
+                # which is what lstar's LSTAR_RSCRIPT contract needs.
+                shim = _rscript_shim(_pid)
+                print(f"[pagoda3] R interpreter is not directly execable "
+                      f"({type(e).__name__}: {str(e)[:120]}) — "
+                      f"{'using an activation shim' if shim else 'NO shim could be built'}",
+                      flush=True)
+                if shim:
+                    cands.append(shim)
     except Exception:  # noqa: BLE001
         pass
     override = os.getenv("LSTAR_RSCRIPT")

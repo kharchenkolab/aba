@@ -376,6 +376,23 @@ def _resolve_view_path(path: str):
                 return max(hits, key=lambda m: m.stat().st_mtime)
         except OSError:
             pass
+    # …then the ARTIFACT CATALOG, which is where a harvested output's human name
+    # actually survives. The served copy is stored under a generated id and the
+    # originally-named file stays in the execution sandbox (off this filesystem),
+    # so for anything a run produced the two lookups above cannot match — only
+    # `original_name` can. Without this the tool refused names it was itself
+    # serving (live 2026-07-21: three straight "artifact not found" on figures
+    # the agent had just written).
+    try:
+        from core.exec.artifacts import find_by_produced_name
+        from core.web.artifacts import _artifact_url_to_path
+        for a in find_by_produced_name(str(p)):
+            u = a.get("url") or ""
+            d = _artifact_url_to_path(u) if u.startswith("/artifacts/") else None
+            if d and d.exists():
+                return d
+    except Exception:  # noqa: BLE001 — resolution is best-effort, never fatal
+        pass
     return None
 
 

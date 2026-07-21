@@ -930,13 +930,23 @@ def _summ_result(result):
     if not isinstance(result, dict):
         return str(result)[:60]
     flags = []
-    for k in ("status", "returncode", "block_type", "reason_code", "entity_id", "run_id",
-              "result_id", "rid", "recipe_hint", "fetch_warning"):
+    # `error` FIRST and always: without it a failed call renders identically to a
+    # successful one. Live 2026-07-21, three `view_artifact` errors in a row all
+    # logged as `DONE view_artifact -> {}` — the same text a success prints, since
+    # neither its error key nor any of its success keys were listed here. The feed
+    # is the fastest read on a live session; a failure must never be invisible in it.
+    for k in ("error", "status", "returncode", "block_type", "reason_code", "entity_id",
+              "run_id", "result_id", "rid", "recipe_hint", "fetch_warning"):
         if k in result:
             v = result[k]
-            flags.append(f"{k}={v}" if isinstance(v, (int, bool)) else f"{k}={str(v)[:30]!r}")
+            flags.append(f"{k}={v}" if isinstance(v, (int, bool)) else f"{k}={str(v)[:60]!r}")
     if result.get("guardrail_warnings"):
         flags.append(f"guardrail_warnings={len(result['guardrail_warnings'])}")
+    if not flags and result:
+        # No recognized key — show the SHAPE rather than a bare `{}`, so an
+        # unlisted return (view_artifact's vision envelope, say) is
+        # distinguishable from a genuinely empty result.
+        flags.append("keys=" + ",".join(sorted(result)[:6]))
     return "{" + ", ".join(flags) + "}"
 
 

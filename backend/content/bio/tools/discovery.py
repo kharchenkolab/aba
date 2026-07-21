@@ -945,7 +945,24 @@ def _r_version_in_session(pid: str, libname: str) -> str | None:
         return None
 
 
-def _cran_lane(pid: str, spec: str) -> bool:
+def _BIOC_RELEASE() -> str:
+    """Bioconductor release to pull from. Overridable per deployment; the default
+    tracks the release the R base pack is built against."""
+    import os
+    return (os.getenv("ABA_BIOC_RELEASE") or "3.20").strip()
+
+
+def _bioc_repos() -> list:
+    """Bioconductor's repository URLs, in the order BiocManager itself uses.
+    Handed to the cran lane as `cran_repos` so a Bioc package resolves as an
+    ordinary repository package — no BiocManager, no writable base."""
+    rel = _BIOC_RELEASE()
+    return [f"https://bioconductor.org/packages/{rel}/bioc",
+            f"https://bioconductor.org/packages/{rel}/data/annotation",
+            f"https://bioconductor.org/packages/{rel}/data/experiment"]
+
+
+def _cran_lane(pid: str, spec: str, *, repos: "list | None" = None) -> bool:
     """Try the substrate's cran layer for one R spec. True if it landed.
 
     `spec` is the substrate's own vocabulary — a plain name, `name ==X.Y.Z`, or
@@ -960,7 +977,8 @@ def _cran_lane(pid: str, spec: str) -> bool:
     substrate won't recognize a git spec here."""
     from core.compute import project_env
     try:
-        project_env.install(pid, "r", [spec], eco="cran")
+        project_env.install(pid, "r", [spec], eco="cran",
+                            **({"cran_repos": list(repos)} if repos else {}))
         return True
     except Exception as e:  # noqa: BLE001 — caller falls back
         print(f"[capability] cran lane declined {spec!r}: {e}", flush=True)
@@ -1005,7 +1023,12 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
                 # the base — delta-only, works on ANY base incl. adopted
                 # read-only mounts, where conda adds AND bespoke installers
                 # refuse with session.cold_base).
-                _done = _cran_lane(pid, _pkg)
+                # Bioconductor is just a secondary repository — the cran lane
+                # takes it via `cran_repos` (weft d51f9fc), so it layers on an
+                # adopted base like any CRAN package instead of needing
+                # BiocManager and a writable prefix.
+                _done = _cran_lane(pid, _pkg,
+                                   repos=_bioc_repos() if _src == "bioconductor" else None)
                 if not _done:
                     _cmd = (f"Rscript -e 'if (!requireNamespace(\"BiocManager\", quietly=TRUE)) "
                             f"install.packages(\"BiocManager\"); BiocManager::install(\"{_pkg}\", "

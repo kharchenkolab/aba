@@ -185,8 +185,12 @@ def main() -> int:
     # ── 9. Missing on disk ──────────────────────────────────────────
     print("missing path → error")
     r = call("view_artifact", path="/nonexistent/file.png")
+    # Assert the SEMANTICS (an error that names the path), not one phrasing. There
+    # are two honest wordings here — "not found" when resolution fails, "missing on
+    # disk" when it resolved and the file then vanished — and pinning the second
+    # left this guard permanently red once resolution started answering first.
     check("missing-path error",
-          "error" in r and "missing" in r["error"], str(r))
+          "error" in r and "/nonexistent/file.png" in r["error"], str(r))
 
     # ── 10. Both args / neither arg ─────────────────────────────────
     print("invalid arg combos")
