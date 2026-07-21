@@ -67,6 +67,7 @@ GET /api/projects/{pid}/data-ledger
 GET /api/projects/{pid}/recovery-report
 GET /api/runs/{rid}/archive
 GET /api/runs/{rid}/durable
+GET /api/runs/{rid}/execs
 GET /api/runs/{rid}/file
 GET /api/runs/{rid}/tree
 GET /api/runs/{run_id}/artifacts
