@@ -1,4 +1,5 @@
 id: revision_delete
+smoke: true
 title: Delete a middle revision from a figure chain (chain re-parenting integrity)
 domain: data_visualization
 expected_overall:

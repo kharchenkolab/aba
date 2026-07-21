@@ -1,4 +1,5 @@
 id: file_lookup
+smoke: true
 title: Name-first file lookup — over-cap outputs and same-name collisions stay findable
 domain: _infra
 gpu: false
