@@ -29,6 +29,7 @@ class _FakeCompute:
 
 def _wire(monkeypatch, *, adopt_eid, status_map, list_envs=None):
     import core.compute as cc
+    import core.compute.seeding  # noqa: F401 — attribute only exists once imported (hermetic runs)
     monkeypatch.setattr(cc.seeding, "adopt_env_id", lambda pack: adopt_eid)
     monkeypatch.setattr(cc, "get_compute", lambda: _FakeCompute(status_map, list_envs))
 

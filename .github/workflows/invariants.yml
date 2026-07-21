@@ -22,6 +22,25 @@ jobs:
           pip install pytest
           python -m pytest tests/test_project_pinning_coverage.py tests/test_route_table.py -q
 
+  guards:
+    # The behavioral guard suite (shared-agent-input guards, output/env unit
+    # guards, runtime translation). Added 2026-07-21 after 10 days of red CI
+    # hid a route-table drift AND none of the unit guards ran in CI at all.
+    # Per-file execution — see scripts/run_guard_tests.sh for why.
+    name: platform guard suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: install/core/environment-boot.yml
+          cache-environment: true
+      - name: guard tests (hermetic, per-file)
+        shell: bash -el {0}
+        run: |
+          pip install pytest
+          PYTHON=python bash scripts/run_guard_tests.sh
+
   frontend:
     name: frontend platform purity
     runs-on: ubuntu-latest
