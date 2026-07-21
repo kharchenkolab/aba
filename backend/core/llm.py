@@ -194,6 +194,11 @@ class _RealStream:
         # (was previously written without this marker, which made the dump
         # misleading about caching behavior).
         messages = _mark_history_cached(messages)
+        # Tripwire reference: the guide's [llm-prep] hash is taken BEFORE the
+        # volatile tail is appended (a sanctioned post-prep transform, like the
+        # cache marks _strip_cc removes). Hash the same boundary here, or the
+        # prep/sent pair differs on every request and the tripwire is dead.
+        _pre_tail_messages = messages
         # …then the per-turn volatile context AFTER that mark, so it sits outside
         # every cached prefix. Only a non-user last message (rare) sends it back to
         # the system array, where it costs a cache miss but is never dropped.
@@ -233,12 +238,16 @@ class _RealStream:
                 # input semantics) so it's directly comparable to the same hash
                 # computed from the dumped turn_context JSON.
                 _canon = _json.dumps(
-                    [{"role": m["role"], "content": _strip_cc(m.get("content"))} for m in messages],
+                    [{"role": m["role"], "content": _strip_cc(m.get("content"))}
+                     for m in _pre_tail_messages],
                     sort_keys=True, default=str,
                 ).encode("utf-8")
                 _hist_sha = _hashlib.sha256(_canon).hexdigest()[:12]
                 _full_sys = (self._system or "") + (self._dynamic_system or "")
-                _sys_sha = _hashlib.sha256(_full_sys.encode("utf-8")).hexdigest()[:12]
+                # sys_sha over the STABLE block alone — same boundary as
+                # [llm-prep]'s (the dynamic tail is per-turn by design; its size
+                # is reported separately below).
+                _sys_sha = _hashlib.sha256((self._system or "").encode("utf-8")).hexdigest()[:12]
                 print(f"[llm-sent] model={self._model} sys_sha={_sys_sha} "
                       f"hist_sha={_hist_sha} n_msgs={len(messages)} "
                       f"sys_chars={len(_full_sys)}"
