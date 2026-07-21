@@ -1,211 +1,357 @@
 {
   "meta": {
-    "date": "20260702-102921",
+    "date": "20260720-175933",
     "mode": "haiku",
-    "commit": "3bf73bd",
+    "commit": "ed0fa9d1",
     "agent_model": "claude-haiku-4-5",
-    "n_scenarios": 26,
-    "note": "best-of composite across Haiku runs (achievable per scenario)"
+    "n_scenarios": 30
   },
   "scenarios": {
     "_selftest_session": {
-      "mech_pass": 7,
-      "mech_total": 7,
+      "mech_pass": 9,
+      "mech_total": 9,
       "rubric_overall": null,
       "fails": [],
-      "bundle": "_selftest_session-20260702-045452"
+      "bundle": "_selftest_session-20260720-175933",
+      "infra": 0
     },
     "alphafold": {
-      "mech_pass": 12,
-      "mech_total": 12,
+      "mech_pass": 10,
+      "mech_total": 14,
       "rubric_overall": null,
-      "fails": [],
-      "bundle": "alphafold-20260702-102959"
+      "fails": [
+        "s5:pinned_results>=2 but 1",
+        "s7:pinned_results>=3 but 2",
+        "s9:pinned_results>=2 but 1",
+        "s11:pinned_results>=3 but 2"
+      ],
+      "bundle": "alphafold-20260720-180142",
+      "infra": 0
     },
     "atac_peaks": {
+      "mech_pass": 11,
+      "mech_total": 16,
+      "rubric_overall": null,
+      "fails": [
+        "s9:produces[figure]>=1 but got 0",
+        "s10:pinned_results>=3 but 2",
+        "s11:produces[figure]>=1 but got 0",
+        "s12:pinned_results>=4 but 2",
+        "s13:pinned_results>=3 but 2;entity_archived:s10 -> missing"
+      ],
+      "bundle": "atac_peaks-20260720-180517",
+      "infra": 0
+    },
+    "background_env_integrity": {
+      "mech_pass": 0,
+      "mech_total": null,
+      "rubric_overall": null,
+      "fails": [
+        "ERROR:report.json unreadable: [Errno 2] No such file or directory: '/Users/peter.kharchenko/aba/aba/regtest/scenarios/_runs/background_env_integrity-20260720-181132/report.json'"
+      ],
+      "bundle": "background_env_integrity-20260720-181132",
+      "infra": 0
+    },
+    "blast_seq": {
+      "mech_pass": 3,
+      "mech_total": 11,
+      "rubric_overall": null,
+      "fails": [
+        "s2:missing_mention:'fluorescent';missing_mention:'Aequorea';produces[figure]>=1 but got 0",
+        "s3:pinned_results>=1 but 0",
+        "s4:produces[figure]>=1 but got 0",
+        "s5:pinned_results>=2 but 0",
+        "s6:produces[figure]>=1 but got 0",
+        "s7:pinned_results>=3 but 0",
+        "s8:pinned_results>=2 but 0;entity_archived:s3 -> missing",
+        "s9:missing_mention:'Aequorea'"
+      ],
+      "bundle": "blast_seq-20260720-181132",
+      "infra": 0
+    },
+    "cheminformatics": {
       "mech_pass": 14,
       "mech_total": 14,
       "rubric_overall": null,
       "fails": [],
-      "bundle": "atac_peaks-20260702-103151"
+      "bundle": "cheminformatics-20260720-181251",
+      "infra": 0
     },
-    "blast_seq": {
+    "colocalization": {
+      "mech_pass": 10,
+      "mech_total": 14,
+      "rubric_overall": null,
+      "fails": [
+        "s7:pinned_results>=3 but 2",
+        "s8:pinned_results>=2 but 1",
+        "s10:pinned_results>=3 but 2",
+        "s11:pinned_results>=2 but 1"
+      ],
+      "bundle": "colocalization-20260720-181824",
+      "infra": 0
+    },
+    "crispr_guides": {
+      "mech_pass": 11,
+      "mech_total": 13,
+      "rubric_overall": null,
+      "fails": [
+        "s9:pinned_results>=4 but 3",
+        "s10:pinned_results>=3 but 2"
+      ],
+      "bundle": "crispr_guides-20260720-182600",
+      "infra": 0
+    },
+    "foci_count": {
+      "mech_pass": 10,
+      "mech_total": 14,
+      "rubric_overall": null,
+      "fails": [
+        "s6:produces[figure]>=1 but got 0",
+        "s7:pinned_results>=3 but 2",
+        "s8:pinned_results>=2 but 1",
+        "s10:pinned_results>=3 but 2"
+      ],
+      "bundle": "foci_count-20260720-183224",
+      "infra": 0
+    },
+    "gpu_job_completion": {
+      "mech_pass": 0,
+      "mech_total": null,
+      "rubric_overall": null,
+      "fails": [
+        "ERROR:report.json unreadable: [Errno 2] No such file or directory: '/Users/peter.kharchenko/aba/aba/regtest/scenarios/_runs/gpu_job_completion-20260720-183908/report.json'"
+      ],
+      "bundle": "gpu_job_completion-20260720-183908",
+      "infra": 0
+    },
+    "gwas_popstruct": {
+      "mech_pass": 11,
+      "mech_total": 14,
+      "rubric_overall": null,
+      "fails": [
+        "s5:missing_mention:'genome-wide'",
+        "s6:produces[figure]>=1 but got 0",
+        "_surfaces:surface:viewer_blind:ana_eb4effae/gwas_unadjusted.csv -> 404"
+      ],
+      "bundle": "gwas_popstruct-20260720-183908",
+      "infra": 0
+    },
+    "image_registration": {
+      "mech_pass": 10,
+      "mech_total": 15,
+      "rubric_overall": null,
+      "fails": [
+        "s8:missing_mention:'deformable';produces[figure]>=1 but got 0",
+        "s9:pinned_results>=3 but 2",
+        "s10:produces[figure]>=1 but got 0;cache_read=0 (no cache hit)",
+        "s11:pinned_results>=4 but 2",
+        "s12:pinned_results>=3 but 1"
+      ],
+      "bundle": "image_registration-20260720-185240",
+      "infra": 0
+    },
+    "methylation_dmr": {
+      "mech_pass": 15,
+      "mech_total": 15,
+      "rubric_overall": null,
+      "fails": [],
+      "bundle": "methylation_dmr-20260720-192354",
+      "infra": 0
+    },
+    "microbiome": {
+      "mech_pass": 14,
+      "mech_total": 14,
+      "rubric_overall": null,
+      "fails": [],
+      "bundle": "microbiome-20260720-193152",
+      "infra": 0
+    },
+    "msa_phylo": {
+      "mech_pass": 9,
+      "mech_total": 16,
+      "rubric_overall": null,
+      "fails": [
+        "s6:produces[figure]>=1 but got 0",
+        "s7:missing_mention:'robust';produces[figure]>=1 but got 0",
+        "s8:pinned_results>=3 but 2",
+        "s10:pinned_results>=4 but 3",
+        "s11:pinned_results>=3 but 2",
+        "s12:missing_mention:'removed'",
+        "s13:pinned_results>=4 but 3"
+      ],
+      "bundle": "msa_phylo-20260720-193735",
+      "infra": 0
+    },
+    "nuclei_count": {
+      "mech_pass": 10,
+      "mech_total": 15,
+      "rubric_overall": null,
+      "fails": [
+        "s6:produces[figure]>=1 but got 0",
+        "s7:pinned_results>=3 but 2",
+        "s9:pinned_results>=4 but 3",
+        "s10:pinned_results>=3 but 2",
+        "s12:pinned_results>=4 but 3"
+      ],
+      "bundle": "nuclei_count-20260720-235220",
+      "infra": 0
+    },
+    "protein_domains": {
+      "mech_pass": 10,
+      "mech_total": 13,
+      "rubric_overall": null,
+      "fails": [
+        "s7:pinned_results>=3 but 2",
+        "s8:pinned_results>=2 but 1",
+        "s10:pinned_results>=3 but 1"
+      ],
+      "bundle": "protein_domains-20260721-000453",
+      "infra": 0
+    },
+    "provenance_export": {
+      "mech_pass": 6,
+      "mech_total": 6,
+      "rubric_overall": null,
+      "fails": [],
+      "bundle": "provenance_export-20260721-001051",
+      "infra": 0
+    },
+    "pseudobulk_de": {
+      "mech_pass": 12,
+      "mech_total": 16,
+      "rubric_overall": null,
+      "fails": [
+        "s6:missing_mention:'updated';produces[figure]>=1 but got 0",
+        "s10:pinned_results>=4 but 3",
+        "s11:pinned_results>=3 but 2",
+        "s13:pinned_results>=4 but 2"
+      ],
+      "bundle": "pseudobulk_de-20260721-001150",
+      "infra": 0
+    },
+    "reproduce_expr": {
       "mech_pass": 9,
       "mech_total": 9,
       "rubric_overall": null,
       "fails": [],
-      "bundle": "blast_seq-20260702-051314"
+      "bundle": "reproduce_expr-20260721-001827",
+      "infra": 0
     },
-    "cheminformatics": {
-      "mech_pass": 12,
-      "mech_total": 12,
+    "revision_delete": {
+      "mech_pass": 10,
+      "mech_total": 10,
       "rubric_overall": null,
       "fails": [],
-      "bundle": "cheminformatics-20260702-051417"
+      "bundle": "revision_delete-20260721-001957",
+      "infra": 0
     },
-    "colocalization": {
-      "mech_pass": 11,
-      "mech_total": 12,
-      "rubric_overall": null,
-      "fails": [
-        "s6:missing_mention:'f3'"
-      ],
-      "bundle": "colocalization-20260702-051719"
-    },
-    "crispr_guides": {
-      "mech_pass": 11,
-      "mech_total": 11,
-      "rubric_overall": null,
-      "fails": [],
-      "bundle": "crispr_guides-20260702-052006"
-    },
-    "foci_count": {
-      "mech_pass": 12,
-      "mech_total": 12,
-      "rubric_overall": null,
-      "fails": [],
-      "bundle": "foci_count-20260702-052320"
-    },
-    "gwas_popstruct": {
-      "mech_pass": 12,
-      "mech_total": 12,
-      "rubric_overall": null,
-      "fails": [],
-      "bundle": "gwas_popstruct-20260702-053510"
-    },
-    "image_registration": {
-      "mech_pass": 13,
-      "mech_total": 13,
-      "rubric_overall": null,
-      "fails": [],
-      "bundle": "image_registration-20260702-053951"
-    },
-    "methylation_dmr": {
-      "mech_pass": 13,
-      "mech_total": 13,
-      "rubric_overall": null,
-      "fails": [],
-      "bundle": "methylation_dmr-20260702-113310"
-    },
-    "microbiome": {
-      "mech_pass": 12,
-      "mech_total": 12,
-      "rubric_overall": null,
-      "fails": [],
-      "bundle": "microbiome-20260702-055504"
-    },
-    "msa_phylo": {
-      "mech_pass": 9,
-      "mech_total": 14,
-      "rubric_overall": null,
-      "fails": [
-        "s7:produces[figure]>=1 but got 0",
-        "s8:pinned_results>=3 but 2",
-        "s10:pinned_results>=4 but 3",
-        "s11:pinned_results>=3 but 2",
-        "s13:pinned_results>=4 but 3"
-      ],
-      "bundle": "msa_phylo-20260702-113825"
-    },
-    "nuclei_count": {
-      "mech_pass": 13,
-      "mech_total": 13,
-      "rubric_overall": null,
-      "fails": [],
-      "bundle": "nuclei_count-20260702-060543"
-    },
-    "protein_domains": {
-      "mech_pass": 11,
-      "mech_total": 11,
-      "rubric_overall": null,
-      "fails": [],
-      "bundle": "protein_domains-20260702-061625"
-    },
-    "provenance_export": {
-      "mech_pass": 4,
-      "mech_total": 4,
-      "rubric_overall": null,
-      "fails": [],
-      "bundle": "provenance_export-20260702-120128"
-    },
-    "pseudobulk_de": {
-      "mech_pass": 13,
-      "mech_total": 14,
-      "rubric_overall": null,
-      "fails": [
-        "s4:missing_mention:'donor'"
-      ],
-      "bundle": "pseudobulk_de-20260702-062019"
-    },
-    "reproduce_expr": {
+    "scrna_advice_routing": {
       "mech_pass": 7,
       "mech_total": 7,
       "rubric_overall": null,
       "fails": [],
-      "bundle": "reproduce_expr-20260702-062500"
-    },
-    "revision_delete": {
-      "mech_pass": 8,
-      "mech_total": 8,
-      "rubric_overall": null,
-      "fails": [],
-      "bundle": "revision_delete-20260702-062602"
+      "bundle": "scrna_advice_routing-20260720-202516",
+      "infra": 0
     },
     "scrna_qc_clustering": {
       "mech_pass": 13,
-      "mech_total": 13,
+      "mech_total": 15,
       "rubric_overall": null,
-      "fails": [],
-      "bundle": "scrna_qc_clustering-20260702-062628"
+      "fails": [
+        "s8:missing_mention:'mito'",
+        "s12:pinned_results>=4 but 3"
+      ],
+      "bundle": "scrna_qc_clustering-20260721-002040",
+      "infra": 0
+    },
+    "slurm_missing_pkg": {
+      "mech_pass": 0,
+      "mech_total": null,
+      "rubric_overall": null,
+      "fails": [
+        "ERROR:report.json unreadable: [Errno 2] No such file or directory: '/Users/peter.kharchenko/aba/aba/regtest/scenarios/_runs/slurm_missing_pkg-20260720-230647/report.json'"
+      ],
+      "bundle": "slurm_missing_pkg-20260720-230647",
+      "infra": 0
     },
     "structure_superpose": {
-      "mech_pass": 12,
-      "mech_total": 12,
+      "mech_pass": 11,
+      "mech_total": 14,
       "rubric_overall": null,
-      "fails": [],
-      "bundle": "structure_superpose-20260702-122132"
+      "fails": [
+        "s8:pinned_results>=3 but 2",
+        "s9:pinned_results>=2 but 1",
+        "s11:pinned_results>=3 but 2"
+      ],
+      "bundle": "structure_superpose-20260721-003123",
+      "infra": 0
     },
     "survival": {
-      "mech_pass": 9,
-      "mech_total": 9,
-      "rubric_overall": null,
-      "fails": [],
-      "bundle": "survival-20260702-064241"
-    },
-    "tpm": {
       "mech_pass": 11,
       "mech_total": 11,
       "rubric_overall": null,
       "fails": [],
-      "bundle": "tpm-20260702-064439"
+      "bundle": "survival-20260720-230647",
+      "infra": 0
     },
-    "variant_annotation": {
-      "mech_pass": 12,
-      "mech_total": 12,
-      "rubric_overall": null,
-      "fails": [],
-      "bundle": "variant_annotation-20260702-123039"
-    },
-    "variant_to_structure": {
-      "mech_pass": 13,
+    "tpm": {
+      "mech_pass": 10,
       "mech_total": 13,
       "rubric_overall": null,
-      "fails": [],
-      "bundle": "variant_to_structure-20260702-064902"
+      "fails": [
+        "s7:pinned_results>=3 but 2",
+        "s9:pinned_results>=4 but 3",
+        "s10:pinned_results>=3 but 2"
+      ],
+      "bundle": "tpm-20260720-231229",
+      "infra": 0
     },
-    "version_revert": {
-      "mech_pass": 7,
-      "mech_total": 8,
+    "variant_annotation": {
+      "mech_pass": 4,
+      "mech_total": 14,
       "rubric_overall": null,
       "fails": [
-        "s7:superseded>=2 but 0"
+        "s2:missing_mention:'ST7';produces[figure]>=1 but got 0",
+        "s3:pinned_results>=1 but 0",
+        "s4:missing_mention:'ST7';produces[figure]>=1 but got 0",
+        "s5:pinned_results>=2 but 0",
+        "s6:missing_mention:'stop_gained';missing_mention:'frameshift';missing_mention:'CFTR';produces[figure]>=1 but got 0",
+        "s7:pinned_results>=3 but 0",
+        "s8:pinned_results>=2 but 0;entity_archived:s3 -> missing",
+        "s9:produces[figure]>=1 but got 0",
+        "s10:pinned_results>=3 but 0",
+        "s11:missing_mention:'rs397516436';missing_mention:'rs80357906'"
       ],
-      "bundle": "version_revert-20260702-070226"
+      "bundle": "variant_annotation-20260720-231738",
+      "infra": 0
+    },
+    "variant_to_structure": {
+      "mech_pass": 12,
+      "mech_total": 15,
+      "rubric_overall": null,
+      "fails": [
+        "s9:pinned_results>=2 but 1",
+        "s11:produces[figure]>=1 but got 0;cache_read=0 (no cache hit)",
+        "s12:pinned_results>=3 but 1"
+      ],
+      "bundle": "variant_to_structure-20260720-231906",
+      "infra": 0
+    },
+    "version_revert": {
+      "mech_pass": 9,
+      "mech_total": 10,
+      "rubric_overall": null,
+      "fails": [
+        "s7:forbidden_present:'deleted'"
+      ],
+      "bundle": "version_revert-20260720-233344",
+      "infra": 0
     }
   },
   "totals": {
-    "mech_pass": 280,
-    "mech_total": 288,
-    "full_pass": 22
-  }
+    "mech_pass": 271,
+    "mech_total": 347,
+    "full_pass": 9
+  },
+  "note": "amended post-cutover baseline 2026-07-21: originals overlaid by contamination reruns (batches 20260720-230647 / 20260720-235220); see regtest/reports/*.md for provenance"
 }
