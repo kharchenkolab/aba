@@ -166,6 +166,11 @@ _TIER2_DIAG: dict = {
     "raised":           0,    # any Exception path
     "reused":           0,    # stored summary served verbatim — NO LLM call
     "reused_on_fail":   0,    # synth failed; stored summary served (not the cliff)
+    "saturated":        0,    # budget unsatisfiable at ANY boundary; served stored
+                              # verbatim. A nonzero rate here is the live tell that
+                              # something oversized (e.g. a vision block) is being
+                              # retained verbatim in history — the upstream cap's
+                              # problem, not this module's.
     "last_error":       "",
 }
 
@@ -297,7 +302,25 @@ def maybe_summarize(thread_id: Optional[str], messages: list[dict],
     else:
         cov_n, prior = 0, None
 
-    to_cover_n = max(len(messages) - eff_tail, cov_n)   # never move backwards
+    # SATURATION rule: if even MAXIMUM coverage cannot fit — the tail alone
+    # (plus the summary) exceeds the budget, which one oversized message inside
+    # tail_keep guarantees — then re-synthesizing achieves nothing but a broken
+    # prefix and a synchronous LLM roundtrip, every generation (the regime the
+    # live incident was in: a ~MB vision block riding the tail for ~tail_keep/2
+    # generations, 30/30 divergences measured). Serve the stored summary
+    # verbatim instead: over-budget but byte-STABLE, so the request is a
+    # prefix-extension and bills only its delta. Advance anyway once the
+    # uncovered gap exceeds a quantum (bounds coverage staleness at one
+    # sanctioned rewrite per epoch, same idiom as Tier-1's batches).
+    desired = len(messages) - eff_tail
+    if cov_n and prior:
+        tail_chars = _message_chars(messages[desired:])
+        if tail_chars + len(prior) > _threshold(budget_chars) \
+                and (desired - cov_n) < max(16, 4 * eff_tail):
+            _TIER2_DIAG["saturated"] += 1
+            return [_summary_message(prior), *messages[cov_n:]]
+
+    to_cover_n = max(desired, cov_n)                    # never move backwards
     old_block = messages[cov_n:to_cover_n] if cov_n else messages[:to_cover_n]
     tail = messages[to_cover_n:]
 

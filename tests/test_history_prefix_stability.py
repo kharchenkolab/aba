@@ -158,3 +158,62 @@ def test_tier1_prune_prefix_stability_documented():
     gaps = [b - a for a, b in zip(diverged_at, diverged_at[1:])]
     assert gaps and min(gaps) >= 2, (
         f"epoch jumps every generation ({diverged_at}) — quantization inert")
+
+
+def test_saturated_regime_stays_prefix_stable(monkeypatch):
+    """The regime the LIVE incident was in: one message larger than the whole
+    budget sits in the tail, so `chars(remainder) + summary <= budget` is
+    unsatisfiable at ANY boundary. Pre-rule, the code fell through to
+    advance-and-synthesize EVERY generation — full regression to sliding-window
+    behavior (verified 30/30 divergences). The rule: when even maximum coverage
+    cannot fit, serve the STORED summary verbatim (over-budget but byte-stable,
+    `saturated` counter) and advance only once per quantized epoch."""
+    calls = _stub_synth(monkeypatch)
+    hist: list = []
+    for i in range(8):                      # build a store under headroom first
+        _grow(hist, i)
+        bs.maybe_summarize("thrSAT", list(hist), budget_chars=BUDGET, tail_keep=TAIL)
+    # one oversized message — bigger than the entire budget — enters the tail
+    hist.append({"role": "user", "content": [
+        {"type": "text", "text": "IMG:" + "z" * (BUDGET + 2000)}]})
+    prev = None
+    divergences = 0
+    calls_before = calls["n"]
+    for i in range(8, 28):
+        _grow(hist, i)
+        eff = bs.maybe_summarize("thrSAT", list(hist),
+                                 budget_chars=BUDGET, tail_keep=TAIL)
+        if prev is not None and not _is_prefix(prev, eff):
+            divergences += 1
+        prev = eff
+    sat_calls = calls["n"] - calls_before
+    assert bs._TIER2_DIAG.get("saturated", 0) > 0, \
+        "saturated path never taken — the regime is undetected"
+    # Sanctioned epochs only: quantum advances while saturated, plus the
+    # entry/exit transitions as the oversized message crosses the tail window.
+    # Pre-rule this was 20/20 (per-generation rewrite + synthesis).
+    assert divergences <= 5, (
+        f"{divergences} divergences in 20 saturated generations — "
+        f"per-generation rewrite is back (the live-incident regime)")
+    assert sat_calls <= 5, (
+        f"{sat_calls} synth calls in 20 saturated generations — "
+        f"per-generation synthesis is back (the latency defect)")
+
+
+def test_saturated_from_first_engagement(monkeypatch):
+    """Oversized message present BEFORE any store exists: first engagement may
+    synthesize once to establish the store; after that, stability."""
+    calls = _stub_synth(monkeypatch)
+    hist: list = [{"role": "user", "content": [
+        {"type": "text", "text": "IMG:" + "z" * (BUDGET + 2000)}]}]
+    prev = None
+    divergences = 0
+    for i in range(20):
+        _grow(hist, i)
+        eff = bs.maybe_summarize("thrSAT2", list(hist),
+                                 budget_chars=BUDGET, tail_keep=TAIL)
+        if prev is not None and not _is_prefix(prev, eff):
+            divergences += 1
+        prev = eff
+    assert divergences <= 3, f"{divergences} divergences from first engagement"
+    assert calls["n"] <= 3, f"{calls['n']} synth calls"
