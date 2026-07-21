@@ -34,6 +34,7 @@ FILES=(
   tests/test_modules_pack_ready.py
   tests/test_fetch_url_integrity.py
   tests/test_env_agency.py
+  tests/test_capability_language.py
   tests/test_remote_output_resolution.py
   tests/test_remote_kernel_lane.py
   tests/test_data_ledger.py

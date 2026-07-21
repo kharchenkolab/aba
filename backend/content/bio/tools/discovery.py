@@ -1119,14 +1119,40 @@ def _extend_into_named_env(env_name: str, packages: list[str], cap: dict) -> dic
             "env_id": res["env_id"], "installed": list(packages), "note": note}
 
 
+def _infer_language(ctx: dict | None) -> str | None:
+    """Best-effort language for a request that didn't state one: if exactly ONE
+    language has a live kernel session in this thread, that's the working
+    context. Both (or neither) live → None — the caller must decide whether
+    ambiguity matters for its branch (inference may DECLINE, never guess)."""
+    try:
+        from core.exec.kernels import get_pool
+        tid = str((ctx or {}).get("thread_id") or "")
+        if not tid:
+            return None
+        live = [lang for lang in ("python", "r")
+                if get_pool().peek(tid, lang) is not None]
+        return live[0] if len(live) == 1 else None
+    except Exception:  # noqa: BLE001 — inference is advisory, never fatal
+        return None
+
+
 def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
     """Materialize a catalogued capability on demand (P1). Python libraries go
     into the wipeable overlay so the next run_python can import them; non-pip
     CLI tools (conda) are reported as deferred. A long install is cancellable
-    (Stop) via the turn's cancel_token, and streams phase progress."""
+    (Stop) via the turn's cancel_token, and streams phase progress.
+
+    `language` scopes readiness: a capability is only "ready" IN a runtime, so
+    the answer must be about the runtime the caller works in. Explicit param
+    wins; else the env= target's recorded language; else the single live
+    kernel's; else unscoped (the historical behavior). Success responses carry
+    `ready_in` so the scope is a branchable field, not prose."""
     name = (input_.get("name") or input_.get("capability") or "").strip()
     if not name:
         return {"error": "name is required"}
+    language = (input_.get("language") or "").strip().lower() or None
+    if language not in (None, "python", "r"):
+        return {"error": f"language must be 'python' or 'r' (got {language!r})"}
     # env= targets a named ISOLATED env instead of the default session; a package
     # install extends it (new EnvID, history kept). Validate up front — an unknown
     # name never silently falls back to the default env.
@@ -1134,13 +1160,58 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
     if env is not None:
         from core.compute import named_envs as _ne
         from core import projects as _proj
-        if _ne.resolve(str(_proj.current() or "default"), env) is None:
+        _row = _ne.resolve(str(_proj.current() or "default"), env)
+        if _row is None:
             return {"status": "error", "name": name, "env": env,
                     "note": f"No named env '{env}' in this project. Call inspect_env() to "
                             f"see the named-env catalog, or make_isolated_env to create it."}
+        _env_lang = (_row.get("language") or "python").lower()
+        if language is not None and language != _env_lang:
+            # The two scopes CONTRADICT — installing "for r" into a python env
+            # answers neither request. Refuse, don't pick (the same-name-
+            # different-ecosystem "cached" bug was this conflict resolved
+            # silently).
+            return {"status": "error", "name": name, "env": env,
+                    "note": f"env '{env}' is a {_env_lang} env but language="
+                            f"'{language}' was requested — these conflict. Drop "
+                            f"one: omit language to target the env, or omit env "
+                            f"to install for {language}."}
+        language = _env_lang                       # env target fixes the scope
+    if language is None:
+        language = _infer_language(ctx)            # may stay None (ambiguous)
     _ct = (ctx or {}).get("cancel_token")
     from core.catalog import resolve_capability
     cap = resolve_capability(name)
+    # Language-scope check: the catalog is keyed by NAME alone, so a hit may be
+    # the same name in the WRONG ecosystem (foo-on-PyPI vs foo-on-CRAN). A
+    # confident "ready" for a runtime the caller isn't in is worse than a miss —
+    # so on a mismatch, treat the name as UNCATALOGUED for the requested
+    # language: an exact registry hit there re-routes to that ecosystem's
+    # install (synthesized cap through the normal dispatch); no hit falls
+    # through to the honest candidates/not_found paths below.
+    if cap is not None and language is not None:
+        _prov0 = cap.get("provisioning") or {}
+        _cap_lang = ("r" if (cap.get("archetype") == "r_package" or _prov0.get("r"))
+                     else ("python" if (_prov0.get("pip") or _prov0.get("conda")
+                                        or cap.get("archetype") in (None, "library"))
+                           else None))            # non-package caps are language-neutral
+        if _cap_lang is not None and _cap_lang != language:
+            _mismatch_note = (f"NOTE: '{name}' is catalogued for {_cap_lang}; you asked "
+                              f"for {language}. ")
+            if language == "r":
+                _hit = _cran_exact(name)
+                if _hit:
+                    cap = {"name": name, "archetype": "r_package",
+                           "provisioning": {"r": {"source": _hit.get("source", "cran"),
+                                                  "package": _hit.get("package") or name}}}
+                else:
+                    cap = None                     # → uncatalogued path, python probe gated off
+            else:
+                cap = None                         # python route: pip-by-name via uncatalogued path
+        else:
+            _mismatch_note = ""
+    else:
+        _mismatch_note = ""
     # env= is an UNAMBIGUOUS "install this package INTO env X" — handle it EARLY,
     # before the default-env machinery (already-importable probe, pack-provider
     # recognition, cluster modules). Those all answer "is it available in the
@@ -1222,7 +1293,10 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         # plausible identifier — a pip name like `scikit-learn` isn't one) PLUS
         # any import aliases the env packs declare for it (#11: asked by package
         # name, probed by real import name).
-        _probes = [name] if name.isidentifier() else []
+        # The import probe answers "does `import X` work in run_PYTHON" — for an
+        # R-scoped request that is the wrong question in the exact way this
+        # parameter exists to prevent, so gate it off.
+        _probes = ([name] if name.isidentifier() and language != "r" else [])
         try:
             from core.compute import env_packs as _ep
             _probes += [a for a in _ep.import_names_for_package(name)
@@ -1240,7 +1314,9 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
                     _ok, _ = verify_python_imports([_p], argv_builder=_probe_cmd)
                     if _ok:
                         return {"status": "ready", "name": name, "import_name": _p,
-                                "note": f"Already available — `import {_p}` works in run_python "
+                                "ready_in": "python",
+                                "note": _mismatch_note +
+                                        f"Already available — `import {_p}` works in run_python "
                                         f"(provided by the base env or a prior install); no install needed."}
         # (B) Declared by an env pack? (#11 already-provided recognition.) The
         # bundle's env packs declare base contents + import aliases; if a pack
@@ -1268,7 +1344,7 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         # instead of pointing at list_capabilities (which would also be
         # empty for an uncatalogued name). Returns suggestions shaped for
         # direct copy into propose_capability.
-        suggestions = _search_external_for_name(name)
+        suggestions = _search_external_for_name(name, language=language)
         if suggestions:
             return {
                 "status": "candidates",
@@ -1337,8 +1413,16 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
 
     def _ready(payload: dict) -> dict:
         payload.setdefault("role", _role)
-        if _role_note and payload.get("status") == "ready":
-            payload["note"] = (payload.get("note") or "") + _role_note
+        if payload.get("status") == "ready":
+            # ready-WHERE as a branchable field, not prose: derived from the
+            # route that actually ran, not from the request.
+            payload.setdefault("ready_in",
+                               "r" if payload.get("archetype") == "r_package"
+                               else "python")
+            if _role_note:
+                payload["note"] = (payload.get("note") or "") + _role_note
+        if _mismatch_note:
+            payload["note"] = _mismatch_note + (payload.get("note") or "")
         if _env_scope_note:
             payload["note"] = (payload.get("note") or "") + _env_scope_note
         return payload

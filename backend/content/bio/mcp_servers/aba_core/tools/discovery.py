@@ -242,6 +242,14 @@ def register_discovery_tools(mcp: FastMCP) -> None:
                           ref: str | None = None,
                           min_version: str | None = None,
                           force: bool = False,
+                          language: Annotated[str | None, Field(
+                              description="Which runtime the capability must be "
+                              "ready IN: 'python' or 'r'. A name can exist in both "
+                              "ecosystems, so readiness is per-runtime. Omit to "
+                              "infer from the env= target or the live kernel; "
+                              "responses carry `ready_in` naming the runtime that "
+                              "was actually provisioned."
+                          )] = None,
                           env: Annotated[str | None, Field(
                               description="Install into this named ISOLATED env "
                               "(from make_isolated_env / inspect_env) instead of the "
@@ -288,6 +296,8 @@ def register_discovery_tools(mcp: FastMCP) -> None:
                 "source/package/ref/min_version apply to a SINGLE capability — pass one "
                 "name with those overrides, or a list of names with none.")}
         _env = {"env": env} if env else {}
+        if language:
+            _env["language"] = language
         with in_tool_ctx(aba_ctx_id) as ctx:
             if len(names) == 1:
                 _in: dict = {"name": names[0], **overrides, **_env}
