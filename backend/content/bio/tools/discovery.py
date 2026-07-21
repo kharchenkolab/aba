@@ -978,11 +978,27 @@ def _r_version_in_session(pid: str, libname: str) -> str | None:
         return None
 
 
+_LAST_LANE_ERROR: dict = {}   # spec+rendered error from the most recent declined lane
+
+
 def _BIOC_RELEASE() -> str:
     """Bioconductor release to pull from. Overridable per deployment; the default
     tracks the release the R base pack is built against."""
     import os
     return (os.getenv("ABA_BIOC_RELEASE") or "3.20").strip()
+
+
+def _cran_repo() -> str:
+    """The CRAN mirror the FALLBACK installer lane must set explicitly.
+
+    `Rscript -e 'install.packages("x")'` with no `repos=` dies with "trying to
+    use CRAN without setting a mirror" — a non-interactive R has no mirror and
+    cannot prompt. That error then becomes the LEAD clause of the agent-facing
+    note, burying the real cause behind a red herring about mirror config
+    (live 2026-07-22, RNetCDF: the actual failure was a missing netcdf.h).
+    Matches the substrate cran lane's own default."""
+    import os
+    return (os.getenv("ABA_CRAN_REPO") or "https://cloud.r-project.org").strip()
 
 
 def _bioc_repos() -> list:
@@ -1014,8 +1030,72 @@ def _cran_lane(pid: str, spec: str, *, repos: "list | None" = None) -> bool:
                             **({"cran_repos": list(repos)} if repos else {}))
         return True
     except Exception as e:  # noqa: BLE001 — caller falls back
-        print(f"[capability] cran lane declined {spec!r}: {e}", flush=True)
+        from core.compute.errors import describe
+        print(f"[capability] cran lane declined {spec!r}: {describe(e)}", flush=True)
+        _LAST_LANE_ERROR["spec"], _LAST_LANE_ERROR["err"] = spec, describe(e)
         return False
+
+
+# A source build that died in configure/compile, as opposed to a bad name, a
+# 404 or a version conflict. Matched against the RENDERED error (describe()),
+# so these are the strings R's own build machinery emits.
+_SYSLIB_SIGNS = (
+    "configuration failed", "pkg-config", "no such file or directory",
+    "cannot find -l", "compilation failed", "c++ compiler", "c compiler",
+    "unable to load shared object", "was not compiled", "not found in the",
+)
+
+
+def _landed_or_fail(libname: str) -> str:
+    """R postlude that turns a SILENT install failure into a real exit code.
+
+    `Rscript -e 'install.packages("x")'` exits 0 even when the build died —
+    install.packages reports "ERROR: configuration failed" on stderr and
+    returns normally. The installer lane then reports success, the capability
+    is checked separately and the agent gets "Installed, but library(x) is not
+    loadable — NOT marking ready": 89 chars, no cause, no remedy, and the build
+    log discarded (live 2026-07-22, once a missing `repos=` stopped masking it
+    with an unrelated mirror error). Asserting the postcondition IN the
+    installer keeps the failure attached to the output that explains it."""
+    return (f'if (!requireNamespace("{libname}", quietly=TRUE)) '
+            f'{{ cat("ABA: install reported success but {libname} is not '
+            f'loadable\\n", file=stderr()); quit(status=1) }}')
+
+
+def _syslib_way_out(rendered: str, libname: str, pkg: str) -> str:
+    """The NEXT STEP to append when a build died for a missing system library.
+
+    Diagnosis without a remedy still costs the agent the turn. Live 2026-07-22,
+    RNetCDF's note carried the exact cause ("netcdf.h was not compiled") and
+    named no way forward — not the read-only base, not conda, not isolated
+    envs — so the only signalled options were the two that cannot work.
+
+    A session overlay is PACKAGE-only: it prepends a library dir, which cannot
+    hold a system library, and the shared base is a read-only mount here. A
+    full solve can, and an isolated env is one — verified live: RNetCDF loads
+    in `make_isolated_env(language='r')` (the solver pulled netcdf and udunits
+    transitively; naming the C library explicitly was not needed).
+
+    Appended only on a build-stage failure — on a typo'd name or a 404 this
+    advice is noise, and noise in an error is how a real hint gets skipped."""
+    low = (rendered or "").lower()
+    if not any(s in low for s in _SYSLIB_SIGNS):
+        return ""
+    env_name = f"{(libname or pkg or 'pkg').lower()}-env"
+    return (f" || NEXT STEP — this looks like a missing SYSTEM library, not a "
+            f"missing R package. The project session can add R packages but "
+            f"never a system library (it is a library dir over a read-only "
+            f"base), so retrying here will fail the same way. An ISOLATED env "
+            f"is a full solve and CAN pull system dependencies: "
+            f"make_isolated_env(name='{env_name}', language='r', "
+            f"packages=['r-{(pkg or libname).lower()}']), then either "
+            f"run_r(env='{env_name}', code=…) per call or "
+            f"set_active_env('{env_name}', language='r') to make it ambient. "
+            f"You do not need to name the C library — the solver pulls it. "
+            f"CAVEAT: a promoted env moves the run lanes, not the viewer "
+            f"launchers' converters — if THIS package is needed to render a "
+            f"viewer, it has to go into the shared base pack instead; say so "
+            f"rather than retrying.")
 
 
 def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
@@ -1030,7 +1110,7 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
     from core.exec import r as rexec
     pid = str(projects.current() or "default")
     rp = dict((cap.get("provisioning") or {}).get("r") or {})
-    for _k in ("ref", "source", "package"):
+    for _k in ("ref", "source", "package", "subdir"):
         if input_.get(_k):
             rp[_k] = input_[_k]
     _src = rp.get("source", "cran")
@@ -1039,7 +1119,7 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
         _pkg.split("/")[-1] if _src == "github"
         else (_pkg[2:] if _src == "conda" and _pkg.startswith("r-") else _pkg))
     min_version = (str(input_.get("min_version") or rp.get("min_version") or "").strip() or None)
-    force = bool(input_.get("force")) or any(input_.get(_k) for _k in ("ref", "source", "package"))
+    force = bool(input_.get("force")) or any(input_.get(_k) for _k in ("ref", "source", "package", "subdir"))
     installed = _r_version_in_session(pid, libname)
     if installed and not force and (not min_version or rexec.version_ge(installed, min_version)):
         return {"status": "ready", "name": cap.get("name"), "archetype": "r_package",
@@ -1060,15 +1140,26 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
                 # takes it via `cran_repos` (weft d51f9fc), so it layers on an
                 # adopted base like any CRAN package instead of needing
                 # BiocManager and a writable prefix.
-                _done = _cran_lane(pid, _pkg,
+                # `package` under source='conda' is a CONDA name (r-rnetcdf).
+                # Handing that to a CRAN repo asks for a package that cannot
+                # exist there, and the agent gets "'r-rnetcdf' is not available
+                # for this version of R" — a diagnosis about the wrong
+                # ecosystem, with no hint that the conda lane is what actually
+                # refused (live 2026-07-22). The CRAN name is the library name.
+                _cran_name = libname if _src == "conda" else _pkg
+                _done = _cran_lane(pid, _cran_name,
                                    repos=_bioc_repos() if _src == "bioconductor" else None)
                 if not _done:
-                    _cmd = (f"Rscript -e 'if (!requireNamespace(\"BiocManager\", quietly=TRUE)) "
-                            f"install.packages(\"BiocManager\"); BiocManager::install(\"{_pkg}\", "
-                            f"update=FALSE, ask=FALSE)'" if _src == "bioconductor" else
-                            f"Rscript -e 'install.packages(\"{_pkg}\")'")
+                    _repo = _cran_repo()
+                    _cmd = (f"Rscript -e 'options(repos=c(CRAN=\"{_repo}\")); "
+                            f"if (!requireNamespace(\"BiocManager\", quietly=TRUE)) "
+                            f"install.packages(\"BiocManager\"); BiocManager::install(\"{_cran_name}\", "
+                            f"update=FALSE, ask=FALSE); {_landed_or_fail(libname)}'"
+                            if _src == "bioconductor" else
+                            f"Rscript -e 'install.packages(\"{_cran_name}\", repos=\"{_repo}\"); "
+                            f"{_landed_or_fail(libname)}'")
                     project_env.run_installer(pid, "r", _cmd, writes_to="rlib",
-                                              note=f"{_src} install of {_pkg} (no conda binary)")
+                                              note=f"{_src} install of {_cran_name} (no conda binary)")
         elif _src == "github":
             # The cran lane speaks the whole spec vocabulary — `owner/repo@ref`
             # is a first-class source there (weft d51f9fc), composed into the
@@ -1077,29 +1168,57 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
             # uninstallable on an adopted base, which is where this deployment
             # lives (live 2026-07-21: session.cold_base, "a bespoke installer
             # needs a writable clone of the base").
-            _ref = rp.get("ref")
-            if not _cran_lane(pid, f"{_pkg}@{_ref}" if _ref else _pkg):
+            # remotes' GitHub grammar is owner/repo[/subdir][@ref]. A subdir is
+            # NOT exotic: a polyglot monorepo keeps the R package under e.g. R/,
+            # so there is no DESCRIPTION at the repo root and install_github 404s
+            # on it (live 2026-07-21 — read as "repo missing").
+            _ref, _sub = rp.get("ref"), (rp.get("subdir") or "").strip("/")
+            _spec = _pkg + (f"/{_sub}" if _sub else "") + (f"@{_ref}" if _ref else "")
+            if not _cran_lane(pid, _spec):
                 # Substrate predates the vocabulary → the old lane, which still
-                # works wherever the base is writable.
-                _r = f', ref="{_ref}"' if _ref else ""
+                # works wherever the base is writable. It takes `_spec`, not
+                # `_pkg` + a separate ref= : remotes' own grammar already
+                # carries subdir AND ref, and passing _pkg here silently DROPS
+                # the subdir — the exact live failure this branch exists to
+                # survive, reintroduced on the fallback path.
                 project_env.run_installer(
                     pid, "r",
-                    f"Rscript -e 'if (!requireNamespace(\"remotes\", quietly=TRUE)) "
-                    f"install.packages(\"remotes\"); remotes::install_github(\"{_pkg}\"{_r}, "
-                    f"upgrade=\"never\", force={str(force).upper()})'",
-                    writes_to="rlib", note=f"github install of {_pkg}")
+                    f"Rscript -e 'options(repos=c(CRAN=\"{_cran_repo()}\")); "
+                    f"if (!requireNamespace(\"remotes\", quietly=TRUE)) "
+                    f"install.packages(\"remotes\"); remotes::install_github(\"{_spec}\", "
+                    f"upgrade=\"never\", force={str(force).upper()}); "
+                    f"{_landed_or_fail(libname)}'",
+                    writes_to="rlib", note=f"github install of {_spec}")
         else:
             return {"status": "error", "name": name,
                     "note": f"unknown R source {_src!r} (cran|bioconductor|conda|github)"}
     except Exception as e:  # noqa: BLE001
+        from core.compute.errors import describe
+        # describe(), not f"{e}": the substrate's hints ARE the diagnosis (which
+        # URL 404'd, the rc, the script it ran). Without them the agent gets
+        # "session installer failed" and guesses — live 2026-07-21 it concluded
+        # the GitHub repo did not exist when the package was simply in a subdir.
+        _note = f"R install into the project env failed: {describe(e)}"
+        if _LAST_LANE_ERROR.get("err") and _LAST_LANE_ERROR["err"] not in _note:
+            _note += f" | cran lane: {_LAST_LANE_ERROR['err']}"
+        _note += _syslib_way_out(_note, libname, _pkg)
         return {"status": "error", "name": name, "archetype": "r_package",
-                "note": f"R install into the project env failed: {e}"}
+                "note": _note}
     new_ver = _r_version_in_session(pid, libname)
     if not new_ver:
+        # "Installed but not loadable" is what a SILENT install failure looks
+        # like from here, and on its own it is 89 chars of nothing: no cause,
+        # no remedy, and the build log — which said `netcdf.h was not
+        # compiled` — thrown away. Carry the lane's own error and the way out,
+        # exactly as the raising path does.
+        _note = (f"Installed, but library({libname}) is not loadable in the "
+                 f"project R env — NOT marking ready. This is what a build that "
+                 f"reported success while producing nothing looks like.")
+        if _LAST_LANE_ERROR.get("err"):
+            _note += f" | cran lane: {_LAST_LANE_ERROR['err']}"
+        _note += _syslib_way_out(_note, libname, _pkg)
         return {"status": "error", "name": name, "archetype": "r_package",
-                "library": libname,
-                "note": f"Installed, but library({libname}) is not loadable in the "
-                        f"project R env — NOT marking ready."}
+                "library": libname, "note": _note}
     # a stale loaded namespace in the running R kernel can pin the old build
     rexec.r_unload_namespace(libname, (ctx or {}).get("thread_id"))
     return {"status": "ready", "name": cap.get("name"), "archetype": "r_package",

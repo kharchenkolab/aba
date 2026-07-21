@@ -246,6 +246,14 @@ def register_discovery_tools(mcp: FastMCP) -> None:
                           source: str | None = None,
                           package: str | None = None,
                           ref: str | None = None,
+                          subdir: Annotated[str | None, Field(
+                              description="For a GitHub R package that does NOT "
+                              "live at the repo root (a polyglot monorepo keeps "
+                              "it under e.g. 'R/'): the path within the repo "
+                              "that holds DESCRIPTION. Without it install_github "
+                              "looks for DESCRIPTION at the root and fails as if "
+                              "the repository were missing."
+                          )] = None,
                           min_version: str | None = None,
                           force: bool = False,
                           language: Annotated[str | None, Field(
@@ -296,10 +304,10 @@ def register_discovery_tools(mcp: FastMCP) -> None:
             return {"status": "error", "note": "ensure_capability needs at least one name."}
         overrides = {k: v for k, v in
                      (("source", source), ("package", package), ("ref", ref),
-                      ("min_version", min_version)) if v}
+                      ("subdir", subdir), ("min_version", min_version)) if v}
         if len(names) > 1 and overrides:
             return {"status": "error", "note": (
-                "source/package/ref/min_version apply to a SINGLE capability — pass one "
+                "source/package/ref/subdir/min_version apply to a SINGLE capability — pass one "
                 "name with those overrides, or a list of names with none.")}
         _env = {"env": env} if env else {}
         if language:

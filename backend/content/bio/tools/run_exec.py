@@ -383,11 +383,19 @@ def _prior_run_files_preamble(project_id: str, thread_id: str,
                 "Files saved to disk in previous turns persist; reload them "
                 "with readRDS()/load_h5ad()/read_csv() etc. from the absolute "
                 "paths listed below.")
+            # Do NOT promise "prebuilt conda/bioconda binaries" here: where the
+            # base is an adopted read-only mount the conda lane refuses and
+            # ensure_capability falls through to a source build, so the banner
+            # named a mechanism that wasn't operative and left the agent with
+            # no read on the compile failure that followed (live 2026-07-22).
             lines.append(
                 "Need a library that isn't loaded? ensure_capability(name) FIRST "
                 "— do NOT install.packages()/BiocManager::install()/pip install "
-                "(they source-compile against missing system libs and fail; "
-                "ensure_capability installs prebuilt conda/bioconda binaries).")
+                "(they bypass the project env and aren't recorded). If it fails "
+                "in configure/compile on a missing header or system library, "
+                "that's the one thing the project env CANNOT add: build an "
+                "isolated env instead (make_isolated_env(..., language='r'), "
+                "then run_r(env=...)), which does a full solve.")
         if cwd:
             lines.append(f"cwd: {cwd}  (bare filenames in your code land here)")
         # Surface the RESOLVED DATA_DIR + the input files actually present (incl.
