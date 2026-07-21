@@ -140,15 +140,11 @@ def find_by_produced_name(name: str, *, limit_execs: int = 400) -> list[dict]:
         return []
     out: list[dict] = []
     try:
-        with exec_records._conn() as c:
-            rows = c.execute(
-                "SELECT exec_id FROM execution_records "
-                "ORDER BY started_at DESC LIMIT ?", (int(limit_execs),)).fetchall()
+        exec_ids = exec_records.list_recent_exec_ids(limit_execs)
     except Exception as e:  # noqa: BLE001 — lookup must never raise at a call site
         _log.warning("find_by_produced_name: index read failed: %s", e)
         return []
-    for r in rows:
-        ex_id = r["exec_id"] if not isinstance(r, tuple) else r[0]
+    for ex_id in exec_ids:
         for a in list_artifacts(ex_id):
             on = (a.get("original_name") or "")
             if on == name or on.rsplit("/", 1)[-1] == leaf:

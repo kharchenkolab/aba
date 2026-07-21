@@ -248,6 +248,17 @@ def get(exec_id: str) -> Optional[dict]:
     return out
 
 
+def list_recent_exec_ids(limit: int = 200) -> list[str]:
+    """Newest-first exec_ids across all runs — the store-API face of the
+    "scan recent records" index read (raw _conn stays confined to this
+    module per the store-port invariant)."""
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT exec_id FROM execution_records "
+            "ORDER BY started_at DESC LIMIT ?", (int(limit),)).fetchall()
+    return [r["exec_id"] for r in rows]
+
+
 def list_by_run(run_id: str, *, limit: Optional[int] = None) -> list[dict]:
     """Index entries (DB row only — no JSON hydration) for an entire Run."""
     if not run_id:

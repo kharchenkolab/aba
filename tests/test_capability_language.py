@@ -31,7 +31,10 @@ def _py_cap(name="foo"):
 
 def test_r_request_on_python_catalogued_name_reroutes_to_cran(monkeypatch):
     """The note's exact scenario: R session, Python-catalogued 'foo'. Must NOT
-    answer ready-for-python; with an exact CRAN hit it installs the R package."""
+    answer ready-for-python; with an exact CRAN hit it installs the R package.
+    The deployment R-pack gate is stubbed PROVISIONED here (hermetic CI has no
+    R pack; the unprovisioned refusal is its own test below)."""
+    monkeypatch.setattr("core.compute.base_env.require", lambda lang: None)
     monkeypatch.setattr("core.catalog.resolve_capability", lambda n: _py_cap(n))
     monkeypatch.setattr(d, "_cran_exact",
                         lambda n, **k: {"source": "cran", "package": n})
@@ -99,3 +102,22 @@ def test_inference_uses_single_live_kernel(monkeypatch):
             return object() if lang == "r" else None
     monkeypatch.setattr("core.exec.kernels.get_pool", lambda: _P())
     assert d._infer_language({"thread_id": "t"}) == "r"
+
+
+def test_r_reroute_on_unprovisioned_deployment_refuses_honestly(monkeypatch):
+    """A deployment with no R pack must refuse the re-routed R install with the
+    provisioning fact named — never a Python 'ready', never a crash. (This is
+    the gate CI's hermetic box exercises for real; stubbed here for both
+    directions per the armed-guard convention.)"""
+    from core.compute.errors import ComputeError
+
+    def _no_pack(lang):
+        raise ComputeError("no_base_pack", f"no base environment pack for {lang!r}")
+    monkeypatch.setattr("core.compute.base_env.require", _no_pack)
+    monkeypatch.setattr("core.catalog.resolve_capability", lambda n: _py_cap(n))
+    monkeypatch.setattr(d, "_cran_exact",
+                        lambda n, **k: {"source": "cran", "package": n})
+    r = d.ensure_capability({"name": "foo", "language": "r"}, {"thread_id": "t"})
+    assert r["status"] == "error", r
+    assert "not available" in (r.get("note") or "") or "no_base_pack" in str(r), r
+    assert r.get("ready_in") is None
