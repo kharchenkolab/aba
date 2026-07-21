@@ -65,3 +65,14 @@ def test_report_silent_when_baseline_clean(monkeypatch, tmp_path):
     md = sweep.write_report(scorecard, {"good": _row()}, [], "haiku",
                             "20260101-000001").read_text()
     assert "blind spots" not in md.lower()
+
+
+def test_smoke_tier_filters_and_is_armed():
+    """--smoke selects only tagged scenarios; the tier must be ARMED (≥2 tagged
+    in the tree) and a strict subset of the full discovery — an empty or
+    near-empty smoke tier reads as a fast green sweep that measured nothing."""
+    full = set(sweep.discover(set(), set()))
+    smoke = set(sweep.discover(set(), set(), smoke=True))
+    assert len(smoke) >= 2, "smoke tier unarmed — tag scenarios with smoke: true"
+    assert smoke < full, "smoke tier must be a strict subset of full discovery"
+    assert len(smoke) <= len(full) // 2, "smoke tier is not a fast subset"

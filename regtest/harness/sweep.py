@@ -44,14 +44,17 @@ PER_SCENARIO_TIMEOUT_S = int(os.environ.get("ABA_REGTEST_SCENARIO_TIMEOUT_S", "2
 RUBRIC_REGRESSION = 0.3        # a rubric_overall drop beyond this counts as a regression
 
 
-def discover(only, exclude):
+def discover(only, exclude, smoke=False):
     import yaml
     out = []
     for f in sorted(SCEN.glob("*/scenario.yaml")):
         sid = f.parent.name
         try:
-            if not (yaml.safe_load(f.read_text()) or {}).get("steps"):
+            spec = yaml.safe_load(f.read_text()) or {}
+            if not spec.get("steps"):
                 continue                                   # v1-only → not part of the v2 sweep
+            if smoke and not spec.get("smoke"):
+                continue           # smoke tier: only scenarios tagged smoke: true
         except Exception:
             continue
         if only and sid not in only:
@@ -243,6 +246,14 @@ def main() -> int:
     ap.add_argument("--accept", action="store_true", help="promote this run to the baseline")
     ap.add_argument("--diagnose", action="store_true", help="forensic-diagnose regressed FAILs")
     ap.add_argument("--no-prune", action="store_true", help="skip _runs retention pruning")
+    ap.add_argument("--smoke", action="store_true",
+                    help="run only scenarios tagged `smoke: true` — the ~15-min "
+                         "routine tier; the full set is the nightly instrument")
+    ap.add_argument("--workers", type=int,
+                    default=int(os.environ.get("ABA_REGTEST_WORKERS", "1")),
+                    help="parallel scenario processes (each is already an "
+                         "isolated subprocess; shared API rate limits are the "
+                         "constraint — the infra detector flags collisions)")
     args = ap.parse_args()
     mode = "opus" if args.opus else "haiku"
     only = set(x for x in args.only.split(",") if x)
@@ -252,19 +263,45 @@ def main() -> int:
         print("[sweep] regenerating scenario data…", flush=True)
         subprocess.run(["bash", str(REGEN)], cwd=str(ROOT))
 
-    scenarios = discover(only, exclude)
+    scenarios = discover(only, exclude, smoke=args.smoke)
+    if args.smoke and len(scenarios) < 2:
+        print("[sweep] SETUP-ERROR: --smoke found <2 tagged scenarios — the "
+              "smoke tier is unarmed (tag scenarios with `smoke: true`).")
+        return 2
     ts = time.strftime("%Y%m%d-%H%M%S", time.localtime())
     print(f"[sweep] mode={mode}  scenarios={len(scenarios)}  ts={ts}\n", flush=True)
 
     rows = {}
-    for i, sid in enumerate(scenarios, 1):
-        print(f"[{i}/{len(scenarios)}] {sid} …", flush=True)
+
+    def _one(sid):
         rep = run_scenario(sid, mode)
-        row = score_of(rep)
-        rows[sid] = row
-        mech = f"{row['mech_pass']}/{row['mech_total']}" if row["mech_total"] is not None else "ERR"
-        tag = f"  ⚠INFRA({row['infra']})" if row.get("infra") else ""
-        print(f"      {mech}  rubric={row['rubric_overall']}  fails={len(row['fails'])}{tag}", flush=True)
+        return sid, score_of(rep)
+
+    if args.workers > 1:
+        # Each scenario is an isolated subprocess (own run dir, own runtime
+        # state); the shared eval home is read-only (installation/config).
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        print(f"[sweep] {args.workers} parallel workers", flush=True)
+        done = 0
+        with ThreadPoolExecutor(max_workers=args.workers) as pool:
+            futs = {pool.submit(_one, sid): sid for sid in scenarios}
+            for fut in as_completed(futs):
+                sid, row = fut.result()
+                rows[sid] = row
+                done += 1
+                mech = f"{row['mech_pass']}/{row['mech_total']}" if row["mech_total"] is not None else "ERR"
+                tag = f"  ⚠INFRA({row['infra']})" if row.get("infra") else ""
+                print(f"[{done}/{len(scenarios)}] {sid}  {mech}  "
+                      f"rubric={row['rubric_overall']}  fails={len(row['fails'])}{tag}",
+                      flush=True)
+    else:
+        for i, sid in enumerate(scenarios, 1):
+            print(f"[{i}/{len(scenarios)}] {sid} …", flush=True)
+            sid, row = _one(sid)
+            rows[sid] = row
+            mech = f"{row['mech_pass']}/{row['mech_total']}" if row["mech_total"] is not None else "ERR"
+            tag = f"  ⚠INFRA({row['infra']})" if row.get("infra") else ""
+            print(f"      {mech}  rubric={row['rubric_overall']}  fails={len(row['fails'])}{tag}", flush=True)
 
     scorecard = {
         "meta": {"date": ts, "mode": mode, "commit": git_commit(),
