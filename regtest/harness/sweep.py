@@ -260,6 +260,29 @@ def bakeable_rows(rows: dict) -> tuple[dict, list]:
     return clean, sorted(set(rows) - set(clean))
 
 
+def ratchet(clean: dict, prior: dict, allow_lower: bool = False):
+    """→ (rows_to_bake, lowered_descriptions).
+
+    A baseline is the bar regressions are measured against, so it must not
+    drift DOWN by accident. Accepting a run that dipped INSIDE the jitter
+    tolerance quietly lowers the bar; after a few such accepts a genuine
+    regression sits below a reference that walked down to meet it, and the
+    instrument reports green while the product falls.
+
+    Where the prior scored higher, its row is kept WHOLESALE — a baseline row
+    stays a coherent snapshot of one run rather than a splice of two."""
+    out, lowered = dict(clean), []
+    if allow_lower:
+        return out, lowered
+    for sid, cur in clean.items():
+        b = prior.get(sid) or {}
+        if b.get("mech_total") is not None and cur.get("mech_pass") is not None \
+                and (b.get("mech_pass") or 0) > cur["mech_pass"]:
+            lowered.append(f"{sid} ({b['mech_pass']}→{cur['mech_pass']})")
+            out[sid] = b
+    return out, lowered
+
+
 def diff_vs_baseline(scorecard, mode):
     """→ (baseline, regressions, unmeasured).
 
@@ -370,6 +393,10 @@ def main() -> int:
     ap.add_argument("--smoke", action="store_true",
                     help="run only scenarios tagged `smoke: true` — the ~15-min "
                          "routine tier; the full set is the nightly instrument")
+    ap.add_argument("--accept-lower", action="store_true",
+                    help="with --accept, allow a row to LOWER its baseline "
+                         "(default ratchets: the higher prior reference is kept, "
+                         "so the bar never drifts down by accident)")
     ap.add_argument("--allow-unprovisioned", action="store_true",
                     help="run even if the eval home looks unprovisioned "
                          "(pre-flight normally refuses — the scorecard would be "
@@ -522,6 +549,11 @@ def main() -> int:
         if skipped:
             print(f"[sweep] ⚠ NOT baking {len(skipped)} uninformative row(s) into the "
                   f"baseline (infra or errored/no-report): {skipped}")
+        clean, lowered = ratchet(clean, prior, allow_lower=args.accept_lower)
+        if lowered:
+            print(f"[sweep] ⚠ ratchet: kept the HIGHER prior reference for "
+                  f"{len(lowered)} row(s) rather than lowering the bar "
+                  f"(--accept-lower to override): {lowered}")
         merged = dict(prior); merged.update(clean)
         legacy_blind = sorted(sid for sid, r in merged.items()
                               if r.get("mech_total") is None)

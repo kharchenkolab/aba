@@ -96,6 +96,13 @@ Collapsing "unmeasured" into "regression" is how four fixture-staging errors
 once drowned two genuine regressions in a headline of six. `--accept` bakes only
 measured rows, and says out loud what it refused.
 
+**`--accept` ratchets.** A dip inside the jitter tolerance is not a regression,
+but baking it would lower the bar — and after a few such accepts a real
+regression sits below a reference that walked down to meet it (erode 10→9, and a
+true fall to 8 then reads as −1, inside `tol=2`, invisible). Where the prior
+reference scored higher it is kept, wholesale, so a baseline row stays a coherent
+snapshot of one run. `--accept-lower` overrides, for a deliberate re-baselining.
+
 **Run one scenario directly** (debugging):
 ```sh
 ABA_SCENARIO=tpm python regtest/harness/runner.py            # Haiku

@@ -287,6 +287,44 @@ def test_shared_predicate_covers_declaration_shapes(tmp_path):
     assert declared_inputs({}) == []
 
 
+def test_accept_ratchets_and_never_lowers_the_bar():
+    """Baseline erosion: a dip INSIDE the jitter tolerance is not a regression,
+    but accepting it lowers the reference — and after a few such accepts a real
+    regression sits below a bar that walked down to meet it. The higher prior
+    row is kept, wholesale, so the baseline stays a coherent snapshot."""
+    prior = {"dip": _row(mech_pass=10, mech_total=14),
+             "rise": _row(mech_pass=10, mech_total=14),
+             "fresh": _row(mech_pass=5, mech_total=5)}
+    clean = {"dip": _row(mech_pass=9, mech_total=14),      # −1, within tol
+             "rise": _row(mech_pass=14, mech_total=14),    # +4, real improvement
+             "new": _row(mech_pass=3, mech_total=4)}       # no prior at all
+    out, lowered = sweep.ratchet(clean, prior)
+    assert out["dip"]["mech_pass"] == 10, "baseline was allowed to drift down"
+    assert out["rise"]["mech_pass"] == 14, "improvement was not ratcheted up"
+    assert out["new"]["mech_pass"] == 3, "a brand-new row must bake as measured"
+    assert len(lowered) == 1 and "dip" in lowered[0]
+    assert "10" in lowered[0] and "9" in lowered[0], "the drop is not named"
+
+
+def test_accept_lower_override_is_honoured():
+    """The other side: the ratchet must be defeatable, or a deliberate,
+    understood re-baselining becomes impossible and someone edits JSON by hand."""
+    prior = {"dip": _row(mech_pass=10, mech_total=14)}
+    clean = {"dip": _row(mech_pass=9, mech_total=14)}
+    out, lowered = sweep.ratchet(clean, prior, allow_lower=True)
+    assert out["dip"]["mech_pass"] == 9 and lowered == []
+
+
+def test_ratchet_ignores_blind_prior_references():
+    """Degenerate: a prior row that errored (mech_total None) is no bar at all —
+    it must not block a real measurement from becoming the reference."""
+    prior = {"blind": _row(mech_pass=0, mech_total=None)}
+    clean = {"blind": _row(mech_pass=7, mech_total=9)}
+    out, lowered = sweep.ratchet(clean, prior)
+    assert out["blind"]["mech_pass"] == 7 and out["blind"]["mech_total"] == 9
+    assert lowered == [], "a blind reference was treated as a bar"
+
+
 def test_inert_smoke_tags_are_surfaced(monkeypatch, tmp_path):
     """A `smoke: true` tag on a scenario discovery can never return selects
     NOTHING — the tier is smaller than the tag count suggests. Phantom coverage
