@@ -442,7 +442,37 @@ def _resolve_dataset_path(path: str, ctx: dict | None) -> str:
     cands.append(os.path.normpath(os.path.join(str(project_data_dir(current_project_id())), path)))
     cands.append(os.path.normpath(os.path.join(str(DATA_DIR), path)))
     cands.append(os.path.normpath(os.path.abspath(path)))
-    return next((c for c in cands if os.path.exists(c)), cands[0])
+    hit = next((c for c in cands if os.path.exists(c)), None)
+    if hit:
+        return hit
+    # Harvested-store tier: a bare name the agent's code JUST wrote resolves
+    # nowhere above when the kernel ran on a REMOTE site — the file exists back
+    # in the remote sandbox, and the local serving copy is digest-named, so no
+    # filesystem search can find it by name. The mapping name → store copy
+    # lives in the run's produced[] manifest; consult it (same translation the
+    # canonical locate_run_output does) instead of reporting not-found for a
+    # file the system is actively serving.
+    try:
+        from content.bio.lifecycle.runs import active_run_id
+        from core.exec.artifacts import artifacts_for_run
+        from core.config import project_artifacts_dir
+        tid = _ctx_thread(ctx)
+        rid = active_run_id(tid) if tid else None
+        base = os.path.basename(path)
+        for a in (artifacts_for_run(rid) if rid else []):
+            on = (a.get("original_name") or "").strip()
+            url = a.get("url") or ""
+            if not on or not url.startswith("/artifacts/"):
+                continue
+            if on == path or os.path.basename(on) == base:
+                parts = url.split("/")            # ['', 'artifacts', pid, served]
+                if len(parts) == 4:
+                    f = os.path.join(str(project_artifacts_dir(parts[2])), parts[3])
+                    if os.path.isfile(f):
+                        return os.path.normpath(f)
+    except Exception:  # noqa: BLE001 — a fallback tier must never break resolution
+        pass
+    return cands[0]
 
 
 def _bundle_paths_into_data_dir(srcs: list[str], title: str) -> tuple[str, list[str], list[str]]:

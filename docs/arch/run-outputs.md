@@ -117,6 +117,12 @@ deleting a fresh copy out from under a viewer.
   blobs, but ABA re-fetches a changed store wholesale into a fresh temp; a
   delta-aware install (reusing the content-addressed cache) would cut repeat
   cost for large, slowly-growing stores.
+- **Harvested-store identity is content-derived.** The harvest copy names each
+  served file by its truncated sha256 (hardlink when same-device), so identical
+  bytes share one store entry across harvests and re-runs, `produced[]` carries
+  a real `sha256`, and name→store translation goes through the run manifest
+  (the harvested tier here, and `register_dataset`'s manifest fallback for
+  bare names written on a remote kernel). Guard: `tests/test_harvest_identity.py`.
 - **Freshness digest is `(size, mtime)`, not content.** A same-size in-place
   rewrite whose mtime does *not* advance (a writer that preserves mtime,
   sub-second fs granularity collapsing two writes into one tick, or remote-node

@@ -7,6 +7,7 @@ tools env (on PATH), killpg cancellation, and png/csv artifact harvest. Before
 P5 the background path was an older parallel copy that saw none of P1–P4.
 """
 from __future__ import annotations
+import os
 import shutil
 import sys
 import uuid
@@ -431,7 +432,7 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0,
     adir = project_artifacts_dir(pid)
     import time as _time
     _harvest_begin = _time.time()   # agent's own writes precede this; our copies follow it
-    _created: set = set()           # uuid copies WE make this call (excluded from the off-convention pass)
+    _created: set = set()           # store names WE record this call (excluded from the off-convention pass)
 
     _skipped_cap = [0]   # files not copied because max_files was reached (reported in warnings)
 
@@ -456,9 +457,34 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0,
             bucket.append({"url": None, "original_name": display,
                            "bytes": nbytes, "link_only": True})
             return
-        dest_name = f"{uuid.uuid4().hex}{ext}"
+        # Identity is DERIVED from content, never minted by the copy. The store
+        # name is the file's sha256 (truncated to 128 bits — same length/shape
+        # as the uuid names it replaces), so: same bytes → same name (re-running
+        # a step, or the remote-kernel scrape re-landing an unchanged file, is a
+        # no-op instead of a second full copy); different bytes → different name
+        # (no clobber); and equality across runs/references is a name compare.
+        # The random-uuid scheme this replaces LOOKED content-addressed (flat
+        # hex names) but wasn't — every harvest minted fresh identity, so dedup,
+        # idempotence, and cross-run equality silently didn't exist.
+        import hashlib as _hashlib
+        _h = _hashlib.sha256()
+        try:
+            with open(f, "rb") as _fh:
+                for _chunk in iter(lambda: _fh.read(1 << 20), b""):
+                    _h.update(_chunk)
+        except OSError:
+            return                      # vanished mid-harvest — nothing to record
+        digest = _h.hexdigest()
+        dest_name = f"{digest[:32]}{ext}"
         _created.add(dest_name)
-        shutil.copy2(str(f), str(adir / dest_name))
+        dest = adir / dest_name
+        if not dest.exists():           # dedup: identical bytes already stored
+            # hardlink first (instant, no bytes moved — both names share inodes,
+            # matching curation's _hardlink_tree idiom); cross-device → full copy.
+            try:
+                os.link(str(f), str(dest))
+            except OSError:
+                shutil.copy2(str(f), str(dest))
         # original_name preserves the subdir context so the agent knows
         # WHERE the file lived (e.g. 'pagoda2_GSM.../qc_violin.png'), not
         # just the bare leaf — useful when multiple subdirs each have
@@ -473,8 +499,12 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0,
             nbytes = 0
         # record the size so the durable Files panel shows real bytes for
         # normally-copied files too (not just oversize link-only ones).
+        # sha256 makes the promised produced[] field real (core.exec.artifacts
+        # read it for years; nothing ever wrote it) — locate_run_output's
+        # harvested tier gets a genuine content digest.
         bucket.append({"url": f"/artifacts/{pid}/{dest_name}",
-                       "original_name": display, "bytes": nbytes})
+                       "original_name": display, "bytes": nbytes,
+                       "sha256": digest})
 
     # 1) Figures
     for f in _iter_kept(scratch, (".png",), since_ts):

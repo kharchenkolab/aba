@@ -29,6 +29,7 @@ FILES=(
   tests/test_cache_control_empty_block.py
   tests/test_wire_contract.py
   # output / env-layer unit guards
+  tests/test_harvest_identity.py
   tests/test_env_integrity.py
   tests/test_modules_pack_ready.py
   tests/test_fetch_url_integrity.py
