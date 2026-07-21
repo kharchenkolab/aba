@@ -54,6 +54,26 @@ def python_package_status(name: str, *, project_id: Optional[str] = None,
         "    o['error'] = traceback.format_exc()[-1000:]\n"
         "print('ABA_JSON=' + json.dumps(o))\n"
     )
+    # The runtime bare run_python actually uses: the project's ACTIVE named
+    # env when one is promoted (probe THERE — an isolated env is standalone),
+    # else the weft session below.
+    from core.compute import named_envs as _ne
+    _envname = _ne.resolve_env(str(project_id or ""), "python")
+    if _envname:
+        import json as _json
+        r = _ne.run_in(str(project_id), _envname, script, timeout_s=timeout_s)
+        for ln in (r.get("stdout") or "").splitlines():
+            if ln.startswith("ABA_JSON="):
+                try:
+                    out.update(_json.loads(ln[len("ABA_JSON="):]))
+                except Exception:  # noqa: BLE001
+                    pass
+                break
+        out["tier"] = "isolated" if out.get("loads") else "unknown"
+        out["env"] = _envname
+        if not out.get("loads") and not out.get("error"):
+            out["error"] = (r.get("stderr") or "").strip()[-600:] or None
+        return out
     # Probe the project's weft SESSION python (its site-packages are
     # authoritative) via the topology-blind argv builder — a lazy session's
     # probe runs against its base realization (content-identical), a

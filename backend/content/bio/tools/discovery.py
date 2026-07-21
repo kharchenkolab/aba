@@ -114,21 +114,39 @@ def inspect_env(input_: dict, ctx: dict | None = None) -> dict:
                 "tiers": ov, "named_envs": catalog}
 
     if is_r:
-        # Probe the project's weft R SESSION (base pack + additions); its own
-        # .libPaths() is authoritative, so there is no project-lib overlay to
-        # stack. requireNamespace = real load; packageVersion + find.package give
-        # version/location. No R pack declared → the R lane is unavailable here.
+        # Probe the runtime bare run_r actually uses: the project's ACTIVE R
+        # env when one is promoted (standalone — no base pack needed), else
+        # the weft R SESSION (base pack + additions; its own .libPaths() is
+        # authoritative). requireNamespace = real load; packageVersion +
+        # find.package give version/location.
         import subprocess
-        from core.compute import base_env as _bev, project_env as _penv
+        from core.compute import base_env as _bev, named_envs as _ne, \
+            project_env as _penv
         from core.compute.errors import ComputeError
-        if not _bev.active("r"):
-            return {"status": "unavailable", "name": name, "language": "r",
-                    "loads": False,
-                    "error": "no R environment pack is declared for this deployment"}
         expr = (f"ok <- requireNamespace({name!r}, quietly=TRUE); "
                 + f"cat('ABA_LOADS=', isTRUE(ok), '\\n', sep=''); "
                 + f"if (isTRUE(ok)) {{ cat('ABA_VER=', as.character(packageVersion({name!r})), '\\n', sep=''); "
                 + f"cat('ABA_LOC=', find.package({name!r}), '\\n', sep='') }}")
+        _envname = _ne.resolve_env(str(pid or ""), "r")
+        if _envname:
+            r = _ne.run_in(str(pid), _envname, expr, timeout_s=120)
+            _nout = r.get("stdout") or ""
+
+            def _pick_n(key):
+                for ln in _nout.splitlines():
+                    if ln.startswith(key):
+                        return ln[len(key):].strip()
+                return None
+            _loads = (_pick_n("ABA_LOADS=") == "TRUE")
+            return {"status": "ok", "name": name, "language": "r",
+                    "loads": _loads, "env": _envname,
+                    "version": _pick_n("ABA_VER="), "location": _pick_n("ABA_LOC="),
+                    "tier": ("isolated" if _loads else "unknown"),
+                    "error": None if _loads else (r.get("stderr") or _nout)[-600:]}
+        if not _bev.active("r"):
+            return {"status": "unavailable", "name": name, "language": "r",
+                    "loads": False,
+                    "error": "no R environment pack is declared for this deployment"}
         try:
             # topology-blind: probes a lazy session against its base
             # realization; a mount-scoped prefix through its activation
@@ -282,26 +300,41 @@ def run_in_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
 
 
 def set_active_env(input_: dict, ctx: dict | None = None) -> dict:
-    """§11.2 — set the project's ACTIVE python env; bare run_python uses it until
-    changed. name='default' resets to the normal served stack. (Python only — R's
-    per-project lib already overrides the base, so run_r has no active pointer.)"""
+    """§11.2 — set the project's ACTIVE env for a language: bare run_python /
+    run_r (no env=) run in it until changed, and capability installs land in
+    it. name='default' resets to the normal served stack. language defaults to
+    python; language='r' promotes an isolated R env — the way a package that
+    needs SYSTEM libraries the base lacks becomes ambient (the session overlay
+    carries packages only, never system libraries)."""
     from core.compute import named_envs
+    from core.compute.errors import ComputeError
     from core import projects
     name = (input_.get("name") or "").strip()
     if not name:
         return {"status": "error", "note": "set_active_env needs a `name` (or 'default')."}
+    language = (input_.get("language") or "python").strip().lower()
+    if language not in ("python", "r"):
+        return {"status": "error",
+                "note": f"language must be 'python' or 'r' (got {language!r})."}
     pid = str(projects.current() or "default")
-    if name.lower() != "default" and named_envs.resolve(pid, name) is None:
-        return {"status": "error", "name": name,
-                "note": f"No isolated python env '{name}'. Create it with make_isolated_env, "
-                        "or pass 'default' to use the normal environment."}
-    named_envs.set_active(pid, name, "python")
-    if name.lower() == "default":
-        return {"status": "ok", "active_python_env": "default",
-                "note": "Bare run_python now uses the default served stack."}
-    return {"status": "ok", "active_python_env": name,
-            "note": f"Bare run_python now runs in '{name}'. Use env='default' for a one-off "
-                    f"in the normal stack, or set_active_env('default') to switch back."}
+    try:
+        named_envs.set_active(pid, name, language)
+    except ComputeError as e:
+        return {"status": "error", "name": name, "language": language,
+                "note": f"{e.detail or e.code} — call inspect_env() for the "
+                        f"named-env catalog, or make_isolated_env to create it."}
+    runner = "run_r" if language == "r" else "run_python"
+    out: dict = {"status": "ok", "language": language}
+    reset = named_envs.is_reserved_name(name)
+    out["active_env"] = "default" if reset else name
+    if language == "python":                     # legacy response key, kept
+        out["active_python_env"] = out["active_env"]
+    out["note"] = (
+        f"Bare {runner} now uses the default served stack." if reset else
+        f"Bare {runner} now runs in '{name}'. Use env='default' for a one-off "
+        f"in the normal stack, or set_active_env('default'"
+        + (", language='r'" if language == "r" else "") + ") to switch back.")
+    return out
 
 
 def evict_env(input_: dict, ctx: dict | None = None) -> dict:
@@ -1136,6 +1169,20 @@ def _infer_language(ctx: dict | None) -> str | None:
         return None
 
 
+def _pointer_env(pid: str, language: "str | None") -> "tuple[str, str] | None":
+    """The active-pointer env this capability request should target, as
+    (env_name, language) — or None for the default session. A known language
+    consults ITS slot only; an ambiguous request lets a single set slot decide
+    (and fix the language); two set slots stay ambiguous — never guess."""
+    from core.compute import named_envs as _ne
+    if language:
+        name = _ne.resolve_env(pid, language)
+        return (name, language) if name else None
+    hits = [(lang, _ne.resolve_env(pid, lang)) for lang in ("python", "r")]
+    hits = [(lang, n) for lang, n in hits if n]
+    return (hits[0][1], hits[0][0]) if len(hits) == 1 else None
+
+
 def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
     """Materialize a catalogued capability on demand (P1). Python libraries go
     into the wipeable overlay so the next run_python can import them; non-pip
@@ -1179,6 +1226,16 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         language = _env_lang                       # env target fixes the scope
     if language is None:
         language = _infer_language(ctx)            # may stay None (ambiguous)
+    if env is None:
+        # No explicit target → the project's ACTIVE env (set_active_env) is
+        # where bare runs execute, so a capability request without env= must
+        # land THERE. Installing into the default session while user code runs
+        # in the promoted env made the installer verify its own success in an
+        # env the user's code never enters — ready reported, symptom persists.
+        from core import projects as _proj
+        _hit = _pointer_env(str(_proj.current() or "default"), language)
+        if _hit is not None:
+            env, language = _hit
     _ct = (ctx or {}).get("cancel_token")
     from core.catalog import resolve_capability
     cap = resolve_capability(name)

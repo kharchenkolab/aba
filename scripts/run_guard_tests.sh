@@ -35,6 +35,7 @@ FILES=(
   tests/test_project_locate.py
   tests/test_vision_refs.py
   tests/test_env_integrity.py
+  tests/test_env_resolution.py
   tests/test_modules_pack_ready.py
   tests/test_fetch_url_integrity.py
   tests/test_env_agency.py

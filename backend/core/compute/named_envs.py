@@ -160,6 +160,37 @@ def set_active(project_id: str, name: str, lang: str = "python") -> dict:
     return {"lang": lang, "active": name}
 
 
+def resolve_env(project_id, language: str, explicit=None) -> Optional[str]:
+    """THE selection policy for "which env runs language-L code in this
+    project" — every execution lane resolves through here (census guard:
+    tests/test_env_resolution.py). Returns a named-env NAME, or None for the
+    default served stack.
+
+    Precedence: an EXPLICIT request wins ('' and reserved names normalize to
+    None; any other string passes through verbatim — existence checks and
+    lane sentinels like 'system' stay with the lane); else the project's
+    ACTIVE pointer for that language; else None. A dangling pointer (names an
+    env that no longer exists — forget() clears pointers itself, so only
+    corruption/manual edits get here) falls back to the default session with
+    a printed warning rather than erroring a bare run that never asked for an
+    env."""
+    if explicit is not None:
+        name = str(explicit).strip()
+        return None if (not name or is_reserved_name(name)) else name
+    if not project_id:
+        return None
+    pid = str(project_id)
+    name = get_active(pid, language)
+    if not name or is_reserved_name(name):
+        return None
+    if resolve(pid, name) is None:
+        print(f"[named_envs] active {language} env {name!r} no longer exists "
+              f"in project {pid} — falling back to the default session",
+              flush=True)
+        return None
+    return name
+
+
 # ── create / extend ──────────────────────────────────────────────────────────
 
 def _spec_for(project_id: str, name: str, language: str,

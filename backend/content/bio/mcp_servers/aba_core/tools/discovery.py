@@ -206,16 +206,20 @@ def register_discovery_tools(mcp: FastMCP) -> None:
                       "python_version": python_version}, peek_ctx(aba_ctx_id))
 
     @mcp.tool()
-    def set_active_env(name: str, aba_ctx_id: str | None = None) -> dict:
-        """Set the project's ACTIVE python environment — after this, a bare
-        `run_python` (no `env=`) runs in `name` until you change it. Pass
-        name='default' to switch back to the project's normal environment. Use
-        when most of your work will happen in one isolated env (created with
-        make_isolated_env), so you don't repeat `env=` on every call. (Python
-        only — R's per-project library already overrides the base.)"""
+    def set_active_env(name: str, language: str = "python",
+                       aba_ctx_id: str | None = None) -> dict:
+        """Set the project's ACTIVE environment for a language — after this, a
+        bare `run_python` / `run_r` (no `env=`) runs in `name` until you change
+        it, and ensure_capability installs land there. Pass name='default' to
+        switch back to the project's normal environment. Use when most of your
+        work happens in one isolated env (created with make_isolated_env), so
+        you don't repeat `env=` on every call. language='r' promotes an
+        isolated R env — the way to make an R package that needs SYSTEM
+        libraries the base lacks ambient for bare run_r (the session overlay
+        carries R packages only, never system libraries)."""
         from core.runtime.tool_ctx import peek_ctx
         from content.bio.tools import set_active_env as _impl
-        return _impl({"name": name}, peek_ctx(aba_ctx_id))
+        return _impl({"name": name, "language": language}, peek_ctx(aba_ctx_id))
 
     @mcp.tool()
     def evict_env(name: str,

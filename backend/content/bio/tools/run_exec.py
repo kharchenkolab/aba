@@ -665,11 +665,8 @@ def bg_submit_kwargs(input_: dict, project_id: str) -> dict:
     est_min = float(input_.get("estimated_runtime_min") or 0)
     est = {"runtime_min": est_min, "cores": input_.get("est_cores"),
            "mem_gb": input_.get("est_mem_gb"), "gpu": input_.get("est_gpu")}
-    env = input_.get("env")
-    if env is None:
-        from core.compute.named_envs import get_active
-        env = get_active(str(project_id), "python")
-    env_name = None if _is_default_env(env) else str(env).strip()
+    from core.compute.named_envs import resolve_env
+    env_name = resolve_env(str(project_id), "python", explicit=input_.get("env"))
     return {"estimate": est, "execution": input_.get("execution"),
             "site": input_.get("site") or None,   # detached lane (misc/detached_compute.md)
             "env": env_name, "timeout_s": _background_timeout_s(input_, est_min)}
@@ -788,11 +785,8 @@ def _run_remote_kernel(input_: dict, ctx: dict | None, project_id: str,
     code = input_.get("code", "")
     timeout_s = max(5, min(int(input_.get("timeout_s") or 300), 1800))
     cancel_token = (ctx or {}).get("cancel_token")
-    env = input_.get("env")
-    if env is None:
-        from core.compute.named_envs import get_active
-        env = get_active(project_id, "python")
-    env_name = None if _is_default_env(env) else str(env).strip()
+    from core.compute.named_envs import resolve_env
+    env_name = resolve_env(project_id, "python", explicit=input_.get("env"))
     if env_name and env_name.lower() in ("system", "none"):
         env_name = "system"   # bare kernel: node interpreter, no realization
     elif env_name:
@@ -901,15 +895,13 @@ def _run_remote_sync(input_: dict, ctx: dict | None, project_id: str,
     site = input_["site"]
     timeout_s = max(5, min(int(input_.get("timeout_s") or 300), 1800))
     submit = submit_r_job if kind == "run_r" else submit_python_job
-    # Env identity — SAME rules as the background lane (bg_submit_kwargs):
-    # env=None follows the project's active python env; 'default'/reserved →
+    # Env identity — SAME rules as every lane: env=None follows the project's
+    # active env for the step's LANGUAGE (resolve_env); 'default'/reserved →
     # None (pack snapshot); a NAMED env must exist (the detached submitter
     # would otherwise silently fall back to the node system runtime).
-    env = input_.get("env")
-    if env is None and kind != "run_r":
-        from core.compute.named_envs import get_active
-        env = get_active(project_id, "python")
-    env_name = None if _is_default_env(env) else str(env).strip()
+    from core.compute.named_envs import resolve_env
+    env_name = resolve_env(project_id, "r" if kind == "run_r" else "python",
+                           explicit=input_.get("env"))
     if env_name and env_name.lower() in ("system", "none"):
         env_name = "system"   # P2 lever: node interpreter, no pack realization
     elif env_name:
@@ -1050,11 +1042,8 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
     # reserved → the normal served stack. Kernel disabled → stateless fallback.
     # §11.2: env=None follows the project's active python env; an explicit value
     # (including 'default') overrides it.
-    env = input_.get("env")
-    if env is None:
-        from core.compute.named_envs import get_active
-        env = get_active(project_id, "python")
-    env_name = None if _is_default_env(env) else env.strip()
+    from core.compute.named_envs import resolve_env
+    env_name = resolve_env(project_id, "python", explicit=input_.get("env"))
     if env_name and env_name.lower() in ("system", "none"):
         # env='system' = a machine's BARE interpreter — meaningful for a
         # placed step (site=...); the local served stack IS this machine's
@@ -1296,11 +1285,13 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
     project_id = projects.current() or "default"
     thread_id = (ctx or {}).get("thread_id") or "default"
 
-    # §11.2: env=<named isolated R env>. Route FIRST so a backgrounded run+env
-    # goes to a queued/Slurm job that runs IN that env (its lib first on
-    # .libPaths()) — not short-circuited to the synchronous one-shot.
-    env = input_.get("env")
-    env_name = None if _is_default_env(env) else env.strip()
+    # §11.2: env=<named isolated R env>; env=None follows the project's active
+    # R env (set_active_env(..., language='r') — how a package needing SYSTEM
+    # libraries the base lacks becomes ambient for bare run_r). Route FIRST so
+    # a backgrounded run+env goes to a queued/Slurm job that runs IN that env
+    # (its lib first on .libPaths()) — not short-circuited to the sync one-shot.
+    from core.compute.named_envs import resolve_env
+    env_name = resolve_env(str(project_id), "r", explicit=input_.get("env"))
 
     if input_.get("site") and not input_.get("background"):
         # SYNC remote run: like a local call, executed THERE (fresh process).
