@@ -46,7 +46,7 @@ def _wire(monkeypatch, tmp_path):
     monkeypatch.setattr(projects, "current", lambda: "test")
 
 
-def test_truncated_transfer_is_rejected_after_retries(_wire, monkeypatch):
+def test_truncated_transfer_is_rejected_after_retries(_wire, monkeypatch, tmp_path):
     calls = {"n": 0}
     def fake_urlopen(req, timeout=0):
         calls["n"] += 1
@@ -55,6 +55,9 @@ def test_truncated_transfer_is_rejected_after_retries(_wire, monkeypatch):
     r = fetch_url({"url": "https://ftp.ncbi.nlm.nih.gov/geo/matrix.mtx.gz"})
     assert "error" in r and "truncat" in r["error"].lower(), r
     assert calls["n"] == 3, "should retry a truncated transfer, not accept it"
+    # the short file must NOT be left on disk to later read as corrupt
+    leftover = list(tmp_path.glob("matrix.mtx.gz"))
+    assert leftover == [], f"partial file leaked after exhausted retries: {leftover}"
 
 
 def test_complete_transfer_verifies_ok(_wire, monkeypatch):

@@ -55,6 +55,25 @@ def test_not_yet_realized_reads_not_ready(monkeypatch):
     assert manager._pack_ready("python-bio") is False
 
 
+def test_string_zero_read_only_is_not_ready(monkeypatch):
+    """The substrate serializes read_only as a STRING on some deployments;
+    plain truthiness treats "0" as True, which would flip a still-building
+    realization to READY. A not-ready realization stamped read_only="0" (string)
+    must read not-ready (found in review)."""
+    _wire(monkeypatch, adopt_eid="env:x",
+          status_map={"env:x": {"realizations": [
+              {"site": "local", "state": "building", "read_only": "0"}]}})
+    assert manager._pack_ready("python-bio") is False
+
+
+def test_string_one_read_only_counts_ready(monkeypatch):
+    # symmetric: the genuine RO-mount signal ("1") still reads ready
+    _wire(monkeypatch, adopt_eid="env:x",
+          status_map={"env:x": {"realizations": [
+              {"site": "local", "state": "adopting", "read_only": "1"}]}})
+    assert manager._pack_ready("python-bio") is True
+
+
 def test_locally_solved_base_matches_by_name(monkeypatch):
     # no catalog adoption (writable deploy) → fall back to spec-name match
     _wire(monkeypatch, adopt_eid=None,

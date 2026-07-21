@@ -114,6 +114,16 @@ def pack_env_id(spec: ModuleSpec) -> tuple[str, str] | None:
     return None
 
 
+def _truthy(v) -> bool:
+    """Read-only/ready flags cross the substrate boundary serialized as either
+    ints (1/0) or STRINGS ("1"/"0"). Plain Python truthiness treats the string
+    "0" as True — so a not-yet-ready realization stamped read_only="0" would
+    read as READY. Normalize: only genuine truthy tokens count."""
+    if isinstance(v, str):
+        return v.strip().lower() in ("1", "true", "yes")
+    return bool(v)
+
+
 def _pack_ready(pack: str) -> bool:
     """Cheap store-read probe (no solve): the pack's env is adopted OR realized
     READY on the local site.
@@ -138,7 +148,7 @@ def _pack_ready(pack: str) -> bool:
             return False
         st = w.sync_call("env_status", eid)
         return any(r.get("site") == "local"
-                   and (r.get("state") == "ready" or r.get("read_only"))
+                   and (r.get("state") == "ready" or _truthy(r.get("read_only")))
                    for r in st.get("realizations", []))
     except Exception:  # noqa: BLE001
         return False
