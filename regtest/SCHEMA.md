@@ -138,8 +138,13 @@ than the substrate). Rationale: outcome oracles cannot see mechanism — the
 legacy local kernel lane and the substrate lane produce identical results,
 records, and surfaces, which is how the platform ran the legacy lane by default
 for months while every test stayed green. Reported as a synthetic `_transport`
-row carrying `checked` (records examined — a zero-checked pass proves nothing
-and should be treated as unproven). Opt out with a top-level `transport: false`.
+row carrying `checked` (records examined) and `proven` (`checked > 0`). A
+zero-checked pass proves nothing, so it is marked `proven: false` and printed
+`UNPROVEN(checked=0)` — the scorecard can then tell "verified weft-clean" from
+"verified nothing". By default an unproven step still scores PASS (flipping a
+vacuous step would drop mech_pass and perturb an accepted baseline);
+`ABA_REGTEST_TRANSPORT_STRICT=1` makes an unproven step FAIL. Opt out entirely
+with a top-level `transport: false`.
 
 ## Surface parity (scenario-end oracle, default ON)
 

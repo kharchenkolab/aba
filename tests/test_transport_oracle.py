@@ -27,7 +27,7 @@ import main  # noqa: E402
 from core.graph._schema import init_db  # noqa: E402
 from core.graph.entities import create_entity  # noqa: E402
 from core.graph import exec_records  # noqa: E402
-from harness.transport import transport_truth  # noqa: E402
+from harness.transport import transport_truth, transport_verdict  # noqa: E402
 
 init_db()
 
@@ -93,9 +93,36 @@ def test_absent_compute_block_not_adjudicated(tmp_path):
     assert out["failures"] == [] and out["checked"] == 0
 
 
+def test_verdict_non_vacuity_proven_flag():
+    """A clean check with checked>0 is a genuine PASS (proven); a clean check
+    with checked==0 verified NOTHING — proven False, but still PASS by default
+    so it can't perturb an accepted baseline's mech_pass."""
+    proven = transport_verdict({"failures": [], "checked": 3})
+    assert proven == {"verdict": "PASS", "fails": [], "checked": 3, "proven": True}
+    vacuous = transport_verdict({"failures": [], "checked": 0})
+    assert vacuous["verdict"] == "PASS" and vacuous["proven"] is False
+
+
+def test_verdict_strict_fails_the_vacuous_pass():
+    """Opt-in strict mode gives the non-vacuity check teeth: checked==0 FAILs
+    with a typed reason, while a genuine failure still FAILs (unchanged)."""
+    v = transport_verdict({"failures": [], "checked": 0}, strict=True)
+    assert v["verdict"] == "FAIL" and v["proven"] is False
+    assert v["fails"] and "unproven" in v["fails"][0]
+    # a real legacy finding fails regardless of strictness, and is not masked
+    real = transport_verdict({"failures": ["transport:legacy_exec:r/x"],
+                              "checked": 2}, strict=False)
+    assert real["verdict"] == "FAIL" and real["fails"] == ["transport:legacy_exec:r/x"]
+    # strict never downgrades a proven clean pass
+    assert transport_verdict({"failures": [], "checked": 5},
+                             strict=True)["verdict"] == "PASS"
+
+
 _TESTS = [test_substrate_stamped_execs_pass,
           test_legacy_stamped_exec_is_flagged,
-          test_absent_compute_block_not_adjudicated]
+          test_absent_compute_block_not_adjudicated,
+          test_verdict_non_vacuity_proven_flag,
+          test_verdict_strict_fails_the_vacuous_pass]
 
 
 def _standalone() -> int:

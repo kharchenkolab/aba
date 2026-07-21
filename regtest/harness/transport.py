@@ -78,3 +78,30 @@ def transport_truth(client, pid: str, *, run_ids=None,
 def transport_truth_failures(client, pid: str, **kw) -> list[str]:
     """The failure list alone (the runner's check-shaped entry point)."""
     return transport_truth(client, pid, **kw)["failures"]
+
+
+def transport_verdict(tt: dict, *, strict: bool = False) -> dict:
+    """Fold a transport_truth() result into a scored step.
+
+    NON-VACUITY: `checked == 0` means NO execution self-identified as
+    substrate-run — a pass that verified NOTHING (the blind spot that let the
+    legacy lane hide for months). It is marked `proven=False` so a scorecard can
+    tell "verified weft-clean" from "verified nothing". It stays PASS by DEFAULT
+    because flipping a vacuous step to non-PASS would drop the scenario's
+    mech_pass and perturb an already-accepted baseline; pass `strict=True`
+    (runner: ABA_REGTEST_TRANSPORT_STRICT=1) to make an unproven step FAIL.
+
+    Returns {verdict, fails, checked, proven}."""
+    tfails = list(tt.get("failures") or [])
+    checked = tt.get("checked", 0) or 0
+    proven = checked > 0
+    if tfails:
+        verdict = "FAIL"
+    elif not proven and strict:
+        verdict = "FAIL"
+        tfails = ["transport:unproven: zero substrate-stamped execs (strict "
+                  "mode) — nothing verified"]
+    else:
+        verdict = "PASS"
+    return {"verdict": verdict, "fails": tfails, "checked": checked,
+            "proven": proven}

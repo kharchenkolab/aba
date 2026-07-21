@@ -821,25 +821,32 @@ def main() -> int:
         # executions self-identify as legacy. Opt out with `transport: false`.
         if spec.get("transport", True):
             try:
-                from harness.transport import transport_truth
+                from harness.transport import transport_truth, transport_verdict
             except ImportError:
-                from transport import transport_truth
+                from transport import transport_truth, transport_verdict
             try:
                 tt = transport_truth(client, pid)
-                tfails = tt["failures"]
-                tchecked = tt["checked"]
             except Exception as e:  # noqa: BLE001
-                tfails, tchecked = [f"transport:oracle_crash:{type(e).__name__}: {e}"], 0
-            verdict = "PASS" if not tfails else "FAIL"
-            print(f"[_transport] mechanism truth: [{verdict}] checked={tchecked} "
+                tt = {"failures": [f"transport:oracle_crash:{type(e).__name__}: {e}"],
+                      "checked": 0}
+            # NON-VACUITY: checked==0 is a pass that verified NOTHING — the exact
+            # blind spot that let the legacy lane hide for months. transport_verdict
+            # records `proven` and (opt-in strict) can FAIL it; by default it stays
+            # PASS so a vacuous flip can't perturb an accepted baseline's mech_pass.
+            tv = transport_verdict(
+                tt, strict=os.environ.get("ABA_REGTEST_TRANSPORT_STRICT") == "1")
+            verdict, tfails, tchecked = tv["verdict"], tv["fails"], tv["checked"]
+            tag = "" if tv["proven"] else " UNPROVEN(checked=0)"
+            print(f"[_transport] mechanism truth: [{verdict}]{tag} checked={tchecked} "
                   f"{('; '.join(tfails)) if tfails else 'every stamped execution ran on the substrate'}\n")
             report.append({"step": "_transport", "kind": "transport_truth",
                            "actor": "oracle", "verdict": verdict,
                            "fails": tfails, "rubric": None,
-                           "checked": tchecked})
+                           "checked": tchecked, "proven": tv["proven"]})
             bundle_steps.append({"step": "_transport", "kind": "transport_truth",
                                  "actor": "oracle", "verdict": verdict,
-                                 "fails": tfails, "checked": tchecked})
+                                 "fails": tfails, "checked": tchecked,
+                                 "proven": tv["proven"]})
     finally:
         try:
             client_cm.__exit__(None, None, None)
