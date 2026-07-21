@@ -15,7 +15,7 @@ import mimetypes
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
 
 from core.web.deps import require_project
@@ -163,6 +163,21 @@ def run_file(rid: str, rel: str, download: int = 0):
     target = resolve_run_file(rid, rel)
     if target:
         return FileResponse(target, media_type=media, headers=headers)
+    # DIRECTORY store (one collapsed 'store' output row): not a streamable file,
+    # but its advertised href must not dead-link — a user clicking the manifest
+    # row deserves an answer. Serve an honest JSON summary (kind, members, size,
+    # how to open); the store's bytes travel via the viewer / whole-store
+    # materialize path, never this single-file route.
+    from content.bio.lifecycle.runs import locate_run_output
+    loc = locate_run_output(rid, rel, match="exact") or locate_run_output(rid, rel)
+    if loc and loc.get("kind") == "dir":
+        return JSONResponse({
+            "kind": "store", "rel": rel, "locality": loc.get("locality"),
+            "site": loc.get("site"), "size": loc.get("size"),
+            "note": (f"{rel!r} is a directory store — open it with a viewer "
+                     f"(get_viewer_url) or materialize it whole; it does not "
+                     f"stream as a single file."),
+        })
     # Tier 2 (B1b): an IN-SANDBOX file (live/dead kernel jobdir, not local) → capped weft
     # preview read. A truncated result means it's past the preview channel — Keep it.
     data, truncated, total = read_run_file(rid, rel)
