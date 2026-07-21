@@ -525,11 +525,12 @@ def _assemble_turn_history(*, user_text, attachments, focus_entity_id, store_tid
 def _build_system_prompt(prompts, active_tools, spec, guide_role, eff_intent,
                          prompt_ctx, sidebar_text, focus_text, thread_text):
     """Assemble the turn's system prompt (Item 2B). Returns (system, dynamic_sys):
-    `system` = project sidebar + focus + thread preambles + the pack's STABLE system
-    block (sent at the transport layer with cache_control: ephemeral); `dynamic_sys` =
-    the pack's per-turn tail (the BM25 recipes slice) plus the live compute-env line
-    (mode + node capacity + Slurm landscape). The two-block split (CC-convergence
-    Phase 4) keeps per-turn intent changes from invalidating the ~26K stable prefix."""
+    `system` = the pack's STABLE system block ALONE (sent at the transport layer with
+    cache_control: ephemeral); `dynamic_sys` = everything that varies per turn — the
+    project sidebar, focus + thread preambles, the pack's BM25 recipes slice and the
+    live compute-env line (mode + node capacity + Slurm landscape). The split is a
+    CACHING contract, not a formatting one: `system` must be byte-identical across
+    turns or the messages breakpoint misses too (see core.llm.place_volatile_tail)."""
     import time as _time
     _debug_timing = config.settings.debug_timing.get()
     _t0 = _time.perf_counter()
@@ -548,8 +549,20 @@ def _build_system_prompt(prompts, active_tools, spec, guide_role, eff_intent,
             dynamic_sys = (dynamic_sys + "\n\n" if dynamic_sys else "") + _cl
     except Exception:  # noqa: BLE001
         pass
-    system = sidebar_text + focus_text + thread_text + stable_sys
-    return system, dynamic_sys
+    # The project sidebar, focus preamble and thread preamble are per-turn STATE —
+    # the sidebar is by construction an "always-fresh snapshot" that moves the moment
+    # a dataset/run/figure is created. They used to be concatenated onto the FRONT of
+    # the cached system block, which made the "stable" prefix change on the very turns
+    # the session was productive; the cache prefix runs tools → system → messages, so
+    # each such change re-sent the whole conversation as fresh input. They ride the
+    # volatile tail now (delivered at the END of the prompt by place_volatile_tail),
+    # ahead of the recipe slice and compute-env line to keep their relative order.
+    volatile = sidebar_text + focus_text + thread_text
+    if volatile and dynamic_sys:
+        dynamic_sys = volatile + "\n\n" + dynamic_sys
+    else:
+        dynamic_sys = volatile + dynamic_sys
+    return stable_sys, dynamic_sys
 
 
 async def stream_response(

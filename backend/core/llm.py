@@ -53,16 +53,19 @@ def _strip_cc(content):
     return out
 
 
-def build_cached_blocks(system: str, dynamic_system: str, tools: list, *, cc_marker: bool):
+def build_cached_blocks(system: str, tools: list, *, cc_marker: bool):
     """Assemble the system + tools API blocks with prompt-cache breakpoints:
-    `cache_control` on the STABLE system prefix and on the LAST tool (which caches the
-    whole tool catalog array). The dynamic system tail (BM25 recipes) and the OAuth CC
-    marker stay UNCACHED, so per-turn dynamic content never busts the catalog/system
-    cache. Pure + side-effect-free so the tool_use a2 guard test can assert the cache
-    structure (and its invariance across turns) without opening a live stream."""
+    `cache_control` on the system block and on the LAST tool (which caches the whole
+    tool catalog array). Only the OAuth CC marker stays uncached. Pure +
+    side-effect-free so the cache guard test can assert the structure — and its
+    invariance across turns — without opening a live stream.
+
+    `system` must carry NOTHING that varies per turn. Prompt caching is PREFIX-based
+    over the order tools → system → messages, so a volatile byte anywhere in `system`
+    invalidates the MESSAGES breakpoint too and the entire conversation is re-sent as
+    fresh input every turn it changes. Per-turn context therefore rides the last
+    message instead — see `place_volatile_tail`."""
     sys_blocks = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
-    if dynamic_system:
-        sys_blocks.append({"type": "text", "text": dynamic_system})   # uncached tail
     if cc_marker:
         sys_blocks = [_CC_MARKER_BLOCK, *sys_blocks]                  # uncached marker, first
     _INTERNAL_KEYS = {"approval_policy"}
@@ -71,6 +74,36 @@ def build_cached_blocks(system: str, dynamic_system: str, tools: list, *, cc_mar
         tool_blocks = [*tool_blocks[:-1],
                        {**tool_blocks[-1], "cache_control": {"type": "ephemeral"}}]
     return sys_blocks, tool_blocks
+
+
+def place_volatile_tail(messages: list, tail: str) -> tuple[list, bool]:
+    """Deliver the turn's VOLATILE context (project snapshot, focus/thread preambles,
+    the intent-sliced recipe catalog, the live compute-env line) as a trailing block on
+    the LAST message — i.e. after every cache breakpoint — instead of in the system
+    array. Returns (messages, placed).
+
+    Why placement, not content, is the performance lever: the cache prefix runs
+    tools → system → messages, so anything volatile in `system` sits in the prefix of
+    the messages breakpoint and re-sends the WHOLE conversation as fresh input on every
+    turn it changes. Measured live on a Slurm deployment (2026-07-21, four turns):
+    cache_read pinned at the tools+system size (27,989 both later turns) while
+    cache_write tracked the growing history (43k → 17k → 38k → 58k) — per-turn cost
+    grew with the conversation instead of staying flat. The compute-env line alone
+    (20s TTL, node/queue state) guaranteed a miss on essentially every turn.
+
+    Call this LAST, after `_mark_last_block_cached`, so the tail lands AFTER the marked
+    block and stays outside the cached prefix. Appended only to a `user` message — a
+    tail on an assistant message would fabricate model output — so the caller keeps it
+    in the system array on that (rare) shape rather than dropping it."""
+    if not tail:
+        return messages, True                      # nothing to place
+    if not (messages and messages[-1].get("role") == "user"
+            and isinstance(messages[-1].get("content"), list)):
+        return messages, False                     # caller falls back to the system array
+    last = messages[-1]
+    messages = [*messages[:-1],
+                {**last, "content": [*last["content"], {"type": "text", "text": tail}]}]
+    return messages, True
 
 
 def _mark_last_block_cached(messages: list) -> list:
@@ -113,15 +146,15 @@ class _RealStream:
         self._stream = None
 
     async def __aenter__(self):
-        # Prompt caching: stable prefix (cache_control) + dynamic tail (no cache).
-        # Up to 4 breakpoints total: stable system, tools, last-message — 3 used.
-        # cache_control on the stable system + last tool; the dynamic system tail and
-        # the OAuth CC marker stay uncached (see build_cached_blocks). oauth_cc mode:
+        # Prompt caching: everything stable sits in the cached prefix, everything
+        # per-turn rides the very end. Up to 4 breakpoints total: system, tools,
+        # last-message — 3 used. cache_control on the system block + last tool; only
+        # the OAuth CC marker stays uncached (see build_cached_blocks). oauth_cc mode:
         # the server gates non-Haiku on OAuth by a byte-exact first-system-block CC
         # marker check — so the marker is first, its own block, and uncached.
         # approval_policy etc. are stripped (API rejects unknown tool keys).
         system, tools = build_cached_blocks(
-            self._system, self._dynamic_system, self._tools, cc_marker=_wants_cc_marker())
+            self._system, self._tools, cc_marker=_wants_cc_marker())
         # THE single history→API transform: {role, content} with UI-only blocks
         # (e.g. the `attachments` chip block) stripped. Anything that reaches the
         # Anthropic SDK passes through here, so the validity guard test
@@ -135,6 +168,12 @@ class _RealStream:
         # written without this marker, which made the dump misleading
         # about caching behavior).
         messages = _mark_last_block_cached(messages)
+        # …then the per-turn volatile context AFTER that mark, so it sits outside
+        # every cached prefix. Only a non-user last message (rare) sends it back to
+        # the system array, where it costs a cache miss but is never dropped.
+        messages, _placed = place_volatile_tail(messages, self._dynamic_system)
+        if not _placed:
+            system = [*system, {"type": "text", "text": self._dynamic_system}]
         # max_tokens caps a single assistant turn's output. 4096 was too tight:
         # when the agent emits a tool_use with large `code` content (e.g.
         # writing a multi-KB markdown recipe via run_python), the stream cuts
