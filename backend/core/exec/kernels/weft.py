@@ -53,6 +53,45 @@ _STATUS_INTERVAL_S = 1.0
 _CANCEL_GRACE_S = config.settings.kernel_cancel_grace_s.get()
 
 
+def _reticulate_pin_r() -> str:
+    """Pin reticulate to a REAL interpreter in every R kernel.
+
+    Left unset, `library(reticulate); import(...)` finds no configured Python and
+    bootstraps its own: it downloads `uv`, then an interpreter, then packages —
+    an unbounded network install inside a session that is supposed to be
+    provisioned. Live 2026-07-21 that hung an R turn for 3.7 minutes on
+    "Downloading uv" until the user killed it, with no output and no timeout.
+
+    Pinned, reticulate binds to the interpreter we name and never downloads one.
+    Preference: the project's own Python session when its prefix is directly
+    execable, else the controller interpreter — which is always present and, on a
+    mount-scoped base, is the only Python path that even RESOLVES from inside the
+    R session's namespace (the two sessions have different mounts). The fallback
+    won't carry the project's packages, so `import()` fails immediately and
+    honestly instead of hanging — which is the point: this makes the failure
+    fast and legible, it does not make reticulate a supported bridge.
+    """
+    import sys as _sys
+    from pathlib import Path
+    py = None
+    try:
+        from core.compute import base_env, project_env
+        from core import projects
+        if base_env.active("python"):
+            _pid = str(projects.current() or "_none")
+            _rt = project_env.runtime(_pid, "python")
+            if _rt.get("direct_exec") and _rt.get("prefix"):
+                py = str(Path(_rt["prefix"]) / "bin" / "python")
+    except Exception:  # noqa: BLE001 — never break kernel startup over this
+        py = None
+    py = py or _sys.executable
+    if not py:
+        return ""
+    # RETICULATE_PYTHON is the documented, long-stable knob; setting it to an
+    # existing binary is what suppresses the managed-venv/uv bootstrap.
+    return f"Sys.setenv(RETICULATE_PYTHON={str(py)!r})\n"
+
+
 def _weft_setup_code(lang: str, remote: bool = False) -> str:
     """The kernel's first-block setup: DATA_DIR / ARTIFACTS_DIR / WORK_DIR — each as
     a VARIABLE *and* an env var — plus harvest helpers, WORK_DIR bound to the kernel's
@@ -84,6 +123,7 @@ def _weft_setup_code(lang: str, remote: bool = False) -> str:
                 f"DATA_DIR <- {str(data)!r}; ARTIFACTS_DIR <- {str(artifacts)!r}\n")
         return (f"{repoline}{dirs}WORK_DIR <- getwd()\n"
                 "Sys.setenv(DATA_DIR=DATA_DIR, ARTIFACTS_DIR=ARTIFACTS_DIR, WORK_DIR=WORK_DIR)\n"
+                + _reticulate_pin_r()
                 + _j._harvest_helpers_r())
     dirs = ("DATA_DIR = ARTIFACTS_DIR = _os.getcwd()\n" if remote else
             f"DATA_DIR = {str(data)!r}\nARTIFACTS_DIR = {str(artifacts)!r}\n")
