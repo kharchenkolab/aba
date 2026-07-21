@@ -55,7 +55,7 @@ Two execution lanes, one harvester:
 
 ```
 run_python/run_r ─► LocalRouter.decide() ─► "local"  ─► KernelPool.get_or_start
- (bio/tools/run_exec.py)                    │           → JupyterKernelSession.execute
+ (bio/tools/run_exec.py)                    │           → WeftKernelSession.execute
                                             └► "background" ─► submit_*_job (jobs-and-hpc.md)
                                                               (fresh process)
     both lanes ─► harvest_artifacts(cwd) ─► plots/tables/files + exec record
@@ -164,9 +164,12 @@ Each resolves the project + thread, then selects a lane —
   longer persist (`run_exec.py:777`).
 - **Resolved-`DATA_DIR` surfacing.** Both the kernel setup cell
   (`_weft_setup_code`, `kernels/weft.py:56`, helpers in
-  `kernels/setup_helpers.py`) and the subprocess preamble inject
-  `DATA_DIR`/`WORK_DIR` into the namespace so both languages resolve them
-  identically. On a cwd shift or a fresh kernel, the
+  `kernels/setup_helpers.py`) and the subprocess preamble seed `DATA_DIR`,
+  `ARTIFACTS_DIR`, and `WORK_DIR` in **both** forms — a language variable
+  (`os.environ`/`Sys.setenv`) and a process env var — so code that reads either
+  form resolves the same path in the interactive and one-shot lanes alike (the
+  interactive kernel previously set only the variable, so `os.environ['DATA_DIR']`
+  KeyError'd). On a cwd shift or a fresh kernel, the
   orientation preamble prepends a banner to stdout naming the **resolved**
   `DATA_DIR` and the input files actually on disk — so the agent doesn't
   conclude "no data, ask the user to upload" when files are present but

@@ -35,13 +35,16 @@ exactly **one door** — `materialize_run_output(loc, max_bytes=, force=,
 progress=)`. Everything else is a thin, named policy over that pair.
 
 **`locate_run_output` never transfers.** It walks the local tiers
-(weft retained tree catalog-first → live weft jobdir(s) → run sandbox → weft's
-own `(run, rel)` key) and then the remote tier (the Run's non-local targets,
-confirmed by live-aware `file_stat` for a file or inventory membership for a
-directory store), returning `{local_path?, locality: local|remote, site,
-durability, kind, size, digest, target}`. `match="exact"` joins the exact rel
-only (serve/archive/keep — a same-named file elsewhere must not answer);
-`match="name"` adds store-prefix and basename matching (viewer/lookup).
+(weft retained tree catalog-first → live weft jobdir(s) → run sandbox →
+exec-cwd (a detached job's own scratch dir, `dirname²` of an exec `record_path`)
+→ weft's own `(run, rel)` key → harvested-artifact tier (the run's advertised
+`produced[]` serving copies, `durability="store"`)) and then the remote tier
+(the Run's non-local targets, confirmed by live-aware `file_stat` for a file or
+inventory membership for a directory store), returning `{local_path?, locality:
+local|remote, site, durability, kind, size, digest, target}`. `match="exact"`
+joins the exact rel only (serve/archive/keep — a same-named file elsewhere must
+not answer); `match="name"` adds store-prefix and basename matching
+(viewer/lookup).
 **Failure this prevents:** N surfaces × M reimplemented resolvers, each with its
 own local-fs assumption; lookups (menus, stats, renders) silently moving bytes.
 
@@ -114,3 +117,14 @@ deleting a fresh copy out from under a viewer.
   blobs, but ABA re-fetches a changed store wholesale into a fresh temp; a
   delta-aware install (reusing the content-addressed cache) would cut repeat
   cost for large, slowly-growing stores.
+- **Freshness digest is `(size, mtime)`, not content.** A same-size in-place
+  rewrite whose mtime does *not* advance (a writer that preserves mtime,
+  sub-second fs granularity collapsing two writes into one tick, or remote-node
+  clock skew) leaves the digest unchanged, so a stale cached copy can serve as
+  current. The harvested-artifact tier already content-addresses (`sha256`);
+  extending that to the fetched-cache tiers would close it.
+- **`match="name"` can resolve a same-basename sibling.** The exec-cwd tier roots
+  a basename walk at the exec's cwd and returns the newest-mtime hit; when a run's
+  execs share a directory (or ran in the thread scratch dir), a `name` lookup for
+  `results.csv` can resolve a *different* exec's same-named file. `match="exact"`
+  is unaffected (exact join, no walk); serve/archive/keep use exact.
