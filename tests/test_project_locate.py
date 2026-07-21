@@ -201,3 +201,33 @@ def test_read_path_remote_only_names_the_fate(monkeypatch):
     _, err = _resolve_project_path("m.h5", {"thread_id": "t"}, must_exist=True,
                                    enforce_sandbox=False)
     assert err and "not local" in err and "siteB" in err
+
+
+def test_prompt_surfaces_teach_name_first_on_all_tiers():
+    """Documentation defaults are behavior: the paths guidance must teach the
+    name-first contract on EVERY prompt tier (full/standard AND the slim file
+    lean tiers swap in — the tier-coverage gap class), and the old
+    root-anchoring idiom must be gone."""
+    for f in ("backend/system_bundle/rules/behavior.md",
+              "backend/system_bundle/rules/behavior_slim.md"):
+        text = (ROOT / f).read_text()
+        assert "refer to it by NAME" in text, f"{f}: name-first teaching absent"
+        assert "find_files(" in text, f"{f}: lookup tool not named"
+        assert "never guess from `DATA_DIR/<name>`" not in text.lower(), \
+            f"{f}: old root-anchoring idiom survives"
+
+
+def test_oversize_messages_name_the_working_handle(tmp_path):
+    """'Too large to copy' is half a message — the other half is the handle
+    that still works. Producer-fed: harvest an over-cap file and assert the
+    warning names the file and the lookup route."""
+    from core.exec.run import harvest_artifacts, _MAX_HARVEST_BYTES
+    scratch = tmp_path / "s"
+    scratch.mkdir()
+    big = scratch / "huge_out.parquet"
+    big.write_bytes(b"\0" * (_MAX_HARVEST_BYTES + 1))
+    _, _, files, warnings = harvest_artifacts(scratch, since_ts=0,
+                                              project_id="prjW")
+    w = " ".join(warnings)
+    assert "huge_out.parquet" in w and "find_files" in w, warnings
+    assert "YOURS BY NAME" in w, warnings

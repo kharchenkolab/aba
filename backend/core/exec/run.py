@@ -550,10 +550,11 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0,
             files.append({"url": None, "original_name": display,
                           "bytes": st.st_size, "link_only": True})
             warnings.append(
-                f"File '{display}' is {st.st_size // (1024*1024)}MB — too large "
-                f"to auto-copy into the artifact store; it stays in the run "
-                f"sandbox and is retained durably when the run settles (listed "
-                f"in Files, not inline-linkable)."
+                f"File '{display}' is {st.st_size // (1024*1024)}MB — not "
+                f"auto-copied (over the size cap) but still YOURS BY NAME: it "
+                f"lives in the run sandbox, is retained durably when the run "
+                f"settles, and find_files('{display.rsplit('/', 1)[-1]}') "
+                f"locates it; opening fetches on demand."
             )
             continue
         suf = f.suffix.lower()
