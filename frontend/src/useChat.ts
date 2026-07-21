@@ -47,7 +47,7 @@ function asSteps(x: unknown): string[] {
   return []
 }
 
-function blocksFromContent(content: Record<string, unknown>[]): Block[] {
+export function blocksFromContent(content: Record<string, unknown>[]): Block[] {
   const blocks: Block[] = []
   for (const block of content) {
     if (block.type === 'text') {
@@ -107,12 +107,30 @@ function blocksFromContent(content: Record<string, unknown>[]): Block[] {
         blocks.push({ type: 'tool_result', name: '(result)',
                       result: txt ? { stdout: txt } : {} })
         for (const x of arr) {
-          if (!x || x.type !== 'image') continue
-          const src = x.source as { type?: string; media_type?: string; data?: string } | undefined
-          if (src && src.type === 'base64' && src.data) {
-            blocks.push({ type: 'image',
-                          url: `data:${src.media_type || 'image/png'};base64,${src.data}`,
-                          alt: 'viewed artifact' })
+          if (!x) continue
+          if (x.type === 'image') {
+            const src = x.source as { type?: string; media_type?: string; data?: string } | undefined
+            if (src && src.type === 'base64' && src.data) {
+              blocks.push({ type: 'image',
+                            url: `data:${src.media_type || 'image/png'};base64,${src.data}`,
+                            alt: 'viewed artifact' })
+            }
+          } else if (x.type === 'image_ref') {
+            // Durable history stores a lightweight reference instead of the
+            // base64 payload (vision_refs). On reload, an entity-backed ref
+            // rehydrates through the served artifact; a path-only ref gets a
+            // labeled placeholder — never a silent drop of a viewed image.
+            const eid = typeof x.entity_id === 'string' ? x.entity_id : ''
+            const p = typeof x.path === 'string' ? x.path : ''
+            if (eid) {
+              blocks.push({ type: 'image',
+                            url: `/api/entities/${encodeURIComponent(eid)}/download`,
+                            alt: 'viewed artifact' })
+            } else {
+              const name = p ? (p.split('/').pop() || p) : 'image'
+              blocks.push({ type: 'tool_result', name: '(result)',
+                            result: { stdout: `[image: ${name} — view again to re-render]` } })
+            }
           }
         }
         continue

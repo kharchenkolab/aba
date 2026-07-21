@@ -26,18 +26,37 @@ from core.config import HISTORY_K_IMAGE_KEEP
 _log = logging.getLogger(__name__)
 
 
+def _as_disk(p) -> str | None:
+    """A ref's stored location → a readable disk path, or None.
+
+    Entity-backed producers store an `/artifacts/<pid>/<name>` URL here, not a
+    disk path — the production-COMMON shape. It must route through the canonical
+    URL→path mapping; testing `is_file()` on the URL string fails, and falling
+    back to the entity record retrieves the SAME URL, so without this the whole
+    entity lane silently kept full base64 in durable history."""
+    if not p:
+        return None
+    s = str(p)
+    if s.startswith("/artifacts/"):
+        try:
+            from core.web.artifacts import _artifact_url_to_path
+            fp = _artifact_url_to_path(s)
+        except Exception:  # noqa: BLE001
+            return None
+        return str(fp) if fp is not None and fp.is_file() else None
+    return s if Path(s).is_file() else None
+
+
 def _resolve_ref_path(ref: dict) -> str | None:
     """Absolute path of the referenced image, or None (deleted/unresolvable)."""
-    p = ref.get("path")
-    if p and Path(p).is_file():
-        return str(p)
+    p = _as_disk(ref.get("path"))
+    if p:
+        return p
     eid = ref.get("entity_id")
     if eid:
         try:
             from core.graph.entities import get_entity
-            ap = (get_entity(eid) or {}).get("artifact_path")
-            if ap and Path(ap).is_file():
-                return str(ap)
+            return _as_disk((get_entity(eid) or {}).get("artifact_path"))
         except Exception:  # noqa: BLE001 — resolution is best-effort
             pass
     return None

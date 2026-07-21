@@ -45,6 +45,45 @@ def _envelope(path="/x/a.png"):
             "_vision_ref": {"tool": "view_file", "path": path}}
 
 
+def test_url_shaped_ref_path_resolves_end_to_end():
+    """The PRODUCTION-COMMON shape the original suite missed: entity-backed
+    views store an /artifacts/<pid>/<name> URL in the ref's path, not a disk
+    path. The resolver must route it through the canonical URL→path mapping —
+    otherwise the mint backstop refuses and full base64 stays in durable
+    history, i.e. the oversized-history class this chain exists to fix
+    persists exactly where it was found."""
+    from core.config import project_artifacts_dir
+    d = Path(str(project_artifacts_dir("prjV")))
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "fig.png").write_bytes(_PNG)
+    out = vr.pack_tool_result_content(_envelope(path="/artifacts/prjV/fig.png"))
+    assert any(b.get("type") == "image_ref" for b in out), \
+        "URL-shaped ref refused at mint — inline base64 kept"
+    msgs = [{"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "t1", "content": out}]}]
+    eff = vr.materialize_image_refs(msgs, k=4)
+    flat = eff[0]["content"][0]["content"]
+    assert any(b.get("type") == "image" for b in flat), \
+        "URL-shaped ref stubbed at egress — model gets no image"
+    assert not any(b.get("type") == "image_ref" for b in flat)
+
+
+def test_entity_fallback_with_url_artifact_path_resolves(monkeypatch):
+    """WIDE, same class, other branch: the entity-record fallback also stores a
+    URL-shaped artifact_path — it must resolve too, not fail twice on the same
+    string. (The original guard monkeypatched a DISK path here, masking this.)"""
+    from core.config import project_artifacts_dir
+    d = Path(str(project_artifacts_dir("prjW")))
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "e.png").write_bytes(_PNG)
+    monkeypatch.setattr("core.graph.entities.get_entity",
+                        lambda eid: {"artifact_path": "/artifacts/prjW/e.png"})
+    ref = {"tool": "view_artifact", "entity_id": "ent_9",
+           "media_type": "image/png"}
+    assert vr._resolve_ref_path(ref) is not None, \
+        "URL-shaped entity artifact_path unresolvable"
+
+
 def test_pack_swaps_image_for_ref_and_never_stores_base64(tmp_path):
     p = tmp_path / "a.png"
     p.write_bytes(_PNG)
