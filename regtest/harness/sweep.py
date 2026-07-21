@@ -143,6 +143,15 @@ def git_commit():
         return "?"
 
 
+def bakeable_rows(rows: dict) -> tuple[dict, list]:
+    """Rows safe to promote into the accepted baseline: informative ones only.
+    Excludes infra failures AND errored-no-report rows (mech_total None) — a
+    null-total reference makes the diff permanently blind for that scenario."""
+    clean = {sid: r for sid, r in rows.items()
+             if not r.get("infra") and r.get("mech_total") is not None}
+    return clean, sorted(set(rows) - set(clean))
+
+
 def diff_vs_baseline(scorecard, mode):
     base_p = BASELINES / f"{mode}.json"
     if not base_p.exists():
@@ -203,6 +212,17 @@ def write_report(scorecard, base, regressions, mode, ts):
     lines += ["", f"**Regressions vs baseline: {len(regressions)}**"]
     for sid, why in regressions:
         lines.append(f"- ⚠ {sid}: {why}")
+    # A baseline row with null totals is an errored/no-report reference — the
+    # diff can NEVER flag a regression for that scenario. Say so in the headline
+    # instead of letting the blindness hide in the per-row table.
+    blind = sorted(sid for sid, b in (base or {}).items()
+                   if b.get("mech_total") is None)
+    if blind:
+        lines += ["", f"**⚠ Baseline blind spots: {len(blind)} scenario(s) whose "
+                      f"reference is 'errored, no report' — regressions there are "
+                      f"invisible until a clean run is accepted:**"]
+        for sid in blind:
+            lines.append(f"- 👁 {sid}")
     (REPORTS / f"{mode}-{ts}.md").write_text("\n".join(lines) + "\n")
     return REPORTS / f"{mode}-{ts}.md"
 
@@ -270,8 +290,22 @@ def main() -> int:
         BASELINES.mkdir(parents=True, exist_ok=True)
         bp = BASELINES / f"{mode}.json"
         prior = json.loads(bp.read_text()).get("scenarios", {}) if bp.exists() else {}
-        clean = {sid: r for sid, r in rows.items() if not r.get("infra")}   # never bake infra failures in
+        # Never bake in a row that told us nothing about product quality:
+        # infra failures AND errored-no-report rows (mech_total None). A
+        # null-total row in the baseline normalizes "errored, no report" as
+        # that scenario's reference — the diff then can't regress against it,
+        # ever, and the blindness is invisible in headline numbers.
+        clean, skipped = bakeable_rows(rows)
+        if skipped:
+            print(f"[sweep] ⚠ NOT baking {len(skipped)} uninformative row(s) into the "
+                  f"baseline (infra or errored/no-report): {skipped}")
         merged = dict(prior); merged.update(clean)
+        legacy_blind = sorted(sid for sid, r in merged.items()
+                              if r.get("mech_total") is None)
+        if legacy_blind:
+            print(f"[sweep] ⚠ baseline still carries {len(legacy_blind)} LEGACY "
+                  f"errored/no-report reference(s) — the diff is blind there until a "
+                  f"clean run of each is accepted: {legacy_blind}")
         out = dict(scorecard); out["scenarios"] = merged
         out["totals"] = {"mech_pass": sum((r.get("mech_pass") or 0) for r in merged.values()),
                          "mech_total": sum((r.get("mech_total") or 0) for r in merged.values()),

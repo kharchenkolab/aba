@@ -40,6 +40,7 @@ FILES=(
   # regtest oracle + probe evaluators (pure, no live server)
   tests/test_transport_oracle.py
   tests/test_live_surface_probe_eval.py
+  tests/test_sweep_baseline_honesty.py
   # runtime translation
   tests/test_openai_runtime_translation.py
   tests/test_openai_runtime_skeleton.py
