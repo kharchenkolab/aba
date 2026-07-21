@@ -123,3 +123,35 @@ def test_entity_ref_resolves_via_artifact_path(tmp_path, monkeypatch):
     out = vr.materialize_image_refs(msgs, k=4)
     b = out[0]["content"][0]["content"][0]
     assert b["type"] == "image" and b["source"]["data"]
+
+
+def test_path_based_view_round_trips_to_a_real_image(tmp_path):
+    """`view_artifact(path=…)` carries NO entity_id — the common shape, since an
+    intermediate a run just wrote has no entity. Its ref must still resolve, or
+    egress hands the model a text stub instead of the image it asked to look at,
+    and the tool silently stops working (the storage win would be paid for with
+    a correctness regression).
+
+    Fails on an entity-only ref: materialization yields ['text','text'].
+    """
+    import json
+    from content.bio.mcp_servers.aba_core.tools import entity_ops as EO
+    from content.bio import vision_refs as VR
+
+    png = tmp_path / "fig.png"
+    png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"Z" * 200_000)
+    env = EO._vision_envelope(None, None, "", str(png), {}, "fig.png",
+                              png.read_bytes(), "image/png")
+    packed = VR.pack_tool_result_content(env)
+
+    # (a) durable history is small — the payload never lands in the DB
+    assert len(json.dumps(packed)) < 2_000, "vision payload leaked into history"
+
+    # (b) …and the recent-K egress puts a REAL image back in front of the model
+    hist = [{"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "t1", "content": packed}]}]
+    out = VR.materialize_image_refs(hist)
+    kinds = [b.get("type") for b in out[0]["content"][0]["content"]]
+    assert "image" in kinds, (
+        f"path-based ref did not materialize (got {kinds}) — the model sees no "
+        f"image, so view_artifact is functionally dead on this shape")

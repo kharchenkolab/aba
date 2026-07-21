@@ -1222,9 +1222,15 @@ def _vision_envelope(entity_id, ent_type, title, ap_str, ent_meta,
             {"type": "image",
              "source": {"type": "base64", "media_type": media_type, "data": img_b64}},
         ],
-        # ref for durable history — materialized on egress for recent-K only
+        # ref for durable history — materialized on egress for recent-K only.
+        # BOTH keys: `view_artifact(path=…)` has no entity_id at all (the common
+        # shape — an intermediate a run just wrote), so an entity-only ref
+        # cannot resolve and egress hands the model a bare stub instead of the
+        # image it asked to look at. `_resolve_ref_path` tries `path` first
+        # behind an is_file() check, so an /artifacts/ URL here simply falls
+        # through to the entity lookup.
         "_vision_ref": {"tool": "view_artifact", "entity_id": entity_id,
-                        "media_type": media_type},
+                        "path": ap_str, "media_type": media_type},
     }
 
 
