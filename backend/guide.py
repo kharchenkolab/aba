@@ -792,6 +792,13 @@ async def stream_response(
                     (spec.summary_tail_keep    if spec else None),
                 )
             )
+            # Inflate recent-K image_refs into real vision blocks HERE —
+            # before the [llm-prep] hash and before any runtime — so all
+            # three lanes see one shape and the wire tripwire stays green
+            # (materializing later, per-runtime, would make prep/sent
+            # hashes differ on every image-bearing turn).
+            from content.bio.vision_refs import materialize_image_refs
+            llm_history = materialize_image_refs(llm_history)
             # Dump the EFFECTIVE context (post-Tier-1 prune + Tier-2
             # summary substitution) once per turn. Earlier code dumped
             # the raw `history` before this point, which silently
@@ -1342,14 +1349,19 @@ async def stream_response(
                         pass
                     yield sse(wire.tool_result(name=ev.tool_name, result=_envelope,
                                                tool_use_id=ev.tool_use_id))
-                    # Vision-blocks envelope (view_figure, etc.):
-                    # passthrough as the tool_result's `content`.
+                    # Vision-blocks envelope (view_figure, etc.): durable
+                    # history stores the REF, not the base64 payload — the
+                    # SSE above already delivered the full envelope to the
+                    # UI; the model gets the bytes via recent-K egress
+                    # materialization (content.bio.vision_refs).
                     if (isinstance(_envelope, dict)
                             and isinstance(_envelope.get("_vision_blocks"), list)):
+                        from content.bio.vision_refs import pack_tool_result_content
                         _tool_result_blocks.append({
                             "type": "tool_result",
                             "tool_use_id": ev.tool_use_id,
-                            "content": _envelope["_vision_blocks"],
+                            "content": pack_tool_result_content(_envelope)
+                            or _envelope["_vision_blocks"],
                         })
                     else:
                         _tool_result_blocks.append({

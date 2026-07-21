@@ -90,7 +90,10 @@ def view_file_tool(input_: dict, ctx: Optional[dict] = None) -> dict:
         if not blk:
             return {"error": f"could not decode image {p.name}"}
         return {"path": str(p), "kind": "image",
-                "_vision_blocks": [{"type": "text", "text": f"Image {p.name}:"}, blk]}
+                "_vision_blocks": [{"type": "text", "text": f"Image {p.name}:"}, blk],
+                # ref for durable history: the payload is materialized on egress
+                # for the recent-K window only (content.bio.vision_refs)
+                "_vision_ref": {"tool": "view_file", "path": str(p)}}
 
     if suf == ".pdf":
         ext = _extract_pdf_text(p, max_chars)

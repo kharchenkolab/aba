@@ -75,10 +75,17 @@ def run_scenario(sid, mode):
         env["ABA_NO_JUDGE"] = "1"                          # Haiku breadth: mechanical only
         env.pop("ABA_SCENARIO_MODEL", None)
     t0 = time.time()
+    # Capture the runner's output per scenario instead of discarding it: an
+    # ERR row whose cause was DEVNULLed is undiagnosable (a whole sweep of
+    # them once had to be re-run by hand to see the first traceback).
+    _errlog = RUNS / f"_stderr-{sid}.log"
+    RUNS.mkdir(parents=True, exist_ok=True)
     try:
-        rc = subprocess.run([PY, "-u", str(RUNNER)], env=env, timeout=PER_SCENARIO_TIMEOUT_S,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                            cwd=str(ROOT)).returncode
+        with open(_errlog, "w") as _ef:
+            rc = subprocess.run([PY, "-u", str(RUNNER)], env=env,
+                                timeout=PER_SCENARIO_TIMEOUT_S,
+                                stdout=_ef, stderr=subprocess.STDOUT,
+                                cwd=str(ROOT)).returncode
     except subprocess.TimeoutExpired:
         return {"_error": f"scenario process timed out after {PER_SCENARIO_TIMEOUT_S}s"}
     # exit 3 = SETUP-ERROR from the runner's seed-staging guard: a declared input

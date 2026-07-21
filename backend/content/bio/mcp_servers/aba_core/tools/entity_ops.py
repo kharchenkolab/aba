@@ -1222,6 +1222,9 @@ def _vision_envelope(entity_id, ent_type, title, ap_str, ent_meta,
             {"type": "image",
              "source": {"type": "base64", "media_type": media_type, "data": img_b64}},
         ],
+        # ref for durable history — materialized on egress for recent-K only
+        "_vision_ref": {"tool": "view_artifact", "entity_id": entity_id,
+                        "media_type": media_type},
     }
 
 

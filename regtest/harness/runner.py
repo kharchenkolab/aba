@@ -259,10 +259,15 @@ def context_metrics(files: list[str]) -> dict:
     sysb = last.get("system") or []
     cc_sys = [bool(isinstance(b, dict) and b.get("cache_control")) for b in sysb]
     msgs = last.get("messages") or []
+    # Message-side breakpoint: the mark sits on the last message's last REAL
+    # block — the block AFTER it (when present) is the volatile tail, which is
+    # deliberately uncached (delivered outside every cached prefix; see
+    # core.llm.place_volatile_tail). Checking only content[-1] asserted the
+    # PRE-placement-fix layout and failed every post-fix request.
     last_cc = False
     if msgs and isinstance(msgs[-1].get("content"), list) and msgs[-1]["content"]:
-        last_cc = bool(isinstance(msgs[-1]["content"][-1], dict)
-                       and msgs[-1]["content"][-1].get("cache_control"))
+        last_cc = any(bool(isinstance(b, dict) and b.get("cache_control"))
+                      for b in msgs[-1]["content"])
     import hashlib
     stable = next((b.get("text", "") for b in sysb
                    if isinstance(b, dict) and b.get("cache_control")), "")
