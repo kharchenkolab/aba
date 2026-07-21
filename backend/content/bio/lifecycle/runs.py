@@ -1561,6 +1561,27 @@ def _stamp_read(dest: str) -> Optional[str]:
         return None
 
 
+# Per-dest install serialization. A directory-store install is check-then-swap
+# (is dest present & fresh? → keep; else supersede + rename in) across TWO
+# non-atomic files (the dir and its sibling `.stamp`). Two concurrent opens of
+# the SAME store can otherwise interleave so the second sees the first's dir
+# present but its stamp not yet written, misreads it as stale, and rmtree's the
+# fresh copy out from under the first caller (which already handed the path to a
+# viewer). A per-dest lock makes the short critical section atomic within the
+# server process (the case that actually races: two viewers opening one store).
+import threading as _threading
+_INSTALL_LOCKS: dict = {}
+_INSTALL_LOCKS_GUARD = _threading.Lock()
+
+
+def _install_lock(dest: str) -> "_threading.Lock":
+    with _INSTALL_LOCKS_GUARD:
+        lk = _INSTALL_LOCKS.get(dest)
+        if lk is None:
+            lk = _INSTALL_LOCKS[dest] = _threading.Lock()
+        return lk
+
+
 def _stamp_write(dest: str, digest: Optional[str]) -> None:
     """Record the SOURCE freshness digest the copy at `dest` was fetched
     against — captured at locate time, BEFORE the fetch, so a store that grew
@@ -1718,20 +1739,24 @@ def _materialize_store(loc: dict, *, force: bool = False, progress=None) -> Opti
         _os.makedirs(_os.path.dirname(dest) or ".", exist_ok=True)
         tmp = f"{dest}.partial.{_os.getpid()}.{_uuid.uuid4().hex}"
         if _data_plane_fetch(abs_path, site, tmp, force=force) and _os.path.isdir(tmp):
-            try:
-                if _os.path.isdir(dest):
-                    if digest and _stamp_read(dest) == digest:
-                        _sh.rmtree(tmp, ignore_errors=True)   # concurrent open won
-                        return _os.path.realpath(dest)
-                    trash = f"{dest}.stale.{_uuid.uuid4().hex}"
-                    _os.rename(dest, trash)                   # supersede stale bytes
-                    _sh.rmtree(trash, ignore_errors=True)
-                _os.replace(tmp, dest)
-                _stamp_write(dest, digest)                    # locate-time digest
-                return _os.path.realpath(dest) if _os.path.isdir(dest) else None
-            except OSError:                                   # dest raced in — keep theirs
-                _sh.rmtree(tmp, ignore_errors=True)
-                return _os.path.realpath(dest) if _os.path.isdir(dest) else None
+            # Serialize the check-then-swap for THIS dest: without the lock a
+            # peer that installed while we fetched would be seen mid-install
+            # (dir present, stamp not yet written) and destroyed as "stale".
+            with _install_lock(dest):
+                try:
+                    if _os.path.isdir(dest):
+                        if digest and _stamp_read(dest) == digest:
+                            _sh.rmtree(tmp, ignore_errors=True)   # a peer already installed the current copy
+                            return _os.path.realpath(dest)
+                        trash = f"{dest}.stale.{_uuid.uuid4().hex}"
+                        _os.rename(dest, trash)                   # supersede stale bytes
+                        _sh.rmtree(trash, ignore_errors=True)
+                    _os.replace(tmp, dest)
+                    _stamp_write(dest, digest)                    # locate-time digest
+                    return _os.path.realpath(dest) if _os.path.isdir(dest) else None
+                except OSError:                                   # dest raced in — keep theirs
+                    _sh.rmtree(tmp, ignore_errors=True)
+                    return _os.path.realpath(dest) if _os.path.isdir(dest) else None
         _sh.rmtree(tmp, ignore_errors=True)
         return None                                  # failure → honest "on <site>"
 

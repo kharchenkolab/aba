@@ -682,6 +682,53 @@ def test_concurrent_store_install_keeps_fresh_dest(monkeypatch):
     assert not os.path.exists(os.path.join(p, "ours"))     # our temp discarded
 
 
+def test_concurrent_store_installs_barrier_never_destroy(monkeypatch):
+    """Two opens of the SAME store, forced (via a barrier) to reach the install
+    critical section AT THE SAME TIME. The per-dest install lock must serialize
+    them so neither destroys a caller-visible dir mid-stamp: both callers get a
+    valid, existing, correctly-stamped dir back (the racy window the prior test
+    couldn't reach — it stamped the peer before the check)."""
+    import threading
+    rid = _mk_run(weft_targets=["krn_race2"], run_state="open")
+    monkeypatch.setattr(runs_mod, "_kernel_site_map", lambda: {"krn_race2": "mendel"})
+    monkeypatch.setattr(runs_mod, "_site_root", lambda site: "/remote/.weft")
+    monkeypatch.setattr(runs_mod, "_live_file_stat", lambda t, r: {})
+    monkeypatch.setattr(retmod, "retained", lambda **kw: [])
+    inv = _stable_inv([{"path": "q.zarr/a", "bytes": 3, "mtime": 9}])
+    monkeypatch.setattr(runs_mod, "_live_inventory", lambda t, **kw: inv)
+    digest = runs_mod._store_members("krn_race2", "q.zarr")["digest"]
+    assert digest
+    barrier = threading.Barrier(2, timeout=8)
+
+    def _dp(abs_path, site, dest, *, force=False):
+        os.makedirs(dest, exist_ok=True)               # each lands in its own .partial
+        open(os.path.join(dest, "member"), "w").write("m")
+        try:
+            barrier.wait()                             # both finish fetching, then race the install
+        except threading.BrokenBarrierError:
+            pass
+        return True
+    monkeypatch.setattr(runs_mod, "_data_plane_fetch", _dp)
+
+    results: dict = {}
+    def worker(i):
+        try:
+            results[i] = runs_mod.resolve_run_store(rid, "q.zarr")
+        except Exception as e:  # noqa: BLE001
+            results[i] = f"raised:{e}"
+    ts = [threading.Thread(target=worker, args=(i,)) for i in range(2)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join(timeout=12)
+    for i in (0, 1):
+        p = results.get(i)
+        assert p and isinstance(p, str) and os.path.isdir(p), f"worker {i}: {p!r}"
+        assert os.path.isfile(os.path.join(p, "member")), f"worker {i} dir destroyed: {p}"
+    assert results[0] == results[1]                    # one canonical dest
+    assert runs_mod._stamp_read(results[0]) == digest  # left properly stamped
+
+
 # ── 18. single-file fetches are atomic: unique temp, then replace ─────────────
 
 def test_file_fetch_atomic_temp_then_replace(monkeypatch):
@@ -742,6 +789,7 @@ _TESTS = [
     test_live_store_same_size_rewrite_refetches,
     test_entity_download_remote_fallback_and_413,
     test_concurrent_store_install_keeps_fresh_dest,
+    test_concurrent_store_installs_barrier_never_destroy,
     test_file_fetch_atomic_temp_then_replace,
 ]
 
