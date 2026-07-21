@@ -217,3 +217,79 @@ def test_saturated_from_first_engagement(monkeypatch):
         prev = eff
     assert divergences <= 3, f"{divergences} divergences from first engagement"
     assert calls["n"] <= 3, f"{calls['n']} synth calls"
+
+
+def _grow_image(history: list, i: int, kb: int = 8):
+    history.append({"role": "assistant", "content": [
+        {"type": "tool_use", "id": f"v{i}", "name": "view_file",
+         "input": {"path": f"plot_{i}.png"}}]})
+    history.append({"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": f"v{i}", "content": [
+            {"type": "image", "source": {"type": "base64",
+             "media_type": "image/png", "data": "A" * (kb * 1024)}}]}]})
+
+
+def test_image_blocks_age_out_of_history():
+    """A vision payload is consumed once; beyond k_image_keep results it must
+    demote to a text stub carrying the re-view reference — while RECENT images
+    stay verbatim for the generation(s) that need them."""
+    hist: list = []
+    _grow_image(hist, 0)
+    for i in range(1, 8):
+        _grow(hist, i)
+    eff = prune_transcript(list(hist), k_image_keep=4)
+    inner = eff[1]["content"][0]["content"]           # tool_result's content list
+    assert inner[0]["type"] == "text" and "re-view via view_file" in inner[0]["text"]
+    assert "plot_0.png" in inner[0]["text"]            # the reference survives
+    # a FRESH image stays verbatim
+    _grow_image(hist, 99)
+    eff2 = prune_transcript(list(hist), k_image_keep=4)
+    assert eff2[-1]["content"][0]["content"][0]["type"] == "image"
+
+
+def test_image_demotion_is_one_rewrite_then_stable():
+    hist: list = []
+    _grow_image(hist, 0)
+    prev = None
+    divergences = 0
+    for i in range(1, 14):
+        _grow(hist, i)
+        eff = prune_transcript(list(hist), k_image_keep=4)
+        if prev is not None and not _is_prefix(prev, eff):
+            divergences += 1
+        prev = eff
+    assert divergences == 1, (
+        f"{divergences} divergences for one aging image — must rewrite exactly "
+        f"once (when it crosses the age window), then stay byte-stable")
+
+
+def test_aged_image_clears_tier2_saturation(monkeypatch):
+    """End-to-end across both tiers: a large image saturates the Tier-2 budget
+    while verbatim; after Tier-1 demotes it, the remainder fits again and the
+    saturated counter stops climbing."""
+    calls = _stub_synth(monkeypatch)
+    hist: list = []
+    for i in range(6):
+        _grow(hist, i)
+    _grow_image(hist, 6, kb=8)                        # ~8KB >> BUDGET
+    sat_before = bs._TIER2_DIAG["saturated"]
+    for i in range(7, 18):
+        _grow(hist, i)
+        pruned = prune_transcript(list(hist), k_image_keep=4)
+        bs.maybe_summarize("thrIMG", pruned, budget_chars=BUDGET, tail_keep=TAIL)
+    # once the image aged out (k_image_keep=4 results ≈ 4 generations), the
+    # effective history shrinks below budget → reuse resumes, saturation stops
+    pruned = prune_transcript(list(hist), k_image_keep=4)
+    assert not any(
+        isinstance(b, dict) and b.get("type") == "tool_result"
+        and isinstance(b.get("content"), list)
+        and any(isinstance(x, dict) and x.get("type") == "image" for x in b["content"])
+        for m in pruned for b in (m.get("content") or [])), "image never demoted"
+    sat_tail = bs._TIER2_DIAG["saturated"]
+    for i in range(18, 22):
+        _grow(hist, i)
+        pruned = prune_transcript(list(hist), k_image_keep=4)
+        bs.maybe_summarize("thrIMG", pruned, budget_chars=BUDGET, tail_keep=TAIL)
+    assert bs._TIER2_DIAG["saturated"] == sat_tail, (
+        "saturation persists after the image demoted — the two tiers aren't "
+        "composing (upstream cap ineffective)")

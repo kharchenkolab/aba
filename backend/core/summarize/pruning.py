@@ -164,6 +164,31 @@ def _quantized_stub_count(n: int, keep: int, batch: int) -> int:
     return (over // batch) * batch
 
 
+def _demote_image_blocks(content: list, tool_name: str, tu_input: dict) -> list:
+    """Replace image blocks in a tool_result's content with a small text stub
+    naming how to re-view. A vision payload is consumed by the model exactly
+    once (the generation that looks at it); retained verbatim it costs its
+    full base64 weight on EVERY subsequent request — the live incident held a
+    ~1.3MB image in history, saturating the Tier-2 budget for ~11 generations.
+    The reference (tool + path/id) keeps it one call away."""
+    ref = ""
+    for k in ("path", "entity_id", "name"):
+        v = (tu_input or {}).get(k)
+        if isinstance(v, str) and v:
+            ref = f", {k}={v[:120]!r}"
+            break
+    out = []
+    for b in content:
+        if isinstance(b, dict) and b.get("type") == "image":
+            media = ((b.get("source") or {}).get("media_type")) or "image"
+            out.append({"type": "text",
+                        "text": f"[image demoted from context ({media}) — "
+                                f"re-view via {tool_name}({ref.lstrip(', ')})]"})
+        else:
+            out.append(b)
+    return out
+
+
 def prune_transcript(
     messages: list[dict],
     *,
@@ -171,6 +196,7 @@ def prune_transcript(
     k_text_keep: int = K_TEXT_KEEP_DEFAULT,
     stub_batch: int | None = None,
     drop_batch: int | None = None,
+    k_image_keep: int = 4,
 ) -> list[dict]:
     """Return a pruned copy of `messages`:
       - The most recent K_TOOL_KEEP tool_result blocks keep their content
@@ -222,6 +248,16 @@ def prune_transcript(
                                    stub_batch)
     keep_positions: set[tuple[int, int]] = \
         set(tool_result_positions[n_stub:])
+    # Image payloads age out on a much shorter window than text (they're
+    # consumed once, cost their full base64 weight per request thereafter, and
+    # can single-handedly saturate the Tier-2 budget). Demoting happens near
+    # the list TAIL, so each image rewrites exactly once with a tiny
+    # invalidation radius — no batch quantization needed (unlike deep stubs).
+    # Applies to ALL results beyond the image window, always-keep tools included
+    # (the always-keep contract is about textual content, not payload bytes).
+    img_demote: set[tuple[int, int]] = \
+        set(tool_result_positions[:-k_image_keep] if k_image_keep > 0
+            else tool_result_positions)
     for (i, j) in tool_result_positions:
         if (i, j) in keep_positions:
             continue
@@ -261,6 +297,16 @@ def prune_transcript(
                     "tool_use_id": tu_id,
                     "content": stub,
                 })
+            elif isinstance(b, dict) and b.get("type") == "tool_result" \
+                    and (i, j) in img_demote \
+                    and isinstance(b.get("content"), list) \
+                    and any(isinstance(x, dict) and x.get("type") == "image"
+                            for x in b["content"]):
+                tu_id = b.get("tool_use_id") or ""
+                tu = tu_index.get(tu_id, {})
+                new_content.append({**b, "content": _demote_image_blocks(
+                    b["content"], tu.get("name", "view_file"),
+                    tu.get("input") or {})})
             else:
                 new_content.append(b)
         out.append({**m, "content": new_content})
