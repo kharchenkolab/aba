@@ -49,8 +49,12 @@ def main():
           "| event | scenarios |", "|---|---|"]
     L += [f"| {k} | {lc.get(k, 0)} |" for k in
           ["revise", "resume", "branch", "drop", "delete", "version_change"]]
-    open("CATALOG.md", "w").write("\n".join(L) + "\n")
-    print(f"wrote CATALOG.md ({len(rows)} scenarios)")
+    # The tracked catalog lives at regtest/CATALOG.md, one level UP — writing it
+    # beside the scenarios left the real index stale (25 entries while 38 were on
+    # disk) and dropped an untracked duplicate next to it.
+    out = os.path.join(os.path.dirname(HERE), "CATALOG.md")
+    open(out, "w").write("\n".join(L) + "\n")
+    print(f"wrote {out} ({len(rows)} scenarios)")
 
 
 if __name__ == "__main__":

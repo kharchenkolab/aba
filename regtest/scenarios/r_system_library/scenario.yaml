@@ -1,0 +1,88 @@
+id: r_system_library
+title: An R package needing a SYSTEM library the base lacks — diagnose, route to an isolated env, use it
+domain: technical
+gpu: false
+summary: >
+  The environment case that a package-only overlay cannot serve. The user asks for an R package
+  whose build links an external C library that the shared R base does not ship. The project
+  session can add R PACKAGES but never a SYSTEM LIBRARY (it is a library directory over a
+  read-only base), so the CRAN source build fails in configure — and retrying in the project env
+  fails identically. The only lane that works is an isolated env, which is a FULL solve and pulls
+  system dependencies. The contract under test is that the agent (a) is TOLD the real cause
+  rather than a generic "installer failed", (b) does not loop retrying the lane that cannot
+  work, and (c) reaches a working state via make_isolated_env(language='r') — then uses it,
+  either per call with run_r(env=...) or ambiently after set_active_env(name, language='r').
+  Fully local except the package download; no data files. RNetCDF is an ordinary
+  data-format/infrastructure package, chosen because it needs an absent C library, not for any
+  domain content.
+lifecycle: []
+data_files: []
+
+steps:
+- id: s1
+  kind: analyze
+  actor: agent
+  prompt: >
+    I need the R package RNetCDF available so I can work with that file format. Please get it
+    installed and confirm it actually loads.
+  expect:
+    tools_used: [ensure_capability]
+    must_mention: ["RNetCDF"]
+    must_not: ["I cannot", "does not exist", "no such package", "not a real package"]
+    checks: >
+      RNetCDF needs the netcdf C library, which the shared R base does NOT ship, so the ordinary
+      CRAN install into the project session MUST fail in configure. What is under test is what
+      the agent does next. PASS requires that the agent reaches a state where RNetCDF genuinely
+      loads — in practice by creating an isolated R env (make_isolated_env with language='r' and
+      a package spec such as 'r-rnetcdf') and then running in it, either via run_r(env=...) or
+      after promoting it with set_active_env(name, language='r'). It must VERIFY the load rather
+      than assert it (a requireNamespace / library() call whose output it reports).
+      Hard failure modes: (a) concluding the package does not exist or is unavailable — the
+      cause is a missing SYSTEM LIBRARY, not a missing package; (b) retrying the same
+      project-session install more than twice, which cannot succeed no matter how often it is
+      repeated; (c) claiming success without any evidence the library loaded; (d) trying to
+      install the system library into the project session or asking the user to install it.
+      Reporting the specific missing library (netcdf) is a strong signal the diagnosis reached
+      the agent at all.
+
+- id: s2
+  kind: analyze
+  actor: agent
+  prompt: >
+    Good. Now use it: create a small NetCDF file with a couple of variables, then read it back
+    and show me what's in it.
+  expect:
+    tools_used: [run_r]
+    must_mention: ["RNetCDF"]
+    must_not: ["there is no such function", "could not find function", "not installed",
+               "ModuleNotFoundError", "I cannot"]
+    checks: >
+      The agent writes and reads a small NetCDF file using RNetCDF (create.nc / var.def.nc /
+      var.put.nc, then open.nc / read.nc or print.nc) and reports the variables it read back.
+      The point is that the environment reached in s1 is actually USABLE for real work, not just
+      importable once: whichever route it took (explicit env= on each call, or a promoted env and
+      bare run_r) must keep working across turns. A failure here means the env was reached but
+      not durable — e.g. the agent promoted an env and then a bare run_r resolved somewhere else,
+      or it used env= in s1 and forgot it in s2.
+
+expected_overall:
+  planted_truth: >
+    There is no dataset — the ground truth is the environment contract. A session overlay carries
+    PACKAGES only; a system library (a header / shared object a compiled package links against)
+    can never live there, and where the shared base is an adopted read-only mount it cannot be
+    added on demand either. An isolated env is a full solve and CAN pull system dependencies, so
+    it is the lane that resolves this class of request; naming the R package (r-rnetcdf) is
+    enough — the solver pulls the C library transitively, so the agent does NOT need to identify
+    or name netcdf itself.
+  notes: >
+    A correct session: (s1) ensure_capability fails in configure with the real cause visible
+    (netcdf.h missing / configuration failed); the agent recognises this as a SYSTEM-library
+    failure rather than a bad package name, creates an isolated R env once via
+    make_isolated_env(language='r', packages=['r-rnetcdf']), and confirms the load with an
+    actual call whose output it shows. (s2) it does real work in that env and reports the
+    variables read back.
+    Failure modes this scenario exists to catch: the "session installer failed" black box (agent
+    is told nothing and guesses the repository or package name is wrong); a retry loop against
+    the project session, which cannot ever succeed; a confident "installed successfully" with no
+    verification; asking the USER to install a system library; and a promotion that does not
+    survive to the next turn.
