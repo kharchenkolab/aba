@@ -1034,6 +1034,7 @@ def _extend_into_named_env(env_name: str, packages: list[str], cap: dict) -> dic
     from core.compute.errors import ComputeError
     from core import projects
     pid = str(projects.current() or "default")
+    _pre_id = (named_envs.resolve(pid, env_name) or {}).get("env_id")
     try:
         res = named_envs.extend(pid, env_name, list(packages))
     except ComputeError as e:
@@ -1043,10 +1044,21 @@ def _extend_into_named_env(env_name: str, packages: list[str], cap: dict) -> dic
     except Exception as e:  # noqa: BLE001
         return {"status": "error", "name": cap.get("name"), "env": env_name,
                 "note": f"could not extend env '{env_name}': {e}"}
-    # Identity changed → a kernel still running on the OLD realization would
-    # never see the new packages (found live: post-extend in-session imports
-    # failed while the registry was correct). Restart the env's live sessions.
-    restarted = _evict_env_kernels(env_name)
+    # Restart live sessions ONLY when the identity actually moved: an extension
+    # that mints a new EnvID leaves a kernel on the OLD realization where the
+    # new packages never appear (found live). But an already-satisfied request
+    # returns the SAME id ("cached") — evicting there would destroy the user's
+    # in-memory state for a genuine no-op (the destructive-retry bug 60ad6ad2
+    # fixed in make_isolated_env, surviving here in the sibling entry point).
+    changed = res.get("env_id") != _pre_id
+    restarted = _evict_env_kernels(env_name) if changed else 0
+    if not changed:
+        note = (f"{', '.join(packages)} already present in isolated env "
+                f"'{env_name}' (env_id {res['env_id']}) — nothing to install; "
+                f"the running session was left intact. Run in it with "
+                f"run_python(env='{env_name}', …).")
+        return {"status": "ready", "name": cap.get("name"), "env": env_name,
+                "env_id": res["env_id"], "installed": [], "note": note}
     note = (f"Installed {', '.join(packages)} into isolated env '{env_name}' "
             f"(new env_id {res['env_id']}). Frozen identities: extending mints a "
             f"new id; history kept. Run in it with run_python(env='{env_name}', …).")
@@ -1703,6 +1715,15 @@ def fetch_url(input_: dict, ctx: dict | None = None) -> dict:
                   detail={"url": url, "bytes": total, "path": str(dest)})
         return {"status": "ok", "path": str(dest), "filename": filename,
                 "bytes": total, "verified": bool(clen)}
+    # All attempts failed: a truncated/short file may be sitting at `dest` (each
+    # attempt reopens 'wb', so only the LAST attempt's partial survives). Remove
+    # it — the whole point was to never hand back a short file that later reads
+    # as corrupt; leaving it on disk for a caller that globs the scratch dir, or
+    # ignores the error, reintroduces exactly that.
+    try:
+        dest.unlink()
+    except OSError:
+        pass
     return {"error": last_err or "fetch failed", "url": url}
 
 

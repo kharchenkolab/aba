@@ -331,6 +331,51 @@ def test_extend_and_evict_restart_env_kernels(monkeypatch):
     assert r3["status"] == "ok" and calls == ["hot"]
 
 
+def test_pool_evict_env_sessions_no_prefix_collision():
+    """A name that is a PREFIX of another env's name must not evict that other
+    env's kernels — the scope key carries the name at the tail, so evicting
+    `data` must leave `dataset` untouched (substring match would kill both)."""
+    from core.exec.kernels.pool import KernelPool
+
+    class _S:
+        alive, busy, last_used = True, False, 0.0
+        def __init__(self): self.down = False
+        def shutdown(self): self.down = True
+
+    p = KernelPool()
+    short, long_, tail = _S(), _S(), _S()
+    p._sessions = {("t1::env::data", "python"): short,
+                   ("t1::env::dataset", "python"): long_,     # prefix superset
+                   ("t2@site::env::dataset", "python"): tail}
+    n = p.evict_env_sessions("data")
+    assert n == 1 and short.down
+    assert not long_.down and not tail.down            # siblings survive
+    assert len(p._sessions) == 2
+
+
+def test_extend_into_named_env_cached_noop_keeps_kernel(monkeypatch):
+    """ensure_capability(env=…) for a package ALREADY in the env is a no-op:
+    extend returns the same id ('cached'), so the running session must be left
+    intact — evicting it would destroy the user's in-memory state for nothing
+    (the destructive-retry class 60ad6ad2 fixed in the sibling path)."""
+    _setup(monkeypatch)
+    named_envs.create("prjT", "warm", packages=["six"])
+    import content.bio.tools.discovery as d
+    calls: list = []
+    monkeypatch.setattr(d, "_evict_env_kernels",
+                        lambda name: calls.append(name) or 1)
+    r = d._extend_into_named_env("warm", ["six"], {"name": "six"})
+    assert r["status"] == "ready"
+    assert calls == []                       # NO eviction on a cached no-op
+    assert r["installed"] == []
+    assert "already present" in r["note"] and "intact" in r["note"]
+    assert "restarted" not in r["note"]
+    # a genuine new package still mints a new id AND restarts
+    r2 = d._extend_into_named_env("warm", ["click"], {"name": "click"})
+    assert r2["status"] == "ready" and calls == ["warm"]
+    assert "restarted" in r2["note"]
+
+
 # ── 6. cross-platform re-lock: chain replay conflicts → FLATTEN fallback ────
 # (F-ENV-2, found live: replaying an extension chain for a new platform
 # re-hits layer_conflict; the cumulative CONTENT must solve as one flat spec)

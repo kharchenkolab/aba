@@ -121,10 +121,16 @@ class KernelPool:
         holding the prefix open must not outlive its realization). Returns the
         number of sessions shut down; in-memory state in those kernels is gone
         by design — callers must SAY so in their result note."""
+        # EXACT tail match, not substring: scope keys put the env name LAST
+        # (`{thread}::env::{name}`, `{thread}@{site}::env::{name}`), so a
+        # substring `marker in k[0]` test would evict env `foo`'s kernels when
+        # asked to evict env `fo` — any name that is a prefix of another's
+        # (`data` vs `dataset`), destroying unrelated in-memory state. The name is
+        # always terminal, so endswith is the correct exact predicate.
         marker = f"::env::{env_name}"
         n = 0
         with self._lock:
-            for key in [k for k in self._sessions if marker in k[0]]:
+            for key in [k for k in self._sessions if k[0].endswith(marker)]:
                 try:
                     self._sessions.pop(key).shutdown()
                     n += 1
