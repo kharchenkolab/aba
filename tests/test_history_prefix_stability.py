@@ -328,3 +328,29 @@ def test_marginal_band_reuses_in_epochs(monkeypatch):
         f"{divergences} divergences in 20 marginal generations — "
         f"per-generation re-synthesis is back (the third-regime gap)")
     assert band_calls <= 5, f"{band_calls} synth calls in 20 marginal generations"
+
+
+def test_reuse_overshoot_stays_within_its_stated_bound(monkeypatch):
+    """The reuse path deliberately runs OVER budget to stay byte-stable, bounded
+    by a slack quantum. Assert the bound it claims.
+
+    Nothing checked this before, and it was false: the check budgeted the raw
+    summary TEXT while the returned list carries the handoff-framed summary
+    MESSAGE (~216 chars more), so the retained history exceeded threshold+slack
+    by that constant. A stated numeric invariant with no assertion behind it is
+    a comment, not a bound — and this one drifts furthest from truth exactly
+    when slack is tightened toward its floor."""
+    _stub_synth(monkeypatch)
+    hist: list = [{"role": "user", "content": [{"type": "text", "text": "go"}]}]
+    thr = bs._threshold(BUDGET)
+    slack = min(8_000, max(1_500, thr // 4))
+    worst = 0
+    for i in range(30):
+        _grow(hist, i)
+        eff = bs.maybe_summarize("thrBOUND", list(hist),
+                                 budget_chars=BUDGET, tail_keep=TAIL)
+        worst = max(worst, bs._message_chars(eff))
+    assert bs._TIER2_DIAG["reused"] > 0, "reuse path never ran — bound untested"
+    assert worst <= thr + slack, (
+        f"retained history reached {worst} chars, over the stated bound "
+        f"threshold({thr}) + slack({slack}) = {thr + slack}")

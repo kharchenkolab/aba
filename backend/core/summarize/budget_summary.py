@@ -307,10 +307,17 @@ def maybe_summarize(thread_id: Optional[str], messages: list[dict],
             # summary while overshoot < slack, fold once per slack's worth of
             # growth. Bounded over-budget (≤ slack), epochs instead of churn.
             _slack = min(8_000, max(1_500, _threshold(budget_chars) // 4))
-            if _message_chars(remainder) + len(prior) \
-                    <= _threshold(budget_chars) + _slack:
+            # Measure what we RETURN, not the raw summary text: the returned
+            # list carries `_summary_message(prior)`, whose handoff framing adds
+            # ~216 chars that `len(prior)` doesn't see. Budgeting the unwrapped
+            # text made the "over-budget by at most `slack`" claim false by that
+            # constant (measured 3,134 overshoot against a 3,000 slack) — small
+            # here, but it is a CONSTANT, so it grows as a share of the bound
+            # whenever slack approaches its 1,500 floor.
+            _candidate = [_summary_message(prior), *remainder]
+            if _message_chars(_candidate) <= _threshold(budget_chars) + _slack:
                 _TIER2_DIAG["reused"] += 1
-                return [_summary_message(prior), *remainder]
+                return _candidate
         else:
             cov_n, prior = 0, None      # store stale/misaligned → full re-derive
     else:
