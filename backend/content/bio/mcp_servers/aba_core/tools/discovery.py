@@ -197,9 +197,11 @@ def register_discovery_tools(mcp: FastMCP) -> None:
         (or `run_r(env='name', …)` for R). `python_version` (e.g. "3.10") pins
         the interpreter — use it when a package needs a DIFFERENT python than
         the base (an old library that requires <3.11); the isolated env is
-        standalone so it can hold any version. (For R: a *project* install
-        already overrides the base via .libPaths — use this only for a fully
-        project-independent / one-off conflicting lib.)"""
+        standalone so it can hold any version. (For R: the project library
+        covers ordinary package installs; an isolated env is the route when a
+        package needs SYSTEM libraries the base lacks, or a fully independent
+        pinned stack — promote it with set_active_env(name, language='r') so
+        bare run_r uses it.)"""
         from core.runtime.tool_ctx import peek_ctx
         from content.bio.tools import make_isolated_env as _impl
         return _impl({"name": name, "packages": packages or [], "language": language,

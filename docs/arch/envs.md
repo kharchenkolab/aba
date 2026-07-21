@@ -90,6 +90,20 @@ identity). ABA keeps per-project `name → EnvID` handles in `PROJECTS_DIR/<pid>
   solves a fresh one; `extend(name, packages)` adds packages as an `extends_env` layer over the
   current EnvID → a **new** EnvID the handle then points at — it **never installs into a frozen
   env**. Each named env carries its own persistent kernel and its own reproducible lock.
+- **Selection — which env runs a bare call** (`named_envs.resolve_env(project_id, language,
+  explicit=None)`): the ONE policy every execution lane resolves through. An explicit
+  `env=` wins (`''`/reserved names → the default session); else the project's **active
+  pointer** for that language (the `active` namespace of `weft_envs.json`, a per-language
+  map written by `set_active_env(name, language=…)` — bind-time validated: the env must
+  exist and match the slot's language); else the default session. A dangling pointer falls
+  back to the default session with a printed warning. Promotion is what makes an isolated
+  env *ambient*: bare `run_python`/`run_r`, background submits, remote kernel/sync runs,
+  `ensure_capability` installs (and their success probes), and the package-status probes
+  all follow the pointer — for R this is the only route to make a package that needs
+  **system libraries** the base lacks available to bare calls (the session overlay carries
+  packages, never system libs). Census guard: `tests/test_env_resolution.py` forbids
+  private pointer reads and unlisted default-session consumers (rationale-annotated
+  allowlists), so a new lane cannot silently opt out of the policy.
 
 CLI tools that are *executables*, not importable libraries (samtools, STAR, nextflow), are a
 content-addressed **tool env** of their own (`named_envs.ensure_tool_env`), exposed to runs via
@@ -101,12 +115,19 @@ The agent calls `ensure_capability(name)` (`content/bio/tools/discovery.py:884`)
 the capability record (the catalog entity + bundle composition are owned by
 [`bundle-and-content.md`](bundle-and-content.md)) and provisions by target lane:
 
+- **Pointer first.** A request with no `env=` targets the project's **active** env when one
+  is promoted (`_pointer_env` → the named lane below) — the installer must land where bare
+  runs execute, and its success probe runs there too; installing into the default session
+  while user code runs in the promoted env made the installer verify its own success in an
+  env the user's code never enters. An ambiguous language consults both slots; exactly one
+  set slot decides (and fixes the language), two stay ambiguous — never guess.
 - **Default lane → the project session.** A pip/library capability installs **live** into the
   project's default weft session via `project_env.install(...)` (`session_install`). Nothing is
   shadow-stacked on a frozen base: the session is a single coherent weft-solved environment, so an
   install is re-solved against the whole set.
-- **Named lane → a frozen env.** A request scoped to a named env routes to
-  `named_envs.create` / `extend`, which solve a new EnvID rather than mutating one.
+- **Named lane → a frozen env.** A request scoped to a named env (explicitly via `env=`, or
+  implicitly via the active pointer) routes to `named_envs.create` / `extend`, which solve a
+  new EnvID rather than mutating one.
 
 `core/exec/materialize.py` is now only the **subprocess run harness**: `MaterializingExecutor`
 supplies the ABA-runtime venv that *launches* a one-shot script (`_base_env`), while the
@@ -252,10 +273,20 @@ the install-time probe can't run.
   GPU partition (driver new enough), nor build node-arch-specific artifacts (source-only wheels,
   `-march=native`, CUDA extensions) on the target partition. The login-node build is the wrong
   hardware for those; a per-partition build-into-a-job + wheel cache is designed, unbuilt.
-- **Stale in-code docstrings.** `content/bio/tools/discovery.py`'s `ensure_capability` docstring
-  still says "wipeable overlay" and `core/exec/materialize.py`'s module header still describes the
-  `ENVS_DIR/pylib` overlay — both pre-weft text; the code routes to `session_install` / raises.
-  Trust the behavior described above, not those headers.
+- **Stale in-code docstrings.** `core/exec/materialize.py`'s module header still describes the
+  `ENVS_DIR/pylib` overlay — pre-weft text; the code raises. Trust the behavior described
+  above, not that header.
+- **A promoted R env is stateless per call.** Python named envs carry a persistent per-env
+  kernel; R named envs run as one-shots (`named_envs.run_in`), so with an active R env
+  promoted, bare `run_r` state does not persist between calls. Honest but surprising —
+  a per-named-env R kernel is the fix, unbuilt.
+- **Two consumers still compare against the default session regardless of the pointer**
+  (census-allowlisted, with rationale): the provenance env-diff (`lifecycle/revisions.py`,
+  "current env" = default session — a pointer-aware diff is backlog) and the viewer
+  launchers' converters (`viewers/launchers/pagoda3.py` — the converter's own deps live in
+  the platform-managed default session, but a serialized R object whose classes live in the
+  user's promoted env would need *both* stacks at once; a two-sided dependency with no
+  composition story yet).
 - **Direct-path residue outside the default lane.** The default lane — including the
   capability layer's import probes (`_default_probe_argv`, a per-call command builder
   consumed by `verify_python_imports(argv_builder=…)`, so a post-install verify sees the

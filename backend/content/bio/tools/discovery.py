@@ -1184,10 +1184,12 @@ def _pointer_env(pid: str, language: "str | None") -> "tuple[str, str] | None":
 
 
 def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
-    """Materialize a catalogued capability on demand (P1). Python libraries go
-    into the wipeable overlay so the next run_python can import them; non-pip
-    CLI tools (conda) are reported as deferred. A long install is cancellable
-    (Stop) via the turn's cancel_token, and streams phase progress.
+    """Materialize a catalogued capability on demand (P1). Python libraries
+    install live into the project's default weft session — or into the ACTIVE
+    named env when one is promoted (set_active_env) or targeted (env=), so the
+    install lands where bare runs execute; non-pip CLI tools (conda) are
+    reported as deferred. A long install is cancellable (Stop) via the turn's
+    cancel_token, and streams phase progress.
 
     `language` scopes readiness: a capability is only "ready" IN a runtime, so
     the answer must be about the runtime the caller works in. Explicit param
