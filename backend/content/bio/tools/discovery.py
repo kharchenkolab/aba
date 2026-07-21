@@ -945,6 +945,28 @@ def _r_version_in_session(pid: str, libname: str) -> str | None:
         return None
 
 
+def _cran_lane(pid: str, spec: str) -> bool:
+    """Try the substrate's cran layer for one R spec. True if it landed.
+
+    `spec` is the substrate's own vocabulary — a plain name, `name ==X.Y.Z`, or
+    `owner/repo@ref`. We deliberately do NOT pre-parse it into a bespoke
+    `install_github(...)` command: the cran lane composes the session rlib
+    delta-only over a read-only base and its record is the spec string, so the
+    snapshot's solve pins the ref and the frozen env still overlay-realizes.
+    A bespoke installer gets neither (it refuses on a cold base, and where it
+    does run it forces a FULL realize).
+
+    False (not an exception) on failure so the caller can fall back — an older
+    substrate won't recognize a git spec here."""
+    from core.compute import project_env
+    try:
+        project_env.install(pid, "r", [spec], eco="cran")
+        return True
+    except Exception as e:  # noqa: BLE001 — caller falls back
+        print(f"[capability] cran lane declined {spec!r}: {e}", flush=True)
+        return False
+
+
 def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
                           name: str) -> dict:
     """W3.4 pack mode: R capability into the PROJECT's session over the R base
@@ -982,30 +1004,34 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
                 # Second lane: the substrate's cran layer (session rlib riding
                 # the base — delta-only, works on ANY base incl. adopted
                 # read-only mounts, where conda adds AND bespoke installers
-                # refuse with session.cold_base). Bespoke installers remain the
-                # last resort (github/BiocManager have no cran-layer form).
-                _done = False
-                if _src == "cran":
-                    try:
-                        project_env.install(pid, "r", [_pkg], eco="cran")
-                        _done = True
-                    except Exception:  # noqa: BLE001 — fall through to bespoke
-                        _done = False
+                # refuse with session.cold_base).
+                _done = _cran_lane(pid, _pkg)
                 if not _done:
                     _cmd = (f"Rscript -e 'if (!requireNamespace(\"BiocManager\", quietly=TRUE)) "
                             f"install.packages(\"BiocManager\"); BiocManager::install(\"{_pkg}\", "
                             f"update=FALSE, ask=FALSE)'" if _src == "bioconductor" else
                             f"Rscript -e 'install.packages(\"{_pkg}\")'")
-                    project_env.run_installer(pid, "r", _cmd,
+                    project_env.run_installer(pid, "r", _cmd, writes_to="rlib",
                                               note=f"{_src} install of {_pkg} (no conda binary)")
         elif _src == "github":
-            _ref = f', ref="{rp.get("ref")}"' if rp.get("ref") else ""
-            project_env.run_installer(
-                pid, "r",
-                f"Rscript -e 'if (!requireNamespace(\"remotes\", quietly=TRUE)) "
-                f"install.packages(\"remotes\"); remotes::install_github(\"{_pkg}\"{_ref}, "
-                f"upgrade=\"never\", force={str(force).upper()})'",
-                note=f"github install of {_pkg}")
+            # The cran lane speaks the whole spec vocabulary — `owner/repo@ref`
+            # is a first-class source there (weft d51f9fc), composed into the
+            # same session rlib and SHA-pinned by the snapshot's solve. Routing
+            # it to the bespoke installer instead made every GitHub R package
+            # uninstallable on an adopted base, which is where this deployment
+            # lives (live 2026-07-21: session.cold_base, "a bespoke installer
+            # needs a writable clone of the base").
+            _ref = rp.get("ref")
+            if not _cran_lane(pid, f"{_pkg}@{_ref}" if _ref else _pkg):
+                # Substrate predates the vocabulary → the old lane, which still
+                # works wherever the base is writable.
+                _r = f', ref="{_ref}"' if _ref else ""
+                project_env.run_installer(
+                    pid, "r",
+                    f"Rscript -e 'if (!requireNamespace(\"remotes\", quietly=TRUE)) "
+                    f"install.packages(\"remotes\"); remotes::install_github(\"{_pkg}\"{_r}, "
+                    f"upgrade=\"never\", force={str(force).upper()})'",
+                    writes_to="rlib", note=f"github install of {_pkg}")
         else:
             return {"status": "error", "name": name,
                     "note": f"unknown R source {_src!r} (cran|bioconductor|conda|github)"}

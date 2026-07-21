@@ -200,10 +200,16 @@ def ensure(pid: str, language: str) -> dict:
     rt = res.get("runtime")
     for add in additions:                      # replay the recorded deltas
         if add.get("eco") == "installer":      # captured arbitrary installer
-            ires = named_envs._sync(ad.session_run_installer(
-                sid, add.get("cmd") or "", note=add.get("note", "")))
+            _ikw = {"writes_to": add["writes_to"]} if add.get("writes_to") else {}
+            try:
+                ires = named_envs._sync(ad.session_run_installer(
+                    sid, add.get("cmd") or "", note=add.get("note", ""), **_ikw))
+            except TypeError:                  # substrate predates writes_to
+                ires = named_envs._sync(ad.session_run_installer(
+                    sid, add.get("cmd") or "", note=add.get("note", "")))
         else:
-            ires = named_envs._sync(ad.session_install(sid, **{add["eco"]: add["specs"]}))
+            ires = named_envs._sync(ad.session_install(
+                sid, **{add["eco"]: add["specs"]}, **(add.get("opts") or {})))
         # installs are the FLIP moment (base → own clone): the install result
         # carries the fresh runtime; the start-time block is stale after one
         rt = (ires or {}).get("runtime") or rt
@@ -285,11 +291,20 @@ def interpreter(pid: str, language: str) -> Path:
 
 
 def install(pid: str, language: str, specs: list[str], *,
-            eco: str = "pypi") -> dict:
+            eco: str = "pypi", **opts) -> dict:
     """LIVE install into the project's default session (the running kernel
     sees it after an importlib cache invalidation — no restart). Recorded in
     the registry so a rebuilt session replays it, and the snapshot goes dirty
-    (the next background job/export mints a fresh EnvID)."""
+    (the next background job/export mints a fresh EnvID).
+
+    `specs` speak the SUBSTRATE's spec vocabulary, not a reduced one: for
+    eco='cran' that is plain names, `name ==X.Y.Z`, and `owner/repo@ref` git
+    sources (weft d51f9fc). Extra `opts` (e.g. `cran_repos=[url]` for a
+    secondary repository) ride through to the substrate verb and are recorded
+    with the addition, so a rebuilt session replays the same request — send
+    them here rather than pre-resolving to a bespoke installer, which is a
+    different lane with different (full-realize, refuses-on-cold-base)
+    semantics."""
     if eco not in _ECOS:
         raise ValueError(f"eco must be one of {_ECOS} (R goes conda-first on "
                          f"warm bases; eco='cran' layers a session rlib on ANY "
@@ -299,9 +314,11 @@ def install(pid: str, language: str, specs: list[str], *,
     s = ensure(pid, language)
     ad = _adapter.get_compute()
     out = dict(named_envs._sync(
-        ad.session_install(s["session_id"], **{eco: list(specs)})) or {})
+        ad.session_install(s["session_id"], **{eco: list(specs)}, **opts)) or {})
     row = get(pid, language)
-    row["additions"].append({"eco": eco, "specs": list(specs), "at": time.time()})
+    row["additions"].append({"eco": eco, "specs": list(specs),
+                             **({"opts": dict(opts)} if opts else {}),
+                             "at": time.time()})
     row["rev"] = int(row.get("rev") or 0) + 1
     _save_row(pid, language, row)
     # an install is the FLIP moment (lazy session materializes its own clone):
@@ -313,17 +330,38 @@ def install(pid: str, language: str, specs: list[str], *,
             "prefix": str(p) if p else None, **out}
 
 
-def run_installer(pid: str, language: str, cmd: str, *, note: str = "") -> dict:
+def run_installer(pid: str, language: str, cmd: str, *, note: str = "",
+                  writes_to: Optional[str] = None) -> dict:
     """Escape hatch (captured + portable): arbitrary installer inside the
     session — e.g. source-CRAN `Rscript -e 'install.packages(…)'`. Rides
-    snapshots as a labeled post_install step."""
+    snapshots as a labeled post_install step.
+
+    `writes_to='rlib'|'pylib'` DECLARES the write target as the session layer
+    (weft d51f9fc): the substrate provisions that layer, points R_LIBS/PIP_TARGET
+    at it, and runs the command over the read-only base — so it works on an
+    adopted base, where an UNdeclared installer is refused (it could write
+    anywhere in the prefix). Declare it whenever the command only adds to the
+    session layer. Cost, per the substrate's own result: a post_install spec
+    realizes FULL rather than overlay, so prefer `install()` when the addition
+    fits the spec vocabulary. Passed through only when set, so an older
+    substrate that lacks the parameter is unaffected."""
     pid = str(pid)
     s = ensure(pid, language)
     ad = _adapter.get_compute()
-    out = dict(named_envs._sync(
-        ad.session_run_installer(s["session_id"], cmd, note=note)) or {})
+    _kw = {"writes_to": writes_to} if writes_to else {}
+    try:
+        out = dict(named_envs._sync(
+            ad.session_run_installer(s["session_id"], cmd, note=note, **_kw)) or {})
+    except TypeError:
+        if not _kw:
+            raise
+        # substrate predates writes_to — retry undeclared (refuses on a cold
+        # base, but works wherever it worked before)
+        out = dict(named_envs._sync(
+            ad.session_run_installer(s["session_id"], cmd, note=note)) or {})
     row = get(pid, language)
     row["additions"].append({"eco": "installer", "cmd": cmd, "note": note,
+                             **({"writes_to": writes_to} if writes_to else {}),
                              "at": time.time()})
     row["rev"] = int(row.get("rev") or 0) + 1
     _save_row(pid, language, row)
