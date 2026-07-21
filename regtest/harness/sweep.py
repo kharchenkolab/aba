@@ -5,16 +5,23 @@ Runs every v2 scenario in a FRESH PROCESS (the resource-accumulation lesson: a
 long-lived in-process runner piles up kernels/zmq sockets), scores each, writes a
 timestamped scorecard, and diffs against the accepted baseline to flag regressions.
 
-  python regtest/harness/sweep.py                 # Haiku breadth (cheap; mechanical only)
+  python regtest/harness/sweep.py --smoke --workers 4     # routine tier (~10 min)
+  python regtest/harness/sweep.py --workers 4     # full Haiku breadth (nightly)
   python regtest/harness/sweep.py --opus          # Opus science (rubric judge on)
   python regtest/harness/sweep.py --only tpm,survival     # subset
   python regtest/harness/sweep.py --regen         # regenerate scenario data first
   python regtest/harness/sweep.py --accept        # promote THIS run to the baseline
   python regtest/harness/sweep.py --diagnose      # run the forensic agent on regressed FAILs
 
-Cost tiers (see README): weekly = Haiku; monthly/on-demand = --opus; forensics only
-on regressions. Credentials come from ABA_LIVE_ENV (default /tmp/aba_8000.env).
-Exit code is nonzero if any regression vs the baseline.
+Cost tiers (see README): routine = --smoke; weekly = Haiku; monthly/on-demand =
+--opus; forensics only on regressions. Credentials come from ABA_LIVE_ENV
+(default /tmp/aba_8000.env). Exit code is nonzero if any regression vs baseline.
+
+Three verdicts, never conflated: MEASURED (ran + scored), UNMEASURED (had a
+baseline but produced no measurement — lost coverage, NOT a regression), and
+baseline BLIND SPOTS (the reference itself is "errored, no report"). Pre-flight
+refuses a run that could not measure at all — an unprovisioned eval home aborts,
+and scenarios with absent declared inputs are skipped before any budget is spent.
 """
 from __future__ import annotations
 import argparse

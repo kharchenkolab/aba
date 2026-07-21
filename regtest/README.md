@@ -50,16 +50,51 @@ bash regtest/scenarios/_regen_all.sh          # cached; ABA_REGEN_FORCE=1 to reb
 
 **Then sweep** (credentials come from `ABA_LIVE_ENV`, default `/tmp/aba_8000.env`):
 ```sh
-python regtest/harness/sweep.py               # Haiku breadth (cheap; mechanical only)
-python regtest/harness/sweep.py --opus        # Opus science (rubric judge on)
+python regtest/harness/sweep.py --smoke --workers 4   # routine tier (~10 min)
+python regtest/harness/sweep.py --workers 4           # full Haiku breadth (nightly)
+python regtest/harness/sweep.py --opus                # Opus science (rubric judge on)
 python regtest/harness/sweep.py --only tpm,survival
-python regtest/harness/sweep.py --accept      # promote THIS run to the baseline
-python regtest/harness/sweep.py --diagnose    # forensic on regressed FAILs
+python regtest/harness/sweep.py --accept              # promote THIS run to the baseline
+python regtest/harness/sweep.py --diagnose            # forensic on regressed FAILs
 ```
-Each scenario runs in a **fresh process** (sequential) — a long-lived in-process
-runner accumulates kernels/zmq sockets and destabilizes late scenarios. The sweep
-writes a scorecard to `reports/`, **diffs it against `baselines/<mode>.json`**, and
-exits nonzero if any scenario regressed. `--accept` updates the baseline.
+Each scenario runs in a **fresh process** — a long-lived in-process runner
+accumulates kernels/zmq sockets and destabilizes late scenarios. `--workers N`
+runs N of those processes at once (they share only a read-only eval home; the
+real constraint is API rate limits, and the infra detector flags collisions).
+
+**Two tiers.** `--smoke` runs only scenarios tagged `smoke: true` — both `_infra`
+scenarios plus the sole carriers of the rarest step-kinds — and is the routine
+gate. The full set is the nightly instrument. The smoke tier is *armed*: fewer
+than two tagged scenarios is a SETUP-ERROR, not a fast green run. Two coverage
+dimensions (background jobs, directory-store outputs) are honestly absent from
+it — every candidate needs a scheduler or GPU.
+
+**Pre-flight.** Before spending any API budget the sweep refuses a run that
+could not measure anything: an **unprovisioned eval home** (no deployed
+`installation/`, or a stub skill catalog) aborts outright — otherwise every
+scenario fails on capability refusals and the scorecard reads as a product
+collapse. Scenarios whose **declared inputs are absent** from their `data/` tree
+are predicted statically and skipped up front, instead of one app-boot at a
+time. `harness/fixtures.py` holds the single definition of "are the declared
+inputs present?", shared with the runner's post-staging guard — when those two
+drifted, the sweep skipped scenarios the runner would have run *and* the runner
+killed scenarios whose nested inputs (`sub/in.csv`) were staged perfectly well.
+
+The sweep writes a scorecard to `reports/`, **diffs it against
+`baselines/<mode>.json`**, and exits nonzero if any scenario regressed.
+
+**Three verdicts, never conflated** — a row that measured nothing is not a
+failing row:
+
+| category | meaning | counts as regression? | baked by `--accept`? |
+|---|---|---|---|
+| measured | the scenario ran and was scored | yes, if below baseline | yes |
+| unmeasured | had a baseline, produced no measurement (setup gap, dead token) | **no** — lost coverage, reported separately | no |
+| baseline blind spot | its *reference* is "errored, no report" | can never regress | — |
+
+Collapsing "unmeasured" into "regression" is how four fixture-staging errors
+once drowned two genuine regressions in a headline of six. `--accept` bakes only
+measured rows, and says out loud what it refused.
 
 **Run one scenario directly** (debugging):
 ```sh
@@ -81,11 +116,14 @@ sweep against a VBC deployment) sets the vars it needs — all overridable:
 | `ABA_ENVS_DIR` | provisioning overlay (MUST be shared-FS under a `slurm` submitter — see envs.md) | `regtest/.envs_cache` (runner) |
 | `ABA_PLACEMENT_STUDY_DIR` | placement-study output; `study.py` + `analyze.py` share this one var | `$TMPDIR/aba_placement_study` |
 | `ABA_SCENARIO` / `ABA_SCENARIO_MODEL` | which scenario / model tier | `_selftest_session` / Haiku |
+| `ABA_REGTEST_WORKERS` | default parallel scenario processes (`--workers` overrides) | `1` |
+| `ABA_REGTEST_MIN_SKILLS` | pre-flight floor for a provisioned skill catalog | `50` |
 
 `_regen_all.sh` **fails loud with guidance** if no python with the scenario deps is found
 (rather than silently FAILing every generator).
 
 ## Cost tiers & cadence
+- **Routine → smoke tier** (`--smoke --workers 4`): ~10 min; the gate you actually run.
 - **Weekly → Haiku breadth** (`sweep.py`): cheap; catches robustness + gross regressions.
 - **Monthly / on-demand → Opus science** (`sweep.py --opus`): rubric-level quality.
 - **On regression → forensics** (`--diagnose`): Opus deep-dive on the flagged steps only.
