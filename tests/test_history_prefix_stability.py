@@ -293,3 +293,38 @@ def test_aged_image_clears_tier2_saturation(monkeypatch):
     assert bs._TIER2_DIAG["saturated"] == sat_tail, (
         "saturation persists after the image demoted — the two tiers aren't "
         "composing (upstream cap ineffective)")
+
+
+def test_marginal_band_reuses_in_epochs(monkeypatch):
+    """The THIRD regime (between headroom and saturation): the tail fits the
+    budget, but the post-advance remainder sits just under it, so pre-slack the
+    reuse check failed one generation after every advance — re-synthesis every
+    generation (30/39 measured at 12k/tail-20). The char-space slack must buy
+    several reuse generations per fold, with the saturated path staying cold
+    (this band is NOT saturation — that distinction is the finding)."""
+    calls = _stub_synth(monkeypatch)
+    hist: list = []
+    for i in range(30):
+        _grow(hist, i)
+    tail_chars = bs._message_chars(hist[-8:])
+    budget = tail_chars + 400              # tail fits; remainder won't, for long
+    sat_before = bs._TIER2_DIAG["saturated"]
+    prev = None
+    divergences = 0
+    calls_before = calls["n"]
+    for i in range(30, 50):
+        _grow(hist, i)
+        eff = bs.maybe_summarize("thrMARG", list(hist),
+                                 budget_chars=budget, tail_keep=8)
+        if prev is not None and not _is_prefix(prev, eff):
+            divergences += 1
+        prev = eff
+    band_calls = calls["n"] - calls_before
+    assert bs._TIER2_DIAG["reused"] > 0, "reuse never fired in the marginal band"
+    assert bs._TIER2_DIAG["saturated"] == sat_before, (
+        "saturated path fired — this scenario drifted out of the marginal band "
+        "and no longer tests it")
+    assert divergences <= 5, (
+        f"{divergences} divergences in 20 marginal generations — "
+        f"per-generation re-synthesis is back (the third-regime gap)")
+    assert band_calls <= 5, f"{band_calls} synth calls in 20 marginal generations"

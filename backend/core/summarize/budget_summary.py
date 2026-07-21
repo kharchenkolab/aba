@@ -294,7 +294,21 @@ def maybe_summarize(thread_id: Optional[str], messages: list[dict],
         cov_n, prior = existing
         if 0 < cov_n <= len(messages) - 1:
             remainder = messages[cov_n:]
-            if _message_chars(remainder) + len(prior) <= _threshold(budget_chars):
+            # Reuse tolerates OVERSHOOT up to a slack quantum. Without it there
+            # is a third regime between headroom and saturation — the MARGINAL
+            # band, where the tail fits the budget but the post-advance
+            # remainder (tail + summary) sits just under it, so one
+            # generation's growth re-crosses the line and the code
+            # re-synthesizes EVERY generation (full prefix break + a
+            # synchronous LLM call each time; measured 30/39 divergences at a
+            # 12k budget with a 20-message tail). Advancing further can't help
+            # — the advance is already maximal (the tail floor) — so the
+            # quantum goes on THIS check, in char space: serve the stored
+            # summary while overshoot < slack, fold once per slack's worth of
+            # growth. Bounded over-budget (≤ slack), epochs instead of churn.
+            _slack = min(8_000, max(1_500, _threshold(budget_chars) // 4))
+            if _message_chars(remainder) + len(prior) \
+                    <= _threshold(budget_chars) + _slack:
                 _TIER2_DIAG["reused"] += 1
                 return [_summary_message(prior), *remainder]
         else:
