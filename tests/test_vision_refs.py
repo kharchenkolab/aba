@@ -45,10 +45,12 @@ def _envelope(path="/x/a.png"):
             "_vision_ref": {"tool": "view_file", "path": path}}
 
 
-def test_pack_swaps_image_for_ref_and_never_stores_base64():
-    out = vr.pack_tool_result_content(_envelope())
+def test_pack_swaps_image_for_ref_and_never_stores_base64(tmp_path):
+    p = tmp_path / "a.png"
+    p.write_bytes(_PNG)
+    out = vr.pack_tool_result_content(_envelope(path=str(p)))
     assert out[0]["type"] == "text"
-    assert out[1]["type"] == "image_ref" and out[1]["path"] == "/x/a.png"
+    assert out[1]["type"] == "image_ref" and out[1]["path"] == str(p)
     assert "AAAA" not in str(out), "payload leaked into durable history"
 
 
@@ -155,3 +157,42 @@ def test_path_based_view_round_trips_to_a_real_image(tmp_path):
     assert "image" in kinds, (
         f"path-based ref did not materialize (got {kinds}) — the model sees no "
         f"image, so view_artifact is functionally dead on this shape")
+# Appended to tests/test_vision_refs.py post-sweep. Armed sequence: append,
+# run → BOTH must FAIL on 639091e4 (PROVEN); apply the fix script; green.
+# (The entity-less shape itself is already guarded by their 639091e4 test —
+# not duplicated here.)
+
+
+def test_pdf_rasterization_mints_no_ref(tmp_path):
+    """Resolvable is not reproducible: a rasterized page's ref would pass
+    is_file() on the .pdf yet the egress materializer cannot decode it — the
+    model would get a stub for a page it just asked to see. The PDF branch
+    must keep inline blocks (Tier-1 ages them out)."""
+    from content.bio.mcp_servers.aba_core.tools import entity_ops as eo
+    pdf = tmp_path / "d.pdf"
+    pdf.write_bytes(b"%PDF-1.4 fake")
+    env = eo._vision_envelope("ent_1", "figure", "t", str(pdf), {},
+                              "d.pdf (page 1/2)", _PNG, "image/png",
+                              materializable=False)
+    assert "_vision_ref" not in env
+    content = vr.pack_tool_result_content(env)
+    assert any(b.get("type") == "image" for b in content), \
+        "PDF page lost its inline image"
+    # and the degenerate end-to-end: even if a pdf-path ref EXISTED in old
+    # history, egress must degrade to a stub, never an image_ref leak
+    msgs = [{"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "t1", "content": [
+            {"type": "image_ref", "tool": "view_artifact",
+             "path": str(pdf), "media_type": "image/png"}]}]}]
+    out = vr.materialize_image_refs(msgs, k=4)
+    flat = out[0]["content"][0]["content"]
+    assert not any(b.get("type") == "image_ref" for b in flat)
+
+
+def test_pack_backstop_refuses_unresolvable_ref(tmp_path):
+    """Correctness over cost: a ref that resolves to nothing at MINT time is
+    not swapped in — inline blocks are kept."""
+    env = _envelope(path=str(tmp_path / "never-existed.png"))
+    content = vr.pack_tool_result_content(env)
+    assert any(b.get("type") == "image" for b in content)
+    assert not any(b.get("type") == "image_ref" for b in content)

@@ -1155,7 +1155,7 @@ def register_entity_ops_tools(mcp: FastMCP) -> None:
             extra = (f" (page {idx + 1}/{n_pages})" if n_pages > 1 else "")
             return _vision_envelope(entity_id, ent_type, title, str(ap_url or disk),
                                     ent_meta, disk.name + extra, img_bytes,
-                                    "image/png")
+                                    "image/png", materializable=False)
 
         # ── Tabular branch ──────────────────────────────────────────
         if suffix in (".csv", ".tsv", ".parquet"):
@@ -1199,7 +1199,8 @@ def register_entity_ops_tools(mcp: FastMCP) -> None:
 
 
 def _vision_envelope(entity_id, ent_type, title, ap_str, ent_meta,
-                     display_name, img_bytes, media_type):
+                     display_name, img_bytes, media_type,
+                     materializable=True):
     """Build the standard vision-bearing tool_result envelope."""
     import base64
     img_b64 = base64.b64encode(img_bytes).decode("ascii")
@@ -1229,8 +1230,12 @@ def _vision_envelope(entity_id, ent_type, title, ap_str, ent_meta,
         # image it asked to look at. `_resolve_ref_path` tries `path` first
         # behind an is_file() check, so an /artifacts/ URL here simply falls
         # through to the entity lookup.
-        "_vision_ref": {"tool": "view_artifact", "entity_id": entity_id,
-                        "path": ap_str, "media_type": media_type},
+        # Minted only when re-reading the ref reproduces what the model saw:
+        # a rasterized PDF page resolves (the .pdf is_file()) but cannot be
+        # re-materialized — resolvable is not reproducible.
+        **({"_vision_ref": {"tool": "view_artifact", "entity_id": entity_id,
+                            "path": ap_str, "media_type": media_type}}
+           if materializable else {}),
     }
 
 

@@ -113,6 +113,11 @@ def pack_tool_result_content(envelope: dict) -> list | None:
     ref = envelope.get("_vision_ref")
     if not isinstance(ref, dict):
         return blocks                    # legacy producer — inline payload
+    if _resolve_ref_path(ref) is None:
+        # Correctness over cost: a ref unresolvable at MINT time would hand
+        # the model a stub for an image it just asked to see. Keep the inline
+        # payload (Tier-1's k_image_keep ages it out).
+        return blocks
     out: list = []
     for b in blocks:
         if isinstance(b, dict) and b.get("type") == "image":
