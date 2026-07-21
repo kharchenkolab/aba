@@ -99,3 +99,41 @@ def test_cache_hit_check_threshold_and_arming():
     assert unmeasured and "UNMEASURED" in unmeasured[0]
     assert cache_hit_check({"cache_hit_min": 0.8}, {"cache_read": 0}) \
         and "UNMEASURED" in cache_hit_check({"cache_hit_min": 0.8}, {})[0]
+
+
+@pytest.mark.parametrize("mode", ["full", "standard", "lean", "lean_small"])
+def test_registration_forbids_the_offer_and_names_the_trigger(mode):
+    """The rule was DELIVERED, quoted back verbatim by the agent, and still lost
+    (live 2026-07-21): it produced the curation bullet's offer template with
+    "Register" swapped in — "Want me to register these as a Dataset entity?" —
+    and waited for the user.
+
+    Two causes, two assertions. (1) The offer must be forbidden IN THE SAME
+    BREATH as the offer template is taught, or the concrete pattern beats the
+    abstract permission that follows it. (2) The trigger must be the data
+    LANDING, not "before analyzing" — the failure happened on a download-and-stop
+    turn where no analysis was pending, so that cue never fired."""
+    from content.bio.prompts.build import build_system
+    stable, _ = build_system(TOOLS, role="primary", intent="fetch data", ctx={}, mode=mode)
+    low = stable.lower()
+    assert "offer" in low and "register" in low
+    # (1) an explicit prohibition on offering to register
+    assert ("never offer to register" in low) or ("register it yourself, never offer" in low), (
+        f"{mode}: nothing forbids OFFERING to register — the observed failure")
+    # (2) the landing trigger, not an analysis-time cue
+    assert "the moment the data lands" in low, (
+        f"{mode}: the registration trigger is not the data landing")
+
+
+def test_registration_rule_precedes_the_curation_prohibition():
+    """Order is load-bearing: the curation bullet supplies a concrete offer
+    TEMPLATE, and a permission that follows a template gets pattern-matched away.
+    Registration must come first."""
+    from pathlib import Path
+    body = (Path(__file__).resolve().parents[1]
+            / "backend/system_bundle/rules/behavior.md").read_text()
+    reg = body.index("Register the data an analysis is ABOUT")
+    cur = body.index("Curation is the USER's gesture")
+    assert reg < cur, (
+        "the curation prohibition precedes the registration rule again — the "
+        "offer template will out-compete it")
