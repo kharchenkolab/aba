@@ -167,10 +167,13 @@ def test_dump_has_cache_control_on_stable_system():
         # The cache-controlled block IS the stable prefix (find it by the marker, not
         # by index 0 — a CC marker may sit at index 0 in oauth_cc mode).
         assert cc[0]["text"] == "STABLE-SYS-PREFIX"
-        # Dynamic tail is present but uncached — sanity-check both.
-        assert any(b["text"] == "DYN-TAIL" for b in dump["system"])
-        assert all("cache_control" not in b
-                   for b in dump["system"] if b.get("text") == "DYN-TAIL")
+        # The volatile tail must NOT be in `system` at all. Anything there sits in the
+        # cache prefix of the MESSAGES breakpoint too (order: tools → system →
+        # messages), so a per-turn tail here re-bills the whole conversation every turn
+        # it changes. It rides the last message instead — see
+        # core.llm.place_volatile_tail and tests/test_catalog_caching.py.
+        assert all(b.get("text") != "DYN-TAIL" for b in sys_blocks), \
+            "volatile tail is back in the system array — cached prefix is unstable again"
 
 
 def test_dump_has_cache_control_on_last_tool():
@@ -190,8 +193,15 @@ def test_dump_has_cache_control_on_last_message_block():
         asyncio.run(_open_and_close(ctx))
         dump = _load_one_dump(dump_dir)
         last_msg = dump["messages"][-1]
-        last_block = last_msg["content"][-1]
-        assert last_block["cache_control"] == {"type": "ephemeral"}
+        content = last_msg["content"]
+        # The volatile tail is delivered LAST and stays uncached; the cache mark sits on
+        # the block BEFORE it, so the tail falls outside every cached prefix. Ordering
+        # is the whole point — a mark after the tail would put per-turn bytes back
+        # inside the cached prefix and re-bill the conversation each turn.
+        assert content[-1]["text"] == "DYN-TAIL", "volatile tail not delivered last"
+        assert "cache_control" not in content[-1], "the volatile tail must stay uncached"
+        assert content[-2]["cache_control"] == {"type": "ephemeral"}, \
+            "cache mark must land on the last real block, ahead of the volatile tail"
 
 
 def test_dump_matches_actual_api_call_kwargs():
