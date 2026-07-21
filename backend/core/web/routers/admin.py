@@ -44,10 +44,10 @@ def admin_tool_stats(days: int = 30, project_id: str | None = None):
         # decoration (the Tier-2 `saturated` counter is THE live tell for
         # oversized content retained in history; the wire tripwire sat red for
         # 73 requests once because nothing watched it).
-        from core.summarize.budget_summary import _TIER2_DIAG
+        from core.summarize.budget_summary import tier2_diag
         from core.llm import _WIRE_DIAG
         return {"tools": stats(days=days), "generations": generation_stats(days=days),
-                "history_compression": dict(_TIER2_DIAG),
+                "history_compression": tier2_diag(),
                 "wire": dict(_WIRE_DIAG)}
 
 

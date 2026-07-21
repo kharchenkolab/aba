@@ -831,16 +831,14 @@ async def stream_response(
             # (cache_control breakpoints are stripped before hashing so they
             # don't cause spurious mismatches).
             try:
-                import hashlib as _h, json as _j
-                _canon = _j.dumps(
-                    [{"role": m["role"],
-                      "content": [{k: v for k, v in b.items() if k != "cache_control"}
-                                  if isinstance(b, dict) else b
-                                  for b in m["content"]] if isinstance(m["content"], list) else m["content"]}
-                     for m in llm_history],
-                    sort_keys=True, default=str,
-                ).encode("utf-8")
-                _hist_sha = _h.sha256(_canon).hexdigest()[:12]
+                import hashlib as _h
+                # SAME boundary as the send side: prep_wire_hash applies the
+                # api_messages transform before hashing. Hashing raw history
+                # here made every attachment-bearing or halt-shaped thread
+                # mismatch on every request — the tripwire sat red through
+                # normal operation and a real wire mutation was invisible.
+                from core.llm import prep_wire_hash
+                _hist_sha = prep_wire_hash(llm_history)
                 _sys_sha = _h.sha256((system or "").encode("utf-8")).hexdigest()[:12]
                 print(f"[llm-prep] run={turn.run_id} sys_sha={_sys_sha} "
                       f"hist_sha={_hist_sha} n_raw={len(history)} n_eff={len(llm_history)}",

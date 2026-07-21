@@ -86,12 +86,40 @@ def build_cached_blocks(system: str, tools: list, *, cc_marker: bool):
 # interleaved prep/sent pairs from counting as false mismatches.
 from collections import deque as _deque
 _RECENT_PREP_SHAS: "_deque[str]" = _deque(maxlen=64)
-_WIRE_DIAG: dict = {"hash_match": 0, "hash_mismatch": 0, "last_mismatch": ""}
+_WIRE_DIAG: dict = {"hash_match": 0, "hash_mismatch": 0, "last_mismatch": "",
+                    "sends_scored": 0}
+
+
+def wire_hash(messages) -> str:
+    """THE canonical envelope hash both ends of the wire compare — one
+    function, or the two sides drift and the tripwire cries wolf.
+    cache_control is stripped (caching metadata, not input semantics)."""
+    import hashlib as _h
+    import json as _j
+    canon = _j.dumps(
+        [{"role": m.get("role"), "content": _strip_cc(m.get("content"))}
+         for m in messages],
+        sort_keys=True, default=str).encode("utf-8")
+    return _h.sha256(canon).hexdigest()[:12]
+
+
+def prep_wire_hash(llm_history) -> str:
+    """What guide scores BEFORE send: the SAME boundary as the send side.
+    The send path hashes messages after the api_messages transform (chip
+    blocks stripped, empty text dropped, emptied messages substituted), so
+    the prep side must apply that transform too — hashing the raw history
+    made every attachment-bearing or halt-shaped thread mismatch on every
+    request, and the tripwire sat red through normal operation."""
+    from core.runtime.history_prep import api_messages
+    return wire_hash(api_messages(llm_history))
 
 
 def _note_wire_hash(sent_sha: str) -> None:
-    """Score one sent-side hash against the recent prep-side set. No-op until
-    the first prep hash arrives (so runtimes that bypass guide never count)."""
+    """Score one sent-side hash against the recent prep-side set. Unarmed
+    sends (no prep hash yet — runtimes that bypass guide) don't score, but
+    they DO count: sends_scored is the armed-ness signal that lets a reader
+    tell frozen zeros from no traffic."""
+    _WIRE_DIAG["sends_scored"] += 1
     if not _RECENT_PREP_SHAS:
         return
     if sent_sha in _RECENT_PREP_SHAS:
@@ -247,6 +275,16 @@ class _RealStream:
         # / "0" / "" disables.
         import os as _os, hashlib as _hashlib, time as _time
         import json as _json
+        # Score the wire hash UNCONDITIONALLY — the tripwire is a production
+        # instrument, not a debug feature. It used to live inside the dump
+        # block below, so ABA_RAW_REQUEST_DIR=off (or an unwritable dir)
+        # silently disarmed it: frozen zeros indistinguishable from no
+        # traffic, the dead-diagnostic class the armed convention forbids.
+        try:
+            _hist_sha = wire_hash(_pre_tail_messages)
+            _note_wire_hash(_hist_sha)
+        except Exception:  # noqa: BLE001 — diagnostics must never break a turn
+            _hist_sha = "?"
         _rawdir = config.settings.raw_request_dir.get()
         if _rawdir and _rawdir.lower() not in ("off", "0", "false", ""):
             try:
@@ -258,17 +296,8 @@ class _RealStream:
                 with open(_fn, "w") as _f:
                     _json.dump(_payload, _f, default=str)
                 # Compact one-line summary on stdout so you can spot mismatches
-                # without parsing JSONs. Logs the SHA-256 of the message envelope
-                # (canonicalized, cache_control stripped — that's metadata, not
-                # input semantics) so it's directly comparable to the same hash
-                # computed from the dumped turn_context JSON.
-                _canon = _json.dumps(
-                    [{"role": m["role"], "content": _strip_cc(m.get("content"))}
-                     for m in _pre_tail_messages],
-                    sort_keys=True, default=str,
-                ).encode("utf-8")
-                _hist_sha = _hashlib.sha256(_canon).hexdigest()[:12]
-                _note_wire_hash(_hist_sha)
+                # without parsing JSONs; the sha is the shared wire_hash, so it's
+                # directly comparable to [llm-prep]'s.
                 _full_sys = (self._system or "") + (self._dynamic_system or "")
                 # sys_sha over the STABLE block alone — same boundary as
                 # [llm-prep]'s (the dynamic tail is per-turn by design; its size
