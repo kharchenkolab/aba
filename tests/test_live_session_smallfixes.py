@@ -49,21 +49,11 @@ def test_find_by_produced_name_matches_leaf_and_full_relpath(monkeypatch):
     leaf must still resolve — that is the whole point of the index."""
     from core.exec import artifacts as A
 
-    rows = [{"exec_id": "ex2"}, {"exec_id": "ex1"}]           # newest first
-
-    class _Cur:
-        def fetchall(self):
-            return rows
-
-    class _C:
-        def execute(self, *_a):
-            return _Cur()
-        def __enter__(self):
-            return self
-        def __exit__(self, *_a):
-            return False
-
-    monkeypatch.setattr(A.exec_records, "_conn", lambda: _C())
+    # Patch the store API, not the raw connection: `_conn` is confined to
+    # exec_records by the store-port invariant, and a test that reaches past the
+    # API repeats the very violation the code was corrected for.
+    monkeypatch.setattr(A.exec_records, "list_recent_exec_ids",
+                        lambda limit=200: ["ex2", "ex1"])      # newest first
     monkeypatch.setattr(A, "list_artifacts", lambda ex, kind=None: {
         "ex2": [{"original_name": "run_b/markers_dotplot.png", "url": "/artifacts/p/bbb.png"}],
         "ex1": [{"original_name": "qc.png", "url": "/artifacts/p/aaa.png"}],
@@ -81,9 +71,9 @@ def test_find_by_produced_name_never_raises(monkeypatch):
     """It sits on a resolution path — a broken index must degrade to 'no match'."""
     from core.exec import artifacts as A
 
-    def _boom():
+    def _boom(limit=200):
         raise RuntimeError("index gone")
-    monkeypatch.setattr(A.exec_records, "_conn", _boom)
+    monkeypatch.setattr(A.exec_records, "list_recent_exec_ids", _boom)
     assert A.find_by_produced_name("x.png") == []
 
 
