@@ -174,30 +174,54 @@ def _observed_model(rows) -> "str | None":
     return "+".join(seen) if seen else None
 
 
-def _model_truth_banner(scorecard) -> "str | None":
-    """Warn when the tier's ASSUMED model is not the one that ran.
+def _mech_tolerance(mode: str, observed: "str | None") -> int:
+    """Mechanical dip forgiven before a scenario counts as regressed.
 
-    This is not cosmetic. The mechanical tolerance is keyed to the tier name
-    (`mech_tol` = 2 for 'haiku', 0 otherwise) on the reasoning that a small
-    model is noisy. At a deployment whose default agent is large, the routine
-    tier runs that large model and still gets the small model's slack — so a
-    genuine 1-2 step regression is forgiven by a rule written for a model that
-    never ran, and the run is billed at the large model's rate while the README
-    calls it the cheap tier. Observed 2026-07-22: every routine scorecard said
-    `claude-haiku-4-5`; every wire request said `claude-opus-4-7`."""
+    Keyed to the model that actually SERVED the turns, not the tier name: the
+    ±2 slack exists because a small model's phrasing jitters run-to-run on
+    must_mention-style gates, so it applies only when a haiku-class model ran.
+    At a deployment whose default agent is large, the routine tier runs that
+    large model and must be held to the strict bar — a 1–2 step dip under a
+    deterministic model is a real behavior change, not noise. (Decision
+    2026-07-22: the routine tier deliberately follows the deployment's default
+    agent; the tolerance follows the truth of what ran.)
+
+    `ABA_REGTEST_MECH_TOL` overrides everything, explicitly. Degenerate
+    shapes: no wire read (absent/"unknown") falls back to the tier's
+    assumption — the pre-truth behavior, never a silent 0 that would flag
+    phantom regressions on a run that measured nothing about the model; a
+    MIXED sweep ("m1+m2") gets the slack only if EVERY member is haiku-class."""
+    env = os.environ.get("ABA_REGTEST_MECH_TOL")
+    if env is not None:
+        return int(env)
+    if mode != "haiku":
+        return 0
+    if not observed or observed == "unknown":
+        return 2
+    return 2 if all("haiku" in m for m in observed.split("+")) else 0
+
+
+def _model_truth_banner(scorecard) -> "str | None":
+    """One line when the tier's ASSUMED model is not the one that ran.
+
+    Informational, not an alarm: the mechanical tolerance is keyed to the
+    model that actually served the turns (`_mech_tolerance`), so a mismatch
+    no longer mis-forgives regressions — what remains true is the label and
+    the bill (the tier name implies a model class; the run is billed at the
+    observed model's rate). Stays silent on match, unknown, or absent —
+    same arming as when this was the MODEL MISMATCH alarm."""
     meta = scorecard["meta"]
     got, assumed = meta.get("agent_model"), meta.get("agent_model_assumed")
     if not got or got == "unknown" or got == assumed:
         return None
-    tol = os.environ.get("ABA_REGTEST_MECH_TOL")
-    return (f"⚠ MODEL MISMATCH — this tier assumes `{assumed}` but `{got}` served the "
-            f"turns. The mechanical tolerance"
-            + (f" (ABA_REGTEST_MECH_TOL={tol})" if tol else
-               " (2 steps for the 'haiku' tier, 0 otherwise)")
-            + f" is keyed to the ASSUMED model, so regressions inside that window are "
-              f"being forgiven by a rule written for a model that did not run — and the "
-              f"cost is `{got}`'s, not `{assumed}`'s. Set ABA_SCENARIO_MODEL to pin the "
-              f"agent, or ABA_REGTEST_MECH_TOL to match what actually runs.")
+    tol = _mech_tolerance(str(meta.get("mode") or ""), got)
+    explicit = os.environ.get("ABA_REGTEST_MECH_TOL")
+    return (f"ℹ tier/model note — this tier assumes `{assumed}` but `{got}` "
+            f"served the turns (the routine tier follows the deployment's "
+            f"default agent). Mechanical tolerance applied: {tol}"
+            + (f" (ABA_REGTEST_MECH_TOL={explicit})" if explicit is not None
+               else " — keyed to the model that RAN, so the strict bar holds")
+            + f". The cost of this sweep is `{got}`'s, not `{assumed}`'s.")
 
 
 def run_scenario(sid, mode):
@@ -364,10 +388,10 @@ def diff_vs_baseline(scorecard, mode):
         print(f"[sweep] ⚠ baseline {base_p} UNREADABLE ({e}) — diff skipped; "
               f"restore it from git or re-accept a clean run")
         return None, [], []
-    # Mode-aware mech tolerance: Haiku's mechanical must_mention gates jitter ±2 steps
-    # run-to-run (phrasing varies, occasional kernel-hang), so a small dip is noise, not
-    # a regression — Haiku is a COARSE robustness net. Opus is deterministic → strict (0).
-    mech_tol = int(os.environ.get("ABA_REGTEST_MECH_TOL", "2" if mode == "haiku" else "0"))
+    # Truth-keyed mech tolerance: the ±2 haiku slack applies only when a
+    # haiku-class model actually served the turns — see _mech_tolerance.
+    mech_tol = _mech_tolerance(
+        mode, (scorecard.get("meta") or {}).get("agent_model"))
     regressions, unmeasured = [], []
     for sid, cur in scorecard["scenarios"].items():
         b = base.get(sid)
@@ -656,8 +680,8 @@ def main() -> int:
     print(f"\n=== sweep {mode}: {t['full_pass']}/{len(scenarios)} scenarios full-pass, "
           f"{t['mech_pass']}/{t['mech_total']} steps · "
           f"regressions={len(regressions)}{unmeas} ===")
-    # On the console too: "regressions=0" is the line people act on, and it is
-    # exactly the number the tolerance-vs-model mismatch inflates.
+    # On the console too: "regressions=0" is the line people act on — the note
+    # tells them which model's determinism that number was scored against.
     _mb = _model_truth_banner(scorecard)
     if _mb:
         print(f"    {_mb}")

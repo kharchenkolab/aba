@@ -464,16 +464,60 @@ def test_observed_model_joins_distinct_and_defaults_none():
 
 def test_model_truth_banner_fires_only_on_genuine_mismatch(monkeypatch):
     mk = lambda got, assumed: {"meta": {"agent_model": got,
-                                        "agent_model_assumed": assumed}}
+                                        "agent_model_assumed": assumed,
+                                        "mode": "haiku"}}
     assert sweep._model_truth_banner(mk("m", "m")) is None          # match
     assert sweep._model_truth_banner(mk("unknown", "m")) is None    # no read
     assert sweep._model_truth_banner(mk(None, "m")) is None         # absent
     monkeypatch.delenv("ABA_REGTEST_MECH_TOL", raising=False)
     b = sweep._model_truth_banner(mk("big-model", "small-model"))
-    assert b and "MODEL MISMATCH" in b
-    assert "big-model" in b and "small-model" in b
+    assert b and "big-model" in b and "small-model" in b
+    # informational now, not an alarm — and it must state the tolerance that
+    # was ACTUALLY applied (0 here: big-model is not haiku-class)
+    assert "tolerance applied: 0" in b.lower()
     monkeypatch.setenv("ABA_REGTEST_MECH_TOL", "3")
     assert "ABA_REGTEST_MECH_TOL=3" in sweep._model_truth_banner(mk("a", "b"))
+
+
+def test_mech_tolerance_is_keyed_to_the_observed_model(monkeypatch):
+    """The ±2 slack exists for small-model phrasing jitter — it must follow
+    the model that RAN, not the tier label. Pre-fix, an opus-served routine
+    sweep got haiku's slack and two genuine ▼-1 dips were forgiven by a rule
+    written for a model that never ran (observed 2026-07-22)."""
+    monkeypatch.delenv("ABA_REGTEST_MECH_TOL", raising=False)
+    assert sweep._mech_tolerance("haiku", "claude-haiku-4-5") == 2
+    assert sweep._mech_tolerance("haiku", "claude-opus-4-7") == 0
+    # degenerate: no wire read → the tier assumption stands (never a silent
+    # strict bar for a run that measured nothing about the model)
+    assert sweep._mech_tolerance("haiku", None) == 2
+    assert sweep._mech_tolerance("haiku", "unknown") == 2
+    # mixed sweep: slack only if EVERY member is haiku-class
+    assert sweep._mech_tolerance("haiku", "claude-haiku-4-5+claude-opus-4-7") == 0
+    # the opus tier is strict no matter what served
+    assert sweep._mech_tolerance("opus", "claude-haiku-4-5") == 0
+    # explicit override wins over everything, both directions
+    monkeypatch.setenv("ABA_REGTEST_MECH_TOL", "1")
+    assert sweep._mech_tolerance("haiku", "claude-haiku-4-5") == 1
+    assert sweep._mech_tolerance("haiku", "claude-opus-4-7") == 1
+
+
+def test_diff_applies_truth_keyed_tolerance(monkeypatch, tmp_path):
+    """End-to-end through diff_vs_baseline: the same ▼-1 dip is a REGRESSION
+    when a non-haiku model served the haiku tier (strict bar) and jitter when
+    haiku itself ran — the behavioral consequence of the keying, not just the
+    helper's arithmetic."""
+    monkeypatch.delenv("ABA_REGTEST_MECH_TOL", raising=False)
+    monkeypatch.setattr(sweep, "BASELINES", tmp_path)
+    (tmp_path / "haiku.json").write_text(json.dumps(
+        {"scenarios": {"s": _row(mech_pass=9, mech_total=9)}}))
+    rows = {"s": _row(mech_pass=8, mech_total=9)}
+    for served, expect_reg in (("claude-opus-4-7", True),
+                               ("claude-haiku-4-5", False)):
+        _, regressions, _ = sweep.diff_vs_baseline(
+            {"meta": {"agent_model": served}, "scenarios": rows}, "haiku")
+        assert bool(regressions) is expect_reg, (
+            f"▼-1 under {served}: expected regression={expect_reg}, "
+            f"got {regressions}")
 
 
 def test_bundle_and_report_agree_on_the_observed_model():
