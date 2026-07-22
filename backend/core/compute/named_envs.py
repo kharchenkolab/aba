@@ -215,7 +215,18 @@ def _spec_for(project_id: str, name: str, language: str,
         _all_conda = [*conda, *(conda_packages or [])]
         kern = ([] if any(p.split()[0] == "r-irkernel" for p in _all_conda)
                 else ["r-irkernel"])
-        deps: dict = {"conda": ["r-base =4.4.*", *kern, *_all_conda]}
+        # r-base: caller-constraint-wins. A caller-PINNED r-base replaces the
+        # baked default (a different R is the point of an isolated env — the
+        # exact analogue of python_version); a bare 'r-base' dedupes away.
+        # Splicing both emitted a duplicate spec, which the substrate now
+        # refuses at intake — truthfully, but with no lever the agent holds.
+        def _is_rbase(p: str) -> bool:
+            return p.split()[0].split("=")[0].strip() == "r-base"
+        _caller_rbase = [p for p in _all_conda if _is_rbase(p)]
+        _all_conda = [p for p in _all_conda if not _is_rbase(p)]
+        _pinned = next((p for p in _caller_rbase if p.strip() != "r-base"), None)
+        _rbase = _pinned or "r-base =4.4.*"
+        deps: dict = {"conda": [_rbase, *kern, *_all_conda]}
         if cran:
             deps["cran"] = cran
         return {"name": label, "deps": deps}

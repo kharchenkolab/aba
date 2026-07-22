@@ -325,6 +325,72 @@ def test_probe_name_for_github_is_the_repo_tail_not_the_subdir():
     assert _probe_target_name(["org/repo/R@dev"], {}, req2) == "RealName"
 
 
+# ── stage D: target resolution parity + the r-base dedupe ───────────────────
+
+def test_spec_for_rbase_caller_constraint_wins():
+    """D2: the baked 'r-base =4.4.*' pin duplicated a caller-supplied r-base
+    (weft now refuses dup specs at intake — truthful, but unactionable by the
+    agent). The rule: a caller-CONSTRAINED r-base replaces the baked pin (a
+    different R is the point of an isolated env — same as python_version); a
+    bare 'r-base' dedupes away."""
+    from core.compute.named_envs import _spec_for
+    def _conda(spec):
+        return spec["deps"]["conda"]
+    # bare r-base → exactly one entry, the baked default
+    c = _conda(_spec_for("p", "e", "r", [], None, ["r-base"]))
+    assert [x for x in c if x.split()[0].split("=")[0] == "r-base"] == \
+        ["r-base =4.4.*"], c
+    # constrained caller pin REPLACES the baked default
+    c = _conda(_spec_for("p", "e", "r", [], None, ["r-base =4.3.*"]))
+    rb = [x for x in c if x.split()[0].split("=")[0] == "r-base"]
+    assert rb == ["r-base =4.3.*"], c
+    # packages-list r-base (prefix-routed) gets the same treatment
+    c = _conda(_spec_for("p", "e", "r", ["r-base =4.2.*"], None, None))
+    rb = [x for x in c if x.split()[0].split("=")[0] == "r-base"]
+    assert rb == ["r-base =4.2.*"], c
+    # no caller r-base → baked default, once; r-irkernel dedupe unaffected
+    c = _conda(_spec_for("p", "e", "r", [], None, ["r-irkernel"]))
+    assert c.count("r-irkernel") == 1
+    assert [x for x in c if x.split()[0].split("=")[0] == "r-base"] == \
+        ["r-base =4.4.*"], c
+
+
+def test_pointer_and_explicit_env_produce_identical_plans(monkeypatch):
+    """F2's dissolution, proven: the SAME rich request through the explicit
+    env= door and through the promoted-pointer door reaches the substrate as
+    the SAME plan (specs, eco, request fields). Promotion must never change
+    what a request means."""
+    import content.bio.tools.discovery as d
+    import core.compute.named_envs as ne
+    plans: list = []
+    monkeypatch.setattr("core.catalog.resolve_capability",
+                        lambda n: {"name": "pkgx", "archetype": "r_package",
+                                   "provisioning": {"r": {"source": "cran",
+                                                          "package": "pkgx"}}})
+    monkeypatch.setattr(ne, "resolve",
+                        lambda pid, name: {"language": "r", "env_id": "e1"})
+    monkeypatch.setattr(ne, "extend",
+                        lambda pid, name, pkgs, *, eco=None, **k:
+                        plans.append((list(pkgs), eco)) or {"env_id": "e2"})
+    monkeypatch.setattr(ne, "run_in",
+                        lambda *a, **k: {"ok": True, "stdout": "CAPQ=2.5",
+                                         "stderr": "", "returncode": 0})
+    monkeypatch.setattr(d, "_evict_env_kernels", lambda name: 0)
+    rich = {"name": "pkgx", "source": "github", "package": "org/repo",
+            "subdir": "R", "ref": "dev", "min_version": "2.0"}
+    # door 1: explicit env=
+    monkeypatch.setattr(d, "_pointer_env", lambda pid, lang: None)
+    out1 = d.ensure_capability({**rich, "env": "grow"}, {"thread_id": "t"})
+    # door 2: promoted pointer, no env=
+    monkeypatch.setattr(d, "_pointer_env", lambda pid, lang: ("grow", "r"))
+    out2 = d.ensure_capability({**rich}, {"thread_id": "t"})
+    assert plans[0] == plans[1], (
+        f"promotion changed the request's meaning: {plans}")
+    assert out1["status"] == out2["status"] == "ready"
+    assert out1.get("requires") == out2.get("requires") == {
+        "package": "repo", "min_version": "2.0"}
+
+
 # ── stage B: verify — readiness is the REQUEST's postcondition ──────────────
 # The named lane certified solves (D4/F4: ready-on-solve, cached=ready, dead
 # verify_imports). Stage B: compose the claim from the request (weft's ONE
