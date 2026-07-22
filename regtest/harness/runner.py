@@ -942,7 +942,10 @@ def main() -> int:
                "rubric_mean": rubric_summary, "report": report, "timeline": timeline}
     (RUN / "report.json").write_text(json.dumps(summary, indent=2, default=str))
     (RUN / "bundle.json").write_text(json.dumps(
-        {"scenario": SCENARIO, "mode": mode, "agent_model": os.environ.get("ABA_MODEL"),
+        {"scenario": SCENARIO, "mode": mode,
+         # same observed-model source as report.json — the flag-derived value
+         # was the fiction the wire read replaced; two files must not disagree
+         "agent_model": wire_model or os.environ.get("ABA_MODEL"),
          "pid": pid, "tid": tid, "steps": bundle_steps,
          "dirs": {"raw_requests": "rawreq/", "turn_contexts": "turnlog/", "project": "projects/"}},
         indent=2, default=str))

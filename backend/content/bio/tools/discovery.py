@@ -152,8 +152,9 @@ def inspect_env(input_: dict, ctx: dict | None = None) -> dict:
             # realization; a mount-scoped prefix through its activation
             _argv = _penv.exec_argv(str(pid or "_none"), "r", ["-e", expr])
         except (ComputeError, RuntimeError) as e:
+            from core.compute.errors import describe
             return {"status": "error", "name": name, "language": "r",
-                    "loads": False, "error": f"R session unavailable: {e}"}
+                    "loads": False, "error": f"R session unavailable: {describe(e)}"}
         try:
             proc = subprocess.run(_argv, capture_output=True,
                                   text=True, timeout=120)
@@ -320,8 +321,9 @@ def set_active_env(input_: dict, ctx: dict | None = None) -> dict:
     try:
         named_envs.set_active(pid, name, language)
     except ComputeError as e:
+        from core.compute.errors import describe
         return {"status": "error", "name": name, "language": language,
-                "note": f"{e.detail or e.code} — call inspect_env() for the "
+                "note": f"{describe(e)} — call inspect_env() for the "
                         f"named-env catalog, or make_isolated_env to create it."}
     runner = "run_r" if language == "r" else "run_python"
     out: dict = {"status": "ok", "language": language}
@@ -368,8 +370,9 @@ def evict_env(input_: dict, ctx: dict | None = None) -> dict:
     try:
         freed = named_envs.evict(pid, name, site=site)
     except ComputeError as e:
+        from core.compute.errors import describe
         return {"status": "error", "name": name,
-                "note": f"could not evict '{name}': {e.detail or e.code}"}
+                "note": f"could not evict '{name}': {describe(e)}"}
     except Exception as e:  # noqa: BLE001
         return {"status": "error", "name": name, "note": f"could not evict '{name}': {e}"}
     scope = f"site '{site}'" if site else "all sites"
@@ -381,8 +384,9 @@ def evict_env(input_: dict, ctx: dict | None = None) -> dict:
         try:
             named_envs.forget(pid, name)
         except ComputeError as e:
+            from core.compute.errors import describe
             return {**out, "status": "error",
-                    "note": out["note"] + f" BUT forget failed: {e.detail or e.code}"}
+                    "note": out["note"] + f" BUT forget failed: {describe(e)}"}
         out["forgotten"] = True
         out["note"] += f" '{name}' is now gone from the project's named-env registry."
     return out
@@ -978,9 +982,6 @@ def _r_version_in_session(pid: str, libname: str) -> str | None:
         return None
 
 
-_LAST_LANE_ERROR: dict = {}   # spec+rendered error from the most recent declined lane
-
-
 def _BIOC_RELEASE() -> str:
     """Bioconductor release to pull from. Overridable per deployment; the default
     tracks the release the R base pack is built against."""
@@ -1011,8 +1012,14 @@ def _bioc_repos() -> list:
             f"https://bioconductor.org/packages/{rel}/data/experiment"]
 
 
-def _cran_lane(pid: str, spec: str, *, repos: "list | None" = None) -> bool:
-    """Try the substrate's cran layer for one R spec. True if it landed.
+def _cran_lane(pid: str, spec: str,
+               *, repos: "list | None" = None) -> "tuple[bool, str | None]":
+    """Try the substrate's cran layer for one R spec. Returns
+    ``(landed, rendered_error)`` — the decline reason travels WITH the request
+    as a return value, never through shared state (a module-global "last lane
+    error" attributed one request's diagnosis to another under concurrent tool
+    calls, and a stale decline from an earlier request to a later unrelated
+    failure).
 
     `spec` is the substrate's own vocabulary — a plain name, `name ==X.Y.Z`, or
     `owner/repo@ref`. We deliberately do NOT pre-parse it into a bespoke
@@ -1028,22 +1035,36 @@ def _cran_lane(pid: str, spec: str, *, repos: "list | None" = None) -> bool:
     try:
         project_env.install(pid, "r", [spec], eco="cran",
                             **({"cran_repos": list(repos)} if repos else {}))
-        return True
+        return True, None
     except Exception as e:  # noqa: BLE001 — caller falls back
         from core.compute.errors import describe
-        print(f"[capability] cran lane declined {spec!r}: {describe(e)}", flush=True)
-        _LAST_LANE_ERROR["spec"], _LAST_LANE_ERROR["err"] = spec, describe(e)
-        return False
+        err = describe(e)
+        print(f"[capability] cran lane declined {spec!r}: {err}", flush=True)
+        return False, err
 
 
 # A source build that died in configure/compile, as opposed to a bad name, a
 # 404 or a version conflict. Matched against the RENDERED error (describe()),
-# so these are the strings R's own build machinery emits.
+# so these are the strings R's own build machinery emits. Kept SPECIFIC: the
+# generic forms ("no such file or directory", "not found in the") also appear
+# in exec failures and registry misses, and a false positive appends the
+# system-library lecture to errors it can only mislead — the header-missing
+# signature is the ``.h:`` form, not the bare phrase. This list is a FALLBACK:
+# a typed substrate stage decides first (see _syslib_way_out), and the tracked
+# end-state is weft classifying build-stage failures itself (alongside the
+# rc-0-on-failed-build fix) so this taxonomy can be deleted.
 _SYSLIB_SIGNS = (
-    "configuration failed", "pkg-config", "no such file or directory",
-    "cannot find -l", "compilation failed", "c++ compiler", "c compiler",
-    "unable to load shared object", "was not compiled", "not found in the",
+    "configuration failed", "configure: error", "pkg-config",
+    ".h: no such file", "fatal error:", "cannot find -l",
+    "undefined reference", "compilation failed", "compilation terminated",
+    "c++ compiler", "c compiler", "unable to load shared object",
+    "was not compiled",
 )
+
+# Substrate stages that end BEFORE any compile of the requested package —
+# solve/staging/submit/infra failures cannot be a missing system library, so
+# the remedy is suppressed no matter what the rendered text happens to match.
+_PRE_BUILD_STAGES = ("solve", "staging", "submit", "infra")
 
 
 def _landed_or_fail(libname: str) -> str:
@@ -1062,7 +1083,8 @@ def _landed_or_fail(libname: str) -> str:
             f'loadable\\n", file=stderr()); quit(status=1) }}')
 
 
-def _syslib_way_out(rendered: str, libname: str, pkg: str) -> str:
+def _syslib_way_out(rendered: str, libname: str, pkg: str,
+                    stage: "str | None" = None) -> str:
     """The NEXT STEP to append when a build died for a missing system library.
 
     Diagnosis without a remedy still costs the agent the turn. Live 2026-07-22,
@@ -1077,20 +1099,29 @@ def _syslib_way_out(rendered: str, libname: str, pkg: str) -> str:
     transitively; naming the C library explicitly was not needed).
 
     Appended only on a build-stage failure — on a typo'd name or a 404 this
-    advice is noise, and noise in an error is how a real hint gets skipped."""
+    advice is noise, and noise in an error is how a real hint gets skipped.
+    The substrate's typed `stage` decides first: a solve/staging/submit/infra
+    failure ended before any compile of this package, so no text match can
+    make the remedy apply; the substring signs are the fallback for errors
+    that carry no stage."""
+    if stage in _PRE_BUILD_STAGES:
+        return ""
     low = (rendered or "").lower()
     if not any(s in low for s in _SYSLIB_SIGNS):
         return ""
-    env_name = f"{(libname or pkg or 'pkg').lower()}-env"
+    # The R library name is the suggestion's base — `pkg` can be a repo path
+    # (owner/repo), which composes a malformed package spec.
+    _base = (libname or (pkg or "pkg").split("/")[-1]).lower()
+    env_name = f"{_base}-env"
     return (f" || NEXT STEP — this looks like a missing SYSTEM library, not a "
             f"missing R package. The project session can add R packages but "
             f"never a system library (it is a library dir over a read-only "
             f"base), so retrying here will fail the same way. An ISOLATED env "
             f"is a full solve and CAN pull system dependencies: "
             f"make_isolated_env(name='{env_name}', language='r', "
-            f"packages=['r-{(pkg or libname).lower()}']), then either "
-            f"run_r(env='{env_name}', code=…) per call or "
-            f"set_active_env('{env_name}', language='r') to make it ambient. "
+            f"packages=['r-{_base}']), then "
+            f"set_active_env('{env_name}', language='r') to make it ambient "
+            f"(or run_r(env='{env_name}', code=…) for a one-off). "
             f"You do not need to name the C library — the solver pulls it. "
             f"CAVEAT: a promoted env moves the run lanes, not the viewer "
             f"launchers' converters — if THIS package is needed to render a "
@@ -1110,7 +1141,11 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
     from core.exec import r as rexec
     pid = str(projects.current() or "default")
     rp = dict((cap.get("provisioning") or {}).get("r") or {})
-    for _k in ("ref", "source", "package", "subdir"):
+    # `library` is an agent-facing override too: the load-verify name when it
+    # differs from the package/repo name (mixed-case CRAN names, monorepo
+    # subdir packages) — without it a SUCCESSFUL install can be verified
+    # under the wrong name and reported as a failure.
+    for _k in ("ref", "source", "package", "subdir", "library"):
         if input_.get(_k):
             rp[_k] = input_[_k]
     _src = rp.get("source", "cran")
@@ -1125,6 +1160,7 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
         return {"status": "ready", "name": cap.get("name"), "archetype": "r_package",
                 "library": libname, "version": installed,
                 "note": f"Already available — library({libname}) {installed} works in run_r."}
+    _lane_err: "str | None" = None      # this REQUEST's cran-lane decline, if any
     try:
         if _src in ("cran", "bioconductor", "conda"):
             conda_name = _pkg if _pkg.startswith(("r-", "bioconductor-")) else (
@@ -1147,8 +1183,9 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
                 # ecosystem, with no hint that the conda lane is what actually
                 # refused (live 2026-07-22). The CRAN name is the library name.
                 _cran_name = libname if _src == "conda" else _pkg
-                _done = _cran_lane(pid, _cran_name,
-                                   repos=_bioc_repos() if _src == "bioconductor" else None)
+                _done, _lane_err = _cran_lane(
+                    pid, _cran_name,
+                    repos=_bioc_repos() if _src == "bioconductor" else None)
                 if not _done:
                     _repo = _cran_repo()
                     _cmd = (f"Rscript -e 'options(repos=c(CRAN=\"{_repo}\")); "
@@ -1174,7 +1211,8 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
             # on it (live 2026-07-21 — read as "repo missing").
             _ref, _sub = rp.get("ref"), (rp.get("subdir") or "").strip("/")
             _spec = _pkg + (f"/{_sub}" if _sub else "") + (f"@{_ref}" if _ref else "")
-            if not _cran_lane(pid, _spec):
+            _ok, _lane_err = _cran_lane(pid, _spec)
+            if not _ok:
                 # Substrate predates the vocabulary → the old lane, which still
                 # works wherever the base is writable. It takes `_spec`, not
                 # `_pkg` + a separate ref= : remotes' own grammar already
@@ -1199,9 +1237,10 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
         # "session installer failed" and guesses — live 2026-07-21 it concluded
         # the GitHub repo did not exist when the package was simply in a subdir.
         _note = f"R install into the project env failed: {describe(e)}"
-        if _LAST_LANE_ERROR.get("err") and _LAST_LANE_ERROR["err"] not in _note:
-            _note += f" | cran lane: {_LAST_LANE_ERROR['err']}"
-        _note += _syslib_way_out(_note, libname, _pkg)
+        if _lane_err and _lane_err not in _note:
+            _note += f" | cran lane: {_lane_err}"
+        _note += _syslib_way_out(_note, libname, _pkg,
+                                 stage=getattr(e, "stage", None))
         return {"status": "error", "name": name, "archetype": "r_package",
                 "note": _note}
     new_ver = _r_version_in_session(pid, libname)
@@ -1214,11 +1253,23 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
         _note = (f"Installed, but library({libname}) is not loadable in the "
                  f"project R env — NOT marking ready. This is what a build that "
                  f"reported success while producing nothing looks like.")
-        if _LAST_LANE_ERROR.get("err"):
-            _note += f" | cran lane: {_LAST_LANE_ERROR['err']}"
+        if _lane_err and _lane_err not in _note:
+            _note += f" | cran lane: {_lane_err}"
         _note += _syslib_way_out(_note, libname, _pkg)
         return {"status": "error", "name": name, "archetype": "r_package",
                 "library": libname, "note": _note}
+    if min_version and not rexec.version_ge(new_ver, min_version):
+        # The postcondition must be the REQUEST's, not "something loads": an
+        # upgrade whose build died leaves the OLD version loadable, and
+        # asserting loadability alone reports the upgrade as ready.
+        _note = (f"Installed, but library({libname}) is {new_ver} while "
+                 f">= {min_version} was requested — the upgrade did NOT land; "
+                 f"NOT marking ready.")
+        if _lane_err and _lane_err not in _note:
+            _note += f" | cran lane: {_lane_err}"
+        _note += _syslib_way_out(_note, libname, _pkg)
+        return {"status": "error", "name": name, "archetype": "r_package",
+                "library": libname, "version": new_ver, "note": _note}
     # a stale loaded namespace in the running R kernel can pin the old build
     rexec.r_unload_namespace(libname, (ctx or {}).get("thread_id"))
     return {"status": "ready", "name": cap.get("name"), "archetype": "r_package",
@@ -1630,8 +1681,10 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         try:
             _probe_cmd = _default_probe_argv()
         except (ComputeError, RuntimeError) as ce:
+            from core.compute.errors import describe
             return {"status": "error", "name": name,
-                    "note": f"the python environment pack is not available: {ce}"}
+                    "note": f"the python environment pack is not available: "
+                            f"{describe(ce)}"}
         if _probe_cmd is None:
             return {"status": "error", "name": name,
                     "note": "no python environment pack is declared for this deployment"}
@@ -1661,7 +1714,9 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
             # from the agent-facing note. Log it for the server console.
             import traceback as _tb
             print(f"[ensure_capability] materialize failed for {name!r}:\n{_tb.format_exc()}", flush=True)
-            return {"status": "error", "name": name, "note": f"materialization failed: {e}"}
+            from core.compute.errors import describe
+            return {"status": "error", "name": name,
+                    "note": f"materialization failed: {describe(e)}"}
         # Authoritatively resolve the import name (seed override → auto-detect),
         # so the agent never guesses `import <pipname>` and thrashes.
         imp = cap.get("import_name") or _detect_import_name(list(prov["pip"]))
@@ -1735,8 +1790,9 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
                           [_spec] if isinstance(_spec, str) else list(_spec),
                           eco="conda")
         except Exception as e:  # noqa: BLE001
+            from core.compute.errors import describe
             if _mod:
-                return _mod_covered(f"isn't needed there and failed: {e}")
+                return _mod_covered(f"isn't needed there and failed: {describe(e)}")
             from core.compute.errors import ComputeError as _CE
             if isinstance(e, _CE) and e.code == "session.cold_base":
                 # refusal-with-lever: on an adopted/mounted (cold-cache) base a
@@ -1754,7 +1810,8 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
                                  f"solve; then ensure_capability(..., env=name). The isolated "
                                  f"env solves as a delta over the base and fetches only "
                                  f"what's missing.")}
-            return {"status": "error", "name": name, "note": f"conda install failed: {e}"}
+            return {"status": "error", "name": name,
+                    "note": f"conda install failed: {describe(e)}"}
         _note = ("Installed into the project's weft session; the binary is on PATH — "
                  "invoke it from run_python via subprocess.")
         if _mod:
@@ -1824,8 +1881,10 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         try:
             _bev.require("r")
         except (ComputeError, RuntimeError) as ce:
+            from core.compute.errors import describe
             return {"status": "error", "name": name,
-                    "note": f"the R environment pack is not available: {ce}"}
+                    "note": f"the R environment pack is not available: "
+                            f"{describe(ce)}"}
         return _ready(_ensure_r_via_session(cap, input_, ctx, name))
     return {"status": "error", "name": name, "note": "capability has no recognized provisioning."}
 

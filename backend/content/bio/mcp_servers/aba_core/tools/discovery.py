@@ -254,6 +254,15 @@ def register_discovery_tools(mcp: FastMCP) -> None:
                               "looks for DESCRIPTION at the root and fails as if "
                               "the repository were missing."
                           )] = None,
+                          library: Annotated[str | None, Field(
+                              description="The R library name to load-verify "
+                              "when it differs from the package/repo name — "
+                              "mixed-case CRAN names for a conda-named package, "
+                              "or a monorepo subdir package whose name is not "
+                              "the repo basename. Without it the post-install "
+                              "check can probe the wrong name and report a "
+                              "successful install as a failure."
+                          )] = None,
                           min_version: str | None = None,
                           force: bool = False,
                           language: Annotated[str | None, Field(
@@ -304,11 +313,13 @@ def register_discovery_tools(mcp: FastMCP) -> None:
             return {"status": "error", "note": "ensure_capability needs at least one name."}
         overrides = {k: v for k, v in
                      (("source", source), ("package", package), ("ref", ref),
-                      ("subdir", subdir), ("min_version", min_version)) if v}
+                      ("subdir", subdir), ("library", library),
+                      ("min_version", min_version)) if v}
         if len(names) > 1 and overrides:
             return {"status": "error", "note": (
-                "source/package/ref/subdir/min_version apply to a SINGLE capability — pass one "
-                "name with those overrides, or a list of names with none.")}
+                "source/package/ref/subdir/library/min_version apply to a SINGLE "
+                "capability — pass one name with those overrides, or a list of "
+                "names with none.")}
         _env = {"env": env} if env else {}
         if language:
             _env["language"] = language

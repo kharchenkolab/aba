@@ -44,9 +44,10 @@ def _capture_installer(monkeypatch, *, cran_lane_ok=False):
     from content.bio.tools import discovery
     seen: dict = {}
     monkeypatch.setattr(discovery, "_r_version_in_session", lambda *a, **k: None)
-    monkeypatch.setattr(discovery, "_cran_lane",
-                        lambda pid, spec, **k: seen.setdefault("cran_spec", spec)
-                        and cran_lane_ok or cran_lane_ok)
+    monkeypatch.setattr(
+        discovery, "_cran_lane",
+        lambda pid, spec, **k: (seen.setdefault("cran_spec", spec),
+                                (cran_lane_ok, None))[1])
 
     def _run_installer(pid, lang, cmd, **k):
         seen["cmd"] = cmd
@@ -132,7 +133,7 @@ def test_build_failure_names_the_lane_that_can_work(monkeypatch):
     from content.bio.tools import discovery
     from core.compute.errors import ComputeError
     monkeypatch.setattr(discovery, "_r_version_in_session", lambda *a, **k: None)
-    monkeypatch.setattr(discovery, "_cran_lane", lambda *a, **k: False)
+    monkeypatch.setattr(discovery, "_cran_lane", lambda *a, **k: (False, None))
     monkeypatch.setitem(sys.modules, "core.compute", types.SimpleNamespace(
         project_env=types.SimpleNamespace(
             install=lambda *a, **k: (_ for _ in ()).throw(RuntimeError("cold base")),
@@ -170,6 +171,45 @@ def test_way_out_is_not_appended_to_unrelated_failures():
     assert _syslib_way_out("zlib.h: No such file or directory", "x", "x") != ""
 
 
+def test_way_out_near_miss_exec_failure_is_not_a_build_failure():
+    """WIDE, the false-positive side: 'No such file or directory' about the
+    INSTALLER BINARY is an exec failure, not a missing header — the generic
+    phrase must not trigger the system-library lecture (only the header form
+    `<name>.h: No such file` is a build signature)."""
+    from content.bio.tools.discovery import _syslib_way_out
+    assert _syslib_way_out(
+        "cannot run installer: /usr/bin/Rscript: No such file or directory",
+        "x", "x") == ""
+
+
+def test_way_out_trusts_the_typed_stage_over_text():
+    """A solve/staging/submit/infra failure ended BEFORE any compile of this
+    package — no text match may apply the remedy there; and a running/realize
+    stage falls through to the text signs as before."""
+    from content.bio.tools.discovery import _syslib_way_out
+    for pre_build in ("solve", "staging", "submit", "infra"):
+        assert _syslib_way_out(_BUILD_FAIL, "x", "x", stage=pre_build) == "", \
+            pre_build
+    assert _syslib_way_out(_BUILD_FAIL, "x", "x", stage="realize") != ""
+    assert _syslib_way_out(_BUILD_FAIL, "x", "x", stage=None) != ""
+
+
+def test_way_out_advice_is_syntactically_valid():
+    """The suggested follow-up must be executable as written: on the github
+    path `pkg` is owner/repo, and interpolating it into a package spec
+    produces an invalid name containing a slash."""
+    from content.bio.tools.discovery import _syslib_way_out
+    out = _syslib_way_out(_BUILD_FAIL, "MonoPkg", "owner/repo")
+    spec = out.split("packages=['")[1].split("'")[0]
+    assert spec == "r-monopkg" and "/" not in spec, out
+    # absent library name: fall back to the repo BASENAME, never the path
+    out2 = _syslib_way_out(_BUILD_FAIL, "", "owner/repo")
+    spec2 = out2.split("packages=['")[1].split("'")[0]
+    assert "/" not in spec2 and spec2 == "r-repo", out2
+    # promotion is the durable pattern — it must be the primary suggestion
+    assert "set_active_env" in out
+
+
 def test_fallback_installer_asserts_the_package_landed(monkeypatch):
     """`Rscript -e 'install.packages("x")'` exits 0 even when the build died —
     so the lane reports success and the agent gets "Installed, but library(x)
@@ -193,20 +233,24 @@ def test_fallback_installer_asserts_the_package_landed(monkeypatch):
             mp.undo()
 
 
+def _flow(monkeypatch, *, lane, probe=lambda *a, **k: None,
+          installer=lambda *a, **k: {"ok": True},
+          conda=lambda *a, **k: (_ for _ in ()).throw(RuntimeError("cold base"))):
+    """_ensure_r_via_session with every boundary stubbed per-call."""
+    from content.bio.tools import discovery
+    monkeypatch.setattr(discovery, "_r_version_in_session", probe)
+    monkeypatch.setattr(discovery, "_cran_lane", lane)
+    monkeypatch.setitem(sys.modules, "core.compute", types.SimpleNamespace(
+        project_env=types.SimpleNamespace(install=conda,
+                                          run_installer=installer)))
+    return discovery
+
+
 def test_not_loadable_carries_the_diagnosis_and_the_way_out(monkeypatch):
     """The silent-failure exit path returned 89 chars and dropped everything —
-    the lane error AND the remedy — even though _LAST_LANE_ERROR held the
-    build log that named the missing header."""
-    from content.bio.tools import discovery
-    discovery._LAST_LANE_ERROR.clear()
-    discovery._LAST_LANE_ERROR["spec"] = "RNetCDF"
-    discovery._LAST_LANE_ERROR["err"] = _BUILD_FAIL
-    monkeypatch.setattr(discovery, "_r_version_in_session", lambda *a, **k: None)
-    monkeypatch.setattr(discovery, "_cran_lane", lambda *a, **k: True)
-    monkeypatch.setitem(sys.modules, "core.compute", types.SimpleNamespace(
-        project_env=types.SimpleNamespace(
-            install=lambda *a, **k: (_ for _ in ()).throw(RuntimeError("cold base")),
-            run_installer=lambda *a, **k: {"ok": True})))
+    the lane error AND the remedy — even though THIS request's lane decline
+    held the build log that named the missing header."""
+    discovery = _flow(monkeypatch, lane=lambda *a, **k: (False, _BUILD_FAIL))
     res = discovery._ensure_r_via_session(
         {"name": "RNetCDF", "provisioning": {"r": {"source": "cran", "package": "RNetCDF"}}},
         {}, None, "RNetCDF")
@@ -214,7 +258,62 @@ def test_not_loadable_carries_the_diagnosis_and_the_way_out(monkeypatch):
     assert res["status"] == "error"
     assert "netcdf.h" in note, f"lane diagnosis dropped: {note!r}"
     assert "make_isolated_env" in note, f"no way forward: {note!r}"
-    discovery._LAST_LANE_ERROR.clear()
+
+
+def test_lane_diagnosis_is_request_scoped_not_global(monkeypatch):
+    """A decline from an EARLIER request must never surface in a later one:
+    the module-global 'last lane error' attributed request A's diagnosis to
+    request B (stale — never cleared — and racy across worker threads)."""
+    # request A: its lane declines with a distinctive diagnosis
+    discovery = _flow(monkeypatch,
+                      lane=lambda *a, **k: (False, "A-ONLY-DIAGNOSIS-73"))
+    discovery._ensure_r_via_session(
+        {"name": "pA", "provisioning": {"r": {"source": "cran", "package": "pA"}}},
+        {}, None, "pA")
+    # request B: its OWN lane lands cleanly; the install then isn't loadable
+    discovery = _flow(monkeypatch, lane=lambda *a, **k: (True, None))
+    res = discovery._ensure_r_via_session(
+        {"name": "pB", "provisioning": {"r": {"source": "cran", "package": "pB"}}},
+        {}, None, "pB")
+    assert res["status"] == "error"
+    assert "A-ONLY-DIAGNOSIS-73" not in res["note"], (
+        "request A's lane diagnosis leaked into request B's failure note — "
+        "the diagnosis must travel with the request, not through shared state")
+    from content.bio.tools import discovery as _d
+    assert not hasattr(_d, "_LAST_LANE_ERROR"), "the shared-state slot is back"
+
+
+def test_min_version_is_rechecked_after_install(monkeypatch):
+    """The other side of the landed-check: an upgrade whose build died leaves
+    the OLD version loadable — asserting loadability alone reports the
+    upgrade as ready."""
+    discovery = _flow(monkeypatch, lane=lambda *a, **k: (True, None),
+                      probe=lambda *a, **k: "1.0")
+    res = discovery._ensure_r_via_session(
+        {"name": "p", "provisioning": {"r": {"source": "cran", "package": "p"}}},
+        {"min_version": "2.0"}, None, "p")
+    assert res["status"] == "error", (
+        f"upgrade build produced only the old 1.0 yet reported: {res}")
+    assert "2.0" in res["note"] and "1.0" in res["note"]
+
+
+def test_library_override_reaches_probe_and_cran_lane(monkeypatch):
+    """The load-verify name is agent-overridable: a conda-named package's CRAN
+    name is mixed-case, and without the override the retry asks the
+    case-sensitive registry for a name that cannot exist there."""
+    seen: dict = {}
+    discovery = _flow(
+        monkeypatch,
+        lane=lambda pid, spec, **k: (seen.setdefault("spec", spec), (True, None))[1],
+        probe=lambda pid, lib, *a, **k: seen.setdefault("lib", lib) and None)
+    discovery._ensure_r_via_session(
+        {"name": "p", "provisioning": {"r": {"source": "conda",
+                                             "package": "r-mixedcase"}}},
+        {"library": "MixedCase"}, None, "p")
+    assert seen.get("spec") == "MixedCase", (
+        f"CRAN retry used {seen.get('spec')!r} — the case-correct override "
+        f"never reached the lane")
+    assert seen.get("lib") == "MixedCase"
 
 
 # ── 4: the retracted premise ────────────────────────────────────────────────

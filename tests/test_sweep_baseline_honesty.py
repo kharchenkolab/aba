@@ -448,3 +448,39 @@ def test_smoke_tier_filters_and_is_armed():
     assert len(smoke) >= 2, "smoke tier unarmed — tag scenarios with smoke: true"
     assert smoke < full, "smoke tier must be a strict subset of full discovery"
     assert len(smoke) <= len(full) // 2, "smoke tier is not a fast subset"
+
+
+# ── model reporting: the scorecard states what RAN, not what the flag implies ─
+
+def test_observed_model_joins_distinct_and_defaults_none():
+    assert sweep._observed_model({}) is None
+    assert sweep._observed_model({"a": {"agent_model": None}, "b": {}}) is None
+    assert sweep._observed_model({"a": {"agent_model": "m1"}}) == "m1"
+    assert sweep._observed_model(
+        {"a": {"agent_model": "m2"}, "b": {"agent_model": "m1"},
+         "c": {"agent_model": "m1"}}) == "m1+m2", \
+        "distinct models must be STATED, never averaged away"
+
+
+def test_model_truth_banner_fires_only_on_genuine_mismatch(monkeypatch):
+    mk = lambda got, assumed: {"meta": {"agent_model": got,
+                                        "agent_model_assumed": assumed}}
+    assert sweep._model_truth_banner(mk("m", "m")) is None          # match
+    assert sweep._model_truth_banner(mk("unknown", "m")) is None    # no read
+    assert sweep._model_truth_banner(mk(None, "m")) is None         # absent
+    monkeypatch.delenv("ABA_REGTEST_MECH_TOL", raising=False)
+    b = sweep._model_truth_banner(mk("big-model", "small-model"))
+    assert b and "MODEL MISMATCH" in b
+    assert "big-model" in b and "small-model" in b
+    monkeypatch.setenv("ABA_REGTEST_MECH_TOL", "3")
+    assert "ABA_REGTEST_MECH_TOL=3" in sweep._model_truth_banner(mk("a", "b"))
+
+
+def test_bundle_and_report_agree_on_the_observed_model():
+    """bundle.json kept the flag-derived model after report.json moved to the
+    wire read — two forensic files disagreeing about which model ran."""
+    src = (ROOT / "regtest" / "harness" / "runner.py").read_text()
+    bundle_write = src.split('"bundle.json").write_text')[1][:600]
+    assert 'wire_model or os.environ.get("ABA_MODEL")' in bundle_write, (
+        "bundle.json's agent_model is not sourced from the wire read that "
+        "report.json uses")

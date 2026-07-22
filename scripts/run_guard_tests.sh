@@ -36,6 +36,8 @@ FILES=(
   tests/test_vision_refs.py
   tests/test_env_integrity.py
   tests/test_env_resolution.py
+  tests/test_substrate_error_surfacing.py
+  tests/test_syslib_env_routing.py
   tests/test_modules_pack_ready.py
   tests/test_fetch_url_integrity.py
   tests/test_env_agency.py

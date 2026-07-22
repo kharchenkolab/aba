@@ -934,9 +934,9 @@ def _run_remote_sync(input_: dict, ctx: dict | None, project_id: str,
     except ValueError as e:          # unknown site / substrate offline
         return {"status": "error", "note": str(e)}
     except ComputeError as e:        # substrate submit died; row marked failed
+        from core.compute.errors import describe
         return {"status": "error",
-                "note": f"could not submit to {site}: "
-                        f"{e.detail or e.code}"}
+                "note": f"could not submit to {site}: {describe(e)}"}
     sub = WeftSubmitter(site=site)
     cancel_token = (ctx or {}).get("cancel_token")
 
@@ -1118,8 +1118,9 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
         except ValueError as e:      # unknown site= / substrate offline
             return {"status": "error", "note": str(e)}
         except ComputeError as e:    # substrate submit died; row marked failed
+            from core.compute.errors import describe
             return {"status": "error",
-                    "note": f"background submit failed: {e.detail or e.code}"}
+                    "note": f"background submit failed: {describe(e)}"}
         return {
             "deferred": True, "deferred_id": job["id"], "job_id": job["id"],
             "status": "submitted",
@@ -1333,8 +1334,9 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
         except ValueError as e:      # unknown site= / substrate offline
             return {"status": "error", "note": str(e)}
         except ComputeError as e:    # substrate submit died; row marked failed
+            from core.compute.errors import describe
             return {"status": "error",
-                    "note": f"background submit failed: {e.detail or e.code}"}
+                    "note": f"background submit failed: {describe(e)}"}
         return {
             "deferred": True, "deferred_id": job["id"], "job_id": job["id"],
             "status": "submitted",

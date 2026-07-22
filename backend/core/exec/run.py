@@ -50,8 +50,9 @@ def run_python_code(
         try:
             py = named_envs.interpreter(str(project_id), env)
         except ComputeError as ce:
+            from core.compute.errors import describe
             return {"error": f"isolated env {env!r} is not available "
-                             f"(project {project_id}): {ce.detail or ce.code}"}
+                             f"(project {project_id}): {describe(ce)}"}
         except Exception as e:  # noqa: BLE001
             return {"error": f"isolated env {env!r} is not available "
                              f"(project {project_id}): {e}"}
@@ -74,7 +75,9 @@ def run_python_code(
             base_env.require("python")
             _default_rt = project_env.runtime(str(project_id), "python")
         except (ComputeError, RuntimeError) as ce:
-            return {"error": f"the python environment pack is not available: {ce}"}
+            from core.compute.errors import describe
+            return {"error": f"the python environment pack is not available: "
+                             f"{describe(ce)}"}
 
     # Preamble: DATA_DIR prepended. Every run is now a weft env (isolated named
     # env or the project's base-pack session) — STANDALONE, its own site-packages
@@ -228,8 +231,9 @@ def run_r_code(
         try:
             rscript = named_envs.interpreter(str(project_id), env)
         except ComputeError as ce:
+            from core.compute.errors import describe
             return {"error": f"isolated R env {env!r} is not available "
-                             f"(project {project_id}): {ce.detail or ce.code}"}
+                             f"(project {project_id}): {describe(ce)}"}
         except Exception as e:  # noqa: BLE001
             return {"error": f"isolated R env {env!r} is not available "
                              f"(project {project_id}): {e}"}
@@ -250,7 +254,9 @@ def run_r_code(
             _default_rt = project_env.runtime(str(project_id), "r")
             rscript = None
         except (ComputeError, RuntimeError) as ce:
-            return {"error": f"the R environment pack is not available: {ce}"}
+            from core.compute.errors import describe
+            return {"error": f"the R environment pack is not available: "
+                             f"{describe(ce)}"}
     preamble_lines = list(lib_lines)
     preamble_lines.append(f'setwd({str(scratch)!r})')
     preamble_lines.append("set.seed(0)")   # provenance.md §3.3 — bit-stable re-run

@@ -480,8 +480,9 @@ class WeftKernelSession:
         except ComputeError as e:
             self.busy = False
             self.alive = False
+            from core.compute.errors import describe
             return ExecResult(returncode=1, stdout="",
-                              stderr=f"[kernel] block submit failed: {e}",
+                              stderr=f"[kernel] block submit failed: {describe(e)}",
                               cancelled=False, timed_out=False)
         block = int(sub.get("block", 0))
         out_off = err_off = 0

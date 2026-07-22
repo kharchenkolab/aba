@@ -40,7 +40,6 @@ def _err():
 def test_describe_carries_the_actual_diagnosis():
     from core.compute.errors import describe
     e = _err()
-    assert "session installer failed" not in describe(e) or True   # summary may stay
     out = describe(e)
     assert "cannot open URL" in out, "the failing URL — the whole diagnosis — is missing"
     assert "DESCRIPTION" in out
@@ -55,6 +54,25 @@ def test_describe_is_bounded():
     from core.compute.errors import ComputeError, describe
     e = ComputeError("x", "y", hints={"out_tail": "Z" * 50_000})
     assert len(describe(e)) < 3_000
+
+
+def test_describe_is_bounded_in_total_not_only_per_key():
+    """The multi-key extreme: 60 modest values are as able to flood a tool
+    result as one long tail — the bound is on the WHOLE rendering."""
+    from core.compute.errors import ComputeError, describe
+    e = ComputeError("x", "y", hints={f"k{i:02d}": "V" * 190 for i in range(60)})
+    assert len(describe(e)) < 3_200
+
+
+def test_describe_never_raises_on_malformed_hints():
+    """describe() runs INSIDE except handlers — a malformed payload (non-dict
+    hints survive from_payload) must degrade to the summary, never raise and
+    escape the structured-error contract."""
+    from core.compute.errors import ComputeError, describe
+    for bad in (["a", "b"], "just a string", 42, {1, 2}):
+        e = ComputeError("c", "d")
+        e.hints = bad
+        assert describe(e) == str(e), f"hints={bad!r}"
 
 
 def test_describe_degrades_on_the_absent_shapes():
@@ -73,7 +91,7 @@ def test_r_install_error_reaches_the_agent_with_hints(monkeypatch):
     from content.bio.tools import discovery
 
     monkeypatch.setattr(discovery, "_r_version_in_session", lambda *_a, **_k: None)
-    monkeypatch.setattr(discovery, "_cran_lane", lambda *a, **k: False)
+    monkeypatch.setattr(discovery, "_cran_lane", lambda *a, **k: (False, None))
     fake_pe = types.SimpleNamespace(
         install=lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no conda")),
         run_installer=lambda *a, **k: (_ for _ in ()).throw(_err()))
@@ -94,8 +112,9 @@ def _spec_for(monkeypatch, prov):
     from content.bio.tools import discovery
     seen = {}
     monkeypatch.setattr(discovery, "_r_version_in_session", lambda *_a, **_k: None)
-    monkeypatch.setattr(discovery, "_cran_lane",
-                        lambda pid, spec, **k: seen.setdefault("spec", spec) and True)
+    monkeypatch.setattr(
+        discovery, "_cran_lane",
+        lambda pid, spec, **k: (seen.setdefault("spec", spec), (True, None))[1])
     monkeypatch.setitem(sys.modules, "core.compute", types.SimpleNamespace(
         project_env=types.SimpleNamespace(
             install=lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no conda")),
@@ -148,8 +167,9 @@ def test_subdir_does_not_corrupt_the_library_name(monkeypatch):
     seen = {}
     monkeypatch.setattr(discovery, "_r_version_in_session",
                         lambda pid, lib, *a, **k: seen.setdefault("lib", lib) and None)
-    monkeypatch.setattr(discovery, "_cran_lane",
-                        lambda pid, spec, **k: seen.setdefault("spec", spec) and True)
+    monkeypatch.setattr(
+        discovery, "_cran_lane",
+        lambda pid, spec, **k: (seen.setdefault("spec", spec), (True, None))[1])
     monkeypatch.setitem(sys.modules, "core.compute", types.SimpleNamespace(
         project_env=types.SimpleNamespace(
             install=lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no conda")),
@@ -163,3 +183,98 @@ def test_subdir_does_not_corrupt_the_library_name(monkeypatch):
     assert seen.get("spec") == "kharchenkolab/lstar/R", seen
     assert seen.get("lib") == "lstar", (
         f"library name became {seen.get('lib')!r} — the subdir leaked into it")
+
+
+# ── census: typed errors render through describe(), nowhere stringly ────────
+# The fourth instance of the one-owner class (file door, wire hash, env
+# resolver, error rendering): N call sites deciding privately whether to use
+# the policy. An except-ComputeError handler that interpolates the exception
+# (or its bare .detail/.code) into an f-string WITHOUT to_payload() or
+# describe() in the same handler drops the hints — the agent's only sensor
+# when everything else has failed.
+
+def _stringly_computeerror_renders(root: Path) -> list:
+    import ast
+    offenders = []
+    for p in sorted(root.rglob("*.py")):
+        try:
+            tree = ast.parse(p.read_text(errors="replace"))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ExceptHandler) or not node.name:
+                continue
+            tnames = set()
+            if node.type is not None:
+                for n in ast.walk(node.type):
+                    if isinstance(n, ast.Name):
+                        tnames.add(n.id)
+                    elif isinstance(n, ast.Attribute):
+                        tnames.add(n.attr)
+            if "ComputeError" not in tnames:
+                continue
+            src = ast.unparse(node)
+            if "to_payload" in src or "describe(" in src:
+                continue        # payload travels structurally / already rendered
+            for sub in ast.walk(node):
+                if not isinstance(sub, ast.FormattedValue):
+                    continue
+                v = sub.value
+                hit = isinstance(v, ast.Name) and v.id == node.name
+                if (isinstance(v, ast.Attribute) and isinstance(v.value, ast.Name)
+                        and v.value.id == node.name and v.attr == "detail"):
+                    hit = True
+                if isinstance(v, ast.BoolOp):
+                    for x in v.values:
+                        if (isinstance(x, ast.Attribute)
+                                and isinstance(x.value, ast.Name)
+                                and x.value.id == node.name
+                                and x.attr in ("detail", "code")):
+                            hit = True
+                if hit:
+                    offenders.append(
+                        str(p.relative_to(root)).replace("\\", "/")
+                        + f":{sub.lineno}")
+                    break
+    return offenders
+
+
+# file → why rendering detail-or-code WITHOUT the payload is acceptable there.
+_RENDER_ALLOWLIST: dict = {
+    "content/bio/lifecycle/revisions.py":
+        "console fallback print on an EXPECTED miss (weft bundle path is "
+        "optional) — the handling is the folder-bundle fallback, not the text",
+    "core/compute/seeding.py":
+        "console fallback print on an EXPECTED adopt miss — the handling is "
+        "the private solve that follows, not the text",
+}
+
+
+def test_typed_errors_are_never_rendered_stringly():
+    backend = ROOT / "backend"
+    offenders = [o for o in _stringly_computeerror_renders(backend)
+                 if o.split(":")[0] not in _RENDER_ALLOWLIST]
+    assert offenders == [], (
+        "except-ComputeError handlers rendering the error WITHOUT its hints "
+        "(use describe(), or attach to_payload() alongside a summary): "
+        f"{offenders}")
+
+
+def test_render_census_scanner_catches_offender(tmp_path):
+    """PROVEN: the scanner flags the hint-dropping shape and clears the
+    describe()-using one — a scanner that matches nothing reads as green."""
+    (tmp_path / "bad.py").write_text(
+        "try:\n    pass\nexcept ComputeError as e:\n    x = f'failed: {e}'\n")
+    (tmp_path / "bad2.py").write_text(
+        "try:\n    pass\nexcept ComputeError as ce:\n"
+        "    x = f'failed: {ce.detail or ce.code}'\n")
+    (tmp_path / "ok.py").write_text(
+        "try:\n    pass\nexcept ComputeError as e:\n"
+        "    x = f'failed: {describe(e)}'\n")
+    (tmp_path / "ok2.py").write_text(
+        "try:\n    pass\nexcept ComputeError as e:\n"
+        "    x = {'error': e.to_payload(), 'note': f'failed: {e.detail}'}\n")
+    hits = _stringly_computeerror_renders(tmp_path)
+    assert any(h.startswith("bad.py") for h in hits), hits
+    assert any(h.startswith("bad2.py") for h in hits), hits
+    assert not any(h.startswith(("ok.py", "ok2.py")) for h in hits), hits

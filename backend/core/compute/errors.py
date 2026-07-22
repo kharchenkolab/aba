@@ -62,7 +62,11 @@ def describe(exc: BaseException, *, limit: int = 700) -> str:
     unbounded tail would push the rest of the tool result out of view.
     """
     base = str(exc)
-    hints = dict(getattr(exc, "hints", None) or {})
+    raw = getattr(exc, "hints", None)
+    # A malformed payload (non-dict hints) must never make the RENDERER raise —
+    # describe() runs inside except handlers, where a raise escapes the
+    # structured-error contract entirely.
+    hints = dict(raw) if isinstance(raw, dict) else {}
     if not hints:
         return base
     parts: list[str] = []
@@ -78,7 +82,13 @@ def describe(exc: BaseException, *, limit: int = 700) -> str:
     meaning = (getattr(exc, "meaning", "") or "").strip()
     if meaning:
         parts.append(f"meaning: {meaning}")
-    return base + " — " + " | ".join(parts) if parts else base
+    if not parts:
+        return base
+    out = base + " — " + " | ".join(parts)
+    # Bounded in TOTAL, not only per key — a payload with many keys is as able
+    # to push the rest of a tool result out of view as one long tail.
+    cap = 4 * limit
+    return out if len(out) <= cap else out[:cap] + " …[truncated]"
 
 
 def is_error_payload(obj: Any) -> bool:
