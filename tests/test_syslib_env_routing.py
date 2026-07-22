@@ -152,12 +152,14 @@ def test_build_failure_names_the_lane_that_can_work(monkeypatch):
     assert "language='r'" in note, "the remedy must be callable as written"
     # and it must say WHY retrying in the project env is pointless
     assert "system library" in note.lower()
-    # …and it must say what promotion does NOT move: the viewer launchers'
-    # converters resolve the default session regardless of the pointer
-    # (docs/arch/envs.md, "Two consumers still compare against the default
-    # session"), so "make an isolated env" is the wrong advice for a package
-    # a viewer needs — that one has to go into the shared base pack.
-    assert "viewer" in note.lower() and "base pack" in note.lower()
+    # Stage E: the LONG rationale (viewer caveat, base-pack routing) lives in
+    # the env-failures playbook (system bundle rule), not in every error —
+    # the note references the playbook and stays lean.
+    assert "playbook" in note.lower(), (
+        "the note must point at the playbook that carries the full doctrine")
+    assert len(note.split("NEXT STEP", 1)[1]) < 520, (
+        f"way-out prose crept back toward paragraph size: "
+        f"{len(note.split('NEXT STEP', 1)[1])} chars")
 
 
 def test_way_out_is_not_appended_to_unrelated_failures():

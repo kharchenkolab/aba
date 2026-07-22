@@ -384,6 +384,51 @@ def install(pid: str, language: str, specs: list[str], *,
             "prefix": str(p) if p else None, **out}
 
 
+def ensure_ranked(pid: str, language: str, names: list[str], *,
+                  lanes: list[str], verify: Optional[dict] = None) -> "dict | None":
+    """Ranked-mode ensure (F-V3a): the CALLER ranks the lanes; the substrate
+    executes the chain mechanically — per-lane dialect spellings, verify
+    inside the loop, typed attempts back. Returns the envelope, or None when
+    the substrate lacks the verb (caller falls back to its legacy cascade).
+
+    Recording follows the identity doctrine — what HAPPENED, never what was
+    asked: each installed attempt is recorded as a plain eco addition with
+    the spelling the lane actually used, so a session rebuild replays
+    reality through the existing per-eco paths. A pre-check short-circuit
+    (changed=False) records nothing and mints no revision."""
+    pid = str(pid)
+    s = ensure(pid, language)
+    ad = _adapter.get_compute()
+    verb = getattr(ad, "ensure_available", None)
+    if verb is None:
+        return None
+    out = dict(named_envs._sync(
+        verb({"session": s["session_id"]}, list(names),
+             lanes=list(lanes), verify=verify)) or {})
+    _problems = _check_envelope_soft(out)
+    if _problems:
+        print(f"[project_env] ensure_available (ranked) envelope violation: "
+              f"{_problems[:3]}", flush=True)
+    _landed = [a for a in (out.get("attempts") or [])
+               if a.get("outcome") == "installed"]
+    if _landed:
+        row = get(pid, language)
+        for a in _landed:
+            eco = a.get("lane")
+            if eco in _ECOS:
+                row["additions"].append(
+                    {"eco": eco,
+                     "specs": [a.get("spelling") or a.get("package")
+                               or (names[0] if names else "")],
+                     **({"verify": dict(verify)} if verify else {}),
+                     "at": time.time()})
+        row["rev"] = int(row.get("rev") or 0) + 1
+        _save_row(pid, language, row)
+    rt = out.get("runtime") or _current_runtime(s["session_id"]) or s["runtime"]
+    out["runtime"] = rt
+    return {"session_id": s["session_id"], **out}
+
+
 def run_installer(pid: str, language: str, cmd: str, *, note: str = "",
                   writes_to: Optional[str] = None,
                   verify: Optional[dict] = None) -> dict:

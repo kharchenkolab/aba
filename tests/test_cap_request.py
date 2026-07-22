@@ -336,6 +336,225 @@ def test_probe_name_for_github_is_the_repo_tail_not_the_subdir():
     assert _probe_target_name(["org/repo/R@dev"], {}, req2) == "RealName"
 
 
+# ── F-V3a: ranked mode replaces the R session cascade ───────────────────────
+# The conda→cran try/except and the conda-name translation move below the
+# API: one ranked call, dialects derived by the substrate, verify-in-loop,
+# typed attempts back. Bioconductor (needs repos) and pre-verb substrates
+# keep the legacy cascade.
+
+class _RankedAdapter:
+    def __init__(self, result=None):
+        self.calls: list = []
+        self._result = result or {
+            "satisfied": True, "changed": True,
+            "attempts": [{"lane": "conda", "outcome": "installed",
+                          "seconds": 2.0, "mutations": ["prefix"],
+                          "spelling": "r-pkgx"}],
+            "verified": {"PkgX": {"status": "passed", "got": "2.1"}},
+            "runtime": {"prefix": "/p"}, "session_id": "s1"}
+
+    async def ensure_available(self, target, request, lanes=None,
+                               verify=True, probe=False):
+        self.calls.append({"target": target, "request": request,
+                           "lanes": lanes, "verify": verify})
+        return self._result
+
+
+def test_ensure_ranked_calls_verb_and_records_what_happened(monkeypatch):
+    ad = _RankedAdapter()
+    from core.compute import project_env as pe
+    monkeypatch.setattr(pe, "ensure",
+                        lambda pid, lang: {"session_id": "s1",
+                                           "runtime": {"prefix": "/p"}})
+    monkeypatch.setattr("core.compute.adapter.get_compute", lambda: ad)
+    row = {"additions": [], "rev": 0}
+    monkeypatch.setattr(pe, "get", lambda pid, lang: row)
+    saved: list = []
+    monkeypatch.setattr(pe, "_save_row", lambda pid, lang, r: saved.append(r))
+    monkeypatch.setattr(pe, "_current_runtime", lambda sid: None)
+    out = pe.ensure_ranked("p", "r", ["PkgX"], lanes=["conda", "cran"],
+                           verify={"loads": ["PkgX"]})
+    c = ad.calls[0]
+    assert c["request"] == ["PkgX"] and c["lanes"] == ["conda", "cran"]
+    assert c["verify"] == {"loads": ["PkgX"]}
+    assert out.get("satisfied") is True
+    # identity doctrine: record what HAPPENED — the winning lane's eco and
+    # the spelling actually used, so a rebuild replays reality
+    assert saved and saved[0]["additions"], "winning lane never recorded"
+    add = saved[0]["additions"][0]
+    assert add["eco"] == "conda" and add["specs"] == ["r-pkgx"], add
+
+
+def test_ensure_ranked_precheck_hit_records_nothing(monkeypatch):
+    ad = _RankedAdapter(result={"satisfied": True, "changed": False,
+                                "attempts": [], "verified": {},
+                                "runtime": None, "session_id": "s1"})
+    from core.compute import project_env as pe
+    monkeypatch.setattr(pe, "ensure",
+                        lambda pid, lang: {"session_id": "s1",
+                                           "runtime": {"prefix": "/p"}})
+    monkeypatch.setattr("core.compute.adapter.get_compute", lambda: ad)
+    saved: list = []
+    monkeypatch.setattr(pe, "get", lambda pid, lang: {"additions": [], "rev": 0})
+    monkeypatch.setattr(pe, "_save_row", lambda *a: saved.append(a))
+    monkeypatch.setattr(pe, "_current_runtime", lambda sid: None)
+    pe.ensure_ranked("p", "r", ["PkgX"], lanes=["conda", "cran"],
+                     verify={"loads": ["PkgX"]})
+    assert not saved, "a pre-check short-circuit must not mint a revision"
+
+
+def test_ensure_ranked_returns_none_on_pre_verb_substrate(monkeypatch):
+    from core.compute import project_env as pe
+
+    class _Old:                                  # no ensure_available at all
+        pass
+
+    monkeypatch.setattr(pe, "ensure",
+                        lambda pid, lang: {"session_id": "s1",
+                                           "runtime": {"prefix": "/p"}})
+    monkeypatch.setattr("core.compute.adapter.get_compute", lambda: _Old())
+    assert pe.ensure_ranked("p", "r", ["X"], lanes=["conda", "cran"]) is None
+
+
+def test_r_lane_uses_ranked_with_registry_name(monkeypatch):
+    """The consumer-side conda-name translation retires: the verb receives
+    the REGISTRY spelling and derives lane dialects itself."""
+    import content.bio.tools.discovery as d
+    seen: dict = {}
+    monkeypatch.setattr(d, "_r_version_in_session",
+                        lambda *a, **k: None if not seen else "2.1")
+
+    def _ranked(pid, lang, names, *, lanes, verify=None):
+        seen.update(names=list(names), lanes=list(lanes), verify=verify)
+        return {"satisfied": True, "changed": True, "attempts": [],
+                "verified": {}, "runtime": None}
+
+    monkeypatch.setitem(sys.modules, "core.compute", types.SimpleNamespace(
+        project_env=types.SimpleNamespace(
+            ensure_ranked=_ranked,
+            install=lambda *a, **k: (_ for _ in ()).throw(
+                AssertionError("legacy conda leg ran despite ranked")),
+            run_installer=lambda *a, **k: (_ for _ in ()).throw(
+                AssertionError("fallback installer ran despite satisfied")))))
+    res = d._ensure_r_via_session(
+        {"name": "PkgX", "provisioning": {"r": {"source": "cran",
+                                                "package": "PkgX"}}},
+        {}, None, "PkgX")
+    assert seen.get("names") == ["PkgX"], (
+        f"verb got a translated name, not the registry spelling: {seen}")
+    assert seen.get("lanes") == ["conda", "cran"]
+    assert (seen.get("verify") or {}).get("loads") == ["PkgX"]
+    assert res["status"] == "ready", res
+
+
+def test_r_lane_falls_back_to_cascade_when_ranked_unavailable(monkeypatch):
+    import content.bio.tools.discovery as d
+    calls: list = []
+    monkeypatch.setattr(d, "_r_version_in_session", lambda *a, **k: None)
+    monkeypatch.setattr(d, "_cran_lane",
+                        lambda *a, **k: calls.append("cran") or (True, None, {}))
+    monkeypatch.setitem(sys.modules, "core.compute", types.SimpleNamespace(
+        project_env=types.SimpleNamespace(
+            ensure_ranked=lambda *a, **k: None,        # pre-verb substrate
+            install=lambda *a, **k: calls.append("conda") or (_ for _ in ()).throw(
+                RuntimeError("no conda build")),
+            run_installer=lambda *a, **k: {"ok": True})))
+    d._ensure_r_via_session(
+        {"name": "p", "provisioning": {"r": {"source": "cran",
+                                             "package": "p"}}},
+        {}, None, "p")
+    assert calls and calls[0] == "conda" and "cran" in calls, (
+        f"legacy cascade order broken on pre-verb substrate: {calls}")
+
+
+def test_r_lane_exhaustion_threads_attempts_and_gates_the_lecture(monkeypatch):
+    """env.unavailable_in_lanes: attempts ride the result; the syslib remedy
+    fires only when an attempt carries a build-class code."""
+    import content.bio.tools.discovery as d
+    from core.compute.errors import ComputeError
+    _atts = [{"lane": "conda", "outcome": "failed",
+              "error": {"error": "env.solve_failed", "retryable": True}},
+             {"lane": "cran", "outcome": "failed",
+              "error": {"error": "env.solve_conflict"}}]
+
+    def _ranked(*a, **k):
+        raise ComputeError("env.unavailable_in_lanes",
+                           "no ranked lane could provide the request",
+                           stage="realize", hints={"attempts": _atts})
+
+    monkeypatch.setattr(d, "_r_version_in_session", lambda *a, **k: None)
+    monkeypatch.setitem(sys.modules, "core.compute", types.SimpleNamespace(
+        project_env=types.SimpleNamespace(
+            ensure_ranked=_ranked,
+            install=lambda *a, **k: {"ok": True},
+            run_installer=lambda *a, **k: {"ok": True})))
+    res = d._ensure_r_via_session(
+        {"name": "p", "provisioning": {"r": {"source": "cran",
+                                             "package": "p"}}},
+        {}, None, "p")
+    assert res["status"] == "error"
+    assert res.get("attempts") == _atts, "hints.attempts dropped at render"
+    assert "missing SYSTEM library" not in res["note"], (
+        "resolution-class exhaustion got the build-stage lecture")
+
+
+# ── stage E: render — typed attempts surfaced, one ready-set, playbook ──────
+
+def test_ready_set_counts_all_genuine_ready_statuses():
+    """M5: ready_isolated / provided_by_pack are genuine readiness — omitting
+    them made batch results report 'partial' with a misleading note."""
+    import inspect
+    from content.bio.mcp_servers.aba_core.tools import discovery as mcp_disc
+    src = inspect.getsource(mcp_disc)
+    rs = src.split("_READY = ")[1].split("}")[0]
+    for status in ("ready_isolated", "provided_by_pack"):
+        assert status in rs, f"{status!r} missing from the ready-set"
+    assert "deferred" not in rs, "deferred promises nothing — not ready"
+
+
+def test_error_results_carry_typed_attempts_when_available(monkeypatch):
+    """Stage E render: the substrate's typed attempt records ride the
+    agent-facing error result — the agent reads structure, not fused prose."""
+    discovery = _flow_r(monkeypatch,
+                        lane_info={"code": "env.realize_failed",
+                                   "attempts": [{"lane": "conda",
+                                                 "outcome": "failed",
+                                                 "error": {"error": "x"}}]})
+    res = discovery._ensure_r_via_session(
+        {"name": "p", "provisioning": {"r": {"source": "cran",
+                                             "package": "p"}}},
+        {}, None, "p")
+    assert res["status"] == "error"
+    assert res.get("attempts") and res["attempts"][0]["lane"] == "conda", (
+        f"typed attempts dropped at the render boundary: {res.keys()}")
+
+
+def _flow_r(monkeypatch, *, lane_info):
+    import content.bio.tools.discovery as d
+    monkeypatch.setattr(d, "_r_version_in_session", lambda *a, **k: None)
+    monkeypatch.setattr(d, "_cran_lane",
+                        lambda *a, **k: (False, "declined", lane_info))
+    monkeypatch.setitem(sys.modules, "core.compute", types.SimpleNamespace(
+        project_env=types.SimpleNamespace(
+            install=lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no conda")),
+            run_installer=lambda *a, **k: (_ for _ in ()).throw(
+                RuntimeError("installer failed")))))
+    return d
+
+
+def test_playbook_covers_the_typed_vocabulary():
+    """Doc-side CODES doctrine: every typed class the render layer can tag
+    has a playbook row — an untagged class is advice the agent never gets."""
+    doc = (ROOT / "backend" / "system_bundle" / "rules" /
+           "env_failures.md").read_text()
+    for cls in ("retryable", "env.solve_conflict", "env.solve_failed",
+                "env.realize_failed", "env.unavailable_in_lanes",
+                "halted", "installed_unverified", "unknown",
+                "session.cold_base", "task.invalid", "not loadable",
+                "make_isolated_env", "set_active_env"):
+        assert cls in doc, f"playbook missing a row/lever for {cls!r}"
+
+
 # ── F-V2: tagged-mode verb adoption behind execute (env_refi2 §3.4) ─────────
 # project_env.install is the ONE crossing for session-lane eco installs; the
 # substrate's ensure_available (tagged mode) replaces session_install there:

@@ -333,7 +333,10 @@ def register_discovery_tools(mcp: FastMCP) -> None:
                     _in["force"] = True
                 return _impl(_in, ctx)
             # Several packages: ensure each; aggregate a per-package result list.
-            _READY = {"ok", "ready", "reference", "available"}
+            # one ready-vocabulary (M5): ready_isolated (auto-isolated env)
+            # and provided_by_pack are genuine readiness; 'deferred' is not
+            _READY = {"ok", "ready", "reference", "available",
+                      "ready_isolated", "provided_by_pack"}
             results = [_impl({"name": n, **_env, **({"force": True} if force else {})}, ctx)
                        for n in names]
             not_ready = [r for r in results if r.get("status") not in _READY]

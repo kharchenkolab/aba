@@ -1148,22 +1148,19 @@ def _syslib_way_out(rendered: str, libname: str, pkg: str,
         return ""
     # The R library name is the suggestion's base — `pkg` can be a repo path
     # (owner/repo), which composes a malformed package spec.
+    # Stage E: the note carries the CLASS TAG + the callable lever; the full
+    # doctrine (why the session can't carry system libs, the viewer/base-pack
+    # caveat) lives in the env-failures playbook rule — knowledge as docs,
+    # not paragraphs re-composed in every error.
     _base = (libname or (pkg or "pkg").split("/")[-1]).lower()
     env_name = f"{_base}-env"
     return (f" || NEXT STEP — this looks like a missing SYSTEM library, not a "
-            f"missing R package. The project session can add R packages but "
-            f"never a system library (it is a library dir over a read-only "
-            f"base), so retrying here will fail the same way. An ISOLATED env "
-            f"is a full solve and CAN pull system dependencies: "
+            f"missing R package; retrying in the project session will fail "
+            f"the same way (see the env-failures playbook). Route: "
             f"make_isolated_env(name='{env_name}', language='r', "
             f"packages=['r-{_base}']), then "
-            f"set_active_env('{env_name}', language='r') to make it ambient "
-            f"(or run_r(env='{env_name}', code=…) for a one-off). "
-            f"You do not need to name the C library — the solver pulls it. "
-            f"CAVEAT: a promoted env moves the run lanes, not the viewer "
-            f"launchers' converters — if THIS package is needed to render a "
-            f"viewer, it has to go into the shared base pack instead; say so "
-            f"rather than retrying.")
+            f"set_active_env('{env_name}', language='r') — the solver pulls "
+            f"C libraries transitively.")
 
 
 def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
@@ -1213,12 +1210,30 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
     _vblock = verify_block(req, libname=libname)
     try:
         if _src in ("cran", "bioconductor", "conda"):
-            conda_name = _pkg if _pkg.startswith(("r-", "bioconductor-")) else (
+            # F-V3a: cran/conda sources go RANKED — one verb call, the
+            # caller's lane order (conda binary first, cran layer second),
+            # dialect spellings derived below the API (the consumer-side
+            # r-<lowercase> translation retires), verify inside the loop,
+            # typed attempts back. Bioconductor stays on the legacy cascade
+            # (its extra repositories aren't in the ranked vocabulary yet);
+            # a pre-verb substrate returns None → same legacy cascade.
+            _rk = None
+            _erk = getattr(project_env, "ensure_ranked", None)
+            if _src != "bioconductor" and _erk is not None:
+                _reg_name = libname if _src == "conda" else _pkg
+                _rk = _erk(pid, "r", [_reg_name], lanes=["conda", "cran"],
+                           verify=_vblock)
+            if _rk is not None:
+                _lane_info = {k: _rk[k] for k in
+                              ("attempts", "verified", "resolved")
+                              if _rk.get(k)}
+            else:
+              conda_name = _pkg if _pkg.startswith(("r-", "bioconductor-")) else (
                 f"bioconductor-{_pkg.lower()}" if _src == "bioconductor" else f"r-{_pkg.lower()}")
-            try:
+              try:
                 project_env.install(pid, "r", [conda_name], eco="conda",
                                     verify=_vblock)
-            except Exception:  # noqa: BLE001 — no conda build / cold base
+              except Exception:  # noqa: BLE001 — no conda build / cold base
                 # Second lane: the substrate's cran layer (session rlib riding
                 # the base — delta-only, works on ANY base incl. adopted
                 # read-only mounts, where conda adds AND bespoke installers
@@ -1311,11 +1326,24 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
             _note += (" | The substrate marks this failure RETRYABLE — "
                       "transient repository/network trouble; retry once "
                       "before changing the request.")
+        # ranked exhaustion: the typed attempts ARE the diagnosis — thread
+        # them to the result, and gate the remedy on the ATTEMPTS' codes
+        # (env.unavailable_in_lanes itself is an aggregate, not a class)
+        _h_atts = (getattr(e, "hints", None) or {}).get("attempts")
+        if _h_atts and not _lane_info.get("attempts"):
+            _lane_info["attempts"] = _h_atts
+        _att_codes = tuple((a.get("error") or {}).get("error")
+                           for a in (_lane_info.get("attempts") or []))
+        # with attempts present, the aggregate's own code
+        # (env.unavailable_in_lanes) is classless — its class is its
+        # attempts'; without them, the raised code speaks for itself
+        _codes = ((_lane_info.get("code"), *_att_codes) if _att_codes
+                  else (getattr(e, "code", None), _lane_info.get("code")))
         _note += _syslib_way_out(_note, libname, _pkg,
-                                 stage=getattr(e, "stage", None),
-                                 codes=(getattr(e, "code", None),
-                                        _lane_info.get("code")))
+                                 stage=getattr(e, "stage", None), codes=_codes)
+        _atts = _lane_info.get("attempts")
         return {"status": "error", "name": name, "archetype": "r_package",
+                **({"attempts": _atts} if _atts else {}),
                 "note": _note}
     new_ver = _r_version_in_session(pid, libname)
     if not new_ver:
@@ -1331,7 +1359,9 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
             _note += f" | cran lane: {_lane_err}"
         _note += _syslib_way_out(_note, libname, _pkg,
                                  codes=(_lane_info.get("code"),))
+        _atts = _lane_info.get("attempts")
         return {"status": "error", "name": name, "archetype": "r_package",
+                **({"attempts": _atts} if _atts else {}),
                 "library": libname, "note": _note}
     if min_version and not rexec.version_ge(new_ver, min_version):
         # The postcondition must be the REQUEST's, not "something loads": an
@@ -1344,7 +1374,9 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
             _note += f" | cran lane: {_lane_err}"
         _note += _syslib_way_out(_note, libname, _pkg,
                                  codes=(_lane_info.get("code"),))
+        _atts = _lane_info.get("attempts")
         return {"status": "error", "name": name, "archetype": "r_package",
+                **({"attempts": _atts} if _atts else {}),
                 "library": libname, "version": new_ver, "note": _note}
     # a stale loaded namespace in the running R kernel can pin the old build
     rexec.r_unload_namespace(libname, (ctx or {}).get("thread_id"))
