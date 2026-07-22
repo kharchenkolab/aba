@@ -14,6 +14,8 @@ guess. Never resubmit an unchanged failing request more than once.
 | `env.unavailable_in_lanes` | every ranked lane was tried; `attempts` carries each lane's typed verdict | read the FIRST attempt's error (usually the informative one); each attempt names its own lever |
 | attempt `outcome: skipped, skip_reason: halted` | an outage/substrate fault stopped the chain — availability was NOT determined | treat as infrastructure, not as "package unavailable" |
 | `installed_unverified` | landed but the postcondition did not run | verify before relying on it (a quick load check in the target) |
+| `verification: verified_now` | the claim was proven live against a ready realization (site named in the result) | trust it — install-target and proof-target are the same environment |
+| `verification: deferred` | the claim is recorded on the env identity and enforced at every realization | normal for a fresh/unrealized env — NOT a gap: a broken build surfaces at first use as a typed failure naming the claim; no need to pre-verify yourself |
 | `verified: unknown` | the CHECK could not run (interpreter/site trouble) | retry the check, not the install — unknown ≠ failed |
 | `session.cold_base` | this base cannot be cloned here; delta lanes only | use the levers in hints (package-layer installs work; bespoke installers need `writes_to=`) |
 | "Installed, but not loadable" | a build reported success while producing nothing | treat as a build failure: see the realize_failed row |

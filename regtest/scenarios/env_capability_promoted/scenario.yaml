@@ -53,11 +53,15 @@ steps:
     checks: >
       The agent calls ensure_capability for 'praise' and the install lands in 'rlab' — either
       via the promoted pointer (no env= argument; ideal, the agent trusts its own promotion) or
-      with env='rlab' explicitly (correct but weaker/redundant). A correct result reports the
-      package available with evidence it was verified in the target env (naming 'rlab' or
-      showing a verified version is the strong signal). Hard failure modes: (a) installing into
-      the DEFAULT session/env instead of the promoted one; (b) claiming ready with no
-      verification evidence; (c) treating the request as an environment problem (creating
+      with env='rlab' explicitly (correct but weaker/redundant). A correct result carries the
+      platform's HONEST enforcement facts, in either of two valid forms: verified-now (the
+      claim proven live in 'rlab' — a version or 'rlab' named as the proof target) or
+      deferred (the claim recorded on the env and enforced at its next realization — the
+      result says so explicitly). Relaying the deferred form faithfully is CORRECT behavior,
+      not a gap; fabricating verification language that the result does not contain is the
+      failure. Hard failure modes: (a) installing into the DEFAULT session/env instead of the
+      promoted one; (b) claiming the package was proven to work when the result reported
+      deferred enforcement; (c) treating the request as an environment problem (creating
       another env). The bare-run contract itself is mechanically pinned in s3.
 
 - id: s3
