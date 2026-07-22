@@ -288,8 +288,10 @@ def main() -> int:
             from content.bio.tools.discovery import ensure_capability as _ec
             okx = _ec({"name": "praise", "env": "renvchk"},
                       {"thread_id": f"ec-r-{pid}"})
-            check("env= install reports ready only with verification evidence",
-                  okx.get("status") == "ready" and bool(okx.get("verified")),
+            check("env= install is ready with HONEST enforcement facts",
+                  okx.get("status") == "ready"
+                  and (bool(okx.get("verified"))
+                       or okx.get("verification") == "deferred"),
                   str(okx)[:300])
             bad = _ec({"name": "envcheck-ghost", "env": "renvchk",
                        "source": "github",

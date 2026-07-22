@@ -834,9 +834,10 @@ def test_verify_block_composes_weft_grammar():
     assert verify_block(r2, libname="Y") == {"loads": ["Y"]}
 
 
-def _extend_env(monkeypatch, *, extend_res, probe, pre_id="e1",
+def _extend_env(monkeypatch, *, extend_res, pre_id="e1",
                 env_lang="r", req=None):
-    """Drive _extend_into_named_env with named_envs stubbed."""
+    """Drive _extend_into_named_env with named_envs stubbed (F-V3b: no
+    consumer probe exists — run_in is TRAPPED to prove that)."""
     import content.bio.tools.discovery as d
     import core.compute.named_envs as ne
     seen: dict = {}
@@ -844,91 +845,132 @@ def _extend_env(monkeypatch, *, extend_res, probe, pre_id="e1",
     monkeypatch.setattr(ne, "resolve",
                         lambda pid, name: {"language": env_lang,
                                            "env_id": pre_id})
-    monkeypatch.setattr(ne, "extend", lambda pid, name, pkgs, **k: extend_res)
 
-    def _run_in(pid, name, code, **k):
-        seen["probe_env"] = name
-        seen["probe_code"] = code
-        return probe
+    def _extend(pid, name, pkgs, **k):
+        seen["extend_kw"] = k
+        if isinstance(extend_res, Exception):
+            raise extend_res
+        return extend_res
 
-    monkeypatch.setattr(ne, "run_in", _run_in)
+    monkeypatch.setattr(ne, "extend", _extend)
+    monkeypatch.setattr(ne, "run_in",
+                        lambda *a, **k: seen.__setitem__("probed", True) or
+                        {"ok": True, "stdout": "", "stderr": "",
+                         "returncode": 0})
     monkeypatch.setattr(d, "_evict_env_kernels", lambda name: 0)
     out = d._extend_into_named_env("grow", ["PkgX"], {"name": "PkgX"}, req=req)
     return seen, out
 
 
-def test_extend_refuses_ready_when_the_package_does_not_load(monkeypatch):
-    """D4's kill: a solve that minted an EnvID is not a loadable package."""
+def test_extend_deferred_is_ready_with_honest_marker(monkeypatch):
+    """F-V3b default (no verify-now available): the claim is recorded on the
+    spec and enforced at every realization — ready, with a BRANCHABLE
+    deferred marker and a note that says which enforcement happened. Never a
+    fabricated 'verified'."""
+    seen, out = _extend_env(monkeypatch, extend_res={"env_id": "e2"})
+    assert out["status"] == "ready"
+    assert out.get("verification") == "deferred", out
+    assert not out.get("verified"), "verified fabricated without a live check"
+    assert "realiz" in out["note"].lower(), (
+        f"note must say enforcement is at realization: {out['note']!r}")
+    assert seen.get("extend_kw", {}).get("verify"), (
+        "ready-with-deferral is only honest if the CLAIM went down")
+    assert not seen.get("probed"), "consumer probe ran — F-V3b deleted it"
+
+
+def test_extend_verified_now_is_relayed(monkeypatch):
+    """When the substrate proved the claim against a ready realization
+    (site= verify-now), the result relays verified + site verbatim."""
+    seen, out = _extend_env(monkeypatch, extend_res={
+        "env_id": "e2",
+        "verified": {"PkgX": {"status": "passed", "got": "2.1"}},
+        "verified_site": "local"})
+    assert out["status"] == "ready"
+    assert out.get("verification") == "verified_now" and out.get("verified")
+    assert "local" in out["note"] and "2.1" in out["note"], out["note"]
+    assert not seen.get("probed")
+
+
+def test_extend_failed_claim_is_an_error_not_ready(monkeypatch):
+    """A ready realization that FAILS its own claim comes back typed
+    (env.realize_failed + hints.postcondition) — a degraded-build finding."""
+    from core.compute.errors import ComputeError
+    err = ComputeError("env.realize_failed", "postcondition failed",
+                       stage="realize",
+                       hints={"postcondition": True, "env_id": "e2"})
+    seen, out = _extend_env(monkeypatch, extend_res=err)
+    assert out["status"] == "error"
+    assert out.get("error", {}).get("error") == "env.realize_failed", out
+    assert not seen.get("probed")
+
+
+def test_extend_cached_keeps_honesty(monkeypatch):
+    """F4 under enforce-at-realize: a cached answer is ready ONLY because the
+    claim rides the spec — deferred marker, no fabricated verified, and no
+    consumer probe resurrected for the no-op."""
     seen, out = _extend_env(monkeypatch,
-                            extend_res={"env_id": "e2"},
-                            probe={"ok": True, "stdout": "CAPQ=MISSING",
-                                   "stderr": "", "returncode": 0})
-    assert out["status"] == "error", (
-        f"extend certified a solve as ready with nothing loadable: {out}")
-    assert "grow" in (out.get("note") or "")
+                            extend_res={"env_id": "e1"})   # same id → cached
+    assert out["status"] == "ready"
+    assert out.get("verification") == "deferred" and not out.get("verified")
+    assert not seen.get("probed")
 
 
-def test_extend_cached_answers_must_also_pass_verify(monkeypatch):
-    """F4's kill: 'already recorded' is a statement about a solve, not about
-    what loads — the cached short-circuit may skip the solve, never the
-    verification."""
-    seen, out = _extend_env(monkeypatch,
-                            extend_res={"env_id": "e1"},   # same id → cached
-                            probe={"ok": True, "stdout": "CAPQ=MISSING",
-                                   "stderr": "", "returncode": 0})
-    assert out["status"] == "error", (
-        f"cached extend returned ready for a spec that never loads: {out}")
-
-
-def test_extend_probe_runs_in_the_target_env(monkeypatch):
-    seen, out = _extend_env(monkeypatch,
-                            extend_res={"env_id": "e2"},
-                            probe={"ok": True, "stdout": "CAPQ=1.0",
-                                   "stderr": "", "returncode": 0})
-    assert seen.get("probe_env") == "grow", (
-        "verification ran somewhere other than the env the user's code enters")
-    assert out["status"] == "ready" and out.get("verified"), out
-
-
-def test_extend_ready_emits_requires_and_enforces_min_version(monkeypatch):
+def test_extend_ready_emits_requires_and_floor_rides_the_claim(monkeypatch):
+    """The version floor moved INTO the claim (versions: >=X) — the substrate
+    enforces it wherever it verifies; the consumer stops re-deriving it."""
     from content.bio.tools.cap_request import CapRequest
     req = CapRequest(name="PkgX", language="r", min_version="2.0",
                      project="prjB")
-    # loadable but BELOW the floor → not ready (the request's postcondition)
-    seen, out = _extend_env(monkeypatch, extend_res={"env_id": "e2"},
-                            probe={"ok": True, "stdout": "CAPQ=1.4",
-                                   "stderr": "", "returncode": 0}, req=req)
-    assert out["status"] == "error" and "2.0" in out["note"], out
-    # at the floor → ready, and the promised `requires` field exists at last
-    seen, out = _extend_env(monkeypatch, extend_res={"env_id": "e2"},
-                            probe={"ok": True, "stdout": "CAPQ=2.1",
-                                   "stderr": "", "returncode": 0}, req=req)
+    seen, out = _extend_env(monkeypatch, extend_res={"env_id": "e2"}, req=req)
     assert out["status"] == "ready"
     assert out.get("requires") == {"package": "PkgX", "min_version": "2.0"}
+    vb = seen.get("extend_kw", {}).get("verify") or {}
+    assert vb.get("versions", {}).get("PkgX") == ">=2.0", (
+        f"the floor never reached the claim: {vb}")
 
 
 def test_extend_note_names_the_env_language_lane(monkeypatch):
     """D4's note half: an R env's success note must say run_r, not
     run_python."""
     seen, out = _extend_env(monkeypatch, extend_res={"env_id": "e2"},
-                            probe={"ok": True, "stdout": "CAPQ=1.0",
-                                   "stderr": "", "returncode": 0},
                             env_lang="r")
     assert "run_r(" in out["note"] and "run_python(" not in out["note"], (
         f"R env advised through the python lane: {out['note']!r}")
 
 
-def test_probe_unknown_is_not_failed(monkeypatch):
-    """The oracle contract (weft P0, mirrored consumer-side): a probe that
-    COULD NOT RUN is unknown — refuse ready, but say the check failed to run,
-    never that the package is absent."""
-    seen, out = _extend_env(monkeypatch, extend_res={"env_id": "e2"},
-                            probe={"ok": False, "stdout": "",
-                                   "stderr": "site unreachable",
-                                   "returncode": 1})
-    assert out["status"] == "error"
-    assert "could not run" in out["note"].lower() or "unknown" in out["note"].lower(), (
-        f"an unrunnable check was reported as a package verdict: {out['note']!r}")
+def test_extend_routes_through_the_env_target_verb(monkeypatch):
+    """named_envs.extend itself: with the verb available, the solve goes
+    through target={'env': parent} with the claim as verify= — never a
+    hand-built extends_env spec; pre-verb substrates keep env_ensure."""
+    import core.compute.named_envs as ne
+    import core.config as cfg
+    import tempfile
+    from pathlib import Path
+    calls: dict = {}
+
+    class _C:
+        async def env_ensure(self, spec):
+            return {"env_id": "env_BASE", "status": "created"}
+
+        async def ensure_available(self, target, request, lanes=None,
+                                   verify=True, probe=False):
+            calls.update(target=target, request=request, verify=verify)
+            return {"satisfied": True, "changed": True, "attempts": [],
+                    "verified": {}, "runtime": None, "env_id": "env_NEW",
+                    "note": "claim recorded; postconditions enforce at realize"}
+
+    mp2 = tempfile.mkdtemp(prefix="aba_fv3b_")
+    monkeypatch.setattr(cfg, "PROJECTS_DIR", Path(mp2))
+    monkeypatch.setattr("core.compute.adapter.get_compute", lambda: _C())
+    ne.create("prjF", "e1", language="r", packages=[])
+    calls.clear()
+    res = ne.extend("prjF", "e1", ["X"], eco="cran",
+                    verify={"loads": ["X"]})
+    assert calls.get("target") == {"env": "env_BASE"}, calls
+    assert calls.get("request") == {"cran": ["X"]}
+    assert calls.get("verify") == {"loads": ["X"]}
+    assert res["env_id"] == "env_NEW"
+    assert "note" in res, "the enforcement note must survive to the door"
 
 
 def test_session_cran_lane_passes_verify_down(monkeypatch):

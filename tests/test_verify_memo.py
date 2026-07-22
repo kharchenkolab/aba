@@ -117,34 +117,14 @@ def test_partial_hit_probes_only_pending_names(monkeypatch):
         f"already-verified name re-probed: {scripts[1][:200]}")
 
 
-def test_named_env_probe_memoizes_passed_only(monkeypatch):
+def test_named_env_consumer_probe_is_gone():
+    """F-V3b deleted the consumer-side named-env probe: enforcement facts come
+    from the substrate (verify-now / enforce-at-realize), and the probe that
+    forced a cold env's first realization at install time must not return."""
     import content.bio.tools.discovery as d
-    import core.compute.named_envs as ne
-    from core.exec import verify as v
-    v._PROBE_MEMO.clear()
-    calls: list = []
-
-    def _run_in(pid, name, code, **k):
-        calls.append(name)
-        out = "CAPQ=MISSING" if len(calls) == 1 else "CAPQ=2.0"
-        return {"ok": True, "stdout": out, "stderr": "", "returncode": 0}
-
-    monkeypatch.setattr(ne, "run_in", _run_in)
-    # failed verdict → not cached → re-probes
-    v1 = d._probe_named_env("p", "grow", "r", "PkgX", None, env_id="env_A")
-    v2 = d._probe_named_env("p", "grow", "r", "PkgX", None, env_id="env_A")
-    assert v1[0] == "failed" and v2[0] == "passed"
-    assert len(calls) == 2
-    # passed verdict → cached for the same identity
-    v3 = d._probe_named_env("p", "grow", "r", "PkgX", None, env_id="env_A")
-    assert v3[0] == "passed" and len(calls) == 2, "passed probe re-derived"
-    # new identity (extend minted a new EnvID) → re-probe
-    d._probe_named_env("p", "grow", "r", "PkgX", None, env_id="env_B")
-    assert len(calls) == 3
-    # absent identity → never memoized
-    d._probe_named_env("p", "grow", "r", "PkgX", None, env_id=None)
-    d._probe_named_env("p", "grow", "r", "PkgX", None, env_id=None)
-    assert len(calls) == 5
+    assert not hasattr(d, "_probe_named_env"), (
+        "the consumer probe is back — the install-time forced-realization "
+        "cost class returns with it")
 
 
 def test_session_probes_pass_the_identity_key(monkeypatch):

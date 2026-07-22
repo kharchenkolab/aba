@@ -339,14 +339,30 @@ def extend(project_id: str, name: str, packages: list[str], *,
                     "summary": "all requested packages already recorded — "
                                "no re-solve", "delta": []}
         deps = _extend_deps(row["language"], packages, eco)
-        spec = {"name": f"aba-{project_id}-{name}",
-                "extends_env": row["env_id"], "deps": deps,
-                # the request's claim rides the SPEC (weft P2): the substrate
-                # enforces it as a realize postcondition on every site this
-                # identity ever realizes on (adopt default-on), composing
-                # base ∪ child along the extends chain
-                **({"verify": dict(verify)} if verify else {})}
-        res = _sync(_adapter.get_compute().env_ensure(spec))  # slow — OUTSIDE the lock
+        _verb = getattr(_adapter.get_compute(), "ensure_available", None)
+        if _verb is not None:
+            # F-V3b: the env target — one solve through the verb; the claim
+            # rides as verify= (recorded on the minted spec, enforced at every
+            # realization; verify-now when a site= is offered and a ready
+            # realization exists there). The envelope's enforcement facts
+            # (verified / verified_site / note) travel back to the caller.
+            _env_out = _sync(_verb({"env": row["env_id"]}, deps,
+                                   verify=(dict(verify) if verify else None)))
+            res = {"env_id": _env_out.get("env_id"),
+                   "status": ("created" if _env_out.get("changed", True)
+                              else "cached"),
+                   "summary": _env_out.get("note"),
+                   "delta": _env_out.get("attempts") or [],
+                   **{k: _env_out[k] for k in
+                      ("verified", "verified_site", "note")
+                      if _env_out.get(k) is not None}}
+        else:
+            spec = {"name": f"aba-{project_id}-{name}",
+                    "extends_env": row["env_id"], "deps": deps,
+                    # pre-verb path: the claim rides the SPEC (weft P2),
+                    # enforced at realize, composing along the extends chain
+                    **({"verify": dict(verify)} if verify else {})}
+            res = _sync(_adapter.get_compute().env_ensure(spec))  # slow — OUTSIDE the lock
         applied = {"ok": False}
 
         def _apply(data):
@@ -370,7 +386,10 @@ def extend(project_id: str, name: str, packages: list[str], *,
         _update(project_id, _apply)
         if applied["ok"]:
             return {"env_id": res["env_id"], "status": res.get("status"),
-                    "summary": res.get("summary"), "delta": res.get("delta")}
+                    "summary": res.get("summary"), "delta": res.get("delta"),
+                    **{k: res[k] for k in
+                       ("verified", "verified_site", "note")
+                       if res.get(k) is not None}}
     raise ComputeError(
         "env.concurrent_extend",
         f"named env {name!r} kept moving under this extend (3 attempts) — "

@@ -1052,44 +1052,12 @@ def _cran_lane(pid: str, spec: str, *, repos: "list | None" = None,
         err = describe(e)
         print(f"[capability] cran lane declined {spec!r}: {err}", flush=True)
         _code = getattr(e, "code", None)
-        return False, err, ({"code": _code} if _code else {})
-
-
-# A source build that died in configure/compile, as opposed to a bad name, a
-# 404 or a version conflict. Matched against the RENDERED error (describe()),
-# so these are the strings R's own build machinery emits. Kept SPECIFIC: the
-# generic forms ("no such file or directory", "not found in the") also appear
-# in exec failures and registry misses, and a false positive appends the
-# system-library lecture to errors it can only mislead — the header-missing
-# signature is the ``.h:`` form, not the bare phrase. This list is a FALLBACK,
-# third in line: the typed substrate stage decides first, then the typed
-# failure CODE (weft f61fcf0 discriminates dead-index / not-in-repo /
-# broken-build — see _NON_BUILD_CODES); the signs' remaining job is narrowing
-# a build-stage failure to the missing-SYSTEM-library subset, which no code
-# expresses — so the list stays even now that the substrate types its stages.
-# Text matching is locale-stable: weft runs its control plane under LC_ALL=C.
-_SYSLIB_SIGNS = (
-    "configuration failed", "configure: error", "pkg-config",
-    ".h: no such file", "fatal error:", "cannot find -l",
-    "undefined reference", "compilation failed", "compilation terminated",
-    "c++ compiler", "c compiler", "unable to load shared object",
-    "was not compiled",
-)
-
-# Substrate stages that end BEFORE any compile of the requested package —
-# solve/staging/submit/infra failures cannot be a missing system library, so
-# the remedy is suppressed no matter what the rendered text happens to match.
-_PRE_BUILD_STAGES = ("solve", "staging", "submit", "infra")
-
-# Typed failure codes that are RESOLUTION problems, not build deaths: weft's
-# session-install classifier discriminates a dead repository index
-# (solve_failed, retryable), a name absent from the configured repos
-# (solve_conflict) and a cold-base refusal (nothing was attempted) from a
-# broken build (realize_failed) — all under stage="realize", so the stage
-# gate alone cannot separate them; the CODE is the discriminator.
-_NON_BUILD_CODES = frozenset({
-    "env.solve_conflict", "env.solve_failed", "session.cold_base",
-})
+        _h = getattr(e, "hints", None) or {}
+        return False, err, {k: v for k, v in
+                            (("code", _code),
+                             ("failure_class", _h.get("failure_class")),
+                             ("missing_system", _h.get("missing_system")))
+                            if v}
 
 
 def _landed_or_fail(libname: str) -> str:
@@ -1108,55 +1076,35 @@ def _landed_or_fail(libname: str) -> str:
             f'loadable\\n", file=stderr()); quit(status=1) }}')
 
 
-def _syslib_way_out(rendered: str, libname: str, pkg: str,
-                    stage: "str | None" = None,
-                    codes: "tuple | str | None" = ()) -> str:
-    """The NEXT STEP to append when a build died for a missing system library.
+def _syslib_way_out(libname: str, pkg: str,
+                    failure_class: "str | None" = None,
+                    missing_system: "dict | None" = None) -> str:
+    """The NEXT STEP to append when a build died for a missing SYSTEM library.
 
-    Diagnosis without a remedy still costs the agent the turn. Live 2026-07-22,
-    RNetCDF's note carried the exact cause ("netcdf.h was not compiled") and
-    named no way forward — not the read-only base, not conda, not isolated
-    envs — so the only signalled options were the two that cannot work.
+    Keys SOLELY on the substrate's typed discrimination
+    (`hints.failure_class == "missing_system_lib"`, weft 13fd7aa) — the
+    consumer-side text taxonomy this replaced (_SYSLIB_SIGNS, stage gates,
+    code gates) is deleted: the substrate scans the build log at the layer
+    that owns it, under a pinned locale, and only ever ADDS the tag to an
+    already-realize_failed verdict, so typo'd names, 404s, exec failures and
+    quoted build fragments in fused notes can no longer misfire the remedy.
 
-    A session overlay is PACKAGE-only: it prepends a library dir, which cannot
-    hold a system library, and the shared base is a read-only mount here. A
-    full solve can, and an isolated env is one — verified live: RNetCDF loads
-    in `make_isolated_env(language='r')` (the solver pulled netcdf and udunits
-    transitively; naming the C library explicitly was not needed).
-
-    Appended only on a build-stage failure — on a typo'd name or a 404 this
-    advice is noise, and noise in an error is how a real hint gets skipped.
-    The substrate's typed facts decide first: a solve/staging/submit/infra
-    `stage` ended before any compile of this package, and a resolution-class
-    failure CODE (dead index, name not in repos, cold-base refusal — weft
-    types these under stage="realize") can never be a missing system library
-    no matter what the fused note's text quotes — tails routinely carry
-    ambient build-log fragments from an EARLIER lane's decline. `codes` takes
-    every typed contributor to the note (raised error + lane decline):
-    suppression needs ALL of them resolution-class, because one build-stage
-    (or untyped) contributor keeps the text signs legitimately in play; the
-    substring signs remain the fallback for errors that carry no type at all,
-    and the narrowing to the SYSLIB subset within genuine build failures."""
-    if stage in _PRE_BUILD_STAGES:
+    The note carries the class tag + the callable lever; the full doctrine
+    (why a session overlay can't carry system libs, the viewer/base-pack
+    caveat) lives in the env-failures playbook rule."""
+    if failure_class != "missing_system_lib":
         return ""
-    typed = {c for c in ((codes,) if isinstance(codes, str) else tuple(codes or ()))
-             if c}
-    if typed and typed <= _NON_BUILD_CODES:
-        return ""
-    low = (rendered or "").lower()
-    if not any(s in low for s in _SYSLIB_SIGNS):
-        return ""
-    # The R library name is the suggestion's base — `pkg` can be a repo path
-    # (owner/repo), which composes a malformed package spec.
-    # Stage E: the note carries the CLASS TAG + the callable lever; the full
-    # doctrine (why the session can't carry system libs, the viewer/base-pack
-    # caveat) lives in the env-failures playbook rule — knowledge as docs,
-    # not paragraphs re-composed in every error.
     _base = (libname or (pkg or "pkg").split("/")[-1]).lower()
     env_name = f"{_base}-env"
-    return (f" || NEXT STEP — this looks like a missing SYSTEM library, not a "
-            f"missing R package; retrying in the project session will fail "
-            f"the same way (see the env-failures playbook). Route: "
+    _named = ""
+    if missing_system:
+        _what = next(iter(missing_system.values()), "")
+        if _what:
+            _named = f" (missing: {_what})"
+    return (f" || NEXT STEP — the substrate classified this as a missing "
+            f"SYSTEM library{_named}, not a missing R package; retrying in "
+            f"the project session will fail the same way (see the "
+            f"env-failures playbook). Route: "
             f"make_isolated_env(name='{env_name}', language='r', "
             f"packages=['r-{_base}']), then "
             f"set_active_env('{env_name}', language='r') — the solver pulls "
@@ -1219,10 +1167,15 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
             # a pre-verb substrate returns None → same legacy cascade.
             _rk = None
             _erk = getattr(project_env, "ensure_ranked", None)
-            if _src != "bioconductor" and _erk is not None:
+            if _erk is not None:
+                # bioconductor rides ranked too now: its repositories go as
+                # cran_repos (weft 13fd7aa) — attempts record them, and the
+                # cran probe answers unknown-not-false under extra repos
                 _reg_name = libname if _src == "conda" else _pkg
                 _rk = _erk(pid, "r", [_reg_name], lanes=["conda", "cran"],
-                           verify=_vblock)
+                           verify=_vblock,
+                           **({"cran_repos": _bioc_repos()}
+                              if _src == "bioconductor" else {}))
             if _rk is not None:
                 _lane_info = {k: _rk[k] for k in
                               ("attempts", "verified", "resolved")
@@ -1332,15 +1285,18 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
         _h_atts = (getattr(e, "hints", None) or {}).get("attempts")
         if _h_atts and not _lane_info.get("attempts"):
             _lane_info["attempts"] = _h_atts
-        _att_codes = tuple((a.get("error") or {}).get("error")
-                           for a in (_lane_info.get("attempts") or []))
-        # with attempts present, the aggregate's own code
-        # (env.unavailable_in_lanes) is classless — its class is its
-        # attempts'; without them, the raised code speaks for itself
-        _codes = ((_lane_info.get("code"), *_att_codes) if _att_codes
-                  else (getattr(e, "code", None), _lane_info.get("code")))
-        _note += _syslib_way_out(_note, libname, _pkg,
-                                 stage=getattr(e, "stage", None), codes=_codes)
+        # the remedy keys on the substrate's typed class — from the raised
+        # error's hints, or any attempt's error hints (ranked exhaustion)
+        _eh = getattr(e, "hints", None) or {}
+        _fc, _ms = _eh.get("failure_class"), _eh.get("missing_system")
+        if not _fc:
+            for _a in _lane_info.get("attempts") or []:
+                _ah = ((_a.get("error") or {}).get("hints")) or {}
+                if _ah.get("failure_class"):
+                    _fc, _ms = _ah["failure_class"], _ah.get("missing_system")
+                    break
+        _note += _syslib_way_out(libname, _pkg, failure_class=_fc,
+                                 missing_system=_ms)
         _atts = _lane_info.get("attempts")
         return {"status": "error", "name": name, "archetype": "r_package",
                 **({"attempts": _atts} if _atts else {}),
@@ -1357,8 +1313,9 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
                  f"reported success while producing nothing looks like.")
         if _lane_err and _lane_err not in _note:
             _note += f" | cran lane: {_lane_err}"
-        _note += _syslib_way_out(_note, libname, _pkg,
-                                 codes=(_lane_info.get("code"),))
+        _note += _syslib_way_out(libname, _pkg,
+                                 failure_class=_lane_info.get("failure_class"),
+                                 missing_system=_lane_info.get("missing_system"))
         _atts = _lane_info.get("attempts")
         return {"status": "error", "name": name, "archetype": "r_package",
                 **({"attempts": _atts} if _atts else {}),
@@ -1372,8 +1329,9 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
                  f"NOT marking ready.")
         if _lane_err and _lane_err not in _note:
             _note += f" | cran lane: {_lane_err}"
-        _note += _syslib_way_out(_note, libname, _pkg,
-                                 codes=(_lane_info.get("code"),))
+        _note += _syslib_way_out(libname, _pkg,
+                                 failure_class=_lane_info.get("failure_class"),
+                                 missing_system=_lane_info.get("missing_system"))
         _atts = _lane_info.get("attempts")
         return {"status": "error", "name": name, "archetype": "r_package",
                 **({"attempts": _atts} if _atts else {}),
@@ -1400,63 +1358,6 @@ def _session_probe_memo_key(pid: str, language: str) -> "tuple | None":
     except Exception:  # noqa: BLE001 — memoization is an optimization, never a gate
         pass
     return None
-
-
-def _probe_named_env(pid: str, env_name: str, language: str, probe_name: str,
-                     min_version: "str | None",
-                     env_id: "str | None" = None) -> "tuple[str, str]":
-    """Consumer-side postcondition probe IN a named env → (verdict, detail),
-    verdict ∈ {passed, failed, unknown}. The oracle contract (weft P0,
-    mirrored here until V3's env target subsumes this probe): a check that
-    COULD NOT RUN is unknown — never a claim about the package. `detail` is
-    the version on pass, the cause otherwise.
-
-    `env_id` (the frozen identity) memoizes PASSED verdicts: a load proven in
-    an EnvID stays true for that EnvID (extends mint new ids → natural miss).
-    failed/unknown never cache; env_id=None never caches."""
-    from core.exec.verify import _PROBE_MEMO, _PROBE_MEMO_LOCK
-    _mk = (("env", env_id, probe_name, min_version)
-           if env_id is not None else None)
-    if _mk is not None:
-        with _PROBE_MEMO_LOCK:
-            _hit = _PROBE_MEMO.get(_mk)
-        if _hit is not None:
-            return "passed", str(_hit)
-    if language == "r":
-        code = (f'if (requireNamespace("{probe_name}", quietly=TRUE)) '
-                f'cat("CAPQ=", as.character(utils::packageVersion('
-                f'"{probe_name}")), "\\n", sep="") else '
-                f'cat("CAPQ=MISSING\\n")')
-    else:
-        code = ("import importlib\n"
-                "try:\n"
-                f"    importlib.import_module({probe_name!r})\n"
-                "    try:\n"
-                "        import importlib.metadata as _md\n"
-                f"        v = _md.version({probe_name!r})\n"
-                "    except Exception:\n"
-                "        v = '0'\n"
-                "    print('CAPQ=' + v)\n"
-                "except Exception:\n"
-                "    print('CAPQ=MISSING')\n")
-    from core.compute import named_envs
-    r = named_envs.run_in(pid, env_name, code, timeout_s=900)
-    out = r.get("stdout") or ""
-    line = next((ln for ln in out.splitlines() if ln.startswith("CAPQ=")), None)
-    if not r.get("ok") or line is None:
-        return "unknown", (str(r.get("stderr") or out or "no output"))[-300:]
-    got = line[len("CAPQ="):].strip()
-    if got == "MISSING":
-        return "failed", f"{probe_name} is not loadable"
-    if min_version:
-        from core.exec import r as rexec
-        if not rexec.version_ge(got, min_version):
-            return "failed", (f"{probe_name} is {got}, the request needs "
-                              f">= {min_version}")
-    if _mk is not None:
-        with _PROBE_MEMO_LOCK:
-            _PROBE_MEMO[_mk] = got            # PASSED only — see docstring
-    return "passed", got
 
 
 def _probe_target_name(packages: list[str], cap: dict, req) -> str:
@@ -1507,14 +1408,18 @@ def _extend_into_named_env(env_name: str, packages: list[str], cap: dict,
         # capability path knows its load name precisely, so the substrate
         # enforces this claim at every future realization of the identity —
         # the consumer probe below covers only the here-and-now
-        _vb = None
-        if req is not None:
-            from content.bio.tools.cap_request import verify_block
-            _lang0 = ((named_envs.resolve(pid, env_name) or {}).get("language")
-                      or "python")
-            _nm = _probe_target_name(packages, cap, req)
-            _vb = (verify_block(req, libname=_nm) if _lang0 == "r"
-                   else verify_block(req, import_name=_nm))
+        # ALWAYS composed — enforce-at-realize readiness is only honest if a
+        # claim rides the identity; a direct caller with no request object
+        # still gets a minimal loads-claim for the best-known name
+        from content.bio.tools.cap_request import CapRequest, verify_block
+        _lang0 = ((named_envs.resolve(pid, env_name) or {}).get("language")
+                  or "python")
+        _nm = _probe_target_name(packages, cap, req)
+        _req0 = req if req is not None else CapRequest(
+            name=str((cap or {}).get("name") or _nm), language=_lang0,
+            project=pid)
+        _vb = (verify_block(_req0, libname=_nm) if _lang0 == "r"
+               else verify_block(_req0, import_name=_nm))
         res = named_envs.extend(pid, env_name, list(packages),
                                 **({"eco": eco} if eco else {}),
                                 **({"verify": _vb} if _vb else {}))
@@ -1538,36 +1443,50 @@ def _extend_into_named_env(env_name: str, packages: list[str], cap: dict,
     _run_fn = "run_r" if _lang == "r" else "run_python"
     _probe_name = _probe_target_name(packages, cap, req)
     _minv = getattr(req, "min_version", None) if req is not None else None
-    verdict, detail = _probe_named_env(pid, env_name, _lang, _probe_name, _minv,
-                                       env_id=res.get("env_id"))
     _requires = ({"package": _probe_name, "min_version": _minv}
                  if _minv else None)
-    if verdict != "passed":
-        # NOT ready: a solve (or a cached record of one) is not the request's
-        # postcondition. unknown ≠ failed — an unrunnable check is a check
-        # problem, never a package verdict.
-        why = (f"the verification could not run in '{env_name}' "
-               f"(verdict unknown): {detail}" if verdict == "unknown" else
-               f"{detail} in '{env_name}'")
+    # F-V3b: enforcement facts come from the SUBSTRATE (the claim rode the
+    # extend as verify=). Two honest outcomes, relayed as a branchable field —
+    # never flattened to a bare "ready", never a consumer probe (which forced
+    # the env's first realization at install time — minutes on a cold env):
+    #   verified_now — a ready realization existed and the claim was proven
+    #                  against it live;
+    #   deferred     — the claim is recorded on the identity and enforced at
+    #                  every realization (a broken build surfaces at first
+    #                  use as a typed failure naming the claim).
+    _ver = res.get("verified") or {}
+    if _ver and all((v or {}).get("status") == "passed" for v in _ver.values()):
+        _vsite = res.get("verified_site") or "site"
+        _got = ", ".join(f"{k} {(v or {}).get('got', '')}".strip()
+                         for k, v in _ver.items())
+        _enf = ("verified_now",
+                f"verified now on {_vsite} ({_got})")
+    elif _ver:
+        # a populated-but-not-passed verified without a raised error is a
+        # substrate contract violation — refuse ready defensively
         return {"status": "error", "name": cap.get("name"), "env": env_name,
-                "env_id": res["env_id"],
-                "installed": list(packages) if changed else [],
+                "env_id": res["env_id"], "verified": _ver,
                 **({"requires": _requires} if _requires else {}),
-                "note": (f"Extended env '{env_name}' (env_id {res['env_id']}), "
-                         f"but NOT marking ready — {why}.")}
+                "note": (f"Extended env '{env_name}', but the verification "
+                         f"report is not clean — NOT marking ready: {_ver}")}
+    else:
+        _enf = ("deferred",
+                "claim recorded on the env — enforced at every realization "
+                "(a broken build will surface at first use, typed)")
     if not changed:
         note = (f"{', '.join(packages)} already present in isolated env "
-                f"'{env_name}' (env_id {res['env_id']}) — verified "
-                f"({_probe_name} {detail}); the running session was left "
-                f"intact. Run in it with {_run_fn}(env='{env_name}', …).")
+                f"'{env_name}' (env_id {res['env_id']}) — {_enf[1]}; the "
+                f"running session was left intact. Run in it with "
+                f"{_run_fn}(env='{env_name}', …).")
         return {"status": "ready", "name": cap.get("name"), "env": env_name,
                 "env_id": res["env_id"], "installed": [],
-                "verified": {_probe_name: detail},
+                "verification": _enf[0],
+                **({"verified": _ver} if _ver else {}),
                 **({"requires": _requires} if _requires else {}),
                 "note": note}
     note = (f"Installed {', '.join(packages)} into isolated env '{env_name}' "
-            f"(new env_id {res['env_id']}, verified {_probe_name} {detail}). "
-            f"Frozen identities: extending mints a new id; history kept. "
+            f"(new env_id {res['env_id']}) — {_enf[1]}. Frozen identities: "
+            f"extending mints a new id; history kept. "
             f"Run in it with {_run_fn}(env='{env_name}', …).")
     if restarted:
         note += (" NOTE: the env's running session was restarted to pick up the "
@@ -1575,7 +1494,8 @@ def _extend_into_named_env(env_name: str, packages: list[str], cap: dict,
                  "env are gone; reload what you need.")
     return {"status": "ready", "name": cap.get("name"), "env": env_name,
             "env_id": res["env_id"], "installed": list(packages),
-            "verified": {_probe_name: detail},
+            "verification": _enf[0],
+            **({"verified": _ver} if _ver else {}),
             **({"requires": _requires} if _requires else {}),
             "note": note}
 

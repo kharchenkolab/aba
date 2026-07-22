@@ -140,7 +140,9 @@ def test_build_failure_names_the_lane_that_can_work(monkeypatch):
             install=lambda *a, **k: (_ for _ in ()).throw(RuntimeError("cold base")),
             run_installer=lambda *a, **k: (_ for _ in ()).throw(ComputeError(
                 "env.realize_failed", "session installer failed", stage="realize",
-                hints={"out_tail": _BUILD_FAIL, "rc": 0})))))
+                hints={"out_tail": _BUILD_FAIL, "rc": 0,
+                       "failure_class": "missing_system_lib",
+                       "missing_system": {"header": "netcdf.h"}})))))
     res = discovery._ensure_r_via_session(
         {"name": "RNetCDF", "provisioning": {"r": {"source": "cran", "package": "RNetCDF"}}},
         {}, None, "RNetCDF")
@@ -162,64 +164,32 @@ def test_build_failure_names_the_lane_that_can_work(monkeypatch):
         f"{len(note.split('NEXT STEP', 1)[1])} chars")
 
 
-def test_way_out_is_not_appended_to_unrelated_failures():
-    """WIDE: on a typo'd name or a 404 this advice is noise, and noise in an
-    error is how a real hint gets skipped. Only build-stage failures qualify."""
+def test_way_out_fires_only_on_the_typed_class():
+    """The classifier's end-state (tracked since the campaign began): the
+    substrate tags `hints.failure_class: missing_system_lib` on build
+    failures; the remedy keys on THAT — no stage gates, no code gates, no
+    text matching. Anything else — typo'd names, 404s, exec failures, build
+    logs quoted in fused notes — gets no lecture, because it carries no tag."""
     from content.bio.tools.discovery import _syslib_way_out
-    assert _syslib_way_out("cannot open URL '…/DESCRIPTION?ref=main'", "x", "x") == ""
-    assert _syslib_way_out("package 'zzz' is not available", "x", "x") == ""
-    assert _syslib_way_out("", "x", "x") == ""
-    assert _syslib_way_out(_BUILD_FAIL, "x", "x") != ""
-    # the compile-stage sibling of a configure failure counts too
-    assert _syslib_way_out("zlib.h: No such file or directory", "x", "x") != ""
+    assert _syslib_way_out("x", "x",
+                           failure_class="missing_system_lib") != ""
+    for fc in (None, "", "something_else"):
+        assert _syslib_way_out("x", "x", failure_class=fc) == "", fc
+    # the captured name (when the substrate's scan found one) is surfaced
+    out = _syslib_way_out("x", "x", failure_class="missing_system_lib",
+                          missing_system={"header": "png.h"})
+    assert "png.h" in out
 
 
-def test_way_out_near_miss_exec_failure_is_not_a_build_failure():
-    """WIDE, the false-positive side: 'No such file or directory' about the
-    INSTALLER BINARY is an exec failure, not a missing header — the generic
-    phrase must not trigger the system-library lecture (only the header form
-    `<name>.h: No such file` is a build signature)."""
-    from content.bio.tools.discovery import _syslib_way_out
-    assert _syslib_way_out(
-        "cannot run installer: /usr/bin/Rscript: No such file or directory",
-        "x", "x") == ""
-
-
-def test_way_out_trusts_the_typed_stage_over_text():
-    """A solve/staging/submit/infra failure ended BEFORE any compile of this
-    package — no text match may apply the remedy there; and a running/realize
-    stage falls through to the text signs as before."""
-    from content.bio.tools.discovery import _syslib_way_out
-    for pre_build in ("solve", "staging", "submit", "infra"):
-        assert _syslib_way_out(_BUILD_FAIL, "x", "x", stage=pre_build) == "", \
-            pre_build
-    assert _syslib_way_out(_BUILD_FAIL, "x", "x", stage="realize") != ""
-    assert _syslib_way_out(_BUILD_FAIL, "x", "x", stage=None) != ""
-
-
-def test_way_out_trusts_the_typed_code_over_text():
-    """weft discriminates WHICH failure a session install was (f61fcf0): a
-    resolution-class code — name not in repos, dead index, cold-base refusal —
-    can never be a missing system library, no matter what the fused note's
-    text quotes (tails routinely carry ambient build-log fragments from an
-    earlier lane's decline). All typed under stage='realize', so only the
-    CODE separates them. One build-stage or untyped contributor keeps the
-    text signs legitimately in play."""
-    from content.bio.tools.discovery import _syslib_way_out
-    for code in ("env.solve_conflict", "env.solve_failed", "session.cold_base"):
-        assert _syslib_way_out(_BUILD_FAIL, "x", "x", codes=(code,)) == "", code
-        assert _syslib_way_out(_BUILD_FAIL, "x", "x", codes=code) == "", (
-            f"single string form: {code}")
-    # a build-stage contributor among the codes → the signs decide → remedy
-    assert _syslib_way_out(_BUILD_FAIL, "x", "x",
-                           codes=("env.solve_failed", "env.realize_failed")) != ""
-    # untyped → the signs decide, exactly as before
-    assert _syslib_way_out(_BUILD_FAIL, "x", "x", codes=()) != ""
-    assert _syslib_way_out(_BUILD_FAIL, "x", "x", codes=(None, None)) != ""
-    # a typed build failure whose text shows no SYSLIB sign gets no lecture —
-    # realize_failed says the build died, not WHY; the signs still narrow
-    assert _syslib_way_out("package 'zzz' is not available", "x", "x",
-                           codes=("env.realize_failed",)) == ""
+def test_text_sign_taxonomy_is_deleted():
+    """_SYSLIB_SIGNS was always a FALLBACK awaiting a typed discrimination;
+    the substrate now ships one. The text taxonomy must not survive — a
+    revived copy would re-open the locale/false-positive class the typed
+    tag closed."""
+    from content.bio.tools import discovery
+    assert not hasattr(discovery, "_SYSLIB_SIGNS"), "the text taxonomy is back"
+    assert not hasattr(discovery, "_PRE_BUILD_STAGES"), (
+        "the stage gate outlived the text signs it guarded")
 
 
 def test_flow_retryable_index_failure_gets_retry_nudge_not_lecture(monkeypatch):
@@ -260,7 +230,8 @@ def test_flow_typed_build_failure_keeps_lecture_no_retry_nudge(monkeypatch):
             "env.realize_failed",
             "installing the R delta into the session layer failed",
             stage="realize", retryable=False,
-            hints={"err_tail": _BUILD_FAIL, "install_rc": 1, "verify_rc": 0})
+            hints={"err_tail": _BUILD_FAIL, "install_rc": 1, "verify_rc": 0,
+                   "failure_class": "missing_system_lib"})
 
     discovery = _flow(
         monkeypatch,
@@ -340,11 +311,13 @@ def test_way_out_advice_is_syntactically_valid():
     path `pkg` is owner/repo, and interpolating it into a package spec
     produces an invalid name containing a slash."""
     from content.bio.tools.discovery import _syslib_way_out
-    out = _syslib_way_out(_BUILD_FAIL, "MonoPkg", "owner/repo")
+    out = _syslib_way_out("MonoPkg", "owner/repo",
+                          failure_class="missing_system_lib")
     spec = out.split("packages=['")[1].split("'")[0]
     assert spec == "r-monopkg" and "/" not in spec, out
     # absent library name: fall back to the repo BASENAME, never the path
-    out2 = _syslib_way_out(_BUILD_FAIL, "", "owner/repo")
+    out2 = _syslib_way_out("", "owner/repo",
+                           failure_class="missing_system_lib")
     spec2 = out2.split("packages=['")[1].split("'")[0]
     assert "/" not in spec2 and spec2 == "r-repo", out2
     # promotion is the durable pattern — it must be the primary suggestion
@@ -392,7 +365,9 @@ def test_not_loadable_carries_the_diagnosis_and_the_way_out(monkeypatch):
     the lane error AND the remedy — even though THIS request's lane decline
     held the build log that named the missing header."""
     discovery = _flow(monkeypatch,
-                      lane=lambda *a, **k: (False, _BUILD_FAIL, {}))
+                      lane=lambda *a, **k: (False, _BUILD_FAIL,
+                                            {"code": "env.realize_failed",
+                                             "failure_class": "missing_system_lib"}))
     res = discovery._ensure_r_via_session(
         {"name": "RNetCDF", "provisioning": {"r": {"source": "cran", "package": "RNetCDF"}}},
         {}, None, "RNetCDF")

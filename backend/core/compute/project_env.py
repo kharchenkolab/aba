@@ -385,7 +385,8 @@ def install(pid: str, language: str, specs: list[str], *,
 
 
 def ensure_ranked(pid: str, language: str, names: list[str], *,
-                  lanes: list[str], verify: Optional[dict] = None) -> "dict | None":
+                  lanes: list[str], verify: Optional[dict] = None,
+                  cran_repos: Optional[list] = None) -> "dict | None":
     """Ranked-mode ensure (F-V3a): the CALLER ranks the lanes; the substrate
     executes the chain mechanically — per-lane dialect spellings, verify
     inside the loop, typed attempts back. Returns the envelope, or None when
@@ -402,9 +403,15 @@ def ensure_ranked(pid: str, language: str, names: list[str], *,
     verb = getattr(ad, "ensure_available", None)
     if verb is None:
         return None
-    out = dict(named_envs._sync(
-        verb({"session": s["session_id"]}, list(names),
-             lanes=list(lanes), verify=verify)) or {})
+    _kw = {"cran_repos": list(cran_repos)} if cran_repos else {}
+    try:
+        out = dict(named_envs._sync(
+            verb({"session": s["session_id"]}, list(names),
+                 lanes=list(lanes), verify=verify, **_kw)) or {})
+    except TypeError:
+        if not _kw:
+            raise
+        return None      # substrate predates ranked cran_repos → legacy cascade
     _problems = _check_envelope_soft(out)
     if _problems:
         print(f"[project_env] ensure_available (ranked) envelope violation: "
