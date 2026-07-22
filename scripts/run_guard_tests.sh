@@ -17,6 +17,8 @@ set -u
 PY="${PYTHON:-python3}"
 
 FILES=(
+  # suite integrity: every test file gated, excluded-with-rationale, or legacy
+  tests/test_suite_census.py
   # shared-agent-input guards (tool catalog / prompts / cache placement)
   tests/test_tool_conventions.py
   tests/test_tool_allowlist.py
