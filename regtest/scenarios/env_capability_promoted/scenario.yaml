@@ -1,0 +1,93 @@
+id: env_capability_promoted
+smoke: true      # routine tier: the promoted-env capability journey is the
+                 # pilot's highest-traffic env path (every request in a promoted
+                 # project routes through the named lane), and it had ZERO
+                 # agent-level coverage while its worst defects (D3/D4/F1-F4,
+                 # env_refi2 §1) accumulated.
+title: A capability requested in a promoted R env lands there, verified, and is usable
+domain: technical
+gpu: false
+summary: >
+  The env= journey at agent level. The user creates an isolated R environment, promotes it
+  (set_active_env), then asks for another R package WITHOUT naming the env — the active pointer
+  must route the install into the promoted env (not the default session), the platform must
+  verify the package actually loads there before claiming ready, and a bare run_r must be able
+  to use it. This is the promoted-pointer lane whose spec-flattening and ready-on-solve defects
+  were repaired in env_refi2 stages A-D; the scenario pins the repaired contract from the
+  agent's side. 'praise' is a tiny pure-R utility package (compliment generator) — chosen for
+  install speed, no domain content, no system deps.
+lifecycle: []
+data_files: []
+
+steps:
+- id: s1
+  kind: analyze
+  actor: agent
+  prompt: >
+    Set up an isolated R environment called "rlab" with the jsonlite package, and make it my
+    default R environment for this project.
+  expect:
+    tools_used: [make_isolated_env, set_active_env]
+    tool_max_calls:
+      make_isolated_env: 1     # exactly one build — re-solving the same env is thrash
+    must_mention: ["rlab"]
+    must_not: ["I cannot", "not able to"]
+    checks: >
+      The agent creates ONE isolated R env named 'rlab' (make_isolated_env with language='r',
+      packages including jsonlite or the conda spelling r-jsonlite) and promotes it with
+      set_active_env(name='rlab', language='r'). It must not refuse, must not create the env
+      more than once, and must not claim the env is unavailable.
+
+- id: s2
+  kind: analyze
+  actor: agent
+  prompt: >
+    I'll also need the R package praise available for my work here.
+  expect:
+    tools_used: [ensure_capability]
+    tool_max_calls:
+      make_isolated_env: 0     # a package request in a promoted project must
+                               # never become a second env build
+    must_mention: ["praise"]
+    must_not: ["does not exist", "not a real package", "I cannot"]
+    checks: >
+      The agent calls ensure_capability for 'praise' and the install lands in 'rlab' — either
+      via the promoted pointer (no env= argument; ideal, the agent trusts its own promotion) or
+      with env='rlab' explicitly (correct but weaker/redundant). A correct result reports the
+      package available with evidence it was verified in the target env (naming 'rlab' or
+      showing a verified version is the strong signal). Hard failure modes: (a) installing into
+      the DEFAULT session/env instead of the promoted one; (b) claiming ready with no
+      verification evidence; (c) treating the request as an environment problem (creating
+      another env). The bare-run contract itself is mechanically pinned in s3.
+
+- id: s3
+  kind: analyze
+  actor: agent
+  prompt: >
+    Great — print one praise message to show it works.
+  expect:
+    tools_used: [run_r]
+    tool_arg_absent:
+      - {tool: run_r, arg: env}   # bare run_r resolves to the promoted env
+    must_not: ["could not find function", "there is no package", "not installed"]
+    checks: >
+      A BARE run_r (no env=) calls praise::praise() (or library(praise); praise()) and shows
+      the output — proving the package installed in s2 is usable exactly where bare calls
+      execute. Failure here means the install and the execution resolved different
+      environments: the class of bug this scenario exists to catch.
+
+expected_overall:
+  planted_truth: >
+    There is no dataset — the ground truth is the promoted-env capability contract:
+    set_active_env makes an isolated env ambient; a subsequent ensure_capability with no env=
+    must land in the promoted env, be VERIFIED there (loadability, not solver success), and be
+    usable by a bare run_r. Install-target, verification-target, and execution-target are the
+    same environment.
+  notes: >
+    Pairs with env_promotion (python, explicit-promotion journey) and r_system_library
+    (session-lane diagnosis journey). This one pins the POINTER path: the highest-traffic env
+    lane in a promoted project, repaired in env_refi2 stages A-D (spec fidelity through the
+    dispatch, verify-or-refuse at the named lane, requires/verified surfaced). Failure modes it
+    exists to catch: install lands in the default session while runs execute in the promoted
+    env; ready claimed on solver success with nothing loadable; the agent distrusting its own
+    promotion and pinning env= everywhere.

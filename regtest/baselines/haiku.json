@@ -1,11 +1,11 @@
 {
   "meta": {
-    "date": "20260722-094119",
+    "date": "20260722-174608",
     "mode": "haiku",
-    "commit": "c9d54f13",
+    "commit": "9646eaf8",
     "agent_model": "claude-opus-4-7",
     "agent_model_assumed": "claude-haiku-4-5",
-    "n_scenarios": 3
+    "n_scenarios": 1
   },
   "scenarios": {
     "_selftest_session": {
@@ -374,11 +374,20 @@
       "bundle": "r_wrong_name-20260722-094328",
       "infra": 0,
       "agent_model": "claude-opus-4-7"
+    },
+    "env_capability_promoted": {
+      "mech_pass": 5,
+      "mech_total": 5,
+      "rubric_overall": null,
+      "fails": [],
+      "bundle": "env_capability_promoted-20260722-174609",
+      "infra": 0,
+      "agent_model": "claude-opus-4-7"
     }
   },
   "totals": {
-    "mech_pass": 283,
-    "mech_total": 359,
-    "full_pass": 12
+    "mech_pass": 288,
+    "mech_total": 364,
+    "full_pass": 13
   }
 }
