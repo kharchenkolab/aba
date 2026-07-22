@@ -50,10 +50,19 @@ expected_overall:
     remedy APPEARS on a genuine build failure; r_wrong_name asserts it does NOT appear on a
     naming failure; this one covers the third confusable — a PATH failure.
 
-    Deliberately scoped to the path/account contract and nothing further. Measured 2026-07-22:
-    once past the path, this package's C++ source needs zlib HEADERS, which neither the project
-    session nor an isolated R env supplied (conda `zlib` in the env did not put `zlib.h` where
-    R's build looked), so no lane completed. Constraining the build outcome here would make the
-    scenario assert a currently-open platform gap and go permanently red; the build lane is
-    r_system_library's subject, not this one's. Not tagged `smoke` for the same reason —
-    promote it once a GitHub-plus-system-header install has a lane that works.
+    Deliberately scoped to the path/account contract and nothing further. Measured 2026-07-23
+    (aba 3d048f64 + weft 13fd7aa): the PATH lever now works end to end — `owner/repo/subdir@ref`
+    survives the composer into both install lanes, the session attempt reaches the C++ compile,
+    and the failure it reports is the true one (`zlib.h: No such file or directory`, typed
+    `failure_class: missing_system_lib`, `missing_system: {header: zlib.h}`). An isolated env
+    carrying the C library IS the working route — an earlier note here claimed conda `zlib` did
+    not put `zlib.h` where R's build looked; that was wrong and is retracted (measured: the
+    header is in the prefix, CPPFLAGS carries `-isystem <prefix>/include`, and `R CMD SHLIB` on
+    a file including it returns 0).
+
+    The build outcome stays unconstrained for a different reason: the env= extend returns
+    `verification: "deferred"` — the load claim is recorded on the env identity and enforced at
+    the FIRST RUN, so nothing at install time has proven this package builds there. Asserting a
+    working build here would assert something the install call does not yet establish. Not
+    tagged `smoke` for the same reason — promote it once the env= lane either verifies at
+    install or the scenario grows a run step that forces realization.

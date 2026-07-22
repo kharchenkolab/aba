@@ -149,7 +149,12 @@ def test_kernel_env_snippet():
     saved = os.environ.get("ABA_BATCH_SUBMITTER")
     os.environ["ABA_BATCH_SUBMITTER"] = "slurm"
     try:
-        if not M.modules_active():                       # no module system (CI) → no-op
+        # modules_active() says a module SYSTEM is configured — not that this
+        # particular module exists on this host. On a slurm cluster whose
+        # module tree lacks the foss-2018b toolchain (EESSI ships
+        # SAMtools/<ver>-GCC-<ver> instead) env_delta is empty and the
+        # documented contract is the empty string, so gate on the DELTA.
+        if not M.modules_active() or not M.env_delta("samtools/1.10-foss-2018b"):
             assert M.kernel_env_snippet("samtools/1.10-foss-2018b") == ""
             return
         snip = M.kernel_env_snippet("samtools/1.10-foss-2018b")
