@@ -519,8 +519,8 @@ def test_ensure_capability_targets_promoted_env(registry, monkeypatch):
     captured = {}
     monkeypatch.setattr(
         disc, "_extend_into_named_env",
-        lambda env, pkgs, cap: (captured.update(env=env, pkgs=list(pkgs))
-                                or {"status": "ready", "env": env}))
+        lambda env, pkgs, cap, **k: (captured.update(env=env, pkgs=list(pkgs))
+                                     or {"status": "ready", "env": env}))
     out = disc.ensure_capability({"name": "somepkg"}, {"thread_id": ""})
     assert captured == {"env": "pyenv", "pkgs": ["somepkg"]}
     assert out["status"] == "ready" and out["env"] == "pyenv"
@@ -535,8 +535,8 @@ def test_ensure_capability_explicit_env_beats_pointer(registry, monkeypatch):
     captured = {}
     monkeypatch.setattr(
         disc, "_extend_into_named_env",
-        lambda env, pkgs, cap: (captured.update(env=env)
-                                or {"status": "ready", "env": env}))
+        lambda env, pkgs, cap, **k: (captured.update(env=env)
+                                     or {"status": "ready", "env": env}))
     disc.ensure_capability({"name": "somepkg", "env": "renv"}, {"thread_id": ""})
     assert captured == {"env": "renv"}
 

@@ -40,7 +40,7 @@ def test_r_request_on_python_catalogued_name_reroutes_to_cran(monkeypatch):
                         lambda n, **k: {"source": "cran", "package": n})
     seen: dict = {}
 
-    def _fake_r(cap, input_, ctx, name):
+    def _fake_r(cap, input_, ctx, name, **k):
         seen["cap"] = cap
         return {"status": "ready", "name": name, "archetype": "r_package",
                 "library": name, "note": "installed"}

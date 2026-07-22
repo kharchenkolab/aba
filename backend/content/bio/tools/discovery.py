@@ -1163,31 +1163,34 @@ def _syslib_way_out(rendered: str, libname: str, pkg: str,
 
 
 def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
-                          name: str) -> dict:
+                          name: str, req=None) -> dict:
     """W3.4 pack mode: R capability into the PROJECT's session over the R base
     pack. conda-first (binary r-*/bioconductor-* into the session — live, no
     compile); github/source via the CAPTURED session installer (rides
     snapshots as a portable post_install step). The shared pack is never
-    mutated — additions live in the project session."""
+    mutated — additions live in the project session.
+
+    Merged request fields come from `req` (cap_request.build_cap_request —
+    the ONE merge owner; `library` is agent-facing there: the load-verify
+    name when it differs from the package/repo name). Direct callers that
+    pass no req get one built from their inputs — same rule, same result."""
     from core import projects
     from core.compute import project_env
     from core.exec import r as rexec
+    if req is None:
+        from content.bio.tools.cap_request import build_cap_request
+        req = build_cap_request(input_, cap, ctx, name=name, language="r")
     pid = str(projects.current() or "default")
-    rp = dict((cap.get("provisioning") or {}).get("r") or {})
-    # `library` is an agent-facing override too: the load-verify name when it
-    # differs from the package/repo name (mixed-case CRAN names, monorepo
-    # subdir packages) — without it a SUCCESSFUL install can be verified
-    # under the wrong name and reported as a failure.
-    for _k in ("ref", "source", "package", "subdir", "library"):
-        if input_.get(_k):
-            rp[_k] = input_[_k]
-    _src = rp.get("source", "cran")
-    _pkg = rp.get("package") or cap.get("name")
-    libname = rp.get("library") or (
+    _src = req.source
+    _pkg = req.package or cap.get("name")
+    libname = req.library or (
         _pkg.split("/")[-1] if _src == "github"
         else (_pkg[2:] if _src == "conda" and _pkg.startswith("r-") else _pkg))
-    min_version = (str(input_.get("min_version") or rp.get("min_version") or "").strip() or None)
-    force = bool(input_.get("force")) or any(input_.get(_k) for _k in ("ref", "source", "package", "subdir"))
+    min_version = req.min_version
+    # an explicit source/ref/package/subdir override is an implicit force —
+    # the caller is steering the install, not asking "is it there"
+    force = req.force or bool(set(req.explicit_overrides)
+                              & {"ref", "source", "package", "subdir"})
     installed = _r_version_in_session(pid, libname)
     if installed and not force and (not min_version or rexec.version_ge(installed, min_version)):
         return {"status": "ready", "name": cap.get("name"), "archetype": "r_package",
@@ -1243,10 +1246,10 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
             # NOT exotic: a polyglot monorepo keeps the R package under e.g. R/,
             # so there is no DESCRIPTION at the repo root and install_github 404s
             # on it (live 2026-07-21 — read as "repo missing").
-            _ref, _sub = rp.get("ref"), (rp.get("subdir") or "").strip("/")
+            _ref, _sub = req.ref, (req.subdir or "").strip("/")
             _spec = _pkg + (f"/{_sub}" if _sub else "") + (f"@{_ref}" if _ref else "")
             _ok, _lane_err, _lane_info = _cran_lane(pid, _spec)
-            if _ok and not rp.get("library"):
+            if _ok and not req.library:
                 # weft read the package's DESCRIPTION at install time and
                 # returns its name as `resolved` (63b6199) — THAT is the load
                 # name. The repo tail is a heuristic that breaks on monorepos
@@ -1334,10 +1337,15 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
                     f"is usable in run_r now."}
 
 
-def _extend_into_named_env(env_name: str, packages: list[str], cap: dict) -> dict:
+def _extend_into_named_env(env_name: str, packages: list[str], cap: dict,
+                           req=None) -> dict:
     """Layer `packages` into a named isolated env via extends_env (frozen
     identities: a new EnvID is minted, the old id kept in history). The env's
-    language picks the ecosystem (pypi | cran)."""
+    language picks the ecosystem (pypi | cran).
+
+    `req` (cap_request.CapRequest) carries the request's merged fields to
+    this door — stage A transports them; the named lane's verify (stage B)
+    and grammar/eco composition (stage C) consume them here."""
     from core.compute import named_envs
     from core.compute.errors import ComputeError
     from core import projects
@@ -1475,11 +1483,12 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
     # install (synthesized cap through the normal dispatch); no hit falls
     # through to the honest candidates/not_found paths below.
     if cap is not None and language is not None:
-        _prov0 = cap.get("provisioning") or {}
-        _cap_lang = ("r" if (cap.get("archetype") == "r_package" or _prov0.get("r"))
-                     else ("python" if (_prov0.get("pip") or _prov0.get("conda")
-                                        or cap.get("archetype") in (None, "library"))
-                           else None))            # non-package caps are language-neutral
+        from content.bio.tools.cap_request import classify_language
+        # ONE classification owner (cap_request.classify_language): notably a
+        # cli/tool cap with conda provisioning is language-NEUTRAL, not python
+        # — the inline heuristic here sent tools into the wrong-ecosystem
+        # mismatch reroute (M6).
+        _cap_lang = classify_language(cap)
         if _cap_lang is not None and _cap_lang != language:
             _mismatch_note = (f"NOTE: '{name}' is catalogued for {_cap_lang}; you asked "
                               f"for {language}. ")
@@ -1497,6 +1506,13 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
             _mismatch_note = ""
     else:
         _mismatch_note = ""
+    # The request, normalized ONCE (env_refi2 stage A): built after the
+    # mismatch handling so it reflects the FINAL capability record, and
+    # threaded to every provisioning door — a door may read merged fields
+    # only from here, never re-pluck raw inputs (fidelity: fields the agent
+    # sent must survive to whichever door serves the request).
+    from content.bio.tools.cap_request import build_cap_request
+    req = build_cap_request(input_, cap, ctx, name=name, language=language)
     # env= is an UNAMBIGUOUS "install this package INTO env X" — handle it EARLY,
     # before the default-env machinery (already-importable probe, pack-provider
     # recognition, cluster modules). Those all answer "is it available in the
@@ -1521,7 +1537,8 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         elif not cap or (cap or {}).get("archetype") in (None, "library"):
             _pkgs = [name]   # uncatalogued / plain library → install by name
         if _pkgs is not None:
-            return _extend_into_named_env(env, _pkgs, cap or {"name": name})
+            return _extend_into_named_env(env, _pkgs, cap or {"name": name},
+                                          req=req)
         # a non-package capability (MCP server, reference): fall through, note it
         _env_scope_note = (f" (env={env!r} applies to PACKAGE installs only; this "
                            f"capability is not a package — provisioned normally.)")
@@ -1941,7 +1958,7 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
             return {"status": "error", "name": name,
                     "note": f"the R environment pack is not available: "
                             f"{describe(ce)}"}
-        return _ready(_ensure_r_via_session(cap, input_, ctx, name))
+        return _ready(_ensure_r_via_session(cap, input_, ctx, name, req=req))
     return {"status": "error", "name": name, "note": "capability has no recognized provisioning."}
 
 
