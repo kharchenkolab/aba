@@ -1440,8 +1440,21 @@ def _extend_into_named_env(env_name: str, packages: list[str], cap: dict,
             # layer — never through a registry-name heuristic
             named_envs.extend(pid, env_name, list(req.conda_packages),
                               eco="conda")
+        # the request's claim rides the env SPEC too (weft P2 / F-V1): the
+        # capability path knows its load name precisely, so the substrate
+        # enforces this claim at every future realization of the identity —
+        # the consumer probe below covers only the here-and-now
+        _vb = None
+        if req is not None:
+            from content.bio.tools.cap_request import verify_block
+            _lang0 = ((named_envs.resolve(pid, env_name) or {}).get("language")
+                      or "python")
+            _nm = _probe_target_name(packages, cap, req)
+            _vb = (verify_block(req, libname=_nm) if _lang0 == "r"
+                   else verify_block(req, import_name=_nm))
         res = named_envs.extend(pid, env_name, list(packages),
-                                **({"eco": eco} if eco else {}))
+                                **({"eco": eco} if eco else {}),
+                                **({"verify": _vb} if _vb else {}))
     except ComputeError as e:
         return {"status": "error", "name": cap.get("name"), "env": env_name,
                 "error": e.to_payload(),

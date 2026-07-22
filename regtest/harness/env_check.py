@@ -73,19 +73,28 @@ def main() -> int:
     print(f"[env_check] scratch project {pid}", flush=True)
 
     try:
+        projects.set_current(pid)
         # ── 1. isolated env carrying a SYSTEM library ────────────────────────
         # zlib is a shared C library, not a python package — exactly the class
         # the session overlay can never carry. Solving it into the isolated
-        # env is the capability the whole campaign is about.
-        res = named_envs.create(pid, "envchk", packages=[],
-                                conda_packages=["zlib"])
-        check("isolated env solves with a system library",
-              bool(res.get("env_id")), str(res))
+        # env is the capability the whole campaign is about. Driven through
+        # the TOOL impl, not named_envs directly: agent-reachable claims must
+        # be proven at the surface the agent can reach (the conda_packages
+        # passthrough existed at the function layer for a week while the tool
+        # could not express it — D1).
+        from content.bio.tools import make_isolated_env as _mk_env
+        from content.bio.tools import set_active_env as _set_env
+        res = _mk_env({"name": "envchk", "packages": [],
+                       "conda_packages": ["zlib"]}, {"thread_id": f"ec-{pid}"})
+        check("isolated env solves with a system library (via the tool)",
+              bool(res.get("env_id")), str(res)[:300])
 
         # ── 2. promotion + resolution ────────────────────────────────────────
-        named_envs.set_active(pid, "envchk", "python")
-        check("promotion binds the python slot",
-              named_envs.get_active(pid, "python") == "envchk")
+        _pr = _set_env({"name": "envchk", "language": "python"},
+                       {"thread_id": f"ec-{pid}"})
+        check("promotion binds the python slot (via the tool)",
+              named_envs.get_active(pid, "python") == "envchk",
+              str(_pr)[:200])
         check("resolve_env follows the pointer",
               named_envs.resolve_env(pid, "python") == "envchk")
         check("resolve_env cross-language isolation",
@@ -210,13 +219,48 @@ def main() -> int:
 
         # ── R journey (--r): the campaign's flagship case ────────────────────
         if args.r:
-            res = named_envs.create(pid, "renvchk", language="r", packages=[],
-                                    conda_packages=["zlib"])
-            check("isolated R env solves with a system library",
-                  bool(res.get("env_id")), str(res))
-            named_envs.set_active(pid, "renvchk", "r")
+            from content.bio.tools import make_isolated_env as _mk_env2
+            from content.bio.tools import set_active_env as _set_env2
+            res = _mk_env2({"name": "renvchk", "language": "r", "packages": [],
+                            "conda_packages": ["zlib"]},
+                           {"thread_id": f"ec-r-{pid}"})
+            check("isolated R env solves with a system library (via the tool)",
+                  bool(res.get("env_id")), str(res)[:300])
+            _set_env2({"name": "renvchk", "language": "r"},
+                      {"thread_id": f"ec-r-{pid}"})
             check("R promotion binds the r slot",
                   named_envs.resolve_env(pid, "r") == "renvchk")
+
+            # ── extend wing: ensure_capability(env=…) at the TOOL surface ───
+            # The env= lane's repaired contract, live: spec fidelity through
+            # the dispatch, verify-or-refuse at the named lane. Positive: a
+            # tiny pure-R registry package extends the env and is VERIFIED
+            # there before ready. Negative: a github+subdir record for a repo
+            # that cannot exist — the composed grammar (owner/repo/subdir@ref)
+            # must reach the substrate (its error quotes the spec), and no
+            # ready without a loadable artifact.
+            from content.bio.tools.discovery import ensure_capability as _ec
+            okx = _ec({"name": "praise", "env": "renvchk"},
+                      {"thread_id": f"ec-r-{pid}"})
+            check("env= install reports ready only with verification evidence",
+                  okx.get("status") == "ready" and bool(okx.get("verified")),
+                  str(okx)[:300])
+            bad = _ec({"name": "envcheck-ghost", "env": "renvchk",
+                       "source": "github",
+                       "package": "aba-envcheck/definitely-missing",
+                       "subdir": "R", "ref": "main"},
+                      {"thread_id": f"ec-r-{pid}"})
+            _btxt = str(bad)
+            # the substrate's resolver splits the spec (repo@ref resolved,
+            # subdir applied after), so its 404 quotes repo@ref — that pair
+            # surviving the dispatch is the live observable here; subdir
+            # composition is pinned hermetically (test_cap_request) and at
+            # agent level (r_github_subdir scenario, a real subdir repo).
+            check("env= github package@ref survives to the substrate",
+                  "aba-envcheck/definitely-missing" in _btxt
+                  and "@main" in _btxt, _btxt[:300])
+            check("env= failure refuses ready",
+                  bad.get("status") != "ready", _btxt[:200])
             rr = named_envs.run_in(pid, "renvchk",
                                    "cat('R_PFX=', R.home(), '\\n', sep='')",
                                    timeout_s=1800)

@@ -325,6 +325,85 @@ def test_probe_name_for_github_is_the_repo_tail_not_the_subdir():
     assert _probe_target_name(["org/repo/R@dev"], {}, req2) == "RealName"
 
 
+# ── F-V1 remainder: verify blocks ride the env SPECS (weft P2) ──────────────
+# The realize postcondition only arms if the spec carries the claim: a named
+# env whose realization is broken on a new site must fail its OWN
+# postcondition there (adopt default-on), not wait for a consumer probe.
+
+def _cap_env_compute(monkeypatch):
+    import core.compute.named_envs as ne
+    import core.compute.adapter as ad
+    seen: dict = {}
+
+    class _C:
+        async def env_ensure(self, spec):
+            seen["spec"] = spec
+            return {"env_id": "env_NEW", "status": "created"}
+
+    monkeypatch.setattr(ad, "get_compute", lambda: _C())
+    return seen
+
+
+def test_extend_spec_carries_the_verify_block(monkeypatch, tmp_path):
+    import core.config as cfg
+    import core.compute.named_envs as ne
+    monkeypatch.setattr(cfg, "PROJECTS_DIR", tmp_path)
+    seen = _cap_env_compute(monkeypatch)
+    ne.create("prjV", "e1", language="r", packages=[])
+    seen.clear()
+    ne.extend("prjV", "e1", ["X"], eco="cran",
+              verify={"loads": ["X"], "versions": {"X": ">=2.0"}})
+    assert seen["spec"].get("verify") == {"loads": ["X"],
+                                          "versions": {"X": ">=2.0"}}, (
+        f"extend dropped the claim — the realize postcondition never arms: "
+        f"{seen['spec']}")
+    # and the layer records it, so a platform re-lock replays the SAME claim
+    row = ne.resolve("prjV", "e1")
+    assert any(l.get("verify") == {"loads": ["X"], "versions": {"X": ">=2.0"}}
+               for l in row.get("layers", [])), row.get("layers")
+
+
+def test_create_spec_carries_the_verify_block(monkeypatch, tmp_path):
+    import core.config as cfg
+    import core.compute.named_envs as ne
+    monkeypatch.setattr(cfg, "PROJECTS_DIR", tmp_path)
+    seen = _cap_env_compute(monkeypatch)
+    ne.create("prjV", "e2", language="r", packages=[],
+              verify={"loads": ["Y"]})
+    assert seen["spec"].get("verify") == {"loads": ["Y"]}, seen["spec"]
+    # absent → no verify key (never an empty-noise claim)
+    seen.clear()
+    ne.create("prjV", "e3", language="r", packages=[])
+    assert "verify" not in seen["spec"], seen["spec"]
+
+
+def test_capability_extend_door_writes_the_claim_onto_the_env(monkeypatch):
+    """The capability path knows its load name precisely (library override /
+    resolved names) — ITS claims go onto the env row, so the substrate
+    enforces them at every future realization of that identity."""
+    import content.bio.tools.discovery as d
+    import core.compute.named_envs as ne
+    seen: dict = {}
+    monkeypatch.setattr("core.projects.current", lambda: "prjV")
+    monkeypatch.setattr(ne, "resolve",
+                        lambda pid, name: {"language": "r", "env_id": "e1"})
+    monkeypatch.setattr(ne, "extend",
+                        lambda pid, name, pkgs, **k: seen.update(k) or
+                        {"env_id": "e2"})
+    monkeypatch.setattr(ne, "run_in",
+                        lambda *a, **k: {"ok": True, "stdout": "CAPQ=2.1",
+                                         "stderr": "", "returncode": 0})
+    monkeypatch.setattr(d, "_evict_env_kernels", lambda name: 0)
+    from content.bio.tools.cap_request import CapRequest
+    req = CapRequest(name="PkgX", language="r", min_version="2.0",
+                     library="PkgX", project="prjV")
+    d._extend_into_named_env("grow", ["PkgX"], {"name": "PkgX"},
+                             req=req, eco="cran")
+    assert seen.get("verify") == {"loads": ["PkgX"],
+                                  "versions": {"PkgX": ">=2.0"}}, (
+        f"the claim never reached the env spec: {seen}")
+
+
 # ── stage D: target resolution parity + the r-base dedupe ───────────────────
 
 def test_spec_for_rbase_caller_constraint_wins():

@@ -239,14 +239,21 @@ def _spec_for(project_id: str, name: str, language: str,
 def create(project_id: str, name: str, *, language: str = "python",
            packages: list[str] | None = None,
            python_version: Optional[str] = None,
-           conda_packages: list[str] | None = None) -> dict:
+           conda_packages: list[str] | None = None,
+           verify: Optional[dict] = None) -> dict:
     """Solve a fresh named env → EnvID (realization is lazy — first run
     realizes). Raises ComputeError with weft's structured cause (e.g.
     env.solve_conflict names the minimal conflicting set). `conda_packages`
-    is the eco passthrough for conda-only deps (see _spec_for)."""
+    is the eco passthrough for conda-only deps (see _spec_for). `verify` is
+    the caller's authored claim, recorded on the SPEC (weft P2): enforced as
+    a realize postcondition wherever this identity realizes. Callers pass it
+    only with load names they actually know — deriving import names from
+    spec strings is guesswork that would false-fail realizations."""
     name = name.strip()
     spec = _spec_for(project_id, name, language, packages or [], python_version,
                      conda_packages)
+    if verify:
+        spec["verify"] = dict(verify)
     res = _sync(_adapter.get_compute().env_ensure(spec))     # slow — OUTSIDE the lock
     now = time.time()
     # base_spec/python_version/layers persist HOW the env was built — the
@@ -296,7 +303,8 @@ def _layer_deps(layer, language: str) -> dict:
 
 
 def extend(project_id: str, name: str, packages: list[str], *,
-           eco: Optional[str] = None) -> dict:
+           eco: Optional[str] = None,
+           verify: Optional[dict] = None) -> dict:
     """Add packages = extends_env over the current EnvID → NEW EnvID, handle
     moves, old id kept in history (never install into a frozen env). `eco`
     overrides the ecosystem routing (see _extend_deps).
@@ -332,7 +340,12 @@ def extend(project_id: str, name: str, packages: list[str], *,
                                "no re-solve", "delta": []}
         deps = _extend_deps(row["language"], packages, eco)
         spec = {"name": f"aba-{project_id}-{name}",
-                "extends_env": row["env_id"], "deps": deps}
+                "extends_env": row["env_id"], "deps": deps,
+                # the request's claim rides the SPEC (weft P2): the substrate
+                # enforces it as a realize postcondition on every site this
+                # identity ever realizes on (adopt default-on), composing
+                # base ∪ child along the extends chain
+                **({"verify": dict(verify)} if verify else {})}
         res = _sync(_adapter.get_compute().env_ensure(spec))  # slow — OUTSIDE the lock
         applied = {"ok": False}
 
@@ -350,7 +363,8 @@ def extend(project_id: str, name: str, packages: list[str], *,
             # layers carry their FULL deps block so a platform re-lock replays
             # the same ecosystems (a flat list replayed as pypi would mis-route
             # a conda layer)
-            r.setdefault("layers", []).append({"deps": deps})
+            r.setdefault("layers", []).append(
+                {"deps": deps, **({"verify": dict(verify)} if verify else {})})
             r["updated_at"] = time.time()
             applied["ok"] = True
         _update(project_id, _apply)
