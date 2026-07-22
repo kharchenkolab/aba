@@ -204,12 +204,15 @@ def make_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
     label = "R" if is_r else "Python"
     lang = "r" if is_r else "python"
     packages = list(input_.get("packages") or [])
-    # eco passthrough (the cold-base lever's consumer side): a `conda:` prefix
-    # routes that package into the conda layer of the solve — the only way to
-    # provision a wheel-less conda-only dep through the isolated lane. (R
-    # packages route by the r-/bioconductor- prefix heuristic instead.)
+    # eco passthrough (the cold-base lever's consumer side): the explicit
+    # `conda_packages` list routes deps into the conda layer of the solve —
+    # the only way to provision a system library / wheel-less conda-only dep
+    # through the isolated lane (D1: 'zlib' in packages went to the wrong
+    # registry with no agent-reachable correction). The legacy `conda:`
+    # prefix inside `packages` still works.
     conda_pkgs = [p[len("conda:"):] for p in packages
                   if isinstance(p, str) and p.startswith("conda:")]
+    conda_pkgs += [str(p) for p in (input_.get("conda_packages") or [])]
     pip_pkgs = [p for p in packages
                 if not (isinstance(p, str) and p.startswith("conda:"))]
     pid = str(projects.current() or "default")
@@ -218,7 +221,7 @@ def make_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
         # mutated in place). Fresh name → solve a new env. Solving is eager so
         # conflicts surface NOW with weft's structured cause; realization is
         # lazy — the first run materializes the prefix.
-        if named_envs.resolve(pid, name) is not None and packages:
+        if named_envs.resolve(pid, name) is not None and (packages or conda_pkgs):
             _pre_id = (named_envs.resolve(pid, name) or {}).get("env_id")
             if conda_pkgs:
                 res = named_envs.extend(pid, name, conda_pkgs, eco="conda")
@@ -1403,6 +1406,10 @@ def _probe_target_name(packages: list[str], cap: dict, req) -> str:
     for k in ("import_name", "library"):
         if (cap or {}).get(k):
             return str(cap[k])
+    if req is not None and req.package:
+        # a github spec's PATH tail is the subdir, not the package — the load
+        # name is the repo tail (until the substrate's resolved names, V3)
+        return req.package.split("/")[-1]
     if packages:
         base = re.split(r"[=<>!\s\[@]", str(packages[0]))[0]
         return base.split("/")[-1] or str(packages[0])
@@ -1410,7 +1417,7 @@ def _probe_target_name(packages: list[str], cap: dict, req) -> str:
 
 
 def _extend_into_named_env(env_name: str, packages: list[str], cap: dict,
-                           req=None) -> dict:
+                           req=None, eco: "str | None" = None) -> dict:
     """Layer `packages` into a named isolated env via extends_env (frozen
     identities: a new EnvID is minted, the old id kept in history). The env's
     language picks the ecosystem (pypi | cran).
@@ -1427,7 +1434,14 @@ def _extend_into_named_env(env_name: str, packages: list[str], cap: dict,
     pid = str(projects.current() or "default")
     _pre_id = (named_envs.resolve(pid, env_name) or {}).get("env_id")
     try:
-        res = named_envs.extend(pid, env_name, list(packages))
+        if req is not None and req.conda_packages:
+            # the explicit conda-eco passthrough (D1's extend-door sibling):
+            # system libraries / conda-only deps land via their own conda
+            # layer — never through a registry-name heuristic
+            named_envs.extend(pid, env_name, list(req.conda_packages),
+                              eco="conda")
+        res = named_envs.extend(pid, env_name, list(packages),
+                                **({"eco": eco} if eco else {}))
     except ComputeError as e:
         return {"status": "error", "name": cap.get("name"), "env": env_name,
                 "error": e.to_payload(),
@@ -1622,26 +1636,18 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
     # DEFAULT stack / how do I get it there", which is the wrong question for a
     # named target: a package present in the default env would short-circuit and
     # env X would never gain it (found live: ensure_capability(env='nptools',
-    # 'pandas') returned ready while nptools stayed numpy-only). For a package
-    # capability we extend with its declared specs; for an UNCATALOGUED name we
-    # extend with the raw name (the env's language picks pypi vs cran) — weft's
-    # solver resolves it. A NON-package capability keeps env='s scope note.
+    # 'pandas') returned ready while nptools stayed numpy-only). The specs and
+    # ecosystem come from the ONE composer (compile_extend): the github grammar
+    # (owner/repo[/subdir][@ref]) survives to the extend lane instead of
+    # flattening to a bare same-named registry package, and the eco is explicit
+    # rather than prefix-derived. A NON-package capability keeps env='s note.
     if env is not None:
-        _prov = (cap or {}).get("provisioning") or {}
-        _pkgs = None
-        if _prov.get("pip"):
-            _pkgs = list(_prov["pip"])
-        elif _prov.get("conda"):
-            _c = _prov["conda"]
-            _spec = _c["spec"] if isinstance(_c, dict) else _c
-            _pkgs = [_spec] if isinstance(_spec, str) else list(_spec)
-        elif (cap or {}).get("archetype") == "r_package":
-            _pkgs = [(cap or {}).get("package") or (cap or {}).get("library") or name]
-        elif not cap or (cap or {}).get("archetype") in (None, "library"):
-            _pkgs = [name]   # uncatalogued / plain library → install by name
-        if _pkgs is not None:
+        from content.bio.tools.cap_request import compile_extend
+        _plan = compile_extend(req, cap, language or "python")
+        if _plan is not None:
+            _pkgs, _eco = _plan
             return _extend_into_named_env(env, _pkgs, cap or {"name": name},
-                                          req=req)
+                                          req=req, eco=_eco)
         # a non-package capability (MCP server, reference): fall through, note it
         _env_scope_note = (f" (env={env!r} applies to PACKAGE installs only; this "
                            f"capability is not a package — provisioned normally.)")

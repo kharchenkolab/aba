@@ -183,6 +183,148 @@ def test_pointer_door_receives_the_same_request(monkeypatch):
         f"pointer door dropped the request: {req}")
 
 
+# ── stage C: compile — one grammar/eco composer ─────────────────────────────
+# The env= dispatch flattened rich records to bare names (D3) and the extend
+# path derived ecosystems by prefix heuristics with no override (D1/F3).
+# compile_extend owns grammar + eco; the doors pass its output through.
+
+def test_compile_extend_composes_the_github_grammar():
+    from content.bio.tools.cap_request import CapRequest, compile_extend
+    req = CapRequest(name="pkgx", language="r", source="github",
+                     package="org/repo", subdir="R", ref="dev")
+    specs, eco = compile_extend(req, {"archetype": "r_package"}, "r")
+    assert specs == ["org/repo/R@dev"] and eco == "cran", (specs, eco)
+    # degenerate shapes: no subdir; no ref; neither
+    req2 = CapRequest(name="p", language="r", source="github", package="o/r")
+    assert compile_extend(req2, {"archetype": "r_package"}, "r") == (["o/r"], "cran")
+
+
+def test_compile_extend_routes_ecosystems_explicitly():
+    from content.bio.tools.cap_request import CapRequest, compile_extend
+    # conda-source R cap → the conda eco, conda spelling as given
+    r = CapRequest(name="x", language="r", source="conda", package="r-x")
+    assert compile_extend(r, {"archetype": "r_package"}, "r") == (["r-x"], "conda")
+    # bioconductor → conda-first spelling in the isolated lane (binary, no
+    # BiocManager, no writable prefix)
+    b = CapRequest(name="SomePkg", language="r", source="bioconductor",
+                   package="SomePkg")
+    assert compile_extend(b, {"archetype": "r_package"}, "r") == \
+        (["bioconductor-somepkg"], "conda")
+    # plain registry names: R env → cran; python env → pypi
+    p = CapRequest(name="X", language="r", source="cran", package="X")
+    assert compile_extend(p, {"archetype": "r_package"}, "r") == (["X"], "cran")
+    u = CapRequest(name="attrs", language="python")
+    assert compile_extend(u, None, "python") == (["attrs"], "pypi")
+    # pip-provisioned cap → its declared specs, pypi
+    pip = CapRequest(name="attrs", language="python")
+    assert compile_extend(pip, {"archetype": "library",
+                                "provisioning": {"pip": ["attrs>=23"]}},
+                          "python") == (["attrs>=23"], "pypi")
+    # conda-provisioned cap → conda eco (F3's namesake-to-PyPI misroute)
+    tool = CapRequest(name="sometool", language="python")
+    assert compile_extend(tool, {"archetype": "library",
+                                 "provisioning": {"conda": "sometool"}},
+                          "python") == (["sometool"], "conda")
+    # non-package capability → None (the dispatch's fall-through)
+    assert compile_extend(CapRequest(name="m"), {"archetype": "mcp_server",
+                                                 "provisioning": {}},
+                          "python") is None
+
+
+def test_env_door_extends_with_composed_spec_and_eco(monkeypatch):
+    """D3's kill at the door: the github grammar reaches named_envs.extend,
+    WITH an explicit eco — never a bare name into a prefix heuristic."""
+    import content.bio.tools.discovery as d
+    import core.compute.named_envs as ne
+    seen: dict = {}
+    monkeypatch.setattr("core.catalog.resolve_capability",
+                        lambda n: {"name": "pkgx", "archetype": "r_package",
+                                   "provisioning": {"r": {"source": "cran",
+                                                          "package": "pkgx"}}})
+    monkeypatch.setattr(ne, "resolve",
+                        lambda pid, name: {"language": "r", "env_id": "e1"})
+
+    def _extend(pid, name, pkgs, *, eco=None, **k):
+        seen["pkgs"], seen["eco"] = list(pkgs), eco
+        return {"env_id": "e2"}
+
+    monkeypatch.setattr(ne, "extend", _extend)
+    monkeypatch.setattr(ne, "run_in",
+                        lambda *a, **k: {"ok": True, "stdout": "CAPQ=1.0",
+                                         "stderr": "", "returncode": 0})
+    monkeypatch.setattr(d, "_evict_env_kernels", lambda name: 0)
+    monkeypatch.setattr(d, "_pointer_env", lambda pid, lang: None)
+    out = d.ensure_capability(
+        {"name": "pkgx", "env": "grow", "source": "github",
+         "package": "org/repo", "subdir": "R", "ref": "dev"},
+        {"thread_id": "t"})
+    assert seen.get("pkgs") == ["org/repo/R@dev"], (
+        f"github grammar flattened at the env= door again: {seen}")
+    assert seen.get("eco") == "cran", seen
+
+
+def test_env_door_conda_packages_pre_extend(monkeypatch):
+    """The explicit conda-eco passthrough at the extend door (D1's sibling):
+    conda_packages land via their own conda-eco extend before the main spec."""
+    import content.bio.tools.discovery as d
+    import core.compute.named_envs as ne
+    calls: list = []
+    monkeypatch.setattr(ne, "resolve",
+                        lambda pid, name: {"language": "r", "env_id": "e1"})
+    monkeypatch.setattr(ne, "extend",
+                        lambda pid, name, pkgs, *, eco=None, **k:
+                        calls.append((list(pkgs), eco)) or {"env_id": "e2"})
+    monkeypatch.setattr(ne, "run_in",
+                        lambda *a, **k: {"ok": True, "stdout": "CAPQ=1.0",
+                                         "stderr": "", "returncode": 0})
+    monkeypatch.setattr(d, "_evict_env_kernels", lambda name: 0)
+    from content.bio.tools.cap_request import CapRequest
+    req = CapRequest(name="X", language="r", conda_packages=["zlib"],
+                     project="prj")
+    d._extend_into_named_env("grow", ["X"], {"name": "X"}, req=req, eco="cran")
+    assert (["zlib"], "conda") in calls, (
+        f"conda_packages never reached a conda-eco extend: {calls}")
+    assert (["X"], "cran") in calls, calls
+
+
+def test_make_isolated_env_exposes_conda_packages(monkeypatch):
+    """D1's tool-surface kill: the eco passthrough exists at named_envs.create
+    but the agent could not reach it."""
+    import inspect
+    import content.bio.tools.discovery as d
+    import core.compute.named_envs as ne
+    from content.bio.mcp_servers.aba_core.tools import discovery as mcp_disc
+    sig = None
+    for _n, _f in inspect.getmembers(mcp_disc):
+        pass
+    src = inspect.getsource(mcp_disc)
+    assert "conda_packages" in src.split("def make_isolated_env")[1].split("def ")[0], (
+        "the MCP surface does not expose conda_packages")
+    seen: dict = {}
+    monkeypatch.setattr(ne, "create",
+                        lambda pid, name, **k: seen.update(k) or
+                        {"env_id": "e1", "status": "created"})
+    d.make_isolated_env({"name": "e", "language": "r", "packages": [],
+                         "conda_packages": ["zlib"]}, {"thread_id": "t"})
+    assert seen.get("conda_packages") == ["zlib"], (
+        f"conda_packages dropped between tool and named_envs.create: {seen}")
+
+
+def test_probe_name_for_github_is_the_repo_tail_not_the_subdir():
+    """A composed spec 'org/repo/R@dev' must not verify library('R') — the
+    load name is the repo tail (or the explicit library=), pending V3's
+    resolved names."""
+    from content.bio.tools.discovery import _probe_target_name
+    from content.bio.tools.cap_request import CapRequest
+    req = CapRequest(name="pkgx", language="r", source="github",
+                     package="org/repo", subdir="R", ref="dev")
+    assert _probe_target_name(["org/repo/R@dev"], {"name": "pkgx"}, req) == "repo"
+    # explicit library still wins
+    req2 = CapRequest(name="pkgx", language="r", source="github",
+                      package="org/repo", subdir="R", library="RealName")
+    assert _probe_target_name(["org/repo/R@dev"], {}, req2) == "RealName"
+
+
 # ── stage B: verify — readiness is the REQUEST's postcondition ──────────────
 # The named lane certified solves (D4/F4: ready-on-solve, cached=ready, dead
 # verify_imports). Stage B: compose the claim from the request (weft's ONE

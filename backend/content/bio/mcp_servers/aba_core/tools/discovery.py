@@ -184,9 +184,10 @@ def register_discovery_tools(mcp: FastMCP) -> None:
                           packages: list[str] | None = None,
                           language: Literal["python", "r"] = "python",
                           python_version: str | None = None,
+                          conda_packages: list[str] | None = None,
                           aba_ctx_id: str | None = None) -> dict:
-        """Create/refresh an ISOLATED env you OWN (a standalone solved
-        environment) and install `packages` into it with full version control.
+        """Create/refresh an ISOLATED env you OWN (standalone solve) and
+        install `packages` into it with full version control.
         CHECK FIRST: inspect_env() lists this project's existing envs — extend one
         (same call with more packages, or ensure_capability(env=...)) instead of
         creating a near-duplicate.
@@ -197,15 +198,17 @@ def register_discovery_tools(mcp: FastMCP) -> None:
         (or `run_r(env='name', …)` for R). `python_version` (e.g. "3.10") pins
         the interpreter — use it when a package needs a DIFFERENT python than
         the base (an old library that requires <3.11); the isolated env is
-        standalone so it can hold any version. (For R: the project library
-        covers ordinary package installs; an isolated env is the route when a
-        package needs SYSTEM libraries the base lacks, or a fully independent
-        pinned stack — promote it with set_active_env(name, language='r') so
-        bare run_r uses it.)"""
+        standalone so it can hold any version. `conda_packages` routes
+        conda-only deps (system libraries like zlib, wheel-less tools) into
+        the solve's conda layer — `packages` registries cannot carry them.
+        (For R: this is the route when a package needs SYSTEM libraries the
+        base lacks — 'r-<name>' usually suffices, the solver pulls C libs;
+        promote with set_active_env(name, language='r') for bare run_r.)"""
         from core.runtime.tool_ctx import peek_ctx
         from content.bio.tools import make_isolated_env as _impl
         return _impl({"name": name, "packages": packages or [], "language": language,
-                      "python_version": python_version}, peek_ctx(aba_ctx_id))
+                      "python_version": python_version,
+                      "conda_packages": conda_packages or []}, peek_ctx(aba_ctx_id))
 
     @mcp.tool()
     def set_active_env(name: str, language: str = "python",

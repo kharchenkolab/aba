@@ -263,7 +263,10 @@ _PRIORITY_TOOLS: tuple[str, ...] = (
     "Skill", "search_skills",
     "present_plan", "ask_clarification",
     "register_dataset", "list_data_files",
-    "ensure_capability", "describe_tool",
+    "ensure_capability",
+    # describe_tool demoted 2026-07-22 (budget: make_isolated_env grew a
+    # conda_packages param): the tool that RECOVERS full prose is the one
+    # whose own summary suffices — its name is its contract.
 )
 # find_files rides summary-rendering: its full docstring is the catalog's
 # largest and list_data_files covers the common case; full prose stays one

@@ -88,6 +88,49 @@ def verify_block(req: CapRequest, *, libname: "str | None" = None,
     return out
 
 
+def compile_extend(req: CapRequest, cap: "dict | None",
+                   env_language: str) -> "tuple[list, str] | None":
+    """Compose the substrate specs + explicit eco for a NAMED-env install —
+    the ONE grammar/eco composer for the extend door (env_refi2 stage C).
+
+    The github grammar (`owner/repo[/subdir][@ref]`) is remotes' own — a
+    subdir is not exotic (monorepos keep the R package under e.g. R/), and
+    flattening it to a bare name silently substituted a same-named registry
+    package (D3). Ecosystems are EXPLICIT: the prefix split downstream is a
+    compatibility default, never policy (F3) — a conda-provisioned tool must
+    not resolve a PyPI namesake. Returns None for non-package capabilities
+    (the dispatch's fall-through)."""
+    prov = (cap or {}).get("provisioning") or {}
+    if prov.get("pip"):
+        return list(prov["pip"]), "pypi"
+    if prov.get("conda"):
+        _c = prov["conda"]
+        _spec = _c.get("spec") if isinstance(_c, dict) else _c
+        specs = [_spec] if isinstance(_spec, str) else list(_spec)
+        return specs, "conda"
+    is_r_pkg = ((cap or {}).get("archetype") == "r_package" or prov.get("r")
+                or (env_language == "r"
+                    and (cap is None
+                         or (cap or {}).get("archetype") in (None, "library"))))
+    if is_r_pkg:
+        pkg = req.package or req.name
+        if req.source == "github":
+            sub = (req.subdir or "").strip("/")
+            spec = pkg + (f"/{sub}" if sub else "") \
+                   + (f"@{req.ref}" if req.ref else "")
+            return [spec], "cran"
+        if req.source == "conda":
+            return [pkg], "conda"
+        if req.source == "bioconductor":
+            nm = pkg if pkg.startswith("bioconductor-") \
+                else f"bioconductor-{pkg.lower()}"
+            return [nm], "conda"
+        return [pkg], "cran"
+    if cap is None or (cap or {}).get("archetype") in (None, "library"):
+        return [req.package or req.name], "pypi"
+    return None                     # non-package capability
+
+
 def _clean(v) -> "str | None":
     s = str(v).strip() if v is not None else ""
     return s or None
