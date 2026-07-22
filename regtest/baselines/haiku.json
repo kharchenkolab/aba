@@ -1,10 +1,11 @@
 {
   "meta": {
-    "date": "20260722-002901",
+    "date": "20260722-094119",
     "mode": "haiku",
-    "commit": "4da5b387",
-    "agent_model": "claude-haiku-4-5",
-    "n_scenarios": 1
+    "commit": "c9d54f13",
+    "agent_model": "claude-opus-4-7",
+    "agent_model_assumed": "claude-haiku-4-5",
+    "n_scenarios": 3
   },
   "scenarios": {
     "_selftest_session": {
@@ -352,13 +353,32 @@
       "mech_total": 5,
       "rubric_overall": null,
       "fails": [],
-      "bundle": "env_promotion-20260722-002901",
-      "infra": 0
+      "bundle": "env_promotion-20260722-094119",
+      "infra": 0,
+      "agent_model": "claude-opus-4-7"
+    },
+    "r_system_library": {
+      "mech_pass": 4,
+      "mech_total": 4,
+      "rubric_overall": null,
+      "fails": [],
+      "bundle": "r_system_library-20260722-094150",
+      "infra": 0,
+      "agent_model": "claude-opus-4-7"
+    },
+    "r_wrong_name": {
+      "mech_pass": 3,
+      "mech_total": 3,
+      "rubric_overall": null,
+      "fails": [],
+      "bundle": "r_wrong_name-20260722-094328",
+      "infra": 0,
+      "agent_model": "claude-opus-4-7"
     }
   },
   "totals": {
-    "mech_pass": 276,
-    "mech_total": 352,
-    "full_pass": 10
+    "mech_pass": 283,
+    "mech_total": 359,
+    "full_pass": 12
   }
 }
