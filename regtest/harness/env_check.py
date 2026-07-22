@@ -208,6 +208,25 @@ def main() -> int:
               and _second < _first,
               f"first={_first:.2f}s second={_second:.2f}s")
 
+        # ── 10b. first pypi install on a FRESH session: overlay, not clone ──
+        # weft's perf round regated the overlay lane on WRITE-NEED: a
+        # pypi-only add rides a pylib layer over the base — zero clone. Field
+        # before/after: 50.5s (10.2s clone + 24.2s probe + install) → ~1.3s.
+        # Budget 15s (generous for cold pip); the entry-count ceiling is the
+        # structural half — a clone would lay down ~55k files.
+        import pathlib as _pl
+        from core.compute import project_env as _pe2
+        _t3 = _time.monotonic()
+        _ins = _pe2.install(pid, "python", ["six"], eco="pypi",
+                            verify={"import": ["six"]})
+        _dt3 = _time.monotonic() - _t3
+        _sid3 = str(_ins.get("session_id") or "")
+        _sd = (_pl.Path.home() / ".aba/weft/site-local/sessions" / _sid3)
+        _n3 = sum(1 for _ in _sd.rglob("*")) if (_sid3 and _sd.exists()) else 0
+        check("perf: first pypi install is overlay-fast (< 15s, no clone)",
+              _dt3 < 15.0 and _n3 < 5000,
+              f"install={_dt3:.1f}s session_entries={_n3}")
+
         # ── failure wing (--failures): honesty when things break ────────────
         # Deterministic on ANY topology: a github install of a repo that does
         # not exist fails at fetch/resolve everywhere. The contract: the note
