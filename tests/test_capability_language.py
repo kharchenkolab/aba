@@ -84,7 +84,7 @@ def test_ready_in_stamped_on_python_path(monkeypatch):
     monkeypatch.setattr("core.catalog.resolve_capability", lambda n: None)
     monkeypatch.setattr(d, "_default_probe_argv", lambda: ["python"])
     monkeypatch.setattr("core.exec.verify.verify_python_imports",
-                        lambda probes, argv_builder=None: (True, ""))
+                        lambda probes, argv_builder=None, **k: (True, ""))
     r = d.ensure_capability({"name": "json5", "language": "python"},
                             {"thread_id": "t"})
     assert r["status"] == "ready" and r.get("ready_in") == "python", r

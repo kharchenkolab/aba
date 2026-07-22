@@ -336,6 +336,122 @@ def test_probe_name_for_github_is_the_repo_tail_not_the_subdir():
     assert _probe_target_name(["org/repo/R@dev"], {}, req2) == "RealName"
 
 
+# ── F-V2: tagged-mode verb adoption behind execute (env_refi2 §3.4) ─────────
+# project_env.install is the ONE crossing for session-lane eco installs; the
+# substrate's ensure_available (tagged mode) replaces session_install there:
+# verify-first pre-check (~0.4s satisfied re-ensure) + record-gating below the
+# API, envelope + attempts from below. Fallback: pre-verb substrates keep the
+# session_install path byte-identically.
+
+class _VerbAdapter:
+    """Fake compute with the tagged verb; records what it was asked."""
+    def __init__(self):
+        self.calls: list = []
+
+    async def ensure_available(self, target, request, lanes=None, verify=True,
+                               probe=False):
+        self.calls.append({"target": target, "request": request,
+                           "verify": verify})
+        return {"satisfied": True, "changed": True,
+                "attempts": [{"lane": "cran", "outcome": "installed",
+                              "seconds": 1.0, "mutations": ["rlib"],
+                              "resolved": ["RealName"]}],
+                "verified": {"X": {"status": "passed", "check": "loads",
+                                   "got": "2.0"}},
+                "runtime": {"prefix": "/p"}, "session_id": "s1"}
+
+
+class _LegacyAdapter:
+    """Pre-verb substrate: no ensure_available attribute at all."""
+    def __init__(self):
+        self.calls: list = []
+
+    async def session_install(self, session_id, **kw):
+        self.calls.append(kw)
+        return {"ok": True, "runtime": {"prefix": "/p"}}
+
+
+def _pe(monkeypatch, ad):
+    from core.compute import project_env as pe
+    monkeypatch.setattr(pe, "ensure",
+                        lambda pid, lang: {"session_id": "s1",
+                                           "runtime": {"prefix": "/p"}})
+    monkeypatch.setattr("core.compute.adapter.get_compute", lambda: ad)
+    monkeypatch.setattr(pe, "get", lambda pid, lang: {"additions": [], "rev": 0})
+    monkeypatch.setattr(pe, "_save_row", lambda *a: None)
+    monkeypatch.setattr(pe, "_current_runtime", lambda sid: None)
+    return pe
+
+
+def test_install_routes_through_the_tagged_verb(monkeypatch):
+    ad = _VerbAdapter()
+    pe = _pe(monkeypatch, ad)
+    out = pe.install("p", "r", ["X"], eco="cran", verify={"loads": ["X"]})
+    assert ad.calls, "install never reached ensure_available"
+    c = ad.calls[0]
+    assert c["target"] == {"session": "s1"}
+    assert c["request"] == {"cran": ["X"]}
+    assert c["verify"] == {"loads": ["X"]}
+    # envelope truth surfaces to callers: attempts/verified/resolved
+    assert out.get("satisfied") is True and out.get("attempts")
+    assert out.get("verified", {}).get("X", {}).get("status") == "passed"
+    assert out.get("resolved") == ["RealName"], (
+        "per-attempt resolved names must flatten to the top level — the "
+        "github resolved-name adoption reads them there")
+
+
+def test_install_without_verify_passes_none_not_true(monkeypatch):
+    """Tagged-mode verify default is OFF for compat (converged design); an
+    installless verify=True from us would flip semantics silently."""
+    ad = _VerbAdapter()
+    pe = _pe(monkeypatch, ad)
+    pe.install("p", "python", ["a"], eco="pypi")
+    assert ad.calls[0]["verify"] is None, ad.calls[0]
+
+
+def test_install_falls_back_on_pre_verb_substrate(monkeypatch):
+    ad = _LegacyAdapter()
+    pe = _pe(monkeypatch, ad)
+    out = pe.install("p", "r", ["X"], eco="cran", verify={"loads": ["X"]})
+    assert ad.calls and ad.calls[0].get("cran") == ["X"], ad.calls
+    assert ad.calls[0].get("verify") == {"loads": ["X"]}
+    assert out.get("ok") is True
+
+
+def test_install_with_repos_stays_on_session_install(monkeypatch):
+    """cran_repos is not part of the verb's tagged request vocabulary yet —
+    a repos-bearing install must keep the session_install path rather than
+    silently dropping the repositories."""
+    class _Both(_VerbAdapter):
+        async def session_install(self, session_id, **kw):
+            self.calls.append({"legacy": kw})
+            return {"ok": True, "runtime": None}
+
+    ad = _Both()
+    pe = _pe(monkeypatch, ad)
+    pe.install("p", "r", ["X"], eco="cran", cran_repos=["https://r.example"])
+    assert ad.calls and "legacy" in ad.calls[0], (
+        f"repos-bearing install took the verb and dropped repos: {ad.calls}")
+    assert ad.calls[0]["legacy"].get("cran_repos") == ["https://r.example"]
+
+
+def test_verb_envelope_is_checked_at_the_crossing(monkeypatch):
+    """render-side adoption of check_envelope: a malformed envelope from the
+    verb is flagged loudly at the ONE crossing (printed, not raised — the
+    install itself succeeded)."""
+    class _Bad(_VerbAdapter):
+        async def ensure_available(self, *a, **k):
+            return {"satisfied": True}          # missing required keys
+
+    pe = _pe(monkeypatch, _Bad())
+    import io, contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        out = pe.install("p", "r", ["X"], eco="cran", verify={"loads": ["X"]})
+    assert "envelope" in buf.getvalue().lower(), (
+        "contract violation crossed silently")
+
+
 # ── F-V1 remainder: verify blocks ride the env SPECS (weft P2) ──────────────
 # The realize postcondition only arms if the spec carries the claim: a named
 # env whose realization is broken on a new site must fail its OWN

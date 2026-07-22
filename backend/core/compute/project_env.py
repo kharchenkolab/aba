@@ -213,8 +213,16 @@ def ensure(pid: str, language: str) -> dict:
                     _ikw.pop("verify", None) if "verify" in _ikw \
                         else _ikw.pop("writes_to", None)
         else:
-            ires = named_envs._sync(ad.session_install(
-                sid, **{add["eco"]: add["specs"]}, **(add.get("opts") or {})))
+            _rkw = dict(add.get("opts") or {})
+            if add.get("verify"):
+                _rkw["verify"] = add["verify"]
+            try:
+                ires = named_envs._sync(ad.session_install(
+                    sid, **{add["eco"]: add["specs"]}, **_rkw))
+            except TypeError:              # substrate predates verify=
+                _rkw.pop("verify", None)
+                ires = named_envs._sync(ad.session_install(
+                    sid, **{add["eco"]: add["specs"]}, **_rkw))
         # installs are the FLIP moment (base → own clone): the install result
         # carries the fresh runtime; the start-time block is stale after one
         rt = (ires or {}).get("runtime") or rt
@@ -295,6 +303,18 @@ def interpreter(pid: str, language: str) -> Path:
     return prefix(pid, language) / "bin" / _exe(language)
 
 
+def _check_envelope_soft(env: dict) -> list:
+    """The pinned ensure_available envelope, checked at the crossing.
+    Minimal structural read (success shape only — errors raise upstream as
+    ComputeError); the full executable reading lives in
+    tests/test_ensure_envelope_contract.py."""
+    out = []
+    for k in ("satisfied", "changed", "attempts", "verified", "runtime"):
+        if k not in env:
+            out.append(f"missing {k!r}")
+    return out
+
+
 def install(pid: str, language: str, specs: list[str], *,
             eco: str = "pypi", **opts) -> dict:
     """LIVE install into the project's default session (the running kernel
@@ -318,11 +338,40 @@ def install(pid: str, language: str, specs: list[str], *,
     pid = str(pid)
     s = ensure(pid, language)
     ad = _adapter.get_compute()
-    out = dict(named_envs._sync(
-        ad.session_install(s["session_id"], **{eco: list(specs)}, **opts)) or {})
+    _verify = opts.pop("verify", None)
+    # F-V2 (env_refi2 §3.4): the tagged-mode verb is the crossing — verify-
+    # first pre-check (a satisfied re-ensure short-circuits in ~0.4s instead
+    # of re-installing/re-probing) and record-gating run below the API, and
+    # the typed envelope (attempts/verified) arrives from below. Exceptions
+    # that stay on session_install: extra opts the verb's tagged request
+    # doesn't speak yet (cran_repos), and pre-verb substrates (no attribute).
+    _verb = getattr(ad, "ensure_available", None) if not opts else None
+    if _verb is not None:
+        out = dict(named_envs._sync(
+            _verb({"session": s["session_id"]}, {eco: list(specs)},
+                  verify=_verify)) or {})
+        _problems = _check_envelope_soft(out)
+        if _problems:
+            # the pinned cross-repo contract, checked where the payload
+            # crosses into aba's model — loud, never fatal (install landed)
+            print(f"[project_env] ensure_available envelope violation: "
+                  f"{_problems[:3]}", flush=True)
+        # per-attempt resolved names flatten to the top level (the github
+        # resolved-name adoption reads them there)
+        if "resolved" not in out:
+            _res = [n for a in (out.get("attempts") or [])
+                    for n in (a.get("resolved") or [])]
+            if _res:
+                out["resolved"] = _res
+    else:
+        out = dict(named_envs._sync(
+            ad.session_install(s["session_id"], **{eco: list(specs)},
+                               **opts,
+                               **({"verify": _verify} if _verify else {}))) or {})
     row = get(pid, language)
     row["additions"].append({"eco": eco, "specs": list(specs),
                              **({"opts": dict(opts)} if opts else {}),
+                             **({"verify": _verify} if _verify else {}),
                              "at": time.time()})
     row["rev"] = int(row.get("rev") or 0) + 1
     _save_row(pid, language, row)
