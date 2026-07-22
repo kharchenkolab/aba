@@ -484,3 +484,80 @@ def test_bundle_and_report_agree_on_the_observed_model():
     assert 'wire_model or os.environ.get("ABA_MODEL")' in bundle_write, (
         "bundle.json's agent_model is not sourced from the wire read that "
         "report.json uses")
+
+
+# ── tool-argument capture + ceiling constructs (the mech layer grows teeth) ──
+
+import importlib.util as _ilu
+import os as _os
+import types as _types
+
+_os.environ.setdefault("ABA_SCENARIO", "_selftest_session")
+_rspec = _ilu.spec_from_file_location(
+    "aba_runner", ROOT / "regtest" / "harness" / "runner.py")
+runner = _ilu.module_from_spec(_rspec)
+sys.modules["aba_runner"] = runner
+_rspec.loader.exec_module(runner)
+
+
+def _sse(events):
+    lines = ["data: " + json.dumps(e) for e in events]
+    return _types.SimpleNamespace(iter_lines=lambda: iter(lines))
+
+
+def test_consume_captures_tool_arguments_capped():
+    cap = {"run_id": None, "text": [], "tools": [], "tool_calls": [],
+           "entities": [], "usage": {}, "kinds": {}, "tool_errors": [],
+           "errors": [], "resume_hops": 0, "jobs": []}
+    runner.consume(_sse([
+        {"type": "tool_start", "name": "run_r",
+         "input": {"env": "sandbox", "code": "X" * 5000}},
+        {"type": "tool_start", "name": "run_python", "input": {}},
+    ]), cap)
+    assert cap["tools"] == ["run_r", "run_python"]
+    assert cap["tool_calls"][0]["args"]["env"] == "sandbox"
+    assert len(cap["tool_calls"][0]["args"]["code"]) == 200   # capped, not raw
+    assert cap["tool_calls"][1]["args"] == {}                 # absent shape
+
+
+class _NullClient:
+    """run_checks fetches the thread manifest unconditionally; the argument
+    checks under test never read it."""
+    def get(self, *a, **k):
+        return _types.SimpleNamespace(json=lambda: {})
+
+
+def _mech(exp, tools=(), calls=()):
+    step = {"expect": exp}
+    cap = {"text": "", "tools": list(tools), "tool_calls": list(calls)}
+    return runner.run_checks(step, cap, {}, [], _NullClient(), "", "", [], [])
+
+
+def test_tool_max_calls_is_a_real_ceiling():
+    fails = _mech({"tool_max_calls": {"make_isolated_env": 1}},
+                  tools=["make_isolated_env"] * 3)
+    assert any(f.startswith("tool_called_too_often:make_isolated_env")
+               for f in fails), fails
+    assert _mech({"tool_max_calls": {"make_isolated_env": 1}},
+                 tools=["make_isolated_env"]) == []
+
+
+def test_tool_arg_absent_checks_every_call():
+    exp = {"tool_arg_absent": [{"tool": "run_python", "arg": "env"}]}
+    ok = [{"name": "run_python", "args": {"code": "1"}}]
+    bad = ok + [{"name": "run_python", "args": {"code": "2", "env": "sandbox"}}]
+    assert _mech(exp, calls=ok) == []
+    fails = _mech(exp, calls=bad)
+    assert any(f.startswith("tool_arg_present:run_python.env") for f in fails)
+    assert _mech(exp, calls=[]) == []      # vacuous — floors are tools_used's job
+
+
+def test_tool_arg_equals_matches_some_call_or_stays_vacuous():
+    exp = {"tool_arg_equals": [{"tool": "set_active_env",
+                                "arg": "language", "value": "r"}]}
+    hit = [{"name": "set_active_env", "args": {"name": "e", "language": "r"}}]
+    miss = [{"name": "set_active_env", "args": {"name": "e"}}]
+    assert _mech(exp, calls=hit) == []
+    assert any(f.startswith("tool_arg_mismatch:set_active_env.language")
+               for f in _mech(exp, calls=miss))
+    assert _mech(exp, calls=[]) == []      # never called → the floor check owns it

@@ -30,11 +30,18 @@ steps:
     installed and confirm it actually loads.
   expect:
     tools_used: [ensure_capability]
+    tool_max_calls:
+      ensure_capability: 3     # the doomed session lane must not be retry-LOOPED
+      make_isolated_env: 1     # ceiling only: on a warm/writable base the session
+                               # lane may legitimately succeed with no env build
     must_mention: ["RNetCDF"]
     must_not: ["I cannot", "does not exist", "no such package", "not a real package"]
     checks: >
-      RNetCDF needs the netcdf C library, which the shared R base does NOT ship, so the ordinary
-      CRAN install into the project session MUST fail in configure. What is under test is what
+      RNetCDF needs the netcdf C library. On an adopted read-only base the shared R base does
+      NOT ship it, so the ordinary CRAN install into the project session MUST fail in configure.
+      (On a deployment whose base is warm/writable, the conda session lane may succeed directly —
+      a verified working load with no isolated env is then a PASS; the hard failure modes below
+      still apply.) What is under test is what
       the agent does next. PASS requires that the agent reaches a state where RNetCDF genuinely
       loads — in practice by creating an isolated R env (make_isolated_env with language='r' and
       a package spec such as 'r-rnetcdf') and then running in it, either via run_r(env=...) or

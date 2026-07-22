@@ -193,6 +193,13 @@ def consume(stream, cap: dict) -> None:
             cap["text"].append(ev.get("text") or ev.get("delta") or "")
         elif t == "tool_start":
             cap["tools"].append(ev.get("name") or ev.get("tool") or "?")
+            # Arguments too (values stringified + capped): names alone cannot
+            # express the CEILING checks — "built exactly one env", "the bare
+            # run carried no env=" — that the promotion scenarios assert.
+            _inp = ev.get("input") if isinstance(ev.get("input"), dict) else {}
+            cap.setdefault("tool_calls", []).append(
+                {"name": ev.get("name") or ev.get("tool") or "?",
+                 "args": {k: str(v)[:200] for k, v in _inp.items()}})
         elif t == "tool_result":
             r = ev.get("result") or {}
             if isinstance(r, dict):
@@ -210,8 +217,9 @@ def consume(stream, cap: dict) -> None:
 
 
 def drive_turn(client, pid, tid, text, resume_answer="Yes, go ahead.") -> dict:
-    cap = {"run_id": None, "text": [], "tools": [], "entities": [], "usage": {},
-           "kinds": {}, "tool_errors": [], "errors": [], "resume_hops": 0, "jobs": []}
+    cap = {"run_id": None, "text": [], "tools": [], "tool_calls": [],
+           "entities": [], "usage": {}, "kinds": {}, "tool_errors": [],
+           "errors": [], "resume_hops": 0, "jobs": []}
     # H5: a read-timeout on the SSE stream so a turn that goes SILENT (wedged exec
     # emitting no events) unblocks iter_lines() on its own rather than leaking the
     # worker thread. Best-effort — the wall-clock call_with_timeout guard is the
@@ -351,6 +359,26 @@ def run_checks(step, cap, cmetrics, prev_msgs, client, pid, tid, created, produc
     for t in (exp.get("tools_not_used") or []):   # advice/lightweight turns must NOT execute
         if t in (cap.get("tools") or []):
             fails.append(f"tool_used_unexpectedly:{t} (used={cap.get('tools')})")
+    # Ceilings and argument shapes — the checks tool NAMES alone can't express.
+    for t, n in (exp.get("tool_max_calls") or {}).items():
+        c = sum(1 for name in (cap.get("tools") or []) if name == t)
+        if c > int(n):
+            fails.append(f"tool_called_too_often:{t} ({c} > {n})")
+    for spec in (exp.get("tool_arg_absent") or []):   # EVERY call must lack the arg
+        t, a = spec.get("tool"), spec.get("arg")
+        for call in (cap.get("tool_calls") or []):
+            if call.get("name") == t and a in (call.get("args") or {}):
+                fails.append(
+                    f"tool_arg_present:{t}.{a}={call['args'][a]!r}")
+                break
+    for spec in (exp.get("tool_arg_equals") or []):   # SOME call carries arg=value
+        t, a, want = spec.get("tool"), spec.get("arg"), spec.get("value")
+        calls = [c for c in (cap.get("tool_calls") or []) if c.get("name") == t]
+        if calls and not any(str((c.get("args") or {}).get(a)) == str(want)
+                             for c in calls):
+            fails.append(
+                f"tool_arg_mismatch:{t}.{a} wanted {want!r} "
+                f"(got {[(c.get('args') or {}).get(a) for c in calls]})")
     bj = exp.get("background_job")                 # await + assert an async job's OUTCOME
     if bj is not None:
         results = await_jobs(client, cap.get("jobs") or [],

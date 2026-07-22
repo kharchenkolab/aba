@@ -23,6 +23,8 @@ steps:
     project's default environment going forward so I don't have to keep pointing at it.
   expect:
     tools_used: [make_isolated_env, set_active_env]
+    tool_max_calls:
+      make_isolated_env: 1     # exactly one build — repeated env builds are thrash
     must_mention: ["sandbox"]
     must_not: ["I cannot", "cannot create", "not able to"]
     checks: >
@@ -40,6 +42,9 @@ steps:
     Confirm numpy actually works in there by importing it and printing its version.
   expect:
     tools_used: [run_python]
+    tool_arg_absent:
+      - {tool: run_python, arg: env}   # the promotion made it ambient — passing
+                                       # env= explicitly is the decay-prone pattern
     must_mention: ["numpy"]
     must_not: ["ModuleNotFoundError", "No module named", "not installed", "I cannot"]
     checks: >
