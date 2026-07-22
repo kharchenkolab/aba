@@ -10,9 +10,12 @@ scratch project, and asserts the promotion chain end to end:
 
 Usage:
     ABA_HOME=<deployment home> <deployment python> regtest/harness/env_check.py
-        [--r]      also run the R-lane journey (heavier solve)
-        [--quick]  skip the kernel-based bare-run check (uses the one-shot lane)
-        [--keep]   keep the scratch project + envs for inspection
+        [--r]        also run the R-lane journey (heavier solve)
+        [--quick]    skip the kernel-based bare-run check (uses the one-shot lane)
+        [--failures] the failure wing: error notes carry the substrate's
+                     diagnosis, stay request-scoped, and the system-library
+                     remedy never fires on a resolve-stage failure
+        [--keep]     keep the scratch project + envs for inspection
 
 Exit 0 = every check passed; 1 = something failed (each check prints its own
 [ok]/[FAIL] line, so a red run names the broken link)."""
@@ -44,6 +47,9 @@ def check(label: str, ok: bool, detail: str = "") -> bool:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--r", action="store_true", help="also run the R journey")
+    ap.add_argument("--failures", action="store_true",
+                    help="run the failure-honesty wing (pays for real failed "
+                         "lookups; deterministic on any topology)")
     ap.add_argument("--quick", action="store_true",
                     help="skip the kernel bare-run (one-shot lane only)")
     ap.add_argument("--keep", action="store_true",
@@ -156,6 +162,42 @@ def main() -> int:
               named_envs.resolve_env(pid, "python") is None)
         check("post-reset background submit uses the default session",
               bg_submit_kwargs({}, pid)["env"] is None)
+
+        # ── failure wing (--failures): honesty when things break ────────────
+        # Deterministic on ANY topology: a github install of a repo that does
+        # not exist fails at fetch/resolve everywhere. The contract: the note
+        # carries the substrate's own diagnosis, stays scoped to ITS request,
+        # and never gets the system-library lecture (resolve-stage failure).
+        if args.failures:
+            projects.set_current(pid)
+            # The tool entry correctly routes an UNCATALOGUED name to the
+            # catalog's not_found path — the lanes under test here are the R
+            # install lanes themselves, driven with a provisioning record the
+            # way a catalogued/proposed capability drives them.
+            from content.bio.tools.discovery import _ensure_r_via_session
+            r1 = _ensure_r_via_session(
+                {"name": "envcheck-missing-one", "provisioning": {"r": {
+                    "source": "github",
+                    "package": "aba-envcheck/definitely-missing-repo-one"}}},
+                {}, None, "envcheck-missing-one")
+            n1 = str(r1.get("note") or "")
+            check("failed install reports an error",
+                  r1.get("status") == "error", str(r1)[:200])
+            check("failure note carries the substrate diagnosis (not a summary)",
+                  len(n1) > 120 and any(s in n1.lower() for s in
+                                        ("cannot open", "404", "url",
+                                         "failed to install", "fail")),
+                  n1[:250])
+            check("resolve-stage failure gets NO system-library lecture",
+                  "missing SYSTEM library" not in n1, n1[-250:])
+            r2 = _ensure_r_via_session(
+                {"name": "envcheck-missing-two", "provisioning": {"r": {
+                    "source": "github",
+                    "package": "aba-envcheck/definitely-missing-repo-two"}}},
+                {}, None, "envcheck-missing-two")
+            n2 = str(r2.get("note") or "")
+            check("diagnosis is request-scoped (no cross-request quote)",
+                  "definitely-missing-repo-one" not in n2, n2[:250])
 
         # ── R journey (--r): the campaign's flagship case ────────────────────
         if args.r:
