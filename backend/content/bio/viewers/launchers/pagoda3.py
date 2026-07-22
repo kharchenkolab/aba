@@ -123,6 +123,13 @@ def _rscript_shim(pid: str) -> "str | None":
     # words after the script become $0, $1, … for it, so appending "$@" outside
     # the quoted script would hand the args to bash rather than to Rscript.
     inner = f'{act} && exec Rscript "$@"'
+    if rt.get("ns_wrap"):
+        # lstar execs this shim from INSIDE the caller's activated env, whose
+        # PATH no longer carries the squashfs mount helper — so `act` (which
+        # mounts this env) must be able to find it. Same repair as
+        # argv_for_runtime; one owner for the rule.
+        from core.compute.project_env import _keep_mount_tooling
+        inner = f'{_keep_mount_tooling()}{inner}'
     body = f'bash -c {shlex.quote(inner)} aba-rscript-shim "$@"'
     if rt.get("ns_wrap"):
         body = f'unshare -rm {body}'

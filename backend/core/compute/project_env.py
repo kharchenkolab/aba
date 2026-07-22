@@ -252,6 +252,28 @@ def runtime(pid: str, language: str) -> dict:
     return ensure(pid, language)["runtime"]
 
 
+def _keep_mount_tooling() -> str:
+    """Shell prefix that keeps the CONTROLLER's bin on PATH across an
+    activation. Empty string when there is nothing to add.
+
+    A successful env activation replaces PATH with that env's own bin. The
+    squashfs mount helper lives in the controller's bin, so anything the
+    activated process then asks the substrate to MOUNT — a second env, an
+    interpreter of another language — fails to find it, and the substrate can
+    only report the helper absent. Measured: `command -v squashfuse` resolves
+    before activation and not after.
+
+    Applied only under `ns_wrap`, which is precisely the flag meaning "this
+    runtime's prefix lives inside a mount namespace" — i.e. where on-demand
+    mounts happen. APPENDED, never prepended: the activated env's own binaries
+    must keep winning; this only restores a fallback the activation dropped.
+    """
+    import os
+    import sys
+    d = os.path.dirname(os.path.abspath(sys.executable))
+    return f"export PATH=\"$PATH:{d}\"; " if d else ""
+
+
 def argv_for_runtime(rt: dict, language: str, args: Sequence[str], *,
                      pre: Sequence[str] = ()) -> list[str]:
     """argv that runs the default env's interpreter with `args`, topology-blind
@@ -270,6 +292,7 @@ def argv_for_runtime(rt: dict, language: str, args: Sequence[str], *,
         return [*head, str(Path(p) / "bin" / exe), *tail]
     script = f"{rt['activation']} && exec {shlex.join([*head, exe, *tail])}"
     if rt.get("ns_wrap"):
+        script = f"{_keep_mount_tooling()}{script}"
         script = f"unshare -rm bash -c {shlex.quote(script)}"
     return ["bash", "-c", script]
 

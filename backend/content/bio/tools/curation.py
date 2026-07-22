@@ -321,8 +321,24 @@ def _within(p: str, base: str) -> bool:
 def _scratch_bases(ctx: dict | None) -> list[str]:
     """Where a relative-path download actually lands: the active Run's output
     dir and the thread's scratch dir (the kernel cwd), so register_dataset can
-    find files the agent wrote there with a bare name."""
+    find files the agent wrote there with a bare name.
+
+    ORDER IS THE CONTRACT. `_resolve_dataset_path` takes the first candidate
+    that exists, so this list decides which bytes a bare name means. Every
+    local kernel is offered (a legitimate register can name a file written in
+    an earlier kernel of the same run), but the CALLER'S kernel goes first and
+    the rest sort newest-first.
+
+    Unordered, this silently adopted another session's data: an agent
+    downloaded a set of files, verified every one of them, and registered the
+    directory by relative name — and got a partial download of the same name
+    left in a kernel sandbox from two days earlier, because the store happened
+    to list that kernel first. The entity went active carrying the agent's
+    verification claim, which was true of the copy it made and false of the
+    copy adopted. A stale sandbox must never outrank the caller's own.
+    """
     bases: list[str] = []
+    mine: list[str] = []
     try:
         from core.data.workspace import scratch_dir
         from core import projects
@@ -333,9 +349,14 @@ def _scratch_bases(ctx: dict | None) -> list[str]:
             from core.graph.entities import get_entity
             rid = active_run_id(tid)
             if rid:
-                ap = (get_entity(rid) or {}).get("artifact_path")
+                ent = get_entity(rid) or {}
+                ap = ent.get("artifact_path")
                 if ap:
                     bases.append(str(ap))
+                # the kernels THIS run executed in (run_exec records each one
+                # via record_weft_target) — the caller's own sandboxes
+                mine = [str(t) for t in
+                        ((ent.get("metadata") or {}).get("weft_targets") or []) if t]
             bases.append(str(scratch_dir(pid, f"thread-{tid}")))
     except Exception:  # noqa: BLE001
         pass
@@ -343,14 +364,68 @@ def _scratch_bases(ctx: dict | None) -> list[str]:
     # ($ABA_HOME/weft/site-local/kernels/<kid>/) — the datasets2.md §1 bug:
     # a bare filename the agent just wrote resolves nowhere without these.
     try:
+        import os as _os
         from core.compute.adapter import get_compute, weft_workspace
-        for k in (get_compute().sync_call("list_kernels") or {}).get("kernels", []):
-            jd = k.get("jobdir")
-            if jd and k.get("site") == "local":
-                bases.append(str(weft_workspace() / "site-local" / jd))
+        _ws = weft_workspace()
+        jds = [k.get("jobdir") for k in
+               (get_compute().sync_call("list_kernels") or {}).get("kernels", [])
+               if k.get("jobdir") and k.get("site") == "local"]
+
+        def _rank(jd: str) -> tuple:
+            # caller's kernels first (most recently recorded wins), then
+            # everything else newest-first. mtime is the only defensible
+            # tiebreak: the agent's own write is the newest thing on disk.
+            try:
+                owned = mine.index(jd)
+                own_key = -(len(mine) - owned)      # last recorded = smallest
+            except ValueError:
+                own_key = 1                          # not ours → after all ours
+            try:
+                mt = _os.path.getmtime(_ws / "site-local" / jd)
+            except OSError:
+                mt = 0.0
+            return (own_key, -mt)
+
+        for jd in sorted(jds, key=_rank):
+            bases.append(str(_ws / "site-local" / jd))
     except Exception:  # noqa: BLE001 — substrate offline → no jobdir candidates
         pass
     return bases
+
+
+_CORRUPT_SCAN_CAP = 64          # files; a big tree pays a bounded price
+
+
+def _corrupt_members(path: str) -> list[str]:
+    """Names of compressed members under `path` that do NOT decompress.
+
+    Cheap and decisive: the gzip/zip container carries its own end-of-stream
+    marker, so a truncated or damaged download is detectable without knowing
+    anything about the payload. Only reads members it can identify; anything
+    else (plain text, binary, unknown suffix) is left alone — this answers
+    "is the container intact", not "is the science right".
+    """
+    import gzip as _gz
+    import os as _os
+    import zipfile as _zf
+    out: list[str] = []
+    files = ([path] if _os.path.isfile(path)
+             else [_os.path.join(r, f)
+                   for r, _d, fs in _os.walk(path) for f in fs])
+    for p in files[:_CORRUPT_SCAN_CAP]:
+        low = p.lower()
+        try:
+            if low.endswith((".gz", ".bgz", ".tgz")):
+                with _gz.open(p, "rb") as fh:      # reads to the EOS marker
+                    while fh.read(1 << 20):
+                        pass
+            elif low.endswith(".zip"):
+                with _zf.ZipFile(p) as z:
+                    if z.testzip() is not None:
+                        out.append(_os.path.basename(p))
+        except Exception:  # noqa: BLE001 — unreadable IS the finding
+            out.append(_os.path.basename(p))
+    return out
 
 
 def _hardlink_tree(src: str, dest: str) -> None:
@@ -894,6 +969,21 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
         note += " Files adopted into DATA_DIR (kept past scratch cleanup)."
     elif adopted and materializing:
         note += " Files are copying into DATA_DIR in the background — fully available shortly."
+    # Integrity at the boundary: whatever the resolver bound to, the bytes that
+    # landed are what the project will read. A compressed member that will not
+    # decompress is a BROKEN dataset, and saying so here costs milliseconds —
+    # while NOT saying it cost two agents four minutes and eight tool calls
+    # diagnosing damaged data that was intact at its source. Advisory, never
+    # fatal: the entity still registers (the caller may want to repair in
+    # place), but the result never reads as a clean success.
+    _bad = _corrupt_members(abspath) if (exists and not _remote_home) else []
+    if _bad:
+        note += (f" WARNING: {len(_bad)} file(s) in this dataset do not "
+                 f"decompress — {', '.join(_bad[:3])}"
+                 f"{' …' if len(_bad) > 3 else ''}. The registered copy is "
+                 f"damaged or partial; re-fetch before using it (verifying a "
+                 f"file where you downloaded it does NOT mean the registered "
+                 f"copy is intact).")
     if bundle_note:
         note += bundle_note
     if not exists:
