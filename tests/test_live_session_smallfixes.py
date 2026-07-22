@@ -94,7 +94,7 @@ def test_bioconductor_goes_through_the_cran_lane_with_repos(monkeypatch):
     from content.bio.tools import discovery
     seen: dict = {}
 
-    def _fake_cran_lane(pid, spec, *, repos=None):
+    def _fake_cran_lane(pid, spec, *, repos=None, **k):
         seen.update({"spec": spec, "repos": repos})
         return True, None, {}
 

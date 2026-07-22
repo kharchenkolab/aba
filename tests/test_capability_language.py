@@ -33,7 +33,10 @@ def test_r_request_on_python_catalogued_name_reroutes_to_cran(monkeypatch):
     """The note's exact scenario: R session, Python-catalogued 'foo'. Must NOT
     answer ready-for-python; with an exact CRAN hit it installs the R package.
     The deployment R-pack gate is stubbed PROVISIONED here (hermetic CI has no
-    R pack; the unprovisioned refusal is its own test below)."""
+    R pack; the unprovisioned refusal is its own test below), and the r-bio
+    MODULE toggle is stubbed ON — the deployment's setting must not decide a
+    hermetic guard (found flaky when the live deployment's toggle flipped)."""
+    monkeypatch.setattr(d, "_r_module_block", lambda: None)
     monkeypatch.setattr("core.compute.base_env.require", lambda lang: None)
     monkeypatch.setattr("core.catalog.resolve_capability", lambda n: _py_cap(n))
     monkeypatch.setattr(d, "_cran_exact",
@@ -113,6 +116,7 @@ def test_r_reroute_on_unprovisioned_deployment_refuses_honestly(monkeypatch):
 
     def _no_pack(lang):
         raise ComputeError("no_base_pack", f"no base environment pack for {lang!r}")
+    monkeypatch.setattr(d, "_r_module_block", lambda: None)
     monkeypatch.setattr("core.compute.base_env.require", _no_pack)
     monkeypatch.setattr("core.catalog.resolve_capability", lambda n: _py_cap(n))
     monkeypatch.setattr(d, "_cran_exact",

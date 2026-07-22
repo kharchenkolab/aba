@@ -70,6 +70,24 @@ def classify_language(cap: "dict | None") -> "str | None":
     return None
 
 
+def verify_block(req: CapRequest, *, libname: "str | None" = None,
+                 import_name: "str | None" = None) -> dict:
+    """The request's claim in the substrate's ONE verify grammar
+    ({import|loads, versions: '>=X'|'==X'} — weft P0). aba AUTHORS the claim
+    (what must hold, from conversation meaning); weft EVALUATES it where the
+    artifact lives. `libname`/`import_name` let the lane supply its resolved
+    load name; the version floor comes from the request."""
+    if (req.language or "python") == "r":
+        nm = libname or req.library or req.name
+        out: dict = {"loads": [nm]}
+    else:
+        nm = import_name or req.library or req.name
+        out = {"import": [nm]}
+    if req.min_version:
+        out["versions"] = {nm: f">={req.min_version}"}
+    return out
+
+
 def _clean(v) -> "str | None":
     s = str(v).strip() if v is not None else ""
     return s or None

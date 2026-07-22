@@ -70,6 +70,12 @@ def _setup(mp) -> "_FakeCompute":
     fake = _FakeCompute()
     mp.setattr(_ad, "get_compute", lambda: fake)
     mp.setattr(projects, "current", lambda: "prjT")
+    # readiness is verify-gated (env_refi2 stage B): the extend door probes
+    # the named env; the fake compute has no interpreter, so stub a passing
+    # probe — the refuse-on-fail side is guarded in test_cap_request.py
+    mp.setattr(named_envs, "run_in",
+               lambda pid, name, code, **k: {"ok": True, "stdout": "CAPQ=1.0",
+                                             "stderr": "", "returncode": 0})
     return fake
 
 

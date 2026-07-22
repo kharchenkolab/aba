@@ -127,6 +127,9 @@ def _entry(monkeypatch, input_, cap, *, env_row=None):
     monkeypatch.setattr(d, "_ensure_r_via_session", _fake_r)
     monkeypatch.setattr(d, "_extend_into_named_env", _fake_extend)
     monkeypatch.setattr(d, "_pointer_env", lambda pid, lang: None)
+    # topology-independent: the r-bio module toggle must not decide this test
+    monkeypatch.setattr(d, "_r_module_block", lambda: None)
+    monkeypatch.setattr("core.compute.base_env.require", lambda lang: None)
     if env_row is not None:
         import core.compute.named_envs as _ne
         monkeypatch.setattr(_ne, "resolve", lambda pid, name: env_row)
@@ -178,6 +181,188 @@ def test_pointer_door_receives_the_same_request(monkeypatch):
     req = seen.get("req")
     assert req is not None and req.min_version == "2.0" and req.ref == "dev", (
         f"pointer door dropped the request: {req}")
+
+
+# ── stage B: verify — readiness is the REQUEST's postcondition ──────────────
+# The named lane certified solves (D4/F4: ready-on-solve, cached=ready, dead
+# verify_imports). Stage B: compose the claim from the request (weft's ONE
+# grammar), pass it down the session verbs (weft V1), and probe the NAMED env
+# consumer-side (until V3's env target) — cached answers included.
+
+def test_verify_block_composes_weft_grammar():
+    from content.bio.tools.cap_request import CapRequest, verify_block
+    r = CapRequest(name="X", language="r", min_version="2.0")
+    assert verify_block(r, libname="X") == {"loads": ["X"],
+                                            "versions": {"X": ">=2.0"}}
+    p = CapRequest(name="pkg", language="python")
+    assert verify_block(p, import_name="pkg_mod") == {"import": ["pkg_mod"]}
+    # no min_version → no versions key (weft refuses empty-noise keys)
+    r2 = CapRequest(name="Y", language="r")
+    assert verify_block(r2, libname="Y") == {"loads": ["Y"]}
+
+
+def _extend_env(monkeypatch, *, extend_res, probe, pre_id="e1",
+                env_lang="r", req=None):
+    """Drive _extend_into_named_env with named_envs stubbed."""
+    import content.bio.tools.discovery as d
+    import core.compute.named_envs as ne
+    seen: dict = {}
+    monkeypatch.setattr("core.projects.current", lambda: "prjB")
+    monkeypatch.setattr(ne, "resolve",
+                        lambda pid, name: {"language": env_lang,
+                                           "env_id": pre_id})
+    monkeypatch.setattr(ne, "extend", lambda pid, name, pkgs, **k: extend_res)
+
+    def _run_in(pid, name, code, **k):
+        seen["probe_env"] = name
+        seen["probe_code"] = code
+        return probe
+
+    monkeypatch.setattr(ne, "run_in", _run_in)
+    monkeypatch.setattr(d, "_evict_env_kernels", lambda name: 0)
+    out = d._extend_into_named_env("grow", ["PkgX"], {"name": "PkgX"}, req=req)
+    return seen, out
+
+
+def test_extend_refuses_ready_when_the_package_does_not_load(monkeypatch):
+    """D4's kill: a solve that minted an EnvID is not a loadable package."""
+    seen, out = _extend_env(monkeypatch,
+                            extend_res={"env_id": "e2"},
+                            probe={"ok": True, "stdout": "CAPQ=MISSING",
+                                   "stderr": "", "returncode": 0})
+    assert out["status"] == "error", (
+        f"extend certified a solve as ready with nothing loadable: {out}")
+    assert "grow" in (out.get("note") or "")
+
+
+def test_extend_cached_answers_must_also_pass_verify(monkeypatch):
+    """F4's kill: 'already recorded' is a statement about a solve, not about
+    what loads — the cached short-circuit may skip the solve, never the
+    verification."""
+    seen, out = _extend_env(monkeypatch,
+                            extend_res={"env_id": "e1"},   # same id → cached
+                            probe={"ok": True, "stdout": "CAPQ=MISSING",
+                                   "stderr": "", "returncode": 0})
+    assert out["status"] == "error", (
+        f"cached extend returned ready for a spec that never loads: {out}")
+
+
+def test_extend_probe_runs_in_the_target_env(monkeypatch):
+    seen, out = _extend_env(monkeypatch,
+                            extend_res={"env_id": "e2"},
+                            probe={"ok": True, "stdout": "CAPQ=1.0",
+                                   "stderr": "", "returncode": 0})
+    assert seen.get("probe_env") == "grow", (
+        "verification ran somewhere other than the env the user's code enters")
+    assert out["status"] == "ready" and out.get("verified"), out
+
+
+def test_extend_ready_emits_requires_and_enforces_min_version(monkeypatch):
+    from content.bio.tools.cap_request import CapRequest
+    req = CapRequest(name="PkgX", language="r", min_version="2.0",
+                     project="prjB")
+    # loadable but BELOW the floor → not ready (the request's postcondition)
+    seen, out = _extend_env(monkeypatch, extend_res={"env_id": "e2"},
+                            probe={"ok": True, "stdout": "CAPQ=1.4",
+                                   "stderr": "", "returncode": 0}, req=req)
+    assert out["status"] == "error" and "2.0" in out["note"], out
+    # at the floor → ready, and the promised `requires` field exists at last
+    seen, out = _extend_env(monkeypatch, extend_res={"env_id": "e2"},
+                            probe={"ok": True, "stdout": "CAPQ=2.1",
+                                   "stderr": "", "returncode": 0}, req=req)
+    assert out["status"] == "ready"
+    assert out.get("requires") == {"package": "PkgX", "min_version": "2.0"}
+
+
+def test_extend_note_names_the_env_language_lane(monkeypatch):
+    """D4's note half: an R env's success note must say run_r, not
+    run_python."""
+    seen, out = _extend_env(monkeypatch, extend_res={"env_id": "e2"},
+                            probe={"ok": True, "stdout": "CAPQ=1.0",
+                                   "stderr": "", "returncode": 0},
+                            env_lang="r")
+    assert "run_r(" in out["note"] and "run_python(" not in out["note"], (
+        f"R env advised through the python lane: {out['note']!r}")
+
+
+def test_probe_unknown_is_not_failed(monkeypatch):
+    """The oracle contract (weft P0, mirrored consumer-side): a probe that
+    COULD NOT RUN is unknown — refuse ready, but say the check failed to run,
+    never that the package is absent."""
+    seen, out = _extend_env(monkeypatch, extend_res={"env_id": "e2"},
+                            probe={"ok": False, "stdout": "",
+                                   "stderr": "site unreachable",
+                                   "returncode": 1})
+    assert out["status"] == "error"
+    assert "could not run" in out["note"].lower() or "unknown" in out["note"].lower(), (
+        f"an unrunnable check was reported as a package verdict: {out['note']!r}")
+
+
+def test_session_cran_lane_passes_verify_down(monkeypatch):
+    """weft V1: the session lanes carry the claim to the substrate — verify
+    inside the install, record-gating below the API."""
+    import content.bio.tools.discovery as d
+    seen: dict = {}
+    monkeypatch.setitem(sys.modules, "core.compute", types.SimpleNamespace(
+        project_env=types.SimpleNamespace(
+            install=lambda pid, lang, specs, **k: seen.update(k) or {"ok": True},
+            run_installer=lambda *a, **k: {"ok": True})))
+    ok, err, info = d._cran_lane("p", "PkgX",
+                                 verify={"loads": ["PkgX"]})
+    assert ok and seen.get("verify") == {"loads": ["PkgX"]}, seen
+
+
+def test_r_session_lane_composes_and_passes_the_claim(monkeypatch):
+    """The R session door sends the request's claim down BOTH its lanes
+    (conda and cran) — loads + version floor in weft's grammar."""
+    import content.bio.tools.discovery as d
+    calls: list = []
+    monkeypatch.setattr(d, "_r_version_in_session", lambda *a, **k: None)
+    monkeypatch.setitem(sys.modules, "core.compute", types.SimpleNamespace(
+        project_env=types.SimpleNamespace(
+            install=lambda pid, lang, specs, **k: calls.append(("install", k))
+                    or {"ok": True},
+            run_installer=lambda *a, **k: calls.append(("installer", k))
+                          or {"ok": True})))
+    monkeypatch.setattr(d, "_r_version_in_session",
+                        lambda *a, **k: None if not calls else "2.5")
+    d._ensure_r_via_session(
+        {"name": "PkgX", "provisioning": {"r": {"source": "cran",
+                                                "package": "PkgX"}}},
+        {"min_version": "2.0"}, None, "PkgX")
+    conda_k = next(k for tag, k in calls if tag == "install")
+    assert conda_k.get("verify") == {"loads": ["PkgX"],
+                                     "versions": {"PkgX": ">=2.0"}}, calls
+
+
+def test_run_installer_threads_verify_with_fallback(monkeypatch):
+    """project_env.run_installer forwards verify= to the substrate, and
+    degrades for a pre-V1 substrate exactly like writes_to does."""
+    from core.compute import project_env as pe
+    seen: dict = {}
+
+    class _Ad:
+        async def session_run_installer(self, sid, cmd, note="", **kw):
+            if "old" in seen:                      # simulate pre-V1 substrate
+                if "verify" in kw:
+                    raise TypeError("unexpected keyword 'verify'")
+            seen.update(kw)
+            return {"ok": True}
+
+    monkeypatch.setattr(pe, "ensure",
+                        lambda pid, lang: {"session_id": "s1",
+                                           "runtime": {"prefix": None}})
+    monkeypatch.setattr("core.compute.adapter.get_compute", lambda: _Ad())
+    monkeypatch.setattr(pe, "get", lambda pid, lang: {"additions": [], "rev": 0})
+    monkeypatch.setattr(pe, "_save_row", lambda *a: None)
+    monkeypatch.setattr(pe, "_current_runtime", lambda sid: None)
+    pe.run_installer("p", "r", "cmd", writes_to="rlib",
+                     verify={"loads": ["X"]})
+    assert seen.get("verify") == {"loads": ["X"]}
+    seen.clear(); seen["old"] = True
+    pe.run_installer("p", "r", "cmd", writes_to="rlib",
+                     verify={"loads": ["X"]})     # must not raise
+    assert "verify" not in seen or seen.get("verify") is None
 
 
 def test_direct_r_lane_call_builds_its_own_request(monkeypatch):

@@ -40,7 +40,8 @@ class _Recorder:
             raise RuntimeError("session.cold_base: substrate predates the vocabulary")
         return {"ok": True}
 
-    def run_installer(self, pid, language, cmd, *, note="", writes_to=None):
+    def run_installer(self, pid, language, cmd, *, note="", writes_to=None,
+                      verify=None):
         self.installers.append({"cmd": cmd, "note": note, "writes_to": writes_to})
         return {"ok": True}
 

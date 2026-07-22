@@ -1012,8 +1012,8 @@ def _bioc_repos() -> list:
             f"https://bioconductor.org/packages/{rel}/data/experiment"]
 
 
-def _cran_lane(pid: str, spec: str,
-               *, repos: "list | None" = None) -> "tuple[bool, str | None, dict]":
+def _cran_lane(pid: str, spec: str, *, repos: "list | None" = None,
+               verify: "dict | None" = None) -> "tuple[bool, str | None, dict]":
     """Try the substrate's cran layer for one R spec. Returns
     ``(landed, rendered_error, info)`` — the decline reason travels WITH the
     request as a return value, never through shared state (a module-global
@@ -1041,7 +1041,8 @@ def _cran_lane(pid: str, spec: str,
     from core.compute import project_env
     try:
         res = project_env.install(pid, "r", [spec], eco="cran",
-                                  **({"cran_repos": list(repos)} if repos else {}))
+                                  **({"cran_repos": list(repos)} if repos else {}),
+                                  **({"verify": verify} if verify else {}))
         return True, None, (res if isinstance(res, dict) else {})
     except Exception as e:  # noqa: BLE001 — caller falls back
         from core.compute.errors import describe
@@ -1192,18 +1193,28 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
     force = req.force or bool(set(req.explicit_overrides)
                               & {"ref", "source", "package", "subdir"})
     installed = _r_version_in_session(pid, libname)
+    _requires = ({"package": libname, "min_version": min_version}
+                 if min_version else None)
     if installed and not force and (not min_version or rexec.version_ge(installed, min_version)):
         return {"status": "ready", "name": cap.get("name"), "archetype": "r_package",
                 "library": libname, "version": installed,
+                **({"requires": _requires} if _requires else {}),
                 "note": f"Already available — library({libname}) {installed} works in run_r."}
     _lane_err: "str | None" = None      # this REQUEST's cran-lane decline, if any
     _lane_info: dict = {}               # its typed facts (code / resolved names)
+    # the request's claim, in the substrate's one verify grammar (weft V1):
+    # passed down every lane so verification runs inside the install and
+    # record-gating holds below the API — the lane's own recheck stays as
+    # belt-and-suspenders until F-V1 soak completes.
+    from content.bio.tools.cap_request import verify_block
+    _vblock = verify_block(req, libname=libname)
     try:
         if _src in ("cran", "bioconductor", "conda"):
             conda_name = _pkg if _pkg.startswith(("r-", "bioconductor-")) else (
                 f"bioconductor-{_pkg.lower()}" if _src == "bioconductor" else f"r-{_pkg.lower()}")
             try:
-                project_env.install(pid, "r", [conda_name], eco="conda")
+                project_env.install(pid, "r", [conda_name], eco="conda",
+                                    verify=_vblock)
             except Exception:  # noqa: BLE001 — no conda build / cold base
                 # Second lane: the substrate's cran layer (session rlib riding
                 # the base — delta-only, works on ANY base incl. adopted
@@ -1222,7 +1233,8 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
                 _cran_name = libname if _src == "conda" else _pkg
                 _done, _lane_err, _lane_info = _cran_lane(
                     pid, _cran_name,
-                    repos=_bioc_repos() if _src == "bioconductor" else None)
+                    repos=_bioc_repos() if _src == "bioconductor" else None,
+                    verify=_vblock)
                 if not _done:
                     _repo = _cran_repo()
                     _cmd = (f"Rscript -e 'options(repos=c(CRAN=\"{_repo}\")); "
@@ -1233,6 +1245,7 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
                             f"Rscript -e 'install.packages(\"{_cran_name}\", repos=\"{_repo}\"); "
                             f"{_landed_or_fail(libname)}'")
                     project_env.run_installer(pid, "r", _cmd, writes_to="rlib",
+                                              verify=_vblock,
                                               note=f"{_src} install of {_cran_name} (no conda binary)")
         elif _src == "github":
             # The cran lane speaks the whole spec vocabulary — `owner/repo@ref`
@@ -1248,7 +1261,7 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
             # on it (live 2026-07-21 — read as "repo missing").
             _ref, _sub = req.ref, (req.subdir or "").strip("/")
             _spec = _pkg + (f"/{_sub}" if _sub else "") + (f"@{_ref}" if _ref else "")
-            _ok, _lane_err, _lane_info = _cran_lane(pid, _spec)
+            _ok, _lane_err, _lane_info = _cran_lane(pid, _spec, verify=_vblock)
             if _ok and not req.library:
                 # weft read the package's DESCRIPTION at install time and
                 # returns its name as `resolved` (63b6199) — THAT is the load
@@ -1274,7 +1287,8 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
                     f"install.packages(\"remotes\"); remotes::install_github(\"{_spec}\", "
                     f"upgrade=\"never\", force={str(force).upper()}); "
                     f"{_landed_or_fail(libname)}'",
-                    writes_to="rlib", note=f"github install of {_spec}")
+                    writes_to="rlib", verify=_vblock,
+                    note=f"github install of {_spec}")
         else:
             return {"status": "error", "name": name,
                     "note": f"unknown R source {_src!r} (cran|bioconductor|conda|github)"}
@@ -1333,8 +1347,66 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
     rexec.r_unload_namespace(libname, (ctx or {}).get("thread_id"))
     return {"status": "ready", "name": cap.get("name"), "archetype": "r_package",
             "library": libname, "version": new_ver,
+            **({"requires": _requires} if _requires else {}),
             "note": f"Installed into the project R env; library({libname}) {new_ver} "
                     f"is usable in run_r now."}
+
+
+def _probe_named_env(pid: str, env_name: str, language: str, probe_name: str,
+                     min_version: "str | None") -> "tuple[str, str]":
+    """Consumer-side postcondition probe IN a named env → (verdict, detail),
+    verdict ∈ {passed, failed, unknown}. The oracle contract (weft P0,
+    mirrored here until V3's env target subsumes this probe): a check that
+    COULD NOT RUN is unknown — never a claim about the package. `detail` is
+    the version on pass, the cause otherwise."""
+    if language == "r":
+        code = (f'if (requireNamespace("{probe_name}", quietly=TRUE)) '
+                f'cat("CAPQ=", as.character(utils::packageVersion('
+                f'"{probe_name}")), "\\n", sep="") else '
+                f'cat("CAPQ=MISSING\\n")')
+    else:
+        code = ("import importlib\n"
+                "try:\n"
+                f"    importlib.import_module({probe_name!r})\n"
+                "    try:\n"
+                "        import importlib.metadata as _md\n"
+                f"        v = _md.version({probe_name!r})\n"
+                "    except Exception:\n"
+                "        v = '0'\n"
+                "    print('CAPQ=' + v)\n"
+                "except Exception:\n"
+                "    print('CAPQ=MISSING')\n")
+    from core.compute import named_envs
+    r = named_envs.run_in(pid, env_name, code, timeout_s=900)
+    out = r.get("stdout") or ""
+    line = next((ln for ln in out.splitlines() if ln.startswith("CAPQ=")), None)
+    if not r.get("ok") or line is None:
+        return "unknown", (str(r.get("stderr") or out or "no output"))[-300:]
+    got = line[len("CAPQ="):].strip()
+    if got == "MISSING":
+        return "failed", f"{probe_name} is not loadable"
+    if min_version:
+        from core.exec import r as rexec
+        if not rexec.version_ge(got, min_version):
+            return "failed", (f"{probe_name} is {got}, the request needs "
+                              f">= {min_version}")
+    return "passed", got
+
+
+def _probe_target_name(packages: list[str], cap: dict, req) -> str:
+    """The load name to verify: the request's override, then the record's
+    import/library name, then the first spec's base (grammar composition is
+    stage C — this is the best available name until then)."""
+    import re
+    if req is not None and req.library:
+        return req.library
+    for k in ("import_name", "library"):
+        if (cap or {}).get(k):
+            return str(cap[k])
+    if packages:
+        base = re.split(r"[=<>!\s\[@]", str(packages[0]))[0]
+        return base.split("/")[-1] or str(packages[0])
+    return str((cap or {}).get("name") or "")
 
 
 def _extend_into_named_env(env_name: str, packages: list[str], cap: dict,
@@ -1344,8 +1416,11 @@ def _extend_into_named_env(env_name: str, packages: list[str], cap: dict,
     language picks the ecosystem (pypi | cran).
 
     `req` (cap_request.CapRequest) carries the request's merged fields to
-    this door — stage A transports them; the named lane's verify (stage B)
-    and grammar/eco composition (stage C) consume them here."""
+    this door. Readiness is the REQUEST's postcondition, not the solver's:
+    every exit — freshly extended or cached — passes the load/version probe
+    in the target env, or refuses ready (D4/F4). A cached answer is a
+    statement about a recorded SOLVE; what the agent asked is whether the
+    package LOADS."""
     from core.compute import named_envs
     from core.compute.errors import ComputeError
     from core import projects
@@ -1368,22 +1443,50 @@ def _extend_into_named_env(env_name: str, packages: list[str], cap: dict,
     # fixed in make_isolated_env, surviving here in the sibling entry point).
     changed = res.get("env_id") != _pre_id
     restarted = _evict_env_kernels(env_name) if changed else 0
+    _lang = ((named_envs.resolve(pid, env_name) or {}).get("language")
+             or "python")
+    _run_fn = "run_r" if _lang == "r" else "run_python"
+    _probe_name = _probe_target_name(packages, cap, req)
+    _minv = getattr(req, "min_version", None) if req is not None else None
+    verdict, detail = _probe_named_env(pid, env_name, _lang, _probe_name, _minv)
+    _requires = ({"package": _probe_name, "min_version": _minv}
+                 if _minv else None)
+    if verdict != "passed":
+        # NOT ready: a solve (or a cached record of one) is not the request's
+        # postcondition. unknown ≠ failed — an unrunnable check is a check
+        # problem, never a package verdict.
+        why = (f"the verification could not run in '{env_name}' "
+               f"(verdict unknown): {detail}" if verdict == "unknown" else
+               f"{detail} in '{env_name}'")
+        return {"status": "error", "name": cap.get("name"), "env": env_name,
+                "env_id": res["env_id"],
+                "installed": list(packages) if changed else [],
+                **({"requires": _requires} if _requires else {}),
+                "note": (f"Extended env '{env_name}' (env_id {res['env_id']}), "
+                         f"but NOT marking ready — {why}.")}
     if not changed:
         note = (f"{', '.join(packages)} already present in isolated env "
-                f"'{env_name}' (env_id {res['env_id']}) — nothing to install; "
-                f"the running session was left intact. Run in it with "
-                f"run_python(env='{env_name}', …).")
+                f"'{env_name}' (env_id {res['env_id']}) — verified "
+                f"({_probe_name} {detail}); the running session was left "
+                f"intact. Run in it with {_run_fn}(env='{env_name}', …).")
         return {"status": "ready", "name": cap.get("name"), "env": env_name,
-                "env_id": res["env_id"], "installed": [], "note": note}
+                "env_id": res["env_id"], "installed": [],
+                "verified": {_probe_name: detail},
+                **({"requires": _requires} if _requires else {}),
+                "note": note}
     note = (f"Installed {', '.join(packages)} into isolated env '{env_name}' "
-            f"(new env_id {res['env_id']}). Frozen identities: extending mints a "
-            f"new id; history kept. Run in it with run_python(env='{env_name}', …).")
+            f"(new env_id {res['env_id']}, verified {_probe_name} {detail}). "
+            f"Frozen identities: extending mints a new id; history kept. "
+            f"Run in it with {_run_fn}(env='{env_name}', …).")
     if restarted:
         note += (" NOTE: the env's running session was restarted to pick up the "
                  "new packages — in-memory objects from earlier steps in this "
                  "env are gone; reload what you need.")
     return {"status": "ready", "name": cap.get("name"), "env": env_name,
-            "env_id": res["env_id"], "installed": list(packages), "note": note}
+            "env_id": res["env_id"], "installed": list(packages),
+            "verified": {_probe_name: detail},
+            **({"requires": _requires} if _requires else {}),
+            "note": note}
 
 
 def _infer_language(ctx: dict | None) -> str | None:

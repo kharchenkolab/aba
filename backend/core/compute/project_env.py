@@ -200,13 +200,18 @@ def ensure(pid: str, language: str) -> dict:
     rt = res.get("runtime")
     for add in additions:                      # replay the recorded deltas
         if add.get("eco") == "installer":      # captured arbitrary installer
-            _ikw = {"writes_to": add["writes_to"]} if add.get("writes_to") else {}
-            try:
-                ires = named_envs._sync(ad.session_run_installer(
-                    sid, add.get("cmd") or "", note=add.get("note", ""), **_ikw))
-            except TypeError:                  # substrate predates writes_to
-                ires = named_envs._sync(ad.session_run_installer(
-                    sid, add.get("cmd") or "", note=add.get("note", "")))
+            _ikw = {k: add[k] for k in ("writes_to", "verify") if add.get(k)}
+            while True:
+                try:
+                    ires = named_envs._sync(ad.session_run_installer(
+                        sid, add.get("cmd") or "", note=add.get("note", ""),
+                        **_ikw))
+                    break
+                except TypeError:              # substrate predates a kw —
+                    if not _ikw:               # degrade newest-first
+                        raise
+                    _ikw.pop("verify", None) if "verify" in _ikw \
+                        else _ikw.pop("writes_to", None)
         else:
             ires = named_envs._sync(ad.session_install(
                 sid, **{add["eco"]: add["specs"]}, **(add.get("opts") or {})))
@@ -331,7 +336,8 @@ def install(pid: str, language: str, specs: list[str], *,
 
 
 def run_installer(pid: str, language: str, cmd: str, *, note: str = "",
-                  writes_to: Optional[str] = None) -> dict:
+                  writes_to: Optional[str] = None,
+                  verify: Optional[dict] = None) -> dict:
     """Escape hatch (captured + portable): arbitrary installer inside the
     session — e.g. source-CRAN `Rscript -e 'install.packages(…)'`. Rides
     snapshots as a labeled post_install step.
@@ -348,20 +354,33 @@ def run_installer(pid: str, language: str, cmd: str, *, note: str = "",
     pid = str(pid)
     s = ensure(pid, language)
     ad = _adapter.get_compute()
-    _kw = {"writes_to": writes_to} if writes_to else {}
-    try:
-        out = dict(named_envs._sync(
-            ad.session_run_installer(s["session_id"], cmd, note=note, **_kw)) or {})
-    except TypeError:
-        if not _kw:
-            raise
-        # substrate predates writes_to — retry undeclared (refuses on a cold
-        # base, but works wherever it worked before)
-        out = dict(named_envs._sync(
-            ad.session_run_installer(s["session_id"], cmd, note=note)) or {})
+    _kw: dict = {}
+    if writes_to:
+        _kw["writes_to"] = writes_to
+    if verify:
+        # weft V1: the postcondition runs INSIDE the install and record-gating
+        # holds below the API — a verify-failed installer never enters the
+        # captured additions on the substrate side.
+        _kw["verify"] = verify
+    while True:
+        try:
+            out = dict(named_envs._sync(
+                ad.session_run_installer(s["session_id"], cmd, note=note,
+                                         **_kw)) or {})
+            break
+        except TypeError:
+            # substrate predates a kw — degrade newest-first (verify, then
+            # writes_to), same behavior each kw had before it existed
+            if "verify" in _kw:
+                _kw.pop("verify")
+            elif "writes_to" in _kw:
+                _kw.pop("writes_to")
+            else:
+                raise
     row = get(pid, language)
     row["additions"].append({"eco": "installer", "cmd": cmd, "note": note,
                              **({"writes_to": writes_to} if writes_to else {}),
+                             **({"verify": verify} if verify else {}),
                              "at": time.time()})
     row["rev"] = int(row.get("rev") or 0) + 1
     _save_row(pid, language, row)
