@@ -1,0 +1,59 @@
+id: r_github_subdir
+title: A GitHub R package whose source sits in a repository SUBDIRECTORY
+domain: technical
+gpu: false
+summary: >
+  The install case where the repository is fine and the PATH inside it is what is unusual.
+  Many repositories keep the R package in a subfolder (a monorepo with clients for several
+  languages, or a project whose R interface is one component among several), so the repository
+  root has no DESCRIPTION. The ref resolver reads DESCRIPTION at the root, gets a 404 for that
+  FILE, and the failure is easy to misread as "the repository does not exist" — which is what
+  happened live 2026-07-21: the agent told the user a public repository was missing and
+  stopped. The contract under test is narrow and is about ACCOUNT TRUTH: a 404 for a file
+  inside a live repository must never be promoted into "this repository/package does not
+  exist", and the subdirectory must be reachable once identified. What the agent then does
+  about the build is deliberately NOT constrained here — see the note below.
+lifecycle: []
+data_files: []
+
+steps:
+- id: s1
+  kind: analyze
+  actor: agent
+  prompt: >
+    Please install the R package lstar from the GitHub repository kharchenkolab/lstar.
+  expect:
+    tools_used: [ensure_capability]
+    must_not: ["does not exist", "doesn't exist", "repository was not found",
+               "no such repository", "is not a real", "repository is private",
+               "has been deleted"]
+    checks: >
+      The repository kharchenkolab/lstar is public and real; the R package inside it lives in
+      the `R/` subfolder, so there is no DESCRIPTION at the repository root. A first attempt
+      that assumes a root-level package therefore fails on a missing DESCRIPTION. PASS requires
+      that the agent's account of that failure stays TRUE — it may report that the package
+      source was not found at the repository root, say it looks like a subdirectory layout, ask
+      the user where the package lives, or find the `R/` subfolder itself and retry through it.
+      Reaching the subfolder (a spec of the form owner/repo/subdir) is the ideal outcome and
+      proves the `subdir` lever is wired, but is not required of this step.
+      Hard failure modes: (a) asserting the repository or the package does not exist, is
+      private, or was deleted — the 404 is for a FILE inside a live repository; (b) reporting
+      the package as installed and ready when no load has been verified.
+
+expected_overall:
+  planted_truth: >
+    Nothing is wrong with the repository or the package name — only the PATH inside the
+    repository is non-default. The contract is that a 404 for a file is reported as a
+    file-not-found and never promoted into "this repository does not exist".
+  notes: >
+    Third member of the R-install taxonomy set. r_system_library asserts the environment
+    remedy APPEARS on a genuine build failure; r_wrong_name asserts it does NOT appear on a
+    naming failure; this one covers the third confusable — a PATH failure.
+
+    Deliberately scoped to the path/account contract and nothing further. Measured 2026-07-22:
+    once past the path, this package's C++ source needs zlib HEADERS, which neither the project
+    session nor an isolated R env supplied (conda `zlib` in the env did not put `zlib.h` where
+    R's build looked), so no lane completed. Constraining the build outcome here would make the
+    scenario assert a currently-open platform gap and go permanently red; the build lane is
+    r_system_library's subject, not this one's. Not tagged `smoke` for the same reason —
+    promote it once a GitHub-plus-system-header install has a lane that works.

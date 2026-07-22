@@ -99,19 +99,28 @@ def main() -> int:
               bg_submit_kwargs({"env": "default"}, pid)["env"] is None)
 
         # ── 4. the promoted env is real: run in it, see the system lib ──────
+        # BOTH facts come from INSIDE the env. Globbing the prefix from here
+        # only works when the env is a materialized directory: on a
+        # squashfs-image deployment the prefix is a mountpoint that is live
+        # solely within the run's mount namespace, so a host-side glob finds
+        # nothing and reports a present library as absent (measured 2026-07-22:
+        # libz.so sits in the image while the outer glob saw an empty dir).
         r = named_envs.run_in(pid, "envchk",
-                              "import sys; print('PFX=' + sys.prefix)",
+                              "import sys, glob, os\n"
+                              "print('PFX=' + sys.prefix)\n"
+                              "print('LIBZ=' + str(bool("
+                              "glob.glob(os.path.join(sys.prefix,'lib','libz*'))"
+                              " or glob.glob(os.path.join("
+                              "sys.prefix,'Library','bin','zlib*')))))",
                               timeout_s=900)
-        pfx = next((ln[len("PFX="):] for ln in (r.get("stdout") or "").splitlines()
-                    if ln.startswith("PFX=")), "")
+        out = (r.get("stdout") or "").splitlines()
+        pfx = next((ln[len("PFX="):] for ln in out if ln.startswith("PFX=")), "")
         check("one-shot run executes inside the promoted env",
               bool(r.get("ok")) and bool(pfx), str(r.get("stderr") or "")[-300:])
         if pfx:
-            import glob
-            libhits = (glob.glob(os.path.join(pfx, "lib", "libz*"))
-                       or glob.glob(os.path.join(pfx, "Library", "bin", "zlib*")))
             check("the system library is present in the promoted prefix",
-                  bool(libhits), f"no libz* under {pfx}/lib")
+                  "LIBZ=True" in out,
+                  f"no libz* under {pfx}/lib (as seen from inside the env)")
 
         if not args.quick:
             # ── 5. BARE run_python (no env=) lands in the promoted env ───────
