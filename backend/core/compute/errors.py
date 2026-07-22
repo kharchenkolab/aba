@@ -70,7 +70,13 @@ def describe(exc: BaseException, *, limit: int = 700) -> str:
     if not hints:
         return base
     parts: list[str] = []
-    for key in ("out_tail", "err_tail", "rc", "script_tail"):
+    # The priority set is weft's own first-read diagnosis per failure class:
+    # out/err tails (installs), log_tail (realize failures — the build log),
+    # solver_message (solve conflicts — names the unsatisfiable pins), the
+    # verifier's MISSING line, and WHOSE rc failed (install vs verify are
+    # discriminated; a bare rc:0 in a failure means the OTHER stage died).
+    for key in ("out_tail", "err_tail", "log_tail", "solver_message",
+                "missing", "rc", "install_rc", "verify_rc", "script_tail"):
         if key in hints:
             val = str(hints.pop(key)).strip()
             if val:

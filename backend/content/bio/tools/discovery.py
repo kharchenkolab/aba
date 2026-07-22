@@ -1013,13 +1013,20 @@ def _bioc_repos() -> list:
 
 
 def _cran_lane(pid: str, spec: str,
-               *, repos: "list | None" = None) -> "tuple[bool, str | None]":
+               *, repos: "list | None" = None) -> "tuple[bool, str | None, dict]":
     """Try the substrate's cran layer for one R spec. Returns
-    ``(landed, rendered_error)`` — the decline reason travels WITH the request
-    as a return value, never through shared state (a module-global "last lane
-    error" attributed one request's diagnosis to another under concurrent tool
-    calls, and a stale decline from an earlier request to a later unrelated
-    failure).
+    ``(landed, rendered_error, info)`` — the decline reason travels WITH the
+    request as a return value, never through shared state (a module-global
+    "last lane error" attributed one request's diagnosis to another under
+    concurrent tool calls, and a stale decline from an earlier request to a
+    later unrelated failure).
+
+    ``info`` carries the lane's TYPED facts for the caller's remedy logic:
+    on success it is the substrate's install result — ``resolved`` holds the
+    DESCRIPTION names weft read at install time for github refs (the load
+    name when it differs from the repo tail); on decline it holds the failure
+    ``code`` (weft discriminates dead-index / not-in-repo / broken-build), so
+    the way-out classifier can trust the substrate over text matching.
 
     `spec` is the substrate's own vocabulary — a plain name, `name ==X.Y.Z`, or
     `owner/repo@ref`. We deliberately do NOT pre-parse it into a bespoke
@@ -1033,14 +1040,15 @@ def _cran_lane(pid: str, spec: str,
     substrate won't recognize a git spec here."""
     from core.compute import project_env
     try:
-        project_env.install(pid, "r", [spec], eco="cran",
-                            **({"cran_repos": list(repos)} if repos else {}))
-        return True, None
+        res = project_env.install(pid, "r", [spec], eco="cran",
+                                  **({"cran_repos": list(repos)} if repos else {}))
+        return True, None, (res if isinstance(res, dict) else {})
     except Exception as e:  # noqa: BLE001 — caller falls back
         from core.compute.errors import describe
         err = describe(e)
         print(f"[capability] cran lane declined {spec!r}: {err}", flush=True)
-        return False, err
+        _code = getattr(e, "code", None)
+        return False, err, ({"code": _code} if _code else {})
 
 
 # A source build that died in configure/compile, as opposed to a bad name, a
@@ -1049,10 +1057,13 @@ def _cran_lane(pid: str, spec: str,
 # generic forms ("no such file or directory", "not found in the") also appear
 # in exec failures and registry misses, and a false positive appends the
 # system-library lecture to errors it can only mislead — the header-missing
-# signature is the ``.h:`` form, not the bare phrase. This list is a FALLBACK:
-# a typed substrate stage decides first (see _syslib_way_out), and the tracked
-# end-state is weft classifying build-stage failures itself (alongside the
-# rc-0-on-failed-build fix) so this taxonomy can be deleted.
+# signature is the ``.h:`` form, not the bare phrase. This list is a FALLBACK,
+# third in line: the typed substrate stage decides first, then the typed
+# failure CODE (weft f61fcf0 discriminates dead-index / not-in-repo /
+# broken-build — see _NON_BUILD_CODES); the signs' remaining job is narrowing
+# a build-stage failure to the missing-SYSTEM-library subset, which no code
+# expresses — so the list stays even now that the substrate types its stages.
+# Text matching is locale-stable: weft runs its control plane under LC_ALL=C.
 _SYSLIB_SIGNS = (
     "configuration failed", "configure: error", "pkg-config",
     ".h: no such file", "fatal error:", "cannot find -l",
@@ -1065,6 +1076,16 @@ _SYSLIB_SIGNS = (
 # solve/staging/submit/infra failures cannot be a missing system library, so
 # the remedy is suppressed no matter what the rendered text happens to match.
 _PRE_BUILD_STAGES = ("solve", "staging", "submit", "infra")
+
+# Typed failure codes that are RESOLUTION problems, not build deaths: weft's
+# session-install classifier discriminates a dead repository index
+# (solve_failed, retryable), a name absent from the configured repos
+# (solve_conflict) and a cold-base refusal (nothing was attempted) from a
+# broken build (realize_failed) — all under stage="realize", so the stage
+# gate alone cannot separate them; the CODE is the discriminator.
+_NON_BUILD_CODES = frozenset({
+    "env.solve_conflict", "env.solve_failed", "session.cold_base",
+})
 
 
 def _landed_or_fail(libname: str) -> str:
@@ -1084,7 +1105,8 @@ def _landed_or_fail(libname: str) -> str:
 
 
 def _syslib_way_out(rendered: str, libname: str, pkg: str,
-                    stage: "str | None" = None) -> str:
+                    stage: "str | None" = None,
+                    codes: "tuple | str | None" = ()) -> str:
     """The NEXT STEP to append when a build died for a missing system library.
 
     Diagnosis without a remedy still costs the agent the turn. Live 2026-07-22,
@@ -1100,11 +1122,22 @@ def _syslib_way_out(rendered: str, libname: str, pkg: str,
 
     Appended only on a build-stage failure — on a typo'd name or a 404 this
     advice is noise, and noise in an error is how a real hint gets skipped.
-    The substrate's typed `stage` decides first: a solve/staging/submit/infra
-    failure ended before any compile of this package, so no text match can
-    make the remedy apply; the substring signs are the fallback for errors
-    that carry no stage."""
+    The substrate's typed facts decide first: a solve/staging/submit/infra
+    `stage` ended before any compile of this package, and a resolution-class
+    failure CODE (dead index, name not in repos, cold-base refusal — weft
+    types these under stage="realize") can never be a missing system library
+    no matter what the fused note's text quotes — tails routinely carry
+    ambient build-log fragments from an EARLIER lane's decline. `codes` takes
+    every typed contributor to the note (raised error + lane decline):
+    suppression needs ALL of them resolution-class, because one build-stage
+    (or untyped) contributor keeps the text signs legitimately in play; the
+    substring signs remain the fallback for errors that carry no type at all,
+    and the narrowing to the SYSLIB subset within genuine build failures."""
     if stage in _PRE_BUILD_STAGES:
+        return ""
+    typed = {c for c in ((codes,) if isinstance(codes, str) else tuple(codes or ()))
+             if c}
+    if typed and typed <= _NON_BUILD_CODES:
         return ""
     low = (rendered or "").lower()
     if not any(s in low for s in _SYSLIB_SIGNS):
@@ -1161,6 +1194,7 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
                 "library": libname, "version": installed,
                 "note": f"Already available — library({libname}) {installed} works in run_r."}
     _lane_err: "str | None" = None      # this REQUEST's cran-lane decline, if any
+    _lane_info: dict = {}               # its typed facts (code / resolved names)
     try:
         if _src in ("cran", "bioconductor", "conda"):
             conda_name = _pkg if _pkg.startswith(("r-", "bioconductor-")) else (
@@ -1183,7 +1217,7 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
                 # ecosystem, with no hint that the conda lane is what actually
                 # refused (live 2026-07-22). The CRAN name is the library name.
                 _cran_name = libname if _src == "conda" else _pkg
-                _done, _lane_err = _cran_lane(
+                _done, _lane_err, _lane_info = _cran_lane(
                     pid, _cran_name,
                     repos=_bioc_repos() if _src == "bioconductor" else None)
                 if not _done:
@@ -1211,7 +1245,18 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
             # on it (live 2026-07-21 — read as "repo missing").
             _ref, _sub = rp.get("ref"), (rp.get("subdir") or "").strip("/")
             _spec = _pkg + (f"/{_sub}" if _sub else "") + (f"@{_ref}" if _ref else "")
-            _ok, _lane_err = _cran_lane(pid, _spec)
+            _ok, _lane_err, _lane_info = _cran_lane(pid, _spec)
+            if _ok and not rp.get("library"):
+                # weft read the package's DESCRIPTION at install time and
+                # returns its name as `resolved` (63b6199) — THAT is the load
+                # name. The repo tail is a heuristic that breaks on monorepos
+                # and renamed packages, where verifying under it reported a
+                # SUCCESSFUL install as "not loadable" unless the agent
+                # happened to pass library=. An explicit library= still wins.
+                _resolved = [str(n) for n in (_lane_info.get("resolved") or [])
+                             if n]
+                if _resolved:
+                    libname = _resolved[0]
             if not _ok:
                 # Substrate predates the vocabulary → the old lane, which still
                 # works wherever the base is writable. It takes `_spec`, not
@@ -1239,8 +1284,17 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
         _note = f"R install into the project env failed: {describe(e)}"
         if _lane_err and _lane_err not in _note:
             _note += f" | cran lane: {_lane_err}"
+        if getattr(e, "retryable", False):
+            # the substrate's own verdict: transient repository/network
+            # trouble, not a package problem — without this the agent reads a
+            # dead index as "the package is missing" and rewrites the request
+            _note += (" | The substrate marks this failure RETRYABLE — "
+                      "transient repository/network trouble; retry once "
+                      "before changing the request.")
         _note += _syslib_way_out(_note, libname, _pkg,
-                                 stage=getattr(e, "stage", None))
+                                 stage=getattr(e, "stage", None),
+                                 codes=(getattr(e, "code", None),
+                                        _lane_info.get("code")))
         return {"status": "error", "name": name, "archetype": "r_package",
                 "note": _note}
     new_ver = _r_version_in_session(pid, libname)
@@ -1255,7 +1309,8 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
                  f"reported success while producing nothing looks like.")
         if _lane_err and _lane_err not in _note:
             _note += f" | cran lane: {_lane_err}"
-        _note += _syslib_way_out(_note, libname, _pkg)
+        _note += _syslib_way_out(_note, libname, _pkg,
+                                 codes=(_lane_info.get("code"),))
         return {"status": "error", "name": name, "archetype": "r_package",
                 "library": libname, "note": _note}
     if min_version and not rexec.version_ge(new_ver, min_version):
@@ -1267,7 +1322,8 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
                  f"NOT marking ready.")
         if _lane_err and _lane_err not in _note:
             _note += f" | cran lane: {_lane_err}"
-        _note += _syslib_way_out(_note, libname, _pkg)
+        _note += _syslib_way_out(_note, libname, _pkg,
+                                 codes=(_lane_info.get("code"),))
         return {"status": "error", "name": name, "archetype": "r_package",
                 "library": libname, "version": new_ver, "note": _note}
     # a stale loaded namespace in the running R kernel can pin the old build

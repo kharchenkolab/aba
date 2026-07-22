@@ -47,7 +47,7 @@ def _capture_installer(monkeypatch, *, cran_lane_ok=False):
     monkeypatch.setattr(
         discovery, "_cran_lane",
         lambda pid, spec, **k: (seen.setdefault("cran_spec", spec),
-                                (cran_lane_ok, None))[1])
+                                (cran_lane_ok, None, {}))[1])
 
     def _run_installer(pid, lang, cmd, **k):
         seen["cmd"] = cmd
@@ -133,7 +133,8 @@ def test_build_failure_names_the_lane_that_can_work(monkeypatch):
     from content.bio.tools import discovery
     from core.compute.errors import ComputeError
     monkeypatch.setattr(discovery, "_r_version_in_session", lambda *a, **k: None)
-    monkeypatch.setattr(discovery, "_cran_lane", lambda *a, **k: (False, None))
+    monkeypatch.setattr(discovery, "_cran_lane",
+                        lambda *a, **k: (False, None, {}))
     monkeypatch.setitem(sys.modules, "core.compute", types.SimpleNamespace(
         project_env=types.SimpleNamespace(
             install=lambda *a, **k: (_ for _ in ()).throw(RuntimeError("cold base")),
@@ -194,6 +195,144 @@ def test_way_out_trusts_the_typed_stage_over_text():
     assert _syslib_way_out(_BUILD_FAIL, "x", "x", stage=None) != ""
 
 
+def test_way_out_trusts_the_typed_code_over_text():
+    """weft discriminates WHICH failure a session install was (f61fcf0): a
+    resolution-class code — name not in repos, dead index, cold-base refusal —
+    can never be a missing system library, no matter what the fused note's
+    text quotes (tails routinely carry ambient build-log fragments from an
+    earlier lane's decline). All typed under stage='realize', so only the
+    CODE separates them. One build-stage or untyped contributor keeps the
+    text signs legitimately in play."""
+    from content.bio.tools.discovery import _syslib_way_out
+    for code in ("env.solve_conflict", "env.solve_failed", "session.cold_base"):
+        assert _syslib_way_out(_BUILD_FAIL, "x", "x", codes=(code,)) == "", code
+        assert _syslib_way_out(_BUILD_FAIL, "x", "x", codes=code) == "", (
+            f"single string form: {code}")
+    # a build-stage contributor among the codes → the signs decide → remedy
+    assert _syslib_way_out(_BUILD_FAIL, "x", "x",
+                           codes=("env.solve_failed", "env.realize_failed")) != ""
+    # untyped → the signs decide, exactly as before
+    assert _syslib_way_out(_BUILD_FAIL, "x", "x", codes=()) != ""
+    assert _syslib_way_out(_BUILD_FAIL, "x", "x", codes=(None, None)) != ""
+    # a typed build failure whose text shows no SYSLIB sign gets no lecture —
+    # realize_failed says the build died, not WHY; the signs still narrow
+    assert _syslib_way_out("package 'zzz' is not available", "x", "x",
+                           codes=("env.realize_failed",)) == ""
+
+
+def test_flow_retryable_index_failure_gets_retry_nudge_not_lecture(monkeypatch):
+    """A dead repository index is transient — weft types it env.solve_failed +
+    retryable. The note must say retry, and must NOT lecture about system
+    libraries even when the fused note quotes a configure error from the
+    lane's earlier decline (both contributors are typed resolution-class)."""
+    from core.compute.errors import ComputeError
+
+    def _boom(*a, **k):
+        raise ComputeError(
+            "env.solve_failed",
+            "an R repository index is unreachable from this node",
+            stage="realize", retryable=True,
+            hints={"err_tail": "unable to access index for repository …"})
+
+    discovery = _flow(
+        monkeypatch,
+        lane=lambda *a, **k: (False, _BUILD_FAIL, {"code": "env.solve_failed"}),
+        installer=_boom)
+    res = discovery._ensure_r_via_session(
+        {"name": "p", "provisioning": {"r": {"source": "cran", "package": "p"}}},
+        {}, None, "p")
+    note = res["note"]
+    assert res["status"] == "error"
+    assert "RETRYABLE" in note, f"the substrate's retryable verdict dropped: {note!r}"
+    assert "missing SYSTEM library" not in note, (
+        "resolution-class failure got the build-stage lecture")
+
+
+def test_flow_typed_build_failure_keeps_lecture_no_retry_nudge(monkeypatch):
+    """The OTHER side: a typed realize_failed with a build signature keeps the
+    remedy, and a non-retryable failure gets no retry advice."""
+    from core.compute.errors import ComputeError
+
+    def _boom(*a, **k):
+        raise ComputeError(
+            "env.realize_failed",
+            "installing the R delta into the session layer failed",
+            stage="realize", retryable=False,
+            hints={"err_tail": _BUILD_FAIL, "install_rc": 1, "verify_rc": 0})
+
+    discovery = _flow(
+        monkeypatch,
+        lane=lambda *a, **k: (False, "no cran binary",
+                              {"code": "env.realize_failed"}),
+        installer=_boom)
+    res = discovery._ensure_r_via_session(
+        {"name": "RNetCDF",
+         "provisioning": {"r": {"source": "cran", "package": "RNetCDF"}}},
+        {}, None, "RNetCDF")
+    note = res["note"]
+    assert "missing SYSTEM library" in note, note
+    assert "RETRYABLE" not in note
+
+
+def test_github_resolved_name_is_adopted_for_verification(monkeypatch):
+    """weft returns `resolved` — the DESCRIPTION names it read at install time
+    (63b6199). A monorepo/renamed package's load name is NOT the repo tail;
+    verifying under the tail reported a SUCCESSFUL install as 'not loadable'
+    unless the agent happened to know to pass library=. The substrate already
+    knows the name — adopt it."""
+    seen: list = []
+
+    def _probe(pid, lib, *a, **k):
+        seen.append(lib)
+        return "2.1" if lib == "RealName" else None
+
+    discovery = _flow(
+        monkeypatch,
+        lane=lambda *a, **k: (True, None, {"resolved": ["RealName"]}),
+        probe=_probe)
+    res = discovery._ensure_r_via_session(
+        {"name": "p", "provisioning": {"r": {"source": "github",
+                                             "package": "org/monorepo"}}},
+        {}, None, "p")
+    assert res["status"] == "ready", (
+        f"install landed under 'RealName' but was verified as {seen[-1]!r}: {res}")
+    assert res["library"] == "RealName"
+
+
+def test_github_explicit_library_wins_over_resolved(monkeypatch):
+    """WIDE: an explicit library= from the agent stays authoritative over the
+    substrate's resolved name, and an ABSENT `resolved` leaves the repo-tail
+    heuristic exactly as before."""
+    calls = {"n": 0}
+
+    def _probe_for(expect):
+        def _probe(pid, lib, *a, **k):
+            calls["n"] += 1
+            if calls["n"] == 1:          # pre-install: nothing loadable yet
+                return None
+            return "1.0" if lib == expect else None
+        return _probe
+
+    discovery = _flow(
+        monkeypatch,
+        lane=lambda *a, **k: (True, None, {"resolved": ["Other"]}),
+        probe=_probe_for("Given"))
+    res = discovery._ensure_r_via_session(
+        {"name": "p", "provisioning": {"r": {"source": "github",
+                                             "package": "org/repo"}}},
+        {"library": "Given"}, None, "p")
+    assert res["status"] == "ready" and res["library"] == "Given", res
+
+    calls["n"] = 0
+    discovery = _flow(monkeypatch, lane=lambda *a, **k: (True, None, {}),
+                      probe=_probe_for("repo"))
+    res = discovery._ensure_r_via_session(
+        {"name": "p", "provisioning": {"r": {"source": "github",
+                                             "package": "org/repo"}}},
+        {}, None, "p")
+    assert res["status"] == "ready" and res["library"] == "repo", res
+
+
 def test_way_out_advice_is_syntactically_valid():
     """The suggested follow-up must be executable as written: on the github
     path `pkg` is owner/repo, and interpolating it into a package spec
@@ -250,7 +389,8 @@ def test_not_loadable_carries_the_diagnosis_and_the_way_out(monkeypatch):
     """The silent-failure exit path returned 89 chars and dropped everything —
     the lane error AND the remedy — even though THIS request's lane decline
     held the build log that named the missing header."""
-    discovery = _flow(monkeypatch, lane=lambda *a, **k: (False, _BUILD_FAIL))
+    discovery = _flow(monkeypatch,
+                      lane=lambda *a, **k: (False, _BUILD_FAIL, {}))
     res = discovery._ensure_r_via_session(
         {"name": "RNetCDF", "provisioning": {"r": {"source": "cran", "package": "RNetCDF"}}},
         {}, None, "RNetCDF")
@@ -266,12 +406,12 @@ def test_lane_diagnosis_is_request_scoped_not_global(monkeypatch):
     request B (stale — never cleared — and racy across worker threads)."""
     # request A: its lane declines with a distinctive diagnosis
     discovery = _flow(monkeypatch,
-                      lane=lambda *a, **k: (False, "A-ONLY-DIAGNOSIS-73"))
+                      lane=lambda *a, **k: (False, "A-ONLY-DIAGNOSIS-73", {}))
     discovery._ensure_r_via_session(
         {"name": "pA", "provisioning": {"r": {"source": "cran", "package": "pA"}}},
         {}, None, "pA")
     # request B: its OWN lane lands cleanly; the install then isn't loadable
-    discovery = _flow(monkeypatch, lane=lambda *a, **k: (True, None))
+    discovery = _flow(monkeypatch, lane=lambda *a, **k: (True, None, {}))
     res = discovery._ensure_r_via_session(
         {"name": "pB", "provisioning": {"r": {"source": "cran", "package": "pB"}}},
         {}, None, "pB")
@@ -287,7 +427,7 @@ def test_min_version_is_rechecked_after_install(monkeypatch):
     """The other side of the landed-check: an upgrade whose build died leaves
     the OLD version loadable — asserting loadability alone reports the
     upgrade as ready."""
-    discovery = _flow(monkeypatch, lane=lambda *a, **k: (True, None),
+    discovery = _flow(monkeypatch, lane=lambda *a, **k: (True, None, {}),
                       probe=lambda *a, **k: "1.0")
     res = discovery._ensure_r_via_session(
         {"name": "p", "provisioning": {"r": {"source": "cran", "package": "p"}}},
@@ -304,7 +444,8 @@ def test_library_override_reaches_probe_and_cran_lane(monkeypatch):
     seen: dict = {}
     discovery = _flow(
         monkeypatch,
-        lane=lambda pid, spec, **k: (seen.setdefault("spec", spec), (True, None))[1],
+        lane=lambda pid, spec, **k: (seen.setdefault("spec", spec),
+                                     (True, None, {}))[1],
         probe=lambda pid, lib, *a, **k: seen.setdefault("lib", lib) and None)
     discovery._ensure_r_via_session(
         {"name": "p", "provisioning": {"r": {"source": "conda",

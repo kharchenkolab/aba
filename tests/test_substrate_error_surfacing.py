@@ -85,13 +85,38 @@ def test_describe_degrades_on_the_absent_shapes():
     assert "boom" in describe(RuntimeError("boom"))     # not a ComputeError at all
 
 
+def test_describe_prioritizes_the_discriminated_install_hints():
+    """weft f61fcf0 discriminates WHOSE rc failed (install vs verify) and
+    carries the first-read diagnosis per failure class: `log_tail` for realize
+    failures (the build log), `solver_message` for solve conflicts (names the
+    unsatisfiable pins), the verifier's MISSING line. These must render at the
+    diagnostic bound, not the 200-char catch-all — a build log clipped at 200
+    loses the actual error line."""
+    from core.compute.errors import ComputeError, describe
+    tail = ("build output line\n" * 25) + "configure: error: netcdf.h missing"
+    e = ComputeError("env.realize_failed", "delta failed", stage="realize",
+                     hints={"log_tail": tail, "install_rc": 0, "verify_rc": 1,
+                            "missing": "MISSING: RNetCDF",
+                            "solver_message": "S" * 300})
+    out = describe(e)
+    assert "configure: error: netcdf.h missing" in out, (
+        "log_tail clipped below the diagnostic bound — the error line at its "
+        "end IS the diagnosis")
+    assert "S" * 300 in out, "solver_message clipped below the diagnostic bound"
+    assert "install_rc: 0" in out and "verify_rc: 1" in out, (
+        "WHOSE rc failed must be recoverable — a bare rc:0 in a failure sent "
+        "a field agent hunting a phantom")
+    assert "MISSING: RNetCDF" in out
+
+
 def test_r_install_error_reaches_the_agent_with_hints(monkeypatch):
     """The agent-facing note must carry the hints, not just the summary."""
     import types
     from content.bio.tools import discovery
 
     monkeypatch.setattr(discovery, "_r_version_in_session", lambda *_a, **_k: None)
-    monkeypatch.setattr(discovery, "_cran_lane", lambda *a, **k: (False, None))
+    monkeypatch.setattr(discovery, "_cran_lane",
+                        lambda *a, **k: (False, None, {}))
     fake_pe = types.SimpleNamespace(
         install=lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no conda")),
         run_installer=lambda *a, **k: (_ for _ in ()).throw(_err()))
@@ -114,7 +139,8 @@ def _spec_for(monkeypatch, prov):
     monkeypatch.setattr(discovery, "_r_version_in_session", lambda *_a, **_k: None)
     monkeypatch.setattr(
         discovery, "_cran_lane",
-        lambda pid, spec, **k: (seen.setdefault("spec", spec), (True, None))[1])
+        lambda pid, spec, **k: (seen.setdefault("spec", spec),
+                                (True, None, {}))[1])
     monkeypatch.setitem(sys.modules, "core.compute", types.SimpleNamespace(
         project_env=types.SimpleNamespace(
             install=lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no conda")),
@@ -169,7 +195,8 @@ def test_subdir_does_not_corrupt_the_library_name(monkeypatch):
                         lambda pid, lib, *a, **k: seen.setdefault("lib", lib) and None)
     monkeypatch.setattr(
         discovery, "_cran_lane",
-        lambda pid, spec, **k: (seen.setdefault("spec", spec), (True, None))[1])
+        lambda pid, spec, **k: (seen.setdefault("spec", spec),
+                                (True, None, {}))[1])
     monkeypatch.setitem(sys.modules, "core.compute", types.SimpleNamespace(
         project_env=types.SimpleNamespace(
             install=lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no conda")),

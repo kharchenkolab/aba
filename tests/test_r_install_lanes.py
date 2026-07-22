@@ -53,9 +53,19 @@ def _run(monkeypatch, *, source, package, ref=None, cran_ok=True):
     fake_pe = types.SimpleNamespace(install=rec.install, run_installer=rec.run_installer)
     fake_cm = types.SimpleNamespace(project_env=fake_pe)
     monkeypatch.setitem(sys.modules, "core.compute", fake_cm)
-    monkeypatch.setattr(discovery, "_cran_lane",
-                        lambda pid, spec: rec.install(pid, "r", [spec], eco="cran") is not None
-                        if cran_ok else _false(rec, spec))
+    def _lane(pid, spec, **k):
+        # honours _cran_lane's REAL contract — (landed, rendered_error, info).
+        # The original stub returned a bare bool, which blew up the caller's
+        # tuple unpack inside its try block: the flow silently took the error
+        # exit and test_github_falls_back_* asserted on a fallback that never
+        # ran. This file was not in the gated suite, so the contract change
+        # that broke it went unnoticed.
+        if cran_ok:
+            rec.install(pid, "r", [spec], eco="cran")
+            return True, None, {}
+        return _false(rec, spec)
+
+    monkeypatch.setattr(discovery, "_cran_lane", _lane)
     prov = {"source": source, "package": package}
     if ref:
         prov["ref"] = ref
@@ -69,7 +79,7 @@ def _run(monkeypatch, *, source, package, ref=None, cran_ok=True):
 
 def _false(rec, spec):
     rec.installs.append({"lang": "r", "specs": [spec], "eco": "cran", "opts": {}})
-    return False
+    return False, "substrate predates the vocabulary", {}
 
 
 def test_github_spec_goes_to_the_cran_lane(monkeypatch):

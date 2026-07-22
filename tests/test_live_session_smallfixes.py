@@ -96,7 +96,7 @@ def test_bioconductor_goes_through_the_cran_lane_with_repos(monkeypatch):
 
     def _fake_cran_lane(pid, spec, *, repos=None):
         seen.update({"spec": spec, "repos": repos})
-        return True
+        return True, None, {}
 
     monkeypatch.setattr(discovery, "_cran_lane", _fake_cran_lane)
     monkeypatch.setattr(discovery, "_r_version_in_session", lambda *_a, **_k: None)
