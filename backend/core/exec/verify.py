@@ -16,7 +16,19 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import threading
 from typing import Optional, Sequence
+
+# Positive-probe memo: {(identity_key, name): True}. POSITIVES ONLY — a
+# verified load is stable for a given identity (sessions key on
+# (session_id, rev): any install bumps rev; frozen envs key on EnvID), while
+# a failure may be transient and must re-derive. In-process by design: a
+# server restart re-pays one probe per identity, never a stale verdict.
+# Field numbers behind this (2026-07-22): 24s post-install probe, 69s on a
+# request that installed nothing. The substrate's verify-first pre-check
+# (~0.4s) replaces this at F-V2; until then this is the consumer stopgap.
+_PROBE_MEMO: dict = {}
+_PROBE_MEMO_LOCK = threading.Lock()
 
 
 def verify_python_imports(
@@ -26,6 +38,7 @@ def verify_python_imports(
     python_exe: Optional[str] = None,
     argv_builder=None,
     timeout_s: int = 180,
+    memo_key: Optional[tuple] = None,
 ) -> tuple[bool, str]:
     """Actually import each name in a fresh subprocess on the target interpreter.
     Returns ``(ok, detail)``.
@@ -48,6 +61,11 @@ def verify_python_imports(
     names = [n for n in (import_names or []) if n]
     if not names:
         return True, ""
+    if memo_key is not None:
+        with _PROBE_MEMO_LOCK:
+            names = [n for n in names if (memo_key, n) not in _PROBE_MEMO]
+        if not names:
+            return True, ""            # every name already proven for this identity
     if extra_paths is None:
         extra_paths = []          # the target interpreter's own site-packages win
     # append (not prepend) so the interpreter's own packages win
@@ -74,6 +92,10 @@ def verify_python_imports(
     except Exception as e:  # noqa: BLE001
         return False, f"could not launch import verification: {e}"
     if proc.returncode == 0 and "ABA_IMPORT_OK" in (proc.stdout or ""):
+        if memo_key is not None:
+            with _PROBE_MEMO_LOCK:
+                for n in names:
+                    _PROBE_MEMO[(memo_key, n)] = True
         return True, ""
     detail = ((proc.stderr or "") + (proc.stdout or "")).strip()
     return False, detail[-1400:]

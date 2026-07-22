@@ -1355,13 +1355,41 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
                     f"is usable in run_r now."}
 
 
+def _session_probe_memo_key(pid: str, language: str) -> "tuple | None":
+    """Identity key for memoizing default-session import probes:
+    (session_id, rev) — any install bumps rev, a rebuilt session gets a new
+    id, so a stale positive is unrepresentable. None (no session row yet) →
+    no memoization: absent identity always probes."""
+    try:
+        from core.compute import project_env
+        row = project_env.get(pid, language)
+        if row and row.get("session_id") is not None:
+            return ("session", row["session_id"], int(row.get("rev") or 0))
+    except Exception:  # noqa: BLE001 — memoization is an optimization, never a gate
+        pass
+    return None
+
+
 def _probe_named_env(pid: str, env_name: str, language: str, probe_name: str,
-                     min_version: "str | None") -> "tuple[str, str]":
+                     min_version: "str | None",
+                     env_id: "str | None" = None) -> "tuple[str, str]":
     """Consumer-side postcondition probe IN a named env → (verdict, detail),
     verdict ∈ {passed, failed, unknown}. The oracle contract (weft P0,
     mirrored here until V3's env target subsumes this probe): a check that
     COULD NOT RUN is unknown — never a claim about the package. `detail` is
-    the version on pass, the cause otherwise."""
+    the version on pass, the cause otherwise.
+
+    `env_id` (the frozen identity) memoizes PASSED verdicts: a load proven in
+    an EnvID stays true for that EnvID (extends mint new ids → natural miss).
+    failed/unknown never cache; env_id=None never caches."""
+    from core.exec.verify import _PROBE_MEMO, _PROBE_MEMO_LOCK
+    _mk = (("env", env_id, probe_name, min_version)
+           if env_id is not None else None)
+    if _mk is not None:
+        with _PROBE_MEMO_LOCK:
+            _hit = _PROBE_MEMO.get(_mk)
+        if _hit is not None:
+            return "passed", str(_hit)
     if language == "r":
         code = (f'if (requireNamespace("{probe_name}", quietly=TRUE)) '
                 f'cat("CAPQ=", as.character(utils::packageVersion('
@@ -1393,6 +1421,9 @@ def _probe_named_env(pid: str, env_name: str, language: str, probe_name: str,
         if not rexec.version_ge(got, min_version):
             return "failed", (f"{probe_name} is {got}, the request needs "
                               f">= {min_version}")
+    if _mk is not None:
+        with _PROBE_MEMO_LOCK:
+            _PROBE_MEMO[_mk] = got            # PASSED only — see docstring
     return "passed", got
 
 
@@ -1475,7 +1506,8 @@ def _extend_into_named_env(env_name: str, packages: list[str], cap: dict,
     _run_fn = "run_r" if _lang == "r" else "run_python"
     _probe_name = _probe_target_name(packages, cap, req)
     _minv = getattr(req, "min_version", None) if req is not None else None
-    verdict, detail = _probe_named_env(pid, env_name, _lang, _probe_name, _minv)
+    verdict, detail = _probe_named_env(pid, env_name, _lang, _probe_name, _minv,
+                                       env_id=res.get("env_id"))
     _requires = ({"package": _probe_name, "min_version": _minv}
                  if _minv else None)
     if verdict != "passed":
@@ -1734,8 +1766,12 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
             except Exception:  # noqa: BLE001 — no realizable session → skip the shortcut
                 _probe_cmd = None
             if _probe_cmd is not None:
+                from core import projects as _prj0
+                _mkey = _session_probe_memo_key(
+                    str(_prj0.current() or "default"), "python")
                 for _p in _probes:
-                    _ok, _ = verify_python_imports([_p], argv_builder=_probe_cmd)
+                    _ok, _ = verify_python_imports([_p], argv_builder=_probe_cmd,
+                                                   memo_key=_mkey)
                     if _ok:
                         return {"status": "ready", "name": name, "import_name": _p,
                                 "ready_in": "python",
@@ -1885,7 +1921,10 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
                     "note": "no python environment pack is declared for this deployment"}
         _imp0 = cap.get("import_name")
         if _imp0:
-            _ok, _ = verify_python_imports([_imp0], argv_builder=_probe_cmd)
+            _ok, _ = verify_python_imports(
+                [_imp0], argv_builder=_probe_cmd,
+                memo_key=_session_probe_memo_key(
+                    str(_projects.current() or "default"), "python"))
             if _ok:
                 return _ready({"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
                         "archetype": cap.get("archetype"), "import_name": _imp0,
@@ -1921,7 +1960,13 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
             # argv_builder re-resolves the runtime: after the install the lazy
             # session has FLIPPED to its own clone — probing the stale
             # pre-install runtime would import-check the base and miss it
-            _ok, _detail = verify_python_imports([imp], argv_builder=_probe_cmd)
+            # post-install: the install itself bumped the session rev, so this
+            # key is FRESH — the probe runs (verifying THIS install), and its
+            # positive memoizes for every later request against the same rev
+            _ok, _detail = verify_python_imports(
+                [imp], argv_builder=_probe_cmd,
+                memo_key=_session_probe_memo_key(
+                    str(_projects.current() or "default"), "python"))
             if not _ok:
                 return {"status": "error", "name": name, "import_name": imp,
                         "note": (f"Installed, but `import {imp}` fails to load — likely an ABI "

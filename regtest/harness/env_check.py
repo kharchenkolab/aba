@@ -181,6 +181,33 @@ def main() -> int:
         check("post-reset background submit uses the default session",
               bg_submit_kwargs({}, pid)["env"] is None)
 
+        # ── 10. latency budget: re-asking is a lookup, not an interpreter ───
+        # The instrument whose absence let a 69s no-op ship (live 2026-07-22):
+        # a capability request whose answer is already PROVEN for the current
+        # identity must be near-free. Placed AFTER the reset so the DEFAULT
+        # session serves it (with a promoted env the pointer would route the
+        # request into the named lane and mutate the scratch env). First ask
+        # pays one real probe subprocess and memoizes; the repeat must come
+        # back inside the budget. ARMED: the first ask must itself register
+        # measurable work — a 0.0s pair means the timer measured nothing.
+        import time as _time
+        projects.set_current(pid)
+        from content.bio.tools.discovery import ensure_capability as _ecp
+        _t0 = _time.monotonic()
+        _e1 = _ecp({"name": "numpy"}, {"thread_id": f"perf-{pid}"})
+        _t1 = _time.monotonic()
+        _e2 = _ecp({"name": "numpy"}, {"thread_id": f"perf-{pid}"})
+        _t2 = _time.monotonic()
+        _first, _second = _t1 - _t0, _t2 - _t1
+        check("perf: probe pair measured real work (armed)",
+              _e1.get("status") == "ready" and _first > 0.05,
+              f"first={_first:.2f}s status={_e1.get('status')} "
+              f"note={str(_e1.get('note') or '')[:120]}")
+        check("perf: repeat capability ask is memoized (< 2s budget)",
+              _e2.get("status") == "ready" and _second < 2.0
+              and _second < _first,
+              f"first={_first:.2f}s second={_second:.2f}s")
+
         # ── failure wing (--failures): honesty when things break ────────────
         # Deterministic on ANY topology: a github install of a repo that does
         # not exist fails at fetch/resolve everywhere. The contract: the note

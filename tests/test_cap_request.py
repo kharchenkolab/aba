@@ -22,6 +22,17 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 pytestmark = pytest.mark.platform
 
+
+@pytest.fixture(autouse=True)
+def _clean_probe_memo():
+    """The probe memo is identity-keyed and process-global by design; tests
+    reuse fake identities, so isolate them from each other's verdicts."""
+    from core.exec import verify as _v
+    _v._PROBE_MEMO.clear()
+    yield
+    _v._PROBE_MEMO.clear()
+
+
 RICH_INPUT = {"name": "pkgx", "min_version": "2.0", "force": True,
               "library": "PkgX", "source": "github", "package": "org/repo",
               "subdir": "R", "ref": "dev"}
