@@ -165,6 +165,41 @@ def preflight_fixtures(scenarios) -> dict:
     return {"gaps": gaps, "examined": examined}
 
 
+def _observed_model(rows) -> "str | None":
+    """The model the runs ACTUALLY used, from their wire requests.
+
+    Distinct values are joined: a sweep whose scenarios did not all run on the
+    same model is a fact the scorecard must state, not average away."""
+    seen = sorted({r.get("agent_model") for r in rows.values() if r.get("agent_model")})
+    return "+".join(seen) if seen else None
+
+
+def _model_truth_banner(scorecard) -> "str | None":
+    """Warn when the tier's ASSUMED model is not the one that ran.
+
+    This is not cosmetic. The mechanical tolerance is keyed to the tier name
+    (`mech_tol` = 2 for 'haiku', 0 otherwise) on the reasoning that a small
+    model is noisy. At a deployment whose default agent is large, the routine
+    tier runs that large model and still gets the small model's slack — so a
+    genuine 1-2 step regression is forgiven by a rule written for a model that
+    never ran, and the run is billed at the large model's rate while the README
+    calls it the cheap tier. Observed 2026-07-22: every routine scorecard said
+    `claude-haiku-4-5`; every wire request said `claude-opus-4-7`."""
+    meta = scorecard["meta"]
+    got, assumed = meta.get("agent_model"), meta.get("agent_model_assumed")
+    if not got or got == "unknown" or got == assumed:
+        return None
+    tol = os.environ.get("ABA_REGTEST_MECH_TOL")
+    return (f"⚠ MODEL MISMATCH — this tier assumes `{assumed}` but `{got}` served the "
+            f"turns. The mechanical tolerance"
+            + (f" (ABA_REGTEST_MECH_TOL={tol})" if tol else
+               " (2 steps for the 'haiku' tier, 0 otherwise)")
+            + f" is keyed to the ASSUMED model, so regressions inside that window are "
+              f"being forgiven by a rule written for a model that did not run — and the "
+              f"cost is `{got}`'s, not `{assumed}`'s. Set ABA_SCENARIO_MODEL to pin the "
+              f"agent, or ABA_REGTEST_MECH_TOL to match what actually runs.")
+
+
 def run_scenario(sid, mode):
     """Run one scenario in a fresh process; return its report.json dict (or an error rec)."""
     env = dict(os.environ)
@@ -247,7 +282,10 @@ def score_of(rep):
              for r in (rep.get("report") or []) if r.get("verdict") == "FAIL"]
     return {"mech_pass": mech.get("pass"), "mech_total": mech.get("total"),
             "rubric_overall": (rep.get("rubric_mean") or {}).get("overall"),
-            "fails": fails, "bundle": rep.get("_bundle"), "infra": rep.get("_infra", 0)}
+            "fails": fails, "bundle": rep.get("_bundle"), "infra": rep.get("_infra", 0),
+            # what the runner saw on the wire — carried up so the scorecard can
+            # state the model it MEASURED instead of the one the flag implies
+            "agent_model": rep.get("agent_model")}
 
 
 def git_commit():
@@ -375,8 +413,11 @@ def write_report(scorecard, base, regressions, mode, ts, unmeasured=()):
     (REPORTS / f"{mode}-{ts}.json").write_text(json.dumps(scorecard, indent=2))
     lines = [f"# regtest sweep — {mode} — {ts}", "",
              f"commit `{scorecard['meta']['commit']}` · {scorecard['meta']['n_scenarios']} scenarios · "
-             f"agent `{scorecard['meta']['agent_model']}`", "",
-             "| scenario | mech | rubric | Δ baseline |", "|---|---|---|---|"]
+             f"agent `{scorecard['meta']['agent_model']}`", ""]
+    _mb = _model_truth_banner(scorecard)
+    if _mb:
+        lines += [f"> {_mb}", ""]
+    lines += ["| scenario | mech | rubric | Δ baseline |", "|---|---|---|---|"]
     for sid, s in sorted(scorecard["scenarios"].items()):
         b = (base or {}).get(sid, {})
         delta = ""
@@ -533,7 +574,14 @@ def main() -> int:
 
     scorecard = {
         "meta": {"date": ts, "mode": mode, "commit": git_commit(),
-                 "agent_model": ("claude-opus-4-8" if mode == "opus" else "claude-haiku-4-5"),
+                 # From the RUNS, not from the flag. Hardcoding it by mode said
+                 # "claude-haiku-4-5" on every routine scorecard while the
+                 # deployment's default agent (claude-opus-4-7) served every
+                 # turn — the label was derived from the CLI switch and never
+                 # compared with what went on the wire.
+                 "agent_model": _observed_model(rows) or "unknown",
+                 "agent_model_assumed": ("claude-opus-4-8" if mode == "opus"
+                                         else "claude-haiku-4-5"),
                  "n_scenarios": len(scenarios)},
         "scenarios": rows,
         "totals": {"mech_pass": sum((r["mech_pass"] or 0) for r in rows.values()),
@@ -608,6 +656,11 @@ def main() -> int:
     print(f"\n=== sweep {mode}: {t['full_pass']}/{len(scenarios)} scenarios full-pass, "
           f"{t['mech_pass']}/{t['mech_total']} steps · "
           f"regressions={len(regressions)}{unmeas} ===")
+    # On the console too: "regressions=0" is the line people act on, and it is
+    # exactly the number the tolerance-vs-model mismatch inflates.
+    _mb = _model_truth_banner(scorecard)
+    if _mb:
+        print(f"    {_mb}")
     print(f"    report: {md}")
     return 1 if regressions else 0
 

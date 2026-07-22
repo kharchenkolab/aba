@@ -920,7 +920,23 @@ def main() -> int:
         vals = [r.get(dim) for r in rubrics if isinstance(r.get(dim), (int, float))]
         return round(sum(vals) / len(vals), 2) if vals else None
     rubric_summary = {d: _mean(d) for d in (*RUBRIC_DIMS, "overall")}
-    summary = {"scenario": SCENARIO, "mode": mode, "agent_model": os.environ.get("ABA_MODEL"),
+    # The model that ACTUALLY ran, read off the wire — not the one we asked for.
+    # `ABA_MODEL` is only set when ABA_SCENARIO_MODEL was passed; with it unset
+    # the deployment's own default agent runs, and recording None there let the
+    # sweep label the tier by its NAME ("haiku") while claude-opus-4-7 served
+    # every turn. A scorecard that names a model nobody called is worse than one
+    # that admits it does not know — and the mech tolerance is keyed to that
+    # name, so the fiction also decides which regressions are forgiven.
+    wire_model = None
+    try:
+        reqs = sorted((RUN / "rawreq").glob("req_*.json"))
+        if reqs:
+            wire_model = json.loads(reqs[-1].read_text()).get("model")
+    except Exception:  # noqa: BLE001 — provenance is advisory, never fatal
+        pass
+    summary = {"scenario": SCENARIO, "mode": mode,
+               "agent_model": wire_model or os.environ.get("ABA_MODEL"),
+               "agent_model_requested": os.environ.get("ABA_MODEL"),
                "judge_model": JUDGE_MODEL if DO_JUDGE else None,
                "mechanical": {"pass": npass, "total": len(report)},
                "rubric_mean": rubric_summary, "report": report, "timeline": timeline}

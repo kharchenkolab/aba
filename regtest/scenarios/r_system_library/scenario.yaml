@@ -1,4 +1,7 @@
 id: r_system_library
+smoke: true      # routine tier: ~2.5 min, no data files. The env area had NO smoke
+                 # coverage (env_promotion is untagged), and this contract has broken
+                 # repeatedly in live use — it is exactly what a routine sweep is for.
 title: An R package needing a SYSTEM library the base lacks — diagnose, route to an isolated env, use it
 domain: technical
 gpu: false
