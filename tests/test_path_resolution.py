@@ -226,3 +226,35 @@ def test_origin_mismatch_is_flagged(monkeypatch, tmp_path):
     out = cu.register_dataset_tool(
         {"title": "t", "path": str(f), "origin": "upload"}, {"thread_id": "t"})
     assert "double-check" in (out.get("note") or ""), out
+
+
+def test_run_key_capture_resolves_ambient_run_when_none_active(monkeypatch, tmp_path):
+    """Link-1 of the live remote-wing red: a no-plan thread has no Run, so
+    kernel-start target recording no-op'd and capture had nothing to resolve.
+    Capture must mirror keep_outputs' F11: resolve-or-create the ambient run,
+    backfill the thread's kernel target, then resolve."""
+    from content.bio.tools import curation as cu
+    import content.bio.lifecycle.runs as runs
+    import content.bio.lifecycle.registry as reg
+    f = tmp_path / "b.bin"; f.write_bytes(b"x")
+    monkeypatch.setattr(runs, "active_run_id", lambda tid: None)
+    monkeypatch.setattr(reg, "_ensure_analysis",
+                        lambda foc, plan, tid: "run_ambient")
+    recorded: list = []
+    monkeypatch.setattr(runs, "record_weft_target",
+                        lambda rid, t: recorded.append((rid, t)))
+    import core.exec.kernels as kmod
+    class _Pool:
+        def peek(self, tid, lang):
+            return (type("S", (), {"kernel_id": "krn_site9"})()
+                    if lang == "python" else None)
+    monkeypatch.setattr(kmod, "get_pool", lambda: _Pool())
+    monkeypatch.setattr(runs, "locate_run_output",
+                        lambda rid, name, **k: {"target": "krn_site9",
+                                                "rel": "b.bin"}
+                        if rid == "run_ambient" else None)
+    md = {}
+    cu._capture_run_key(str(f), md, "th_norun")
+    assert ("run_ambient", "krn_site9") in recorded, (
+        "kernel target never backfilled onto the ambient run")
+    assert md.get("run_key") == {"run": "krn_site9", "rel": "b.bin"}, md

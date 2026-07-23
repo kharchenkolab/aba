@@ -745,9 +745,32 @@ def _capture_run_key(abspath: str, md: dict,
         from core.compute.adapter import get_compute, weft_workspace
         real = os.path.realpath(abspath)
         try:
-            from content.bio.lifecycle.runs import active_run_id, locate_run_output
+            from content.bio.lifecycle.runs import (active_run_id,
+                                                    locate_run_output,
+                                                    record_weft_target)
             _rid = active_run_id(_thread_id) if _thread_id else None
+            if _rid is None and _thread_id:
+                # F11 parity (keep_outputs already does this): a quick/no-plan
+                # thread has no Run yet, so kernel-start target recording
+                # no-op'd — resolve-or-create the AMBIENT run and backfill
+                # this thread's kernel targets, or a remote-born file loses
+                # its durable (run, rel) linkage forever (live: the remote
+                # wing's F3 red, link 1).
+                try:
+                    from content.bio.lifecycle.registry import _ensure_analysis
+                    _rid = _ensure_analysis(None, {}, _thread_id)
+                except Exception:  # noqa: BLE001
+                    _rid = None
             if _rid:
+                try:
+                    from core.exec.kernels import get_pool
+                    for _lang in ("python", "r"):
+                        _sess = get_pool().peek(_thread_id, _lang)
+                        if _sess is not None:
+                            record_weft_target(_rid,
+                                               getattr(_sess, "kernel_id", None))
+                except Exception:  # noqa: BLE001
+                    pass
                 _hit = locate_run_output(_rid, os.path.basename(abspath))
                 if _hit and _hit.get("target") and _hit.get("rel"):
                     md["run_key"] = {"run": _hit["target"], "rel": _hit["rel"]}
