@@ -1,8 +1,8 @@
 {
   "meta": {
-    "date": "20260723-110727",
+    "date": "20260723-110902",
     "mode": "haiku",
-    "commit": "c98b966a",
+    "commit": "00964cae",
     "agent_model": "claude-opus-4-7",
     "agent_model_assumed": "claude-haiku-4-5",
     "n_scenarios": 1

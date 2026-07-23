@@ -400,7 +400,11 @@ def _prior_run_files_preamble(project_id: str, thread_id: str,
                 "isolated env instead (make_isolated_env(..., language='r'), "
                 "then run_r(env=...)), which does a full solve.")
         if cwd:
-            lines.append(f"cwd: {cwd}  (bare filenames in your code land here)")
+            lines.append(f"cwd: {cwd}  (bare filenames in your code land here — "
+                         f"an EPHEMERAL sandbox, swept when this kernel stops: "
+                         f"when the user wants a produced file KEPT, call the "
+                         f"keep_outputs tool; register_dataset is only for "
+                         f"real datasets)")
         # Surface the RESOLVED DATA_DIR + the input files actually present (incl.
         # SUBDIRS) so the agent doesn't conclude "no data — ask the user to
         # upload" when files are on disk but unregistered (forensic: coloc/foci).

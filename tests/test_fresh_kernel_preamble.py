@@ -225,3 +225,18 @@ def test_r_banner_marks_the_tool_namespace_boundary():
         "bare call syntax in the R banner reads as an R function")
     assert "not" in banner.lower() and "R" in banner, (
         f"the banner must say it is NOT callable from R code: {banner!r}")
+
+
+def test_cwd_banner_states_ephemerality_and_the_keep_lane():
+    """Live x4: agents wrote 'kept' files into the sandbox and durably kept
+    nothing (or minted a Dataset for a scratch file). The nudge belongs at
+    the moment of writing — the cwd line — and must route to the RETENTION
+    lane, naming the dataset boundary."""
+    import inspect
+    from content.bio.tools import run_exec
+    src = inspect.getsource(run_exec)
+    ln = next((l for l in src.splitlines() if '"cwd: ' in l or "f\"cwd: " in l), "")
+    blk = src[src.index("cwd: {cwd}"):src.index("cwd: {cwd}") + 500]
+    assert "EPHEMERAL" in blk and "keep_outputs" in blk, blk[:200]
+    assert "register_dataset is only" in blk, (
+        "the dataset boundary must be stated, or keeps mint Datasets again")
