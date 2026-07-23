@@ -93,6 +93,83 @@ def file_stat(target: str, rel: str) -> dict:
     return _call("run_file_stat", target, rel)
 
 
+# Version-skew memo for the batched verb forms (weft bd6ae6e): a substrate
+# that predates them refuses the kwarg ONCE per process, then we emulate.
+_BATCH_REFUSED: set = set()
+# Emulation is per-file round-trips — the exact amplifier the batch removes —
+# so it keeps the pre-batch budget; rels beyond it stay UNANSWERED (absent
+# from the reply = not-checked, which callers must never read as "absent on
+# disk").
+_EMULATE_CAP = 50
+
+
+def _predates_batch(e: BaseException) -> bool:
+    """True only for 'this substrate doesn't know the batched form' — an
+    in-process old signature (TypeError) or a dispatcher kwarg refusal. Real
+    failures (site down, bad path) must propagate, not silently degrade to
+    N round-trips."""
+    if isinstance(e, TypeError):
+        return "unexpected keyword" in str(e)
+    return (getattr(e, "code", "") == "task.invalid"
+            and ("keyword" in getattr(e, "detail", "")
+                 or "unknown" in getattr(e, "detail", "")))
+
+
+def file_stats(target: str, rels: list) -> dict:
+    """Batched `run_file_stat(target, rels=[...])`: one target resolution, one
+    keep lookup, ONE stat invocation → `{"files": {rel: answer}}` with the
+    single-call per-file shape and sandbox→keep precedence preserved in-batch
+    (weft bd6ae6e — a polling panel was paying 2N store queries + N subprocess
+    spawns, serialized; this is the O(1) form). Weft guarantees per-path
+    positive markers: a partially-run probe raises retryable internal.error
+    rather than reporting a file absent."""
+    rels = list(rels)
+    if not rels:
+        return {"files": {}}
+    if "run_file_stat" not in _BATCH_REFUSED:
+        try:
+            return _call("run_file_stat", target, rels=rels)
+        except Exception as e:  # noqa: BLE001
+            if not _predates_batch(e):
+                raise
+            _BATCH_REFUSED.add("run_file_stat")
+    out: dict = {}
+    for rel in rels[:_EMULATE_CAP]:
+        try:
+            out[rel] = file_stat(target, rel)
+        except Exception:  # noqa: BLE001 — per-file trouble = unanswered
+            continue
+    return {"files": out}
+
+
+def inventories(targets: list) -> dict:
+    """Batched `run_inventory(targets=[...])` → `{"inventories": {target:
+    result | typed-error dict}}` — one absent receipt never fails the batch
+    (its entry carries the error; discriminate with `is_error_payload`).
+    Recorded receipts only (live=True stays per-run, per weft's contract)."""
+    targets = list(targets)
+    if not targets:
+        return {"inventories": {}}
+    if "run_inventory" not in _BATCH_REFUSED:
+        try:
+            return _call("run_inventory", targets=targets)
+        except Exception as e:  # noqa: BLE001
+            if not _predates_batch(e):
+                raise
+            _BATCH_REFUSED.add("run_inventory")
+    from core.compute.errors import ComputeError
+    out: dict = {}
+    for t in targets:
+        try:
+            out[t] = inventory(t)
+        except ComputeError as e:
+            out[t] = e.to_payload()
+        except Exception as e:  # noqa: BLE001
+            out[t] = {"error": "internal.error", "stage": "aba",
+                      "detail": str(e), "retryable": True}
+    return {"inventories": out}
+
+
 def file_read(target: str, rel: str, max_bytes: int = 1 << 20) -> dict:
     """Size-capped base64 PREVIEW read from a target's sandbox (weft `run_file_read`): live
     or dead, path confined to the jobdir, hard-capped at 8 MB (`data.missing` on a swept

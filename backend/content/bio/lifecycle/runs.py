@@ -1906,13 +1906,20 @@ def run_durable_view(run_id: str) -> dict:
             pass
 
     # terminal inventory paths (survive the sweep) across the Run's targets — the fallback
-    # when a live stat isn't available.
+    # when a live stat isn't available. ONE batched call for all targets (weft bd6ae6e);
+    # per-entry typed errors (no receipt yet is fine) skip that target, never the batch.
+    from core.compute.errors import is_error_payload
     inv_paths: set = set()
-    for t in (md.get("weft_targets") or []):
+    targets = list(md.get("weft_targets") or [])
+    if targets:
         try:
-            inv = retention.inventory(t)
-            inv_paths.update(e.get("path") for e in (inv.get("entries") or []))
-        except Exception:  # noqa: BLE001 — no inventory yet is fine
+            for inv in (retention.inventories(targets).get("inventories")
+                        or {}).values():
+                if is_error_payload(inv):
+                    continue
+                inv_paths.update(e.get("path")
+                                 for e in (inv.get("entries") or []))
+        except Exception:  # noqa: BLE001 — substrate trouble ≠ empty inventory
             pass
 
     # DEDUP by relpath: `artifacts_for_run` returns one row PER EXEC (ordered by
@@ -1922,30 +1929,6 @@ def run_durable_view(run_id: str) -> dict:
     # url/size/kind). Without this, rows + summary counts inflate and the tree gets
     # duplicate sibling nodes with identical paths.
     by_rel: dict = {}
-    # Live on-disk check (weft run_file_stat, 5d1c5dc) — authoritative for in-sandbox vs
-    # cleared, and the ONLY signal on a live kernel (which has no terminal inventory yet;
-    # the inventory proxy would mislabel every live file "cleared"). Bounded round-trips.
-    targets = list(md.get("weft_targets") or [])
-    _stat_budget = [50]
-
-    def _on_disk(rel: str):
-        """(performed, exists, bytes) across the Run's targets. `performed=False` → couldn't
-        check (jupyter / no target / budget spent) → caller falls back to the inventory proxy."""
-        if not targets or _stat_budget[0] <= 0:
-            return (False, False, 0)
-        answered = False   # did any stat actually return (vs. all erroring)?
-        for t in targets:
-            if _stat_budget[0] <= 0:
-                break
-            _stat_budget[0] -= 1
-            try:
-                st = retention.file_stat(t, rel)
-            except Exception:  # noqa: BLE001 — treat as not-checked → proxy fallback
-                continue
-            answered = True
-            if st.get("exists"):
-                return (True, True, st.get("bytes") or 0)
-        return (answered, False, 0)
 
     import fnmatch as _fnmatch
 
@@ -1977,6 +1960,39 @@ def run_durable_view(run_id: str) -> dict:
         if rel:
             by_rel[rel] = a
 
+    # Live on-disk check (weft run_file_stat) — authoritative for in-sandbox
+    # vs cleared, and the ONLY signal on a live kernel (no terminal inventory
+    # yet; the proxy would mislabel every live file "cleared"). BATCHED (weft
+    # bd6ae6e): only the rels no earlier tier answers, ONE call per target.
+    # The per-file loop this replaces was the convoy's amplifier — 2N store
+    # queries + N subprocess spawns, serialized, under a 50-round-trip budget
+    # that silently left the tail to the proxy.
+    _STAT_CAP = 500          # per-request bound; files beyond it → proxy path
+    need_stat = [rel for rel, a in by_rel.items()
+                 if rel not in done_files and not _sel_match(rel, done_sel)
+                 and not _is_saving(rel) and not a.get("url")][:_STAT_CAP]
+    stat_res: dict = {}      # rel -> (performed, exists, bytes)
+    if targets and need_stat:
+        answered: set = set()
+        found: dict = {}     # rel -> live bytes; FIRST target with the file wins
+        for t in targets:
+            unresolved = [r for r in need_stat if r not in found]
+            if not unresolved:
+                break
+            try:
+                ans = retention.file_stats(t, unresolved).get("files") or {}
+            except Exception:  # noqa: BLE001 — target unreachable → not-checked
+                continue
+            for r in unresolved:
+                st = ans.get(r)
+                if not isinstance(st, dict):
+                    continue   # unanswered (emulation cap) → stays not-checked
+                answered.add(r)
+                if st.get("exists"):
+                    found[r] = st.get("bytes") or 0
+        stat_res = {r: (r in answered, r in found, found.get(r, 0))
+                    for r in need_stat}
+
     files = []
     counts = {"retained": 0, "saving": 0, "in_store": 0,
               "at_risk": 0, "in_sandbox": 0, "cleared": 0, "unknown": 0}
@@ -2005,7 +2021,7 @@ def run_durable_view(run_id: str) -> dict:
         elif url:                                 # small surfaced → aba serving cache only
             state, badge = "in-store", "temporary · a viewing copy is held here"
         else:
-            performed, exists, live_bytes = _on_disk(rel)
+            performed, exists, live_bytes = stat_res.get(rel, (False, False, 0))
             if exists:
                 if not size and live_bytes:          # real size for a live file
                     size = live_bytes
@@ -2065,7 +2081,14 @@ def run_durable_tree(run_id: str) -> dict:
     """`run_durable_view` nested into a TreeNode-compatible tree (root → folders →
     file nodes carrying the durable `state`/`badge`), for the Files panel to render
     directly. Folders sort before files, name-ascending. Carries `summary` alongside."""
-    dv = run_durable_view(run_id)
+    return durable_tree_from_view(run_durable_view(run_id))
+
+
+def durable_tree_from_view(dv: dict) -> dict:
+    """Pure view→tree transform. Split from run_durable_tree so the /durable
+    route can compute the (expensive) view ONCE per coalesced flight and
+    derive flat/tree shapes per request. `dv` may be shared across concurrent
+    requests — this function must never mutate it."""
     root: dict = {"kind": "root", "name": "", "path": "", "children": []}
     dirs: dict = {"": root}
 

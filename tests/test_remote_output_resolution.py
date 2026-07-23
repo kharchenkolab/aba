@@ -534,6 +534,12 @@ def test_lifecycle_remote_produce_open_here_then_settle(monkeypatch, tmp_path):
     stat = {"exists": True, "bytes": len(payload), "mtime": 100}
     monkeypatch.setattr(runs_mod, "_live_file_stat", lambda t, r: dict(stat))
     monkeypatch.setattr(retmod, "file_stat", lambda t, r: dict(stat))
+    # the durable VIEW consults the batched seam (weft bd6ae6e); the serve/
+    # resolve surfaces above still use the singles
+    monkeypatch.setattr(retmod, "file_stats", lambda t, rels: {
+        "files": {r: dict(stat) for r in rels}})
+    monkeypatch.setattr(retmod, "inventories", lambda ts: {
+        "inventories": {t: {"entries": []} for t in ts}})
     monkeypatch.setattr(artmod, "artifacts_for_run", lambda r: [
         {"original_name": rel, "url": None, "kind": "file", "size": len(payload)}])
     content = {"cur": payload}

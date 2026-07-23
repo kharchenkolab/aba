@@ -78,13 +78,15 @@ describe('RunView durability polling', () => {
     expect(calls).toBe(2)
   })
 
-  it('keeps polling while the Run is OPEN (picks up newly-harvested files), no pending needed', async () => {
+  it('an OPEN run with nothing settling re-checks at the SLOW cadence (30s, not 6s)', async () => {
+    // Convoy discipline: 6s is for files actively settling. A merely-open run
+    // used to poll at 6s for its whole life — every open Run card a permanent
+    // fast poller against the one route that's expensive server-side.
     let calls = 0
     globalThis.fetch = vi.fn().mockImplementation((url: string) =>
       String(url).includes('/durable')
         ? (calls++, Promise.resolve({ ok: true, json: () => Promise.resolve(keptTree) }))
         : Promise.resolve({ ok: true, json: () => Promise.resolve({}) })) as unknown as typeof globalThis.fetch
-    // run_state: 'open' → an in-progress run; the panel must refresh as artifacts land
     const run = { id: 'ana_open', type: 'analysis', title: 'R',
                   metadata: { run_state: 'open' } } as unknown as never
     await act(async () => {
@@ -93,9 +95,79 @@ describe('RunView durability polling', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
     expect(calls).toBe(1)
     await act(async () => { await vi.advanceTimersByTimeAsync(6000) })
-    expect(calls).toBe(2)                 // polled again purely because the run is open
-    await act(async () => { await vi.advanceTimersByTimeAsync(6000) })
+    expect(calls).toBe(1)                 // 6s passes: no poll — nothing is settling
+    await act(async () => { await vi.advanceTimersByTimeAsync(24000) })
+    expect(calls).toBe(2)                 // …the 30s idle re-check (new files are additive)
+    await act(async () => { await vi.advanceTimersByTimeAsync(30000) })
     expect(calls).toBe(3)
+  })
+
+  it('a failed poll keeps the last-good tree and retries with backoff (10s→20s), resetting on success', async () => {
+    // The OLD loop did the worst thing on BOTH axes: it blanked the panel
+    // (lying "no files") AND never rescheduled — one blip killed polling
+    // until remount. Failing pollers must instead slow down during exactly
+    // the overload that makes them fail.
+    let calls = 0
+    let mode: 'ok-pending' | 'fail' | 'ok-kept' = 'ok-pending'
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      if (!String(url).includes('/durable')) return Promise.resolve({ ok: true, json: () => Promise.resolve({}) })
+      calls++
+      if (mode === 'fail') return Promise.reject(new Error('pool exhausted'))
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(mode === 'ok-pending' ? pendingTree : keptTree) })
+    }) as unknown as typeof globalThis.fetch
+    const run = { id: 'ana_f', type: 'analysis', title: 'R', metadata: {} } as unknown as never
+    await act(async () => {
+      render(<RunView run={run} entities={[]} onFocus={() => {}} onChange={() => {}} />)
+    })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(calls).toBe(1)
+    expect(screen.getByText('keeping…')).toBeTruthy()      // pending tree rendered
+
+    mode = 'fail'
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000) })   // settling poll → fails
+    expect(calls).toBe(2)
+    expect(screen.getByText('keeping…')).toBeTruthy()      // last-good tree KEPT, not blanked
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000) })   // 6s is NOT the retry cadence
+    expect(calls).toBe(2)
+    await act(async () => { await vi.advanceTimersByTimeAsync(4000) })   // 10s backoff retry → fails
+    expect(calls).toBe(3)
+    await act(async () => { await vi.advanceTimersByTimeAsync(20000) })  // doubled: 20s retry
+    expect(calls).toBe(4)
+
+    mode = 'ok-kept'
+    await act(async () => { await vi.advanceTimersByTimeAsync(40000) })  // 40s retry → succeeds
+    expect(calls).toBe(5)
+    expect(screen.getByText('kept ✓')).toBeTruthy()
+    await act(async () => { await vi.advanceTimersByTimeAsync(120000) }) // settled + closed → stops
+    expect(calls).toBe(5)
+  })
+
+  it('a hidden tab schedules nothing; returning refreshes immediately', async () => {
+    let hidden = false
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden })
+    let calls = 0
+    globalThis.fetch = vi.fn().mockImplementation((url: string) =>
+      String(url).includes('/durable')
+        ? (calls++, Promise.resolve({ ok: true, json: () => Promise.resolve(pendingTree) }))
+        : Promise.resolve({ ok: true, json: () => Promise.resolve({}) })) as unknown as typeof globalThis.fetch
+    const run = { id: 'ana_h', type: 'analysis', title: 'R', metadata: {} } as unknown as never
+    await act(async () => {
+      render(<RunView run={run} entities={[]} onFocus={() => {}} onChange={() => {}} />)
+    })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(calls).toBe(1)                 // pending → settling cadence armed
+
+    hidden = true
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(60000) })
+    expect(calls).toBe(1)                 // a minute passes hidden: zero polls
+
+    hidden = false
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(calls).toBe(2)                 // immediate refresh on return
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000) })
+    expect(calls).toBe(3)                 // …and the settling cadence resumes
   })
 })
 

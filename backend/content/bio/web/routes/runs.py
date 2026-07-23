@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
 
 from core.web.deps import require_project
+from core.web.coalesce import Coalescer
 from core.graph.entities import create_entity, get_entity, update_entity
 from core.graph.edges import add_edge
 
@@ -254,16 +255,36 @@ def run_archive(rid: str):
                              f'attachment; filename="{rid}-outputs.zip"'})
 
 
+# The durable view is EXPENSIVE relative to every sibling route (it walks the
+# substrate's retention index — many serialized store queries) and it is the
+# one route the UI POLLS per open Run card. Unbounded, those pollers park
+# threadpool workers until the pool starves and every sync route stops (the
+# 2026-07 convoy). Coalesced: same-run pollers share one flight, and durable
+# work can hold at most 2 of the pool's workers, ever. Not a cache — each
+# resolved flight is forgotten; the next poll recomputes.
+_durable_flight = Coalescer(max_concurrent=2)
+
+
 @router.get("/api/runs/{rid}/durable")
-def run_durable(rid: str, flat: int = 0):
+async def run_durable(rid: str, flat: int = 0):
     """The Run's durability view — per-file state (retained / saving / in-store / at-risk /
     in-sandbox / cleared) merged from weft's retained tree + inventory + the live sandbox. Returns a
     TreeNode-compatible tree (root → folders → file nodes with `state`/`badge`) so the
     Files panel renders it directly, plus a `summary`. `?flat=1` returns the flat
     {files, summary} model instead. Backs the sweep-surviving Files listing (§6.2)."""
-    _run_or_404(rid)
-    from content.bio.lifecycle.runs import run_durable_view, run_durable_tree
-    return run_durable_view(rid) if flat else run_durable_tree(rid)
+    from content.bio.lifecycle.runs import run_durable_view, durable_tree_from_view
+
+    def _compute():
+        # sync work (entity read + substrate walk) stays inside the flight —
+        # an async def body runs ON the event loop, where it must not block.
+        # A 404 raised here reaches every awaiter of the flight; same rid →
+        # same answer, so shared failure is as correct as shared success.
+        _run_or_404(rid)
+        return run_durable_view(rid)
+
+    view = await _durable_flight.get(rid, _compute)
+    # view is SHARED across concurrent requests — derive, never mutate.
+    return view if flat else durable_tree_from_view(view)
 
 
 class _KeepBody(BaseModel):
