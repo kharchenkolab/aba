@@ -33,7 +33,23 @@ from core.config import PROJECTS_DIR, _LazyDir  # noqa: E402 — kept here so le
 # runtime swaps) is honored — these resolve PROJECTS_DIR live on every use.
 REGISTRY = _LazyDir(lambda: PROJECTS_DIR / "registry.json")
 SCRATCH = _LazyDir(lambda: PROJECTS_DIR / "_scratch.db")   # parked here when no project is active
-SINGLE = bool(config.settings.db_path.get())
+def _single() -> bool:
+    """SINGLE (one-DB, test/single-user) mode — computed LAZILY per access.
+    This was a module constant frozen at first import, which under pytest
+    bound from the COLLECTION-TIME env (the conftest imports the backend
+    before any test module's env setup runs) — so a module that set
+    ABA_DB_PATH at its own top level still ran multi-project, its files
+    landing under 'single' while resolution looked in '_workspace' (the
+    hidden red in the per-project registration tests). Lazy matches the
+    lazy-core.config doctrine the rest of the runtime follows; external
+    consumers read `projects.SINGLE` via module __getattr__ unchanged."""
+    return bool(config.settings.db_path.get())
+
+
+def __getattr__(name: str):
+    if name == "SINGLE":
+        return _single()
+    raise AttributeError(name)
 
 _state = {"current": None}
 
@@ -168,14 +184,14 @@ def init() -> None:
     doing DB work. If a request arrives without project_id and the global is
     None, the handler can refuse loudly instead of writing to a misleading
     default."""
-    if SINGLE:
+    if _single():
         init_db()
         return
     _park_scratch()
 
 
 def set_current(pid: str) -> None:
-    if SINGLE:
+    if _single():
         return
     _schema_mod.set_db_path(_db_file(pid))
     _state["current"] = pid
@@ -216,7 +232,7 @@ def set_current(pid: str) -> None:
 
 
 def current() -> str | None:
-    if SINGLE:
+    if _single():
         return "single"
     pid = _active_pid.get()
     if pid is not None:
@@ -245,7 +261,7 @@ def ensure_opened(pid: str) -> None:
     the project's tables and reap its previous-process stale turns (#14's
     first-open memo). Subsequent calls are a set-membership check — this is the
     request hot path, so it must stay cheap. No-op in SINGLE mode."""
-    if SINGLE or not pid or pid in _opened_pids:
+    if _single() or not pid or pid in _opened_pids:
         return
     _opened_pids.add(pid)
     init_db()
@@ -285,7 +301,7 @@ def bind(pid: str | None):
 
     No-op in SINGLE/test-harness mode (the harness owns DB_PATH) or when `pid`
     is falsy (no project to bind — leave the global fallback in place)."""
-    if SINGLE or not pid:
+    if _single() or not pid:
         yield pid
         return
     tok_pid = _active_pid.set(pid)
@@ -318,7 +334,7 @@ def _db_mtime_iso(pid: str) -> str | None:
 
 
 def list_projects() -> list:
-    if SINGLE:
+    if _single():
         return [{"id": "single", "name": "Project", "created_at": _now(),
                  "last_touched": _now(), "current": True, "counts": _counts(_schema_mod.DB_PATH)}]
     cur = _state["current"]
@@ -336,7 +352,7 @@ def list_projects() -> list:
 
 
 def create_project(name: str) -> dict:
-    if SINGLE:
+    if _single():
         return list_projects()[0]
     pid = "prj_" + uuid.uuid4().hex[:8]
     entry = {"id": pid, "name": (name or "Untitled project").strip()[:80],
@@ -350,7 +366,7 @@ def create_project(name: str) -> dict:
 
 
 def rename_project(pid: str, name: str) -> None:
-    if SINGLE:
+    if _single():
         return
     with _locked_registry() as reg:
         for p in reg:
@@ -364,7 +380,7 @@ def project_model(pid: str) -> str:
     none. Stored on the registry entry; the chat loop resolves it via
     config.current_model_for_project(). SINGLE mode has no registry → "" (falls
     through to the global/bundle default)."""
-    if SINGLE or not pid:
+    if _single() or not pid:
         return ""
     for p in _load():
         if p.get("id") == pid:
@@ -375,7 +391,7 @@ def project_model(pid: str) -> str:
 def set_project_model(pid: str, model: str) -> None:
     """Pin (or clear, if `model` is falsy) the project's LLM model on its
     registry entry. Takes effect on the next turn (resolution is live)."""
-    if SINGLE:
+    if _single():
         return
     with _locked_registry() as reg:
         for p in reg:
@@ -389,7 +405,7 @@ def set_project_model(pid: str, model: str) -> None:
 
 
 def delete_project(pid: str) -> None:
-    if SINGLE:
+    if _single():
         return
     with _locked_registry() as reg:
         reg[:] = [p for p in reg if p["id"] != pid]

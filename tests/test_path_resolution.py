@@ -414,3 +414,21 @@ def test_capture_confirms_identity_via_remote_targets(monkeypatch, tmp_path):
     md2 = {}
     cu._capture_run_key(str(f), md2, "th")
     assert "run_key" not in md2, md2
+
+
+def test_single_mode_is_lazy_not_frozen_at_import(monkeypatch):
+    """The mode constant was frozen at first import: under pytest the
+    conftest imports the backend during collection (no DB path set), so a
+    module setting its DB path at top level still ran multi-project — files
+    landed under one project identity while resolution looked under the
+    workspace fallback. Lazy per-access reads close the class."""
+    import core.projects as projects
+    monkeypatch.delenv("ABA_DB_PATH", raising=False)
+    import core.config as config
+    config.settings.db_path.reset() if hasattr(config.settings.db_path, "reset") else None
+    assert projects.SINGLE in (True, False)      # attribute access works
+    before = projects.SINGLE
+    monkeypatch.setenv("ABA_DB_PATH", "/tmp/lazy_single_probe.db")
+    assert projects.SINGLE is True, (
+        "SINGLE still frozen at import — env change invisible")
+    monkeypatch.delenv("ABA_DB_PATH", raising=False)

@@ -46,6 +46,7 @@ FILES=(
   tests/test_verify_memo.py
   tests/test_path_resolution.py
   tests/test_keep_outputs.py
+  tests/test_register_dataset_per_project.py
   tests/test_substrate_error_surfacing.py
   tests/test_syslib_env_routing.py
   tests/test_r_install_lanes.py
