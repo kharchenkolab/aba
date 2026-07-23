@@ -115,7 +115,8 @@ def test_walk_match_tiers_carry_durability(tmp_path):
 
 def _register_missing(monkeypatch, path):
     from content.bio.tools import curation as cu
-    monkeypatch.setattr(cu, "_resolve_dataset_path", lambda p, ctx: p)
+    monkeypatch.setattr(cu, "_resolve_dataset_path",
+                        lambda p, ctx, **k: p)
     return cu.register_dataset_tool({"path": path, "title": "t"},
                                     {"thread_id": "t"})
 
@@ -258,3 +259,51 @@ def test_run_key_capture_resolves_ambient_run_when_none_active(monkeypatch, tmp_
     assert ("run_ambient", "krn_site9") in recorded, (
         "kernel target never backfilled onto the ambient run")
     assert md.get("run_key") == {"run": "krn_site9", "rel": "b.bin"}, md
+
+
+def test_remote_hit_is_materialized_not_discarded(monkeypatch, tmp_path):
+    """The other model's finding, verified: a remote hit has local_path None
+    BY DESIGN, and P1 discarded it — the resolver knew the site and the
+    error said 'pass an ABSOLUTE path'. A remote hit must route through the
+    ONE mover under the small gate and come home."""
+    from content.bio.tools import curation as cu
+    import content.bio.lifecycle.runs as runs
+    fetched = tmp_path / "fetched.bin"; fetched.write_bytes(b"RW1")
+    monkeypatch.setattr(runs, "active_run_id", lambda tid: "run_9")
+    monkeypatch.setattr(runs, "locate_run_output",
+                        lambda rid, name, **k: {"locality": "remote",
+                                                "site": "siteX", "size": 3,
+                                                "target": "krn_x",
+                                                "rel": name,
+                                                "local_path": None})
+    seen: dict = {}
+    def _mover(hit, *, max_bytes, **k):
+        seen["max_bytes"] = max_bytes
+        return str(fetched)
+    monkeypatch.setattr(runs, "materialize_run_output", _mover)
+    got = cu._resolve_dataset_path("fetched.bin", {"thread_id": "t"})
+    assert got == str(fetched), f"remote hit discarded again: {got}"
+    assert seen.get("max_bytes"), "mover called without a budget"
+
+
+def test_remote_refusal_error_names_the_site(monkeypatch):
+    """Over-budget remote hit: the error names site= and the keep lane —
+    never 'pass an ABSOLUTE path' for bytes that live elsewhere."""
+    from content.bio.tools import curation as cu
+    import content.bio.lifecycle.runs as runs
+    monkeypatch.setattr(runs, "active_run_id", lambda tid: "run_9")
+    monkeypatch.setattr(runs, "locate_run_output",
+                        lambda rid, name, **k: {"locality": "remote",
+                                                "site": "siteX",
+                                                "size": 10**12,
+                                                "target": "krn_x",
+                                                "rel": name,
+                                                "local_path": None})
+    monkeypatch.setattr(runs, "materialize_run_output",
+                        lambda hit, **k: (_ for _ in ()).throw(
+                            RuntimeError("exceeds budget")))
+    out = cu.register_dataset_tool({"title": "t", "path": "big.bin"},
+                                   {"thread_id": "t"})
+    msg = str(out.get("error") or "")
+    assert "siteX" in msg and "keep_outputs" in msg, msg
+    assert "ABSOLUTE" not in msg, f"wrong advice survived: {msg!r}"

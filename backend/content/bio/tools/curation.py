@@ -493,7 +493,8 @@ def _adopt_into_data_dir(src: str) -> tuple[str, bool]:
         return dest, True
 
 
-def _resolve_dataset_path(path: str, ctx: dict | None) -> str:
+def _resolve_dataset_path(path: str, ctx: dict | None,
+                          _remote_out: "dict | None" = None) -> str:
     """Resolve a bare/relative path against the scratch tier first (where the
     agent's relative downloads land), then the **per-project** data dir (what
     the kernel preamble sets ``os.environ["DATA_DIR"]`` to — the dir the agent
@@ -525,6 +526,28 @@ def _resolve_dataset_path(path: str, ctx: dict | None) -> str:
             _hit = locate_run_output(_rid, path)
             if _hit and _hit.get("local_path") and os.path.exists(_hit["local_path"]):
                 return os.path.normpath(_hit["local_path"])
+            if _hit and _hit.get("locality") == "remote":
+                # A remote hit is an ANSWER, not a miss (its local_path is
+                # None by the lookup-never-transfers contract). Bytes move
+                # only through the ONE mover, under the same small
+                # transparent gate the serve surfaces use; a refusal is
+                # stashed so the error can name the site instead of
+                # advising an absolute path that cannot work across sites.
+                try:
+                    from content.bio.lifecycle.runs import materialize_run_output
+                    from core.exec.run import _MAX_HARVEST_BYTES
+                    _local = materialize_run_output(
+                        _hit, max_bytes=_MAX_HARVEST_BYTES)
+                    if _local and os.path.exists(_local):
+                        return os.path.normpath(_local)
+                except Exception as _me:  # noqa: BLE001 — refusal/size gate
+                    if _remote_out is not None:
+                        _remote_out.update(site=_hit.get("site"),
+                                           size=_hit.get("size"),
+                                           why=str(_me)[:200])
+                if _remote_out is not None and "site" not in _remote_out:
+                    _remote_out.update(site=_hit.get("site"),
+                                       size=_hit.get("size"))
     except Exception:  # noqa: BLE001 — resolution falls to the ranked scan
         pass
     cands = [os.path.normpath(os.path.join(b, path)) for b in _scratch_bases(ctx)]
@@ -925,7 +948,8 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
         if _set_key:
             weft_md["source_key"] = _set_key
     else:
-        abspath = _resolve_dataset_path(str(path), ctx)
+        _remote_miss: dict = {}
+        abspath = _resolve_dataset_path(str(path), ctx, _remote_out=_remote_miss)
         exists = os.path.exists(abspath)
         # Adopt: a file found in the SCRATCH tier (not already under DATA_DIR)
         # goes weft-native (misc/datasets2.md §4B): CAS ingest mints the
@@ -1002,6 +1026,18 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
             # thing they did — the input actually missing there is site=
             # (an absolute path is exists()-checked on THIS controller; on a
             # site-targeted kernel that check is about the wrong machine).
+            if _remote_miss.get("site"):
+                _sz = _remote_miss.get("size")
+                return {"error": (
+                    f"{path!r} was found on site {_remote_miss['site']!r}"
+                    + (f" ({_sz} bytes)" if _sz else "")
+                    + " but was not brought here"
+                    + (f" ({_remote_miss['why']})" if _remote_miss.get("why")
+                       else " (size gate)")
+                    + f" — register it in place with path=<absolute path on "
+                      f"the site> + site='{_remote_miss['site']}', or keep it "
+                      f"as a run output (keep_outputs) and register later."
+                )}
             if os.path.isabs(str(path)):
                 return {"error": (
                     f"Nothing to register: {path!r} does not exist on this "

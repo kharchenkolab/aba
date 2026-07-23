@@ -290,8 +290,17 @@ def main() -> int:
             _reg = register_dataset_tool({"path": "rw_marker.bin",
                                           "title": "rw marker"},
                                          {"thread_id": f"rw-{pid}"})
-            check("remote wing: relative-name registration succeeds",
-                  bool(_reg.get("dataset_id")), str(_reg)[:300])
+            _dsid = _reg.get("dataset_id")
+            _bytes_ok = False
+            if _dsid:
+                from core.graph.entities import get_entity as _ge0
+                _rp = ((_ge0(_dsid) or {}).get("metadata") or {}).get("ref_path")
+                try:
+                    _bytes_ok = bool(_rp) and open(_rp, "rb").read() == b"RW1"
+                except Exception:  # noqa: BLE001
+                    _bytes_ok = False
+            check("remote wing: registration binds the CORRECT bytes",
+                  bool(_dsid) and _bytes_ok, str(_reg)[:300])
             if _reg.get("dataset_id"):
                 from core.graph.entities import get_entity as _ge
                 _md = (_ge(_reg["dataset_id"]) or {}).get("metadata") or {}
