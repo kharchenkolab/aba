@@ -493,6 +493,35 @@ def _adopt_into_data_dir(src: str) -> tuple[str, bool]:
         return dest, True
 
 
+def _ambient_run_for(thread_id: "str | None") -> "str | None":
+    """The thread's Run for addressing purposes — F11 parity everywhere:
+    resolve the active Run, else mint the AMBIENT one (as keep_outputs does),
+    and backfill this thread's live kernel targets so the canonical
+    resolver's remote tier has something to walk. One helper, used by BOTH
+    the registration resolution (P1) and run_key capture — the fix landing
+    in only one of them left the other returning None (live, twice)."""
+    if not thread_id:
+        return None
+    try:
+        from content.bio.lifecycle.runs import active_run_id, record_weft_target
+        rid = active_run_id(thread_id)
+        if rid is None:
+            from content.bio.lifecycle.registry import _ensure_analysis
+            rid = _ensure_analysis(None, {}, thread_id)
+        if rid:
+            try:
+                from core.exec.kernels import get_pool
+                for _lang in ("python", "r"):
+                    _sess = get_pool().peek(thread_id, _lang)
+                    if _sess is not None:
+                        record_weft_target(rid, getattr(_sess, "kernel_id", None))
+            except Exception:  # noqa: BLE001
+                pass
+        return rid
+    except Exception:  # noqa: BLE001 — addressing enrichment, never a gate
+        return None
+
+
 def _resolve_dataset_path(path: str, ctx: dict | None,
                           _remote_out: "dict | None" = None) -> str:
     """Resolve a bare/relative path against the scratch tier first (where the
@@ -519,9 +548,9 @@ def _resolve_dataset_path(path: str, ctx: dict | None,
     # ranked scratch scan (52c6d094) survives as the fallback and the only
     # tier for no-run registrations (uploads).
     try:
-        from content.bio.lifecycle.runs import active_run_id, locate_run_output
+        from content.bio.lifecycle.runs import locate_run_output
         _tid = str((ctx or {}).get("thread_id") or "")
-        _rid = active_run_id(_tid) if _tid else None
+        _rid = _ambient_run_for(_tid)
         if _rid:
             _hit = locate_run_output(_rid, path)
             if _hit and _hit.get("local_path") and os.path.exists(_hit["local_path"]):
@@ -768,32 +797,9 @@ def _capture_run_key(abspath: str, md: dict,
         from core.compute.adapter import get_compute, weft_workspace
         real = os.path.realpath(abspath)
         try:
-            from content.bio.lifecycle.runs import (active_run_id,
-                                                    locate_run_output,
-                                                    record_weft_target)
-            _rid = active_run_id(_thread_id) if _thread_id else None
-            if _rid is None and _thread_id:
-                # F11 parity (keep_outputs already does this): a quick/no-plan
-                # thread has no Run yet, so kernel-start target recording
-                # no-op'd — resolve-or-create the AMBIENT run and backfill
-                # this thread's kernel targets, or a remote-born file loses
-                # its durable (run, rel) linkage forever (live: the remote
-                # wing's F3 red, link 1).
-                try:
-                    from content.bio.lifecycle.registry import _ensure_analysis
-                    _rid = _ensure_analysis(None, {}, _thread_id)
-                except Exception:  # noqa: BLE001
-                    _rid = None
+            from content.bio.lifecycle.runs import locate_run_output
+            _rid = _ambient_run_for(_thread_id)
             if _rid:
-                try:
-                    from core.exec.kernels import get_pool
-                    for _lang in ("python", "r"):
-                        _sess = get_pool().peek(_thread_id, _lang)
-                        if _sess is not None:
-                            record_weft_target(_rid,
-                                               getattr(_sess, "kernel_id", None))
-                except Exception:  # noqa: BLE001
-                    pass
                 _hit = locate_run_output(_rid, os.path.basename(abspath))
                 if _hit and _hit.get("target") and _hit.get("rel"):
                     md["run_key"] = {"run": _hit["target"], "rel": _hit["rel"]}
