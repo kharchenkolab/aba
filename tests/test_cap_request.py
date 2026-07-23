@@ -1055,3 +1055,43 @@ def test_direct_r_lane_call_builds_its_own_request(monkeypatch):
         {"min_version": "3.1"}, None, "p")
     assert res["status"] == "error"
     assert "3.1" not in (res.get("version") or ""), res
+
+
+# ── C2 (live thr_ee54c469): the system knew the answer and didn't say it ────
+
+def test_failed_install_surfaces_the_matching_capability_card(monkeypatch):
+    """The agent asked for a prefixed spelling of a name whose capability
+    CARD exists (and rules the request out) — but the card was only read
+    after two failed installs. A failed ensure must surface a matching
+    card's headline itself: strip eco prefixes, look up the catalog, quote."""
+    import content.bio.tools.discovery as d
+    monkeypatch.setattr(
+        "core.catalog.resolve_capability",
+        lambda n: ({"name": "pkgcard", "archetype": "reference",
+                    "summary": "bundled with the platform; do not install "
+                               "from registries"}
+                   if n == "pkgcard" else None))
+    hint = d._card_hint("r-pkgcard")
+    assert hint and "pkgcard" in hint and "bundled" in hint, hint
+    assert "read_capability" in hint, "the hint must name the next tool"
+    # degenerate shapes: no card anywhere → empty; exact name that IS the
+    # card → empty (the caller already had the card in hand)
+    assert d._card_hint("r-nothere") == ""
+    assert d._card_hint("pkgcard") != ""   # prefixless still hints on error
+
+
+def test_r_lane_error_carries_the_card_hint(monkeypatch):
+    """End to end: the R lane's error note quotes the card headline."""
+    discovery = _flow_r(monkeypatch,
+                        lane_info={"code": "env.solve_conflict"})
+    monkeypatch.setattr(
+        "core.catalog.resolve_capability",
+        lambda n: ({"name": "pkgcard", "summary": "bundled; do not install"}
+                   if n == "pkgcard" else None))
+    res = discovery._ensure_r_via_session(
+        {"name": "r-pkgcard",
+         "provisioning": {"r": {"source": "conda", "package": "r-pkgcard"}}},
+        {}, None, "r-pkgcard")
+    assert res["status"] == "error"
+    assert "bundled" in res["note"] and "read_capability" in res["note"], (
+        f"card headline missing from the failure note: {res['note'][-200:]!r}")

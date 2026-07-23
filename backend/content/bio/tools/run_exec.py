@@ -388,9 +388,12 @@ def _prior_run_files_preamble(project_id: str, thread_id: str,
             # ensure_capability falls through to a source build, so the banner
             # named a mechanism that wasn't operative and left the agent with
             # no read on the compile failure that followed (live 2026-07-22).
+            # The reader of THIS banner is composing R: bare `tool(name)`
+            # syntax reads as an R function and gets inlined into the cell
+            # (live thr_ee54c469: rc=1). Name the namespace boundary.
             lines.append(
-                "Need a library that isn't loaded? ensure_capability(name) FIRST "
-                "— do NOT install.packages()/BiocManager::install()/pip install "
+                "Need a library that isn't loaded? Call the ensure_capability tool FIRST (a platform tool, not an R function — never write it inside R code) "
+                "— and do NOT install.packages()/BiocManager::install()/pip install "
                 "(they bypass the project env and aren't recorded). If it fails "
                 "in configure/compile on a missing header or system library, "
                 "that's the one thing the project env CANNOT add: build an "

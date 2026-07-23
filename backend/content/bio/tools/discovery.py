@@ -1060,6 +1060,39 @@ def _cran_lane(pid: str, spec: str, *, repos: "list | None" = None,
                             if v}
 
 
+def _card_hint(requested: str) -> str:
+    """On a FAILED install, quote the matching capability card's headline.
+
+    Live thr_ee54c469 (2026-07-23): the agent tried a prefixed conda spelling
+    of a name whose capability card exists — and says the package is bundled,
+    not installable from any registry. The card was only read AFTER two
+    failed installs. The system knew the answer and didn't say it: a failed
+    ensure must check whether a card exists under the requested name or its
+    prefix-stripped form and surface the headline + the tool that reads it."""
+    try:
+        from core.catalog import resolve_capability
+        seen = set()
+        for cand in (requested,
+                     requested[2:] if requested.startswith("r-") else None,
+                     requested[len("bioconductor-"):]
+                     if requested.startswith("bioconductor-") else None):
+            c = (cand or "").strip().lower()
+            if not c or c in seen:
+                continue
+            seen.add(c)
+            cap = resolve_capability(c)
+            if cap:
+                head = str(cap.get("summary") or cap.get("description")
+                           or "").strip().splitlines()[0][:200]
+                nm = cap.get("name") or c
+                return (f" | NOTE: a capability card exists for '{nm}'"
+                        + (f": {head}" if head else "")
+                        + f" — read_capability('{nm}') before retrying.")
+    except Exception:  # noqa: BLE001 — a hint must never break the error path
+        pass
+    return ""
+
+
 def _landed_or_fail(libname: str) -> str:
     """R postlude that turns a SILENT install failure into a real exit code.
 
@@ -1297,6 +1330,7 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
                     break
         _note += _syslib_way_out(libname, _pkg, failure_class=_fc,
                                  missing_system=_ms)
+        _note += _card_hint(str(_pkg or name))
         _atts = _lane_info.get("attempts")
         return {"status": "error", "name": name, "archetype": "r_package",
                 **({"attempts": _atts} if _atts else {}),

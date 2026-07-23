@@ -203,3 +203,25 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def test_r_banner_marks_the_tool_namespace_boundary():
+    """Live thr_ee54c469 (2026-07-23): the R kernel banner advertised
+    `ensure_capability(name)` in bare call syntax while the agent was
+    composing R — it inlined it into the R cell (rc=1). The two namespaces
+    collide exactly there: in the R lane the banner must NAME the boundary
+    (it is a platform tool, never an R function); bare `tool(name)` syntax
+    with no marker is forbidden in the R banner."""
+    import inspect
+    from content.bio.tools import run_exec
+    src = inspect.getsource(run_exec)
+    # find the R-lane banner line mentioning ensure_capability
+    banner = next((ln for ln in src.splitlines()
+                   if "ensure_capability" in ln and "Need a" in ln), "")
+    assert banner, "the R capability banner is gone — update this guard"
+    assert "tool" in banner.lower(), (
+        f"the R banner does not name the tool boundary: {banner!r}")
+    assert "ensure_capability(name)" not in banner, (
+        "bare call syntax in the R banner reads as an R function")
+    assert "not" in banner.lower() and "R" in banner, (
+        f"the banner must say it is NOT callable from R code: {banner!r}")
