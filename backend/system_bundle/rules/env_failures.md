@@ -22,10 +22,13 @@ guess. Never resubmit an unchanged failing request more than once.
 | `task.invalid` | the request itself is malformed | fix the call per hints; not a retry case |
 
 Paths: a file result carrying `durability: ephemeral` (or an `opens` note
-saying the path is swept) is an address that DIES with its sandbox — register
-it (`register_dataset`) or copy it under DATA_DIR before handing it to a
-viewer, storing it in an entity, or referring to it in a later turn. Paths
-are lookups, never identities.
+saying the path is swept) is an address that DIES with its sandbox — make it
+durable before handing it to a viewer, storing it in an entity, or referring
+to it in a later turn. PICK THE RIGHT LANE: a working file the user wants
+kept is a RUN OUTPUT — `keep_outputs` (retention); `register_dataset` is ONLY
+for data that is a first-class scientific entity entering analysis (imported
+data, a curated deliverable). Keeping a scratch file must not mint a Dataset.
+Paths are lookups, never identities.
 
 Promotion recap: `set_active_env(name, language=…)` makes an isolated env
 ambient — bare `run_python`/`run_r` and later installs land there until reset

@@ -79,7 +79,8 @@ def _walk_match(root: Path, pattern: str, hits: list, tier: str,
                          "size_bytes": int(st.st_size),
                          "mtime": _mtime_iso(st.st_mtime),
                          "opens": ("sandbox path — swept when the kernel "
-                                   "stops; register or copy before reuse"
+                                   "stops; keep_outputs to retain (or "
+                                   "register_dataset ONLY for real datasets)"
                                    if _ephemeral else "local file")})
             if len(hits) >= cap:
                 return
