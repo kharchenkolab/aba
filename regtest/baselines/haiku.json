@@ -1,8 +1,8 @@
 {
   "meta": {
-    "date": "20260723-110902",
+    "date": "20260723-111312",
     "mode": "haiku",
-    "commit": "00964cae",
+    "commit": "5ef1dc18",
     "agent_model": "claude-opus-4-7",
     "agent_model_assumed": "claude-haiku-4-5",
     "n_scenarios": 1
@@ -389,7 +389,7 @@
       "mech_total": 4,
       "rubric_overall": null,
       "fails": [],
-      "bundle": "ephemeral_deliverable-20260723-094751",
+      "bundle": "ephemeral_deliverable-20260723-111312",
       "infra": 0,
       "agent_model": "claude-opus-4-7"
     }

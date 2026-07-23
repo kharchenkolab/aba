@@ -60,7 +60,6 @@ tests/test_rds_bridge_health.py
 tests/test_read_entity.py
 tests/test_recovery_settle.py
 tests/test_refs_fetch.py
-tests/test_register_dataset_per_project.py
 tests/test_regtest_portability.py
 tests/test_replay_reconcile.py
 tests/test_result_delete_cascade.py
