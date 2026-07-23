@@ -513,6 +513,20 @@ def _resolve_dataset_path(path: str, ctx: dict | None) -> str:
     from core.projects import current_project_id
     if os.path.isabs(path):
         return os.path.normpath(path)        # also collapses `./` segments
+    # Canonical resolver FIRST (misc/paths.md P1): the Run's recorded outputs
+    # — site-aware, stopped-kernel-aware — outrank any filesystem scan; the
+    # ranked scratch scan (52c6d094) survives as the fallback and the only
+    # tier for no-run registrations (uploads).
+    try:
+        from content.bio.lifecycle.runs import active_run_id, locate_run_output
+        _tid = str((ctx or {}).get("thread_id") or "")
+        _rid = active_run_id(_tid) if _tid else None
+        if _rid:
+            _hit = locate_run_output(_rid, path)
+            if _hit and _hit.get("local_path") and os.path.exists(_hit["local_path"]):
+                return os.path.normpath(_hit["local_path"])
+    except Exception:  # noqa: BLE001 — resolution falls to the ranked scan
+        pass
     cands = [os.path.normpath(os.path.join(b, path)) for b in _scratch_bases(ctx)]
     cands.append(os.path.normpath(os.path.join(str(project_data_dir(current_project_id())), path)))
     cands.append(os.path.normpath(os.path.join(str(DATA_DIR), path)))
@@ -693,7 +707,8 @@ def _slugify_for_dir(title: str) -> str:
     return (s or "dataset")[:80]
 
 
-def _weft_adopt(abspath: str, title: str) -> tuple[str, dict]:
+def _weft_adopt(abspath: str, title: str,
+                _thread_id: 'str | None' = None) -> tuple[str, dict]:
     """Weft-native adopt for PRODUCED/fetched bytes (replaces the plain
     copy-into-data-dir): CAS ingest mints the content identity (dedup — the
     same content re-registered is the same ref, re-fetches stop piling up),
@@ -711,12 +726,31 @@ def _weft_adopt(abspath: str, title: str) -> tuple[str, dict]:
     md = {"ref": rec["ref"], "origin_class": rec["origin_class"],
           "source_key": rec["source_key"],
           "descriptor": rec.get("descriptor") or {}}
-    # retention2: when the file sits in a weft kernel jobdir, record the
-    # (run, relpath) KEY — the durable handle that survives sweeps, keeps,
-    # and PLACE moves (paths are lookups, never identities)
+    _capture_run_key(abspath, md, _thread_id)
+    return dest, md
+
+
+def _capture_run_key(abspath: str, md: dict,
+                     _thread_id: "str | None" = None) -> None:
+    """Record the durable (run, rel) KEY for bytes born in a kernel jobdir —
+    the handle that survives sweeps, keeps and PLACE moves (paths are
+    lookups, never identities). Canonical resolver FIRST (misc/paths.md P2):
+    its tiers are site-aware, so a file born on a site-targeted kernel still
+    gets its handle; the local prefix scan below cannot see those and stays
+    only as the no-run fallback (census-allowlisted)."""
     try:
         from core.compute.adapter import get_compute, weft_workspace
         real = os.path.realpath(abspath)
+        try:
+            from content.bio.lifecycle.runs import active_run_id, locate_run_output
+            _rid = active_run_id(_thread_id) if _thread_id else None
+            if _rid:
+                _hit = locate_run_output(_rid, os.path.basename(abspath))
+                if _hit and _hit.get("target") and _hit.get("rel"):
+                    md["run_key"] = {"run": _hit["target"], "rel": _hit["rel"]}
+                    return
+        except Exception:  # noqa: BLE001 — fall to the local scan
+            pass
         for k in (get_compute().sync_call("list_kernels") or {})                 .get("kernels", []):
             jd = k.get("jobdir")
             if not jd or k.get("site") != "local":
@@ -729,7 +763,6 @@ def _weft_adopt(abspath: str, title: str) -> tuple[str, dict]:
                 break
     except Exception:  # noqa: BLE001 — the key is enrichment, never a gate
         pass
-    return dest, md
 
 
 def _paths_set_source_key(paths_list, site) -> str | None:
@@ -872,7 +905,8 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
                    _within(abspath, _PROJECT_DATA))
         if exists and in_work and not in_data:
             try:
-                abspath, weft_md = _weft_adopt(abspath, str(title))
+                abspath, weft_md = _weft_adopt(abspath, str(title),
+                               _thread_id=_ctx_thread(ctx))
                 adopted = True
             except Exception:  # noqa: BLE001 — substrate offline → legacy adopt
                 try:

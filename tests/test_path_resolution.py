@@ -130,3 +130,56 @@ def test_notfound_error_branches_on_isabs(monkeypatch):
     msg_rel = str(out_rel.get("error") or out_rel.get("note") or "")
     assert "absolute" in msg_rel.lower(), (
         f"relative-path miss keeps the absolute-path advice: {msg_rel!r}")
+
+
+# ── P1/P2: registration resolves through the canonical resolver ─────────────
+
+def test_resolve_dataset_path_consults_canonical_resolver_first(monkeypatch, tmp_path):
+    from content.bio.tools import curation as cu
+    import content.bio.lifecycle.runs as runs
+    f = tmp_path / "made.bin"; f.write_bytes(b"right")
+    monkeypatch.setattr(runs, "active_run_id", lambda tid: "run_1")
+    monkeypatch.setattr(runs, "locate_run_output",
+                        lambda rid, name, **k: {"local_path": str(f),
+                                                "target": "krn_9",
+                                                "rel": "made.bin"})
+    got = cu._resolve_dataset_path("made.bin", {"thread_id": "t"})
+    assert got == str(f), (
+        f"canonical answer ignored — a scratch scan can outrank it again: {got}")
+
+
+def test_resolve_dataset_path_no_run_falls_to_ranked_scan(monkeypatch):
+    """The most common registration (uploads, out-of-run) has no run — the
+    ranked scan must serve it exactly as before (degenerate shape)."""
+    from content.bio.tools import curation as cu
+    import content.bio.lifecycle.runs as runs
+    monkeypatch.setattr(runs, "active_run_id", lambda tid: None)
+    monkeypatch.setattr(runs, "locate_run_output",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("resolver consulted with no run")))
+    out = cu._resolve_dataset_path("nope.bin", {"thread_id": "t"})
+    assert out.endswith("nope.bin")
+
+
+def test_run_key_captured_via_resolver_for_nonlocal_kernel(monkeypatch, tmp_path):
+    """F3's lost handle: a file born on a site-targeted kernel gets its
+    durable (run, rel) key from the canonical resolver — the local prefix
+    scan cannot see it. Guard proven red pre-P2."""
+    from content.bio.tools import curation as cu
+    import content.bio.lifecycle.runs as runs
+    f = tmp_path / "remote_born.bin"; f.write_bytes(b"x")
+    monkeypatch.setattr(runs, "active_run_id", lambda tid: "run_2")
+    monkeypatch.setattr(runs, "locate_run_output",
+                        lambda rid, name, **k: {"target": "krn_site7",
+                                                "rel": "remote_born.bin",
+                                                "local_path": None})
+    import core.compute.adapter as ad
+    class _C:
+        def sync_call(self, *a, **k): return {"kernels": []}
+        def __getattr__(self, n): return lambda *a, **k: {}
+    monkeypatch.setattr(ad, "get_compute", lambda: _C())
+    monkeypatch.setattr(cu, "_weft_ingest", lambda *a, **k: {}, raising=False)
+    md = {}
+    cu._capture_run_key(str(f), md, "th")
+    assert md.get("run_key") == {"run": "krn_site7", "rel": "remote_born.bin"}, (
+        f"durable key not captured for a non-local kernel: {md.get('run_key')}")
