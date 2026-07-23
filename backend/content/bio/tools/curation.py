@@ -919,6 +919,19 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
         # 'artifact_path' is missing or empty" — the symptom when a relative
         # path resolved against a now-gone per-run scratch dir.
         if not exists:
+            # Branch on what the caller ALREADY supplied: telling someone who
+            # passed an absolute path to "pass an ABSOLUTE path" names the one
+            # thing they did — the input actually missing there is site=
+            # (an absolute path is exists()-checked on THIS controller; on a
+            # site-targeted kernel that check is about the wrong machine).
+            if os.path.isabs(str(path)):
+                return {"error": (
+                    f"Nothing to register: {path!r} does not exist on this "
+                    f"controller. If the file was written by a site-targeted "
+                    f"kernel (run_python(site=…)), pass site= to "
+                    f"register_dataset — an absolute path alone is checked "
+                    f"locally and cannot reach another site's filesystem."
+                )}
             return {"error": (
                 f"Nothing to register: no file or directory found at {path!r} "
                 f"(resolved to {abspath}). If you created/downloaded it in a run_python "

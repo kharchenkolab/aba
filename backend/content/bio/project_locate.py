@@ -59,11 +59,19 @@ def _walk_match(root: Path, pattern: str, hits: list, tier: str,
                 st = fp.stat()
             except OSError:
                 continue
+            # Durability is PER TIER, and silence is a claim: a live-sandbox
+            # hit is swept with its kernel — presenting it as a plain "local
+            # file" shipped an 83.6 MB deliverable addressed by a path that
+            # was dead on arrival (live 2026-07-23, F2 in misc/paths.md).
+            _ephemeral = "sandbox" in tier or "scratch" in tier
             hits.append({"name": name, "path": str(fp), "tier": tier,
                          "locality": "local", "site": "local",
+                         "durability": "ephemeral" if _ephemeral else "durable",
                          "size_bytes": int(st.st_size),
                          "mtime": _mtime_iso(st.st_mtime),
-                         "opens": "local file"})
+                         "opens": ("sandbox path — swept when the kernel "
+                                   "stops; register or copy before reuse"
+                                   if _ephemeral else "local file")})
             if len(hits) >= cap:
                 return
 
