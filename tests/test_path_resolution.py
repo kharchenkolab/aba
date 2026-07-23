@@ -346,3 +346,32 @@ def test_remote_fetch_threads_identity_to_run_key(monkeypatch, tmp_path):
     md = (get_entity(out["dataset_id"]) or {}).get("metadata") or {}
     assert md.get("run_key") == {"run": "krn_x", "rel": "m.bin"}, (
         f"identity dropped between resolution and capture: {md.get('run_key')}")
+
+
+def test_harvest_tier_hits_carry_producing_target(monkeypatch, tmp_path):
+    """The wing's final red: the harvested serving copy answered first and
+    carried target: None, so run_key capture saw an identity-less hit. The
+    artifact row knows its exec; the exec record knows its kernel — the tier
+    must surface that recorded truth."""
+    import content.bio.lifecycle.runs as runs
+    import core.exec.artifacts as arts
+    import core.graph.exec_records as er
+    served = tmp_path / "prj" / "ab12cd"; served.parent.mkdir(parents=True)
+    served.write_bytes(b"x")
+    monkeypatch.setattr(runs, "get_entity",
+                        lambda rid: {"id": rid, "metadata": {}})
+    monkeypatch.setattr(arts, "artifacts_for_run",
+                        lambda rid, **k: [{"original_name": "m.bin",
+                                           "url": "/artifacts/prj/ab12cd",
+                                           "exec_id": "ex_7", "size": 1,
+                                           "sha256": "ab"}])
+    monkeypatch.setattr(er, "get",
+                        lambda eid: {"compute": {"kernel_id": "krn_remote7"}}
+                        if eid == "ex_7" else None)
+    import core.config as cfg
+    monkeypatch.setattr(cfg, "project_artifacts_dir",
+                        lambda pid: tmp_path / pid)
+    hit = runs.locate_run_output("run_h", "m.bin")
+    assert hit and hit.get("durability") == "store", hit
+    assert hit.get("target") == "krn_remote7", (
+        f"harvest tier still identity-less: {hit}")

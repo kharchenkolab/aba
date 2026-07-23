@@ -1337,11 +1337,25 @@ def locate_run_output(run_id: str, name: str, *, match: str = "name",
                     size = a.get("size") or _os.path.getsize(str(f))
                 except OSError:
                     size = a.get("size")
+                # the harvested copy KNOWS its producer: the artifact row
+                # carries exec_id, and the exec record's compute block holds
+                # the kernel target — surface it, or every consumer that
+                # needs the durable (target, rel) identity (run_key capture,
+                # retention) sees an identity-less hit whenever this tier
+                # answers first (live: the remote wing's last red — a
+                # remote-born file's serving copy shadowed the remote tier)
+                _tgt = None
+                try:
+                    from core.graph import exec_records as _er
+                    _tgt = (((_er.get(a.get("exec_id")) or {})
+                             .get("compute") or {}).get("kernel_id"))
+                except Exception:  # noqa: BLE001 — identity is enrichment
+                    pass
                 return {"run_id": run_id, "rel": on, "root": str(f.parent),
                         "local_path": str(f), "locality": "local",
                         "site": "local", "durability": "store",
                         "kind": "file", "size": size, "mtime": None,
-                        "target": None, "digest": a.get("sha256")}
+                        "target": _tgt, "digest": a.get("sha256")}
     except Exception as e:  # noqa: BLE001 — a tier must never break the resolver
         _log.debug("locate_run_output: artifact-store tier failed for %s: %s",
                    run_id, e)

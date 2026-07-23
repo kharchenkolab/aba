@@ -235,7 +235,13 @@ def run_scenario(sid, mode):
         env.pop("ABA_NO_JUDGE", None)
     else:
         env["ABA_NO_JUDGE"] = "1"                          # Haiku breadth: mechanical only
-        env.pop("ABA_SCENARIO_MODEL", None)
+        # An EXPLICIT pin survives (the budget lever): the pop existed to
+        # keep the routine tier on the deployment default, but it silently
+        # ate a caller's ABA_SCENARIO_MODEL — a haiku-pinned merge gate ran
+        # (and billed) the large default while reporting the pin was set
+        # (live 2026-07-22). Absent a pin, behavior is unchanged.
+        if not os.environ.get("ABA_SCENARIO_MODEL"):
+            env.pop("ABA_SCENARIO_MODEL", None)
     t0 = time.time()
     # Capture the runner's output per scenario instead of discarding it: an
     # ERR row whose cause was DEVNULLed is undiagnosable (a whole sweep of

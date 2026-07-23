@@ -605,3 +605,13 @@ def test_tool_arg_equals_matches_some_call_or_stays_vacuous():
     assert any(f.startswith("tool_arg_mismatch:set_active_env.language")
                for f in _mech(exp, calls=miss))
     assert _mech(exp, calls=[]) == []      # never called → the floor check owns it
+
+
+def test_routine_tier_honors_an_explicit_model_pin(monkeypatch):
+    """The budget lever: ABA_SCENARIO_MODEL from the caller must reach the
+    runner env in the routine tier (the unconditional pop silently ran the
+    large deployment default on a haiku-pinned merge gate, live 2026-07-22);
+    absent a pin, the tier still strips any inherited value."""
+    src = (ROOT / "regtest" / "harness" / "sweep.py").read_text()
+    assert 'if not os.environ.get("ABA_SCENARIO_MODEL")' in src, (
+        "the routine tier pops the pin unconditionally again")
