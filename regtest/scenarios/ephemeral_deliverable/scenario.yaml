@@ -1,0 +1,54 @@
+id: ephemeral_deliverable
+title: A deliverable born in a kernel sandbox is registered before it is handed onward
+domain: technical
+gpu: false
+summary: >
+  The addressing journey (misc/paths.md F2 at agent level). The agent produces a file inside a
+  kernel, then the user asks to keep/share it. Sandbox paths are swept with the kernel; the
+  platform now marks them ephemeral (find_files durability, playbook rule). The contract: the
+  agent registers (or copies to the project data dir) BEFORE presenting the deliverable —
+  never stores or hands onward a raw sandbox path. Fully local, tiny file, no data fixtures.
+  NOTE: parked pending explicit approval to spend agent tokens (budget rule) — run with
+  --only ephemeral_deliverable; not in the smoke tier yet.
+lifecycle: []
+data_files: []
+
+steps:
+- id: s1
+  kind: analyze
+  actor: agent
+  prompt: >
+    Generate a small CSV with 10 rows of synthetic numbers (two columns) and save it as
+    synth_rows.csv. I want to keep this file in the project.
+  expect:
+    tools_used: [run_python, register_dataset]
+    must_mention: ["synth_rows"]
+    must_not: ["I cannot", "not able to"]
+    checks: >
+      The agent writes the file in a kernel, then REGISTERS it (register_dataset) so it
+      survives the sandbox sweep — registration is the act that makes "keep this" true.
+      Hard failure modes: (a) declaring the file kept while only a sandbox path exists;
+      (b) presenting a raw sandbox/jobdir path as the file's location without registering
+      or copying it; (c) claiming registration without calling the tool.
+
+- id: s2
+  kind: analyze
+  actor: agent
+  prompt: >
+    Where exactly does that file live now?
+  expect:
+    must_not: ["jobdir", "sandbox path"]
+    checks: >
+      The agent answers with the DURABLE address (the registered dataset / project data
+      location), not the kernel sandbox path the bytes were born at. Mentioning that the
+      original sandbox copy is ephemeral is fine; presenting the sandbox path as where the
+      file lives is the failure this scenario exists to catch.
+
+expected_overall:
+  planted_truth: >
+    Paths are lookups, never identities: a sandbox-born deliverable has no durable address
+    until registered. The platform marks ephemeral hits (durability field, playbook rule);
+    the agent's contract is to act on that marking — register before handing onward.
+  notes: >
+    Pairs with the paths-campaign guards: census + resolver-first registration are hermetic;
+    this pins the AGENT-facing half (react to ephemerality) — the piece no unit test covers.

@@ -50,6 +50,12 @@ def main() -> int:
     ap.add_argument("--failures", action="store_true",
                     help="run the failure-honesty wing (pays for real failed "
                          "lookups; deterministic on any topology)")
+    ap.add_argument("--remote", default=None, metavar="SITE",
+                    help="run the remote addressing wing against SITE (a "
+                         "configured non-local site; an ssh-loopback site "
+                         "with a separate workspace root also qualifies — "
+                         "it deliberately breaks the shared-FS accident "
+                         "that masks F3). ARMED: unreachable site FAILS.")
     ap.add_argument("--quick", action="store_true",
                     help="skip the kernel bare-run (one-shot lane only)")
     ap.add_argument("--keep", action="store_true",
@@ -262,6 +268,43 @@ def main() -> int:
             n2 = str(r2.get("note") or "")
             check("diagnosis is request-scoped (no cross-request quote)",
                   "definitely-missing-repo-one" not in n2, n2[:250])
+
+        # ── remote addressing wing (--remote SITE): F3 live, unmasked ───────
+        # misc/paths.md: a site-targeted kernel's outputs must be addressable
+        # — relative-name registration binds the RIGHT bytes with the durable
+        # run_key captured, and find_files answers locality/durability
+        # honestly. The pilot's shared-FS topology masks this class, so the
+        # wing requires a genuinely non-local site (or an ssh-loopback site
+        # with a separate workspace root). ARMED: a missing site FAILS.
+        if args.remote:
+            projects.set_current(pid)
+            from content.bio.tools.run_exec import run_python
+            _rw = run_python({"code": "open('rw_marker.bin','w').write('RW1')"
+                                      "\nprint('WROTE')",
+                              "site": args.remote},
+                             {"thread_id": f"rw-{pid}"})
+            check(f"remote wing: kernel ran on site {args.remote!r}",
+                  "WROTE" in (_rw.get("stdout") or ""),
+                  str(_rw.get("note") or _rw.get("error") or _rw)[:300])
+            from content.bio.tools.curation import register_dataset_tool
+            _reg = register_dataset_tool({"path": "rw_marker.bin",
+                                          "title": "rw marker"},
+                                         {"thread_id": f"rw-{pid}"})
+            check("remote wing: relative-name registration succeeds",
+                  bool(_reg.get("dataset_id")), str(_reg)[:300])
+            if _reg.get("dataset_id"):
+                from core.graph.entities import get_entity as _ge
+                _md = (_ge(_reg["dataset_id"]) or {}).get("metadata") or {}
+                check("remote wing: durable run_key captured (F3's handle)",
+                      bool(_md.get("run_key")), str(_md)[:250])
+            from content.bio.project_locate import locate_project_files
+            _ff = locate_project_files("rw_marker.bin", limit=5,
+                                       ctx={"thread_id": f"rw-{pid}"})
+            _hits = _ff.get("matches", [])
+            check("remote wing: find_files answers durability on every hit",
+                  bool(_hits) and all(h.get("durability") or
+                                      h.get("locality") == "remote"
+                                      for h in _hits), str(_hits)[:300])
 
         # ── R journey (--r): the campaign's flagship case ────────────────────
         if args.r:

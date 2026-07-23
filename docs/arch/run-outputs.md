@@ -84,6 +84,13 @@ deleting a fresh copy out from under a viewer.
 | Serve (archive) | `/api/runs/{id}/archive` | per-file `resolve_run_file`; skipped files listed in-zip, never dropped |
 | Serve (entity / tree) | `main.py` `/api/entities/{id}/download`, `web/routes/files.py` content/raw/download | dangling `/artifacts` cache → `resolve_entity_output` → materialize under the small gate, else site-naming 413 |
 | List | `run_durable_view` / `run_durable_tree` | recorded truth first; two-axis badges (protection × location); `retained` rows always link the live `/file` URL — remote in-place included |
+| Register (`register_dataset`) | `curation._resolve_dataset_path` | `locate_run_output(active_run, name)` **first** (site- and stopped-kernel-aware); the ranked scratch scan is the fallback and the only tier for no-run registrations; the durable `run_key` is captured via the resolver (`_capture_run_key`), site-agnostically |
+| Search (`find_files`) | `project_locate.locate_project_files` | every tier answers `durability`; a live-sandbox hit says it is swept and must be registered/copied before reuse — silence is a claim |
+
+Site literals in the addressing surface are census-guarded
+(`tests/test_path_resolution.py`): every `site == "local"` comparison is either
+a rationale-annotated allowlist entry or a failing guard — resolution logic may
+not be re-derived at a door (misc/paths.md owns the rationale).
 | View | `viewers` routes + external launcher `_resolve_source` | lookup (`resolve_project_run_output`) returns a **remote marker**, moves nothing; launch calls `resolve_run_store` (guardrail budget, progress, retain-on-view) |
 | Render | cards / `metadata.run.sites` / exec `compute` block | reads recorded placement only; never a live stat |
 
