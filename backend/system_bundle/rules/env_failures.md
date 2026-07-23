@@ -32,3 +32,8 @@ ambient — bare `run_python`/`run_r` and later installs land there until reset
 with `set_active_env('default')`. Install-target, verify-target and
 execution-target are always the same environment; if a result names an env,
 that is where the package lives.
+
+Dataset provenance: every `register_dataset` states `origin` (kind) +
+`source` (traceable ref) — the platform records mechanics (fetch keys, run
+keys) but only you know where data is FROM; a result carrying
+`provenance: unstated` means go back and state it.

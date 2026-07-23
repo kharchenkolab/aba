@@ -183,3 +183,46 @@ def test_run_key_captured_via_resolver_for_nonlocal_kernel(monkeypatch, tmp_path
     cu._capture_run_key(str(f), md, "th")
     assert md.get("run_key") == {"run": "krn_site7", "rel": "remote_born.bin"}, (
         f"durable key not captured for a non-local kernel: {md.get('run_key')}")
+
+
+# ── origin: agent-stated provenance, structurally required ───────────────────
+
+def _register_tmp(monkeypatch, tmp_path, **extra):
+    from content.bio.tools import curation as cu
+    f = tmp_path / "d.csv"; f.write_text("a,b\n1,2\n")
+    monkeypatch.setattr(cu, "_capture_run_key",
+                        lambda *a, **k: None)
+    return cu.register_dataset_tool(
+        {"title": "t", "path": str(f), **extra}, {"thread_id": "t"})
+
+
+def test_origin_kind_is_validated_and_recorded(monkeypatch, tmp_path):
+    from core.graph.entities import get_entity
+    bad = _register_tmp(monkeypatch, tmp_path, origin="somewhere")
+    assert "origin must be one of" in str(bad.get("error") or ""), bad
+    ok = _register_tmp(monkeypatch, tmp_path, origin="derived",
+                       source="run ana_123")
+    assert ok.get("provenance") == "derived", ok
+    md = (get_entity(ok["dataset_id"]) or {}).get("metadata") or {}
+    assert md.get("origin_kind") == "derived", md
+
+
+def test_unstated_origin_is_loud_never_silent(monkeypatch, tmp_path):
+    out = _register_tmp(monkeypatch, tmp_path)
+    assert out.get("provenance") == "unstated", out
+    assert "PROVENANCE UNSTATED" in (out.get("note") or ""), (
+        f"silent omission — the nag is the structural half of the ask: "
+        f"{out.get('note')!r}")
+
+
+def test_origin_mismatch_is_flagged(monkeypatch, tmp_path):
+    """Authored claim vs mechanical evidence: 'upload' bytes carrying a
+    kernel run_key contradict — flag, never silently prefer either side."""
+    from content.bio.tools import curation as cu
+    f = tmp_path / "d.csv"; f.write_text("x\n")
+    monkeypatch.setattr(cu, "_capture_run_key",
+                        lambda abspath, md, tid=None:
+                        md.__setitem__("run_key", {"run": "krn_1", "rel": "d.csv"}))
+    out = cu.register_dataset_tool(
+        {"title": "t", "path": str(f), "origin": "upload"}, {"thread_id": "t"})
+    assert "double-check" in (out.get("note") or ""), out

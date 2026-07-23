@@ -642,7 +642,8 @@ def _url_preflight(url: str) -> str | None:
 
 
 def _register_dataset_url(url: str, site: str | None, title: str,
-                          input_: dict, ctx: dict | None) -> dict:
+                          input_: dict, ctx: dict | None,
+                          _okind: 'str | None' = None) -> dict:
     """URL lane (misc/datasets2.md §4A): weft fetches into the target site's
     CAS, hashed on arrival — the agent never pre-downloads. With site=, the
     bytes land on THAT site and never touch the controller; locally we also
@@ -671,6 +672,7 @@ def _register_dataset_url(url: str, site: str | None, title: str,
         except Exception:  # noqa: BLE001 — CAS copy still holds the bytes
             pass
     md = {"thread_id": _ctx_thread(ctx), "origin": "url",
+          "origin_kind": _okind or "url",
           "by_reference": abspath is None, "ref_path": abspath or url,
           "summary": (input_.get("summary") or "").strip(),
           "source": input_.get("source") or url,
@@ -693,6 +695,7 @@ def _register_dataset_url(url: str, site: str | None, title: str,
              "fetched into the local data store")
     return {"status": "ok", "dataset_id": eid, "title": title,
             "artifact_path": abspath,
+            "provenance": _okind or "url",
             "note": f"Registered as a Dataset entity — {where}."}
 
 
@@ -779,6 +782,10 @@ def _paths_set_source_key(paths_list, site) -> str | None:
         "|".join(sorted(os.path.normpath(str(x)) for x in paths_list)), site)
 
 
+_ORIGIN_KINDS = {"url", "upload", "derived", "collaborator",
+                 "instrument", "simulated", "public_registry", "unknown"}
+
+
 def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
     import os
     from core.config import DATA_DIR
@@ -796,6 +803,19 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
     title = input_.get("title")
     if not title:
         return {"error": "title is required"}
+    # Agent-STATED origin (misc/paths.md follow-on): where the dataset is
+    # from is conversation meaning — only the agent holds it, and it is
+    # unrecoverable after registration. Structured kind + the existing
+    # `source` as the traceable ref; absence is legal but LOUD (the result
+    # carries provenance: unstated), never silent. The url door pre-fills
+    # what the system genuinely knows; it never invents meaning.
+    _okind = (str(input_.get("origin") or "").strip().lower() or None)
+    if _okind is not None and _okind not in _ORIGIN_KINDS:
+        return {"error": f"origin must be one of {sorted(_ORIGIN_KINDS)} "
+                         f"(got {_okind!r}); use 'unknown' to state that "
+                         f"the origin is genuinely not known"}
+    if _okind is None and input_.get("url"):
+        _okind = "url"
     paths_list = input_.get("paths")
     path = input_.get("path")
     url = (input_.get("url") or "").strip() or None
@@ -837,7 +857,8 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
         pass
 
     if url:
-        return _register_dataset_url(url, site, title, input_, ctx)
+        return _register_dataset_url(url, site, title, input_, ctx,
+                             _okind=_okind)
 
     bundle_note = ""
     weft_md = {}
@@ -986,9 +1007,21 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
     # the entity sidecar and survives a DB-crash recovery. Stat-only; skipped for adopted/copied
     # datasets (those are ABA-owned in DATA_DIR, so there's nothing to drift).
     _md = {"thread_id": _ctx_thread(ctx), "origin": "external",
+           "origin_kind": _okind or "unstated",
            "by_reference": not adopted, "ref_path": abspath,
            "summary": summary, "source": input_.get("source", ""),
            "organism": input_.get("organism"), **weft_md}
+    # evidence enrichment runs for EVERY registration, not only adopted
+    # bytes — a by-reference file in a kernel jobdir deserves its durable
+    # key too (the adopt-only capture was a door-shaped gap)
+    if "run_key" not in _md and exists:
+        _capture_run_key(abspath, _md, _ctx_thread(ctx))
+    # cross-check: authored claim vs mechanical evidence — a dataset said to
+    # be an upload/collaborator hand-off that carries a kernel run_key was
+    # BORN here; flag the contradiction, never silently prefer either side
+    if _okind in ("upload", "collaborator") and _md.get("run_key"):
+        _md["origin_mismatch"] = ("stated origin is external-to-platform but "
+                                  "the bytes carry a kernel run_key")
     _remote_home = ((weft_md.get("home") or {}).get("site") or "local") != "local"
     if exists and not adopted and not _remote_home:
         try:
@@ -1052,9 +1085,15 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
             update_entity(eid, metadata={**cur, "layout_hint": layout_hint})
         except Exception:  # noqa: BLE001
             pass
+    if not _okind:
+        note += " PROVENANCE UNSTATED: say where this dataset is from — re-register or note it now (origin= kind + source= traceable ref); this is unrecoverable later."
+    elif _md.get("origin_mismatch"):
+        note += (f" NOTE: {_md['origin_mismatch']} — double-check the stated "
+                 f"origin.")
     return {"status": "ok", "dataset_id": eid, "title": title,
             "artifact_path": abspath if exists else None,
             "layout_hint": layout_hint or None,
+            "provenance": _okind or "unstated",
             "note": note}
 
 
