@@ -1,8 +1,8 @@
 {
   "meta": {
-    "date": "20260722-174608",
+    "date": "20260723-095105",
     "mode": "haiku",
-    "commit": "9646eaf8",
+    "commit": "10103724",
     "agent_model": "claude-opus-4-7",
     "agent_model_assumed": "claude-haiku-4-5",
     "n_scenarios": 1
@@ -383,11 +383,20 @@
       "bundle": "env_capability_promoted-20260722-174609",
       "infra": 0,
       "agent_model": "claude-opus-4-7"
+    },
+    "ephemeral_deliverable": {
+      "mech_pass": 4,
+      "mech_total": 4,
+      "rubric_overall": null,
+      "fails": [],
+      "bundle": "ephemeral_deliverable-20260723-094751",
+      "infra": 0,
+      "agent_model": "claude-opus-4-7"
     }
   },
   "totals": {
-    "mech_pass": 288,
-    "mech_total": 364,
-    "full_pass": 13
+    "mech_pass": 292,
+    "mech_total": 368,
+    "full_pass": 14
   }
 }

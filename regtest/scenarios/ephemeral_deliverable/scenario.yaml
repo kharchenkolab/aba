@@ -22,6 +22,8 @@ steps:
     synth_rows.csv. I want to keep this file in the project.
   expect:
     tools_used: [run_python, register_dataset]
+    tool_arg_equals:
+      - {tool: register_dataset, arg: origin, value: simulated}
     must_mention: ["synth_rows"]
     must_not: ["I cannot", "not able to"]
     checks: >
