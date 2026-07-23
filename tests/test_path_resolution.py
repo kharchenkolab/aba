@@ -258,9 +258,8 @@ def test_run_key_capture_resolves_ambient_run_when_none_active(monkeypatch, tmp_
                         lambda rid, t: recorded.append((rid, t)))
     import core.exec.kernels as kmod
     class _Pool:
-        def peek(self, tid, lang):
-            return (type("S", (), {"kernel_id": "krn_site9"})()
-                    if lang == "python" else None)
+        def sessions_for_thread(self, tid):
+            return [type("S", (), {"kernel_id": "krn_site9"})()]
     monkeypatch.setattr(kmod, "get_pool", lambda: _Pool())
     monkeypatch.setattr(runs, "locate_run_output",
                         lambda rid, name, **k: {"target": "krn_site9",
@@ -375,3 +374,43 @@ def test_harvest_tier_hits_carry_producing_target(monkeypatch, tmp_path):
     assert hit and hit.get("durability") == "store", hit
     assert hit.get("target") == "krn_remote7", (
         f"harvest tier still identity-less: {hit}")
+
+
+def test_pool_enumeration_finds_site_scoped_sessions():
+    """The backfill missed `tid@site` scope keys — no-plan threads never
+    recorded their remote kernel targets (live)."""
+    from core.exec.kernels.pool import KernelPool
+    pool = KernelPool()
+    for sk in ("th1", "th1@siteX", "th1::env::e1", "th2", "th1x"):
+        pool._sessions[(sk, "python")] = type("S", (), {"kernel_id": sk})()
+    got = {s.kernel_id for s in pool.sessions_for_thread("th1")}
+    assert got == {"th1", "th1@siteX", "th1::env::e1"}, got
+
+
+def test_capture_confirms_identity_via_remote_targets(monkeypatch, tmp_path):
+    """The mirror-copy shadow: locate answers a local scratch hit with no
+    target; capture must confirm against the run's recorded remote targets
+    (retention stat) rather than give up — and never invent one when the
+    substrate can't confirm the file."""
+    from content.bio.tools import curation as cu
+    import content.bio.lifecycle.runs as runs
+    from core.compute import retention
+    f = tmp_path / "m.bin"; f.write_bytes(b"x")
+    monkeypatch.setattr(cu, "_ambient_run_for", lambda tid: "run_1")
+    monkeypatch.setattr(runs, "locate_run_output",
+                        lambda rid, name, **k: {"local_path": str(f),
+                                                "rel": "mirror-123/m.bin",
+                                                "target": None,
+                                                "locality": "local"})
+    monkeypatch.setattr(runs, "_run_remote_targets",
+                        lambda rid: [("krn_far", "siteX")])
+    monkeypatch.setattr(retention, "file_stat",
+                        lambda t, rel: {"exists": rel == "m.bin"})
+    md = {}
+    cu._capture_run_key(str(f), md, "th")
+    assert md.get("run_key") == {"run": "krn_far", "rel": "m.bin"}, md
+    # the substrate can't confirm → no invented identity
+    monkeypatch.setattr(retention, "file_stat", lambda t, rel: {"exists": False})
+    md2 = {}
+    cu._capture_run_key(str(f), md2, "th")
+    assert "run_key" not in md2, md2

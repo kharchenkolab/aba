@@ -75,6 +75,21 @@ class KernelPool:
             self._sessions[key] = s
             return s
 
+    def sessions_for_thread(self, thread_id: str) -> list:
+        """Every live session whose scope belongs to `thread_id` — the bare
+        scope, @site variants, and ::env variants. Addressing needs the full
+        set: a durable (target, rel) handle for a site-kernel's output can
+        only be recorded if the SITE-scoped session is discoverable (the
+        default-scope peek silently missed `tid@site`, so no-plan threads
+        never recorded their remote targets — live 2026-07-23)."""
+        tid = str(thread_id)
+        out = []
+        with self._lock:
+            for (sk, _lang), sess in list(self._sessions.items()):
+                if sk == tid or sk.startswith(tid + "@")                         or sk.startswith(tid + "::"):
+                    out.append(sess)
+        return out
+
     def peek(self, scope_key: str, lang: str = "python"):
         """Return the live session for (scope_key, lang) if one exists, else None
         — WITHOUT starting a new kernel. Used to nudge an already-running kernel

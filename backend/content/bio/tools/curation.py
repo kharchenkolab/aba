@@ -511,10 +511,8 @@ def _ambient_run_for(thread_id: "str | None") -> "str | None":
         if rid:
             try:
                 from core.exec.kernels import get_pool
-                for _lang in ("python", "r"):
-                    _sess = get_pool().peek(thread_id, _lang)
-                    if _sess is not None:
-                        record_weft_target(rid, getattr(_sess, "kernel_id", None))
+                for _sess in get_pool().sessions_for_thread(thread_id):
+                    record_weft_target(rid, getattr(_sess, "kernel_id", None))
             except Exception:  # noqa: BLE001
                 pass
         return rid
@@ -813,6 +811,24 @@ def _capture_run_key(abspath: str, md: dict,
                 if _hit and _hit.get("target") and _hit.get("rel"):
                     md["run_key"] = {"run": _hit["target"], "rel": _hit["rel"]}
                     return
+                if _hit and not _hit.get("target"):
+                    # An identity-less local copy (the thread-sandbox mirror
+                    # of a remote kernel's output) can shadow the identity-
+                    # bearing tiers. The run's recorded remote targets are
+                    # the truth channel: confirm the file exists kernel-side
+                    # via the retention stat verb and key against THAT —
+                    # never invent an identity the substrate can't confirm.
+                    try:
+                        from content.bio.lifecycle.runs import _run_remote_targets
+                        from core.compute import retention
+                        _base = os.path.basename(abspath)
+                        for _t, _site in _run_remote_targets(_rid):
+                            _st = retention.file_stat(_t, _base)
+                            if _st.get("exists"):
+                                md["run_key"] = {"run": _t, "rel": _base}
+                                return
+                    except Exception:  # noqa: BLE001 — enrichment only
+                        pass
         except Exception:  # noqa: BLE001 — fall to the local scan
             pass
         for k in (get_compute().sync_call("list_kernels") or {})                 .get("kernels", []):
