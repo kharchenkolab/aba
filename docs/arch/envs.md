@@ -111,23 +111,43 @@ PATH — the weft successor to the old micromamba tools env.
 
 ## Provisioning — adding a capability on demand
 
-The agent calls `ensure_capability(name)` (`content/bio/tools/discovery.py:884`); it resolves
-the capability record (the catalog entity + bundle composition are owned by
-[`bundle-and-content.md`](bundle-and-content.md)) and provisions by target lane:
+The agent calls `ensure_capability(name)` (`content/bio/tools/discovery.py`). The request is
+**normalized once** into a `CapRequest` (`content/bio/tools/cap_request.py` — the single place
+tool arguments and the capability record are merged; explicit input wins; empty strings are
+absent) and travels to whichever door serves it, so a field the agent sent cannot evaporate at
+a door that never learned of it. The capability record itself (catalog entity + bundle
+composition) is owned by [`bundle-and-content.md`](bundle-and-content.md).
 
-- **Pointer first.** A request with no `env=` targets the project's **active** env when one
-  is promoted (`_pointer_env` → the named lane below) — the installer must land where bare
-  runs execute, and its success probe runs there too; installing into the default session
-  while user code runs in the promoted env made the installer verify its own success in an
-  env the user's code never enters. An ambiguous language consults both slots; exactly one
-  set slot decides (and fixes the language), two stay ambiguous — never guess.
-- **Default lane → the project session.** A pip/library capability installs **live** into the
-  project's default weft session via `project_env.install(...)` (`session_install`). Nothing is
-  shadow-stacked on a frozen base: the session is a single coherent weft-solved environment, so an
-  install is re-solved against the whole set.
-- **Named lane → a frozen env.** A request scoped to a named env (explicitly via `env=`, or
-  implicitly via the active pointer) routes to `named_envs.create` / `extend`, which solve a
-  new EnvID rather than mutating one.
+- **Target resolution.** Explicit `env=` (reserved names → session) → the project's **active**
+  pointer for the request's language → the default session. The installer lands where bare
+  runs execute; promotion does not change what a request means (the same request through the
+  pointer and through explicit `env=` produces identical substrate plans — guarded). An
+  ambiguous language consults both slots; exactly one set slot decides, two stay ambiguous —
+  never guess.
+- **Session installs ride the substrate's `ensure_available` verb.** Registry/conda-sourced R
+  requests go **ranked** (`project_env.ensure_ranked`, `lanes=["conda","cran"]`; secondary
+  registries via `cran_repos`): the substrate derives per-lane spellings, verifies inside the
+  lane loop, and returns typed per-lane `attempts`. Eco-explicit installs go **tagged**
+  (`project_env.install(eco=…)` → the verb's tagged mode) with verify-first pre-check and
+  record-gating below the API. Pre-verb substrates degrade to `session_install` byte-identically.
+- **Named lane → a frozen env, claims enforced by the substrate.** `named_envs.create/extend`
+  solve a new EnvID (history kept); the request's **claim** (load names + version floors,
+  composed by `cap_request.verify_block`) rides the spec / the env-target verb call. Readiness
+  carries honest enforcement facts as a branchable field: `verification: "verified_now"` (claim
+  proven live against a ready realization) or `"deferred"` (recorded on the identity, enforced
+  at every realization — a broken build surfaces at first use, typed). There is **no
+  consumer-side load probe** (it forced a cold env's first realization at install time).
+- **Failure rendering is typed end to end.** Error results carry the substrate's `attempts`
+  verbatim; the missing-system-library remedy keys **solely** on the substrate's
+  `hints.failure_class == "missing_system_lib"` (no text matching — the consumer-side sign
+  taxonomy is deleted, tombstone-guarded); remedial doctrine lives in the system-bundle
+  playbook rule (`system_bundle/rules/env_failures.md`), not in composed prose; a failed
+  install whose (prefix-stripped) name matches a capability card quotes the card's headline.
+  Positive import probes are memoized per identity (`core/exec/verify.py` — sessions key on
+  (session_id, rev), frozen envs on EnvID; negatives never cache).
+
+The result envelope is a **pinned cross-repo contract** (`tests/schemas/ensure_envelope.schema.json`,
+byte-compared against the substrate's copy; `tests/test_ensure_envelope_contract.py`).
 
 `core/exec/materialize.py` is now only the **subprocess run harness**: `MaterializingExecutor`
 supplies the ABA-runtime venv that *launches* a one-shot script (`_base_env`), while the
@@ -276,6 +296,14 @@ the install-time probe can't run.
 - **Stale in-code docstrings.** `core/exec/materialize.py`'s module header still describes the
   `ENVS_DIR/pylib` overlay — pre-weft text; the code raises. Trust the behavior described
   above, not that header.
+- **Legacy cascade fallbacks exist only for pre-verb substrates.** The R session lane and the
+  session install path keep `session_install`/try-except branches reachable solely when the
+  substrate lacks `ensure_available` (guarded); they are deletion candidates once no deployed
+  substrate predates the verb. `run_installer` remains outside the ranked vocabulary (explicit-
+  cmd ranked entries are a tracked substrate follow-up).
+- **Probe memoization is a consumer stopgap.** The identity-keyed positive-probe memo
+  (`core/exec/verify.py`) duplicates what the verb's verify-first pre-check does below the API;
+  it stays until the already-importable shortcut path also rides the verb, then deletes.
 - **Pre-parity named R envs lack `r-irkernel`.** New named R envs bake it (as python bakes
   `ipykernel`), so named/promoted R runs get a persistent per-env kernel; an env created
   before that parity has no kernel package, so its kernel can't start and runs degrade to
