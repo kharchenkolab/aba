@@ -59,6 +59,15 @@ echo "   stage:   $STAGE"
 rm -rf "$STAGE"; mkdir -p "$STAGE"
 cp -a "$REPO_ROOT/backend" "$STAGE/backend"
 cp -a "$REPO_ROOT/frontend/dist" "$STAGE/frontend-dist"
+# Operator scripts (~112 KB) — notably publish_base_packs.py, the ONLY way to build
+# and publish the science env packs. Without these in the image the deployment cannot
+# perform its own §4 step and an operator needs a git checkout, which INSTALL.md's
+# "from an aba checkout or runtime" wrongly implies is optional (live 2026-07-23: had
+# to bind-mount a checkout to publish r-bio). __pycache__ is dropped, not shipped.
+if [ -d "$REPO_ROOT/scripts" ]; then
+  cp -a "$REPO_ROOT/scripts" "$STAGE/scripts"
+  rm -rf "$STAGE/scripts/__pycache__"
+fi
 # The SIF is the OOD/cluster artifact, and OOD serves the SPA under /rnode/<host>/<port>/.
 # The dist must therefore carry the /__OOD_PREFIX__/ base placeholder that script.sh.erb
 # rewrites per session (build the frontend with ABA_OOD_BASE=/__OOD_PREFIX__/). A dist built
@@ -268,6 +277,8 @@ DEF="$STAGE/aba-$PROFILE.def"
   [ -d "$STAGE/pagoda3-dist" ] && echo "    $STAGE/pagoda3-dist /opt/aba/vendor/pagoda3/dist"
   [ -f "$STAGE/ca-certificates.crt" ] && echo "    $STAGE/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt"
   [ -d "$STAGE/bin" ] && echo "    $STAGE/bin /opt/aba/bin"
+  # %files is an EXPLICIT list — staging a dir above does nothing without a line here.
+  [ -d "$STAGE/scripts" ] && echo "    $STAGE/scripts /opt/aba/scripts"
   { [ "$PROFILE" = "fat" ] || [ "$PROFILE" = "weft" ]; } && echo "    $STAGE/aba-venv /opt/aba-venv"
   [ "$PROFILE" = "fat" ] && echo "    $STAGE/aba-tools /opt/aba-envs/tools"
   # weft substrate: pixi binaries + the base env packs (weft is baked INTO the venv

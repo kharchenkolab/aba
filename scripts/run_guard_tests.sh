@@ -224,6 +224,7 @@ FILES=(
   tests/test_serving_spine.py
   tests/test_settle_deferred.py
   tests/test_sif_glibc_floor.py
+  tests/test_sif_ships_operator_scripts.py
   tests/test_store_serve.py
   tests/test_store_zip.py
   tests/test_summary_budget_precedence.py
