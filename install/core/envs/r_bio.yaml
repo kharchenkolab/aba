@@ -49,6 +49,16 @@ spec:
       - bioconductor-deseq2
       - bioconductor-edger
       - bioconductor-limma
+    # CRAN lane — for packages with no conda-forge/bioconda build. Solved into
+    # the SAME closure as the conda lane, so the pack stays one EnvID.
+    cran:
+      # The R side of the lstar interchange model (viewer store + Seurat/SCE
+      # bridge). Baked here rather than installed on demand: the on-demand
+      # route source-compiles against zlib.h, which the base lacks — that dead
+      # end cost a live session an isolated-env fork (misc/paths.md era, live
+      # 2026-07-23). No conda-forge `r-lstar` exists; CRAN 0.2.1 is the first
+      # published release, and PPM (weft's default repo) serves a binary.
+      - lstar
     # R secondary/release repos (§4b R ecosystem) — extra CRAN-likes folded
     # into the joint closure. weft's r_repositories; empty here (PPM is default).
   # release_repos: []
