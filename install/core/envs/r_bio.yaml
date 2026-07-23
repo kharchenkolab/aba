@@ -49,6 +49,13 @@ spec:
       - bioconductor-deseq2
       - bioconductor-edger
       - bioconductor-limma
+      # zlib DEV headers (zlib.h), not just the runtime libzlib the R stack
+      # pulls in transitively: the cran lane below compiles from source
+      # whenever PPM has no matching binary, and lstar's C++ core includes
+      # <zlib.h>. Without this the pack realize dies at
+      #   fatal error: zlib.h: No such file or directory
+      # (measured on the first /resources/aba publish, 2026-07-23).
+      - zlib
     # CRAN lane — for packages with no conda-forge/bioconda build. Solved into
     # the SAME closure as the conda lane, so the pack stays one EnvID.
     cran:
@@ -59,6 +66,15 @@ spec:
       # 2026-07-23). No conda-forge `r-lstar` exists; CRAN 0.2.1 is the first
       # published release, and PPM (weft's default repo) serves a binary.
       - lstar
-    # R secondary/release repos (§4b R ecosystem) — extra CRAN-likes folded
-    # into the joint closure. weft's r_repositories; empty here (PPM is default).
+  # Extra CRAN-like repos, folded into the joint closure alongside weft's
+  # default PPM snapshot (UTC-today − 2). Live CRAN is listed because that lag
+  # HIDES fresh releases: lstar 0.2.1 published 2026-07-22, and PPM's 07-21 and
+  # 07-22 snapshots both still served 0.1.0 — the pack would silently bake the
+  # OLD version, which must stay in lockstep with the pinned lstar-sc + pagoda3
+  # dist. install.packages() takes the highest version across repos, so this
+  # only ever moves a package FORWARD to what CRAN has published.
+  # DROP this once PPM carries 0.2.1 (check:
+  #   curl -s https://packagemanager.posit.co/cran/__linux__/focal/<date>/src/contrib/PACKAGES | grep -A1 '^Package: lstar$')
+  r_repositories:
+    - https://cloud.r-project.org
   # release_repos: []
