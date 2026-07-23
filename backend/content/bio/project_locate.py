@@ -37,6 +37,15 @@ def _mtime_iso(ts: float) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
 
 
+# Durability is an EXPLICIT per-tier fact, defaulting EPHEMERAL: the original
+# marking string-matched tier names ("sandbox"/"scratch"), so a renamed or
+# added tier silently defaulted to durable — a durability claim made by
+# silence, pointing the wrong way (the F2 class). New tiers must be entered
+# here deliberately; an unknown tier is treated as swept-any-time.
+_TIER_DURABILITY = {"live sandbox": "ephemeral", "work scratch": "ephemeral",
+                    "run output": "durable", "user data": "durable"}
+
+
 def _walk_match(root: Path, pattern: str, hits: list, tier: str,
                 cap: int) -> None:
     if not root or not root.exists():
@@ -63,7 +72,7 @@ def _walk_match(root: Path, pattern: str, hits: list, tier: str,
             # hit is swept with its kernel — presenting it as a plain "local
             # file" shipped an 83.6 MB deliverable addressed by a path that
             # was dead on arrival (live 2026-07-23, F2 in misc/paths.md).
-            _ephemeral = "sandbox" in tier or "scratch" in tier
+            _ephemeral = _TIER_DURABILITY.get(tier, "ephemeral") == "ephemeral"
             hits.append({"name": name, "path": str(fp), "tier": tier,
                          "locality": "local", "site": "local",
                          "durability": "ephemeral" if _ephemeral else "durable",

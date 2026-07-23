@@ -117,12 +117,28 @@ def test_keep_outputs_tool_resolves_active_run(monkeypatch):
     assert "retained=3" in out["note"]
 
 
-def test_keep_outputs_tool_no_run(monkeypatch):
+def test_keep_outputs_tool_no_run_resolves_ambient(monkeypatch):
+    """F11 (updated 2026-07-23 — the old assertion encoded the PRE-F11
+    contract and sat contradicting it on the frozen-legacy list): a keep in
+    a quick/no-plan thread lazily resolves the AMBIENT run rather than
+    erroring; only when even that fails does the honest error remain."""
     monkeypatch.setattr(curmod, "_ctx_thread", lambda ctx: "t1")
-    from content.bio.lifecycle import runs as R
+    from content.bio.lifecycle import runs as R, registry as REG
     monkeypatch.setattr(R, "active_run_id", lambda tid: None)
-    out = curmod.keep_outputs_tool({}, ctx={"thread_id": "t1"})
-    assert "error" in out
+    monkeypatch.setattr(REG, "_ensure_analysis",
+                        lambda foc, plan, tid: "run_ambient")
+    seen = {}
+    monkeypatch.setattr(R, "set_keep_decision",
+                        lambda rid, keep=None, drop=None:
+                        seen.update(rid=rid) or {"summary": {}})
+    out = curmod.keep_outputs_tool({"keep": ["x.bin"]}, ctx={"thread_id": "t1"})
+    assert "error" not in out and seen.get("rid") == "run_ambient", out
+    # the degenerate shape: ambient resolution ALSO fails → honest error
+    monkeypatch.setattr(REG, "_ensure_analysis",
+                        lambda foc, plan, tid: (_ for _ in ()).throw(
+                            RuntimeError("no")))
+    out2 = curmod.keep_outputs_tool({}, ctx={"thread_id": "t1"})
+    assert "error" in out2
 
 
 def test_keep_outputs_tool_coerces_str_to_list(monkeypatch):
@@ -144,7 +160,7 @@ _TESTS = [
     test_set_keep_decision_persists_and_applies,
     test_set_keep_decision_unknown_run,
     test_keep_outputs_tool_resolves_active_run,
-    test_keep_outputs_tool_no_run,
+    test_keep_outputs_tool_no_run_resolves_ambient,
     test_keep_outputs_tool_coerces_str_to_list,
 ]
 

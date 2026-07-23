@@ -104,11 +104,23 @@ def test_walk_match_tiers_carry_durability(tmp_path):
     assert hits and hits[0].get("durability") == "ephemeral", hits
     assert "swept" in hits[0]["opens"].lower(), (
         f"an ephemeral address must SAY it dies: {hits[0]['opens']!r}")
-    # the false-positive side: a durable tier must NOT cry ephemeral
+    # the false-positive side, on a literal production ACTUALLY emits
+    # (the first guard used "project data" — a label no tier produces, so
+    # the durable side was unexercised; other-model finding #4)
     hits2: list = []
-    pl._walk_match(d, "out.bin", hits2, "project data", cap=5)
+    pl._walk_match(d, "out.bin", hits2, "user data", cap=5)
     assert hits2 and hits2[0].get("durability") == "durable", hits2
     assert "swept" not in hits2[0]["opens"].lower()
+    # fail-closed: an UNKNOWN tier defaults ephemeral, never durable
+    hits3: list = []
+    pl._walk_match(d, "out.bin", hits3, "brand new tier", cap=5)
+    assert hits3 and hits3[0].get("durability") == "ephemeral", hits3
+    # and the column must enumerate every ranked tier — a tier added to the
+    # ranking without a durability entry fails here, not in production
+    ranked = {"live sandbox", "run output", "user data", "work scratch"}
+    assert ranked <= set(pl._TIER_DURABILITY), (
+        f"ranked tiers missing a durability entry: "
+        f"{ranked - set(pl._TIER_DURABILITY)}")
 
 
 # ── P4: the not-found error names the missing input ─────────────────────────
@@ -307,3 +319,30 @@ def test_remote_refusal_error_names_the_site(monkeypatch):
     msg = str(out.get("error") or "")
     assert "siteX" in msg and "keep_outputs" in msg, msg
     assert "ABSOLUTE" not in msg, f"wrong advice survived: {msg!r}"
+
+
+def test_remote_fetch_threads_identity_to_run_key(monkeypatch, tmp_path):
+    """The wing's LAST red: after adoption a fresh lookup answers with the
+    local copy (no producing-target identity) — so the identity is threaded
+    from the resolution moment instead of re-derived."""
+    from content.bio.tools import curation as cu
+    import content.bio.lifecycle.runs as runs
+    fetched = tmp_path / "m.bin"; fetched.write_bytes(b"RW1")
+    monkeypatch.setattr(runs, "active_run_id", lambda tid: "run_9")
+    monkeypatch.setattr(runs, "record_weft_target", lambda *a: None)
+    monkeypatch.setattr(runs, "locate_run_output",
+                        lambda rid, name, **k: {"locality": "remote",
+                                                "site": "siteX", "size": 3,
+                                                "target": "krn_x",
+                                                "rel": "m.bin",
+                                                "local_path": None})
+    monkeypatch.setattr(runs, "materialize_run_output",
+                        lambda hit, **k: str(fetched))
+    out = cu.register_dataset_tool({"title": "t", "path": "m.bin",
+                                    "origin": "derived"},
+                                   {"thread_id": "t"})
+    assert out.get("dataset_id"), out
+    from core.graph.entities import get_entity
+    md = (get_entity(out["dataset_id"]) or {}).get("metadata") or {}
+    assert md.get("run_key") == {"run": "krn_x", "rel": "m.bin"}, (
+        f"identity dropped between resolution and capture: {md.get('run_key')}")

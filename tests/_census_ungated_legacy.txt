@@ -35,7 +35,6 @@ tests/test_inspect_env.py
 tests/test_isolated_env_tools.py
 tests/test_jobs_failure_notify.py
 tests/test_jobs_tools.py
-tests/test_keep_outputs.py
 tests/test_lean_prompt_mode.py
 tests/test_list_data_files.py
 tests/test_live_agent_attachments.py

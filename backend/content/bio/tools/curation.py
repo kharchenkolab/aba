@@ -568,6 +568,15 @@ def _resolve_dataset_path(path: str, ctx: dict | None,
                     _local = materialize_run_output(
                         _hit, max_bytes=_MAX_HARVEST_BYTES)
                     if _local and os.path.exists(_local):
+                        if _remote_out is not None:
+                            # identity captured at the moment it is KNOWN —
+                            # after adoption a fresh lookup answers with the
+                            # local copy, which carries no producing-target
+                            # identity (live: the wing's last red)
+                            _remote_out.update(target=_hit.get("target"),
+                                               rel=_hit.get("rel"),
+                                               site=_hit.get("site"),
+                                               fetched=True)
                         return os.path.normpath(_local)
                 except Exception as _me:  # noqa: BLE001 — refusal/size gate
                     if _remote_out is not None:
@@ -870,6 +879,7 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
         _okind = "url"
     paths_list = input_.get("paths")
     path = input_.get("path")
+    _remote_key = None            # set on the single-path remote-fetch branch
     url = (input_.get("url") or "").strip() or None
     site = (input_.get("site") or "").strip() or None
     given = [x for x in (paths_list, path, url) if x]
@@ -957,6 +967,9 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
         _remote_miss: dict = {}
         abspath = _resolve_dataset_path(str(path), ctx, _remote_out=_remote_miss)
         exists = os.path.exists(abspath)
+        _remote_key = ({"run": _remote_miss["target"], "rel": _remote_miss["rel"]}
+                       if _remote_miss.get("fetched") and _remote_miss.get("target")
+                       and _remote_miss.get("rel") else None)
         # Adopt: a file found in the SCRATCH tier (not already under DATA_DIR)
         # goes weft-native (misc/datasets2.md §4B): CAS ingest mints the
         # content identity (dedup, survives the kernel-jobdir sweep), then a
@@ -1079,6 +1092,8 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
     # evidence enrichment runs for EVERY registration, not only adopted
     # bytes — a by-reference file in a kernel jobdir deserves its durable
     # key too (the adopt-only capture was a door-shaped gap)
+    if _remote_key and "run_key" not in _md:
+        _md["run_key"] = _remote_key
     if "run_key" not in _md and exists:
         _capture_run_key(abspath, _md, _ctx_thread(ctx))
     # cross-check: authored claim vs mechanical evidence — a dataset said to
