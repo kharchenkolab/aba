@@ -1,27 +1,37 @@
-/* The one editable-title affordance — a subtle background fill on hover, the
-   same everywhere (global header, entity card headers, Result/Run titles).
-   Negative margins keep the hover box from shifting the text it sits behind.
-   The input inherits the host font so the swap doesn't jump. */
+/* The one editable-title affordance — identical everywhere (global header,
+   entity card headers, Result/Run titles, Claim statement). Hover is a
+   layout-free halo (box-shadow spread + fill) so it never shifts the text and
+   never fights a host class's margin/padding. */
 .edit-title {
   cursor: text;
   border-radius: 5px;
-  padding: 1px 5px;
-  margin: -1px -5px;
-  transition: background .12s;
+  transition: background .12s, box-shadow .12s;
 }
-.edit-title:hover { background: var(--tree-active-bg); }
+.edit-title:hover {
+  background: var(--tree-active-bg);
+  box-shadow: 0 0 0 4px var(--tree-active-bg);
+}
 
 .edit-title__ai { display: inline-flex; vertical-align: middle; margin-left: 5px; }
 .edit-title__placeholder { color: var(--text-4); }
 
+/* Edit field. Typography + width are stamped INLINE from the rest element (see
+   begin() in EditableTitle.tsx), so the glyphs and extent match exactly. The
+   box is zeroed and the edit ring is a box-shadow (no layout space), so the
+   caret lands exactly where the text was — no jump on entry. */
 .edit-title__input {
-  font: inherit;
-  color: var(--text);
+  box-sizing: border-box;
+  padding: 0; margin: 0; border: 0;
+  border-radius: 4px;
   background: var(--bg);
-  border: 1px solid var(--accent-border, var(--accent));
-  border-radius: 5px;
-  padding: 1px 5px;
-  margin: -1px -5px;
-  min-width: 8ch;
+  box-shadow: 0 0 0 2px var(--accent-border, var(--accent));
+  outline: none;
+  min-width: 6ch;
 }
-.edit-title__input:focus { outline: none; }
+.edit-title__input--multiline {
+  display: block;
+  resize: vertical;
+  overflow: auto;
+  white-space: pre-wrap;
+  min-height: 1.4em;
+}

@@ -46,6 +46,19 @@ describe('EditableTitle', () => {
     expect(onCommit).not.toHaveBeenCalled()
   })
 
+  it('multiline mode edits via a textarea; Enter commits, Shift+Enter inserts a newline', () => {
+    const onCommit = vi.fn()
+    render(<EditableTitle value="stmt" onCommit={onCommit} multiline />)
+    fireEvent.click(screen.getByText('stmt'))
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement
+    expect(ta.tagName).toBe('TEXTAREA')
+    fireEvent.change(ta, { target: { value: 'new stmt' } })
+    fireEvent.keyDown(ta, { key: 'Enter', shiftKey: true })   // newline — must NOT commit
+    expect(onCommit).not.toHaveBeenCalled()
+    fireEvent.keyDown(ta, { key: 'Enter' })                   // commit
+    expect(onCommit).toHaveBeenCalledWith('new stmt')
+  })
+
   it('renders the AI-suggested glyph only when aiSuggested', () => {
     const { rerender, container } = render(<EditableTitle value="T" onCommit={() => {}} aiSuggested />)
     expect(container.querySelector('.edit-title__ai')).not.toBeNull()
