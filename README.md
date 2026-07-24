@@ -17,7 +17,7 @@ left it. It's built for long-running research, not one-off questions.
 <p align="center">
   <img src="docs/images/aba-result-view.png" width="880"
        alt="The ABA workspace: a focused Result showing two paired UMAP figures with an auto-generated synthesis, the project sidebar of typed entities (Threads, Data, Claims, Results, Runs, Files) on the left, and Guide's chat on the right where the figure was produced and revised by asking."><br>
-  <em>A <strong>Result</strong> in ABA: paired figures with a written synthesis and a <code>SOURCE</code> provenance stamp, the typed-entity sidebar on the left (Data, Results, Claims, Runs, Files), and Guide's chat on the right — where this figure was produced and then revised just by asking.</em>
+  <em>Whatever entity you have open — a <strong>Result</strong>, a figure, a dataset — Guide already knows what you're looking at. Open an old figure and ask to revise it, or highlight something in the figure or text and just ask.</em>
 </p>
 
 ## What you can do
