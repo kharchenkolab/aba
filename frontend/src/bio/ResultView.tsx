@@ -13,6 +13,7 @@ import RevisionStrip, { useFigureRevisions, type RevisionAction } from './Revisi
 import ProvenanceSection from '../components/ProvenanceSection'
 import ConfirmDialog from '../components/ConfirmDialog'
 import { HILITE, captureHighlight, nextAnnotToken, type Pt } from '../components/highlightTools'
+import EditableTitle from '../components/EditableTitle'
 import './ResultView.css'
 
 
@@ -101,8 +102,6 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
   const threadId = result.metadata?.thread_id as string | undefined
   const cellById = (id?: string) => (id ? entities.find(e => e.id === id) : undefined)
 
-  const [titleEdit, setTitleEdit] = useState(false)
-  const [title, setTitle] = useState(result.title)
   const [reading, setReading] = useState(interpretation)
   const [synthesisOpen, setSynthesisOpen] = useState(false)
   const [synthGen, setSynthGen] = useState(false)          // synthesis being generated
@@ -138,7 +137,7 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
   // signals an annotation-clear (avoids stale ✏️-on state after Esc).
   useEffect(() => { setHighlighting(false) }, [result.id, annotClear])  // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { setReading(interpretation); setTitle(result.title); lastSyncedInterp.current = interpretation }, [result.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setReading(interpretation); lastSyncedInterp.current = interpretation }, [result.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Pick up a background-generated synthesis (auto at pin, or the Guide button via
   // the entity_updated broadcast) WITHOUT clobbering an in-flight user edit — mirrors
@@ -300,7 +299,6 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
     onChange()
   }
   const rid = encodeURIComponent(result.id)
-  const saveTitle = () => { setTitleEdit(false); if (title.trim() && title.trim() !== result.title) api(`/api/entities/${rid}`, 'PATCH', { title: title.trim() }) }
   // On any user edit, flip interpretation_origin to 'user' so the ✨ tag disappears
   // and the background auto-interpret won't overwrite the user's text later.
   const saveReading = () => {
@@ -410,20 +408,11 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
           canvas-actions row (consistent with the Threads view), so it's
           NOT rendered here — each MemberPanel is driven by the lifted
           `highlighting` prop. */}
-      {titleEdit ? (
-        <input className="rv__title-input" autoFocus value={title}
-               onChange={e => setTitle(e.target.value)} onBlur={saveTitle}
-               onKeyDown={e => { if (e.key === 'Enter') saveTitle(); if (e.key === 'Escape') { setTitle(result.title); setTitleEdit(false) } }} />
-      ) : (
-        <div className="rv__title-row">
-          <h1 className="rv__title" onClick={() => setTitleEdit(true)} title="Click to rename">{result.title}</h1>
-          {titleOrigin === 'ai' && (
-            <span className="rv__ai-tag" title="Title suggested by Guide — edit to make it yours">
-              <AgentGlyph agent="guide" size={13} />
-            </span>
-          )}
-        </div>
-      )}
+      <div className="rv__title-row">
+        <EditableTitle as="h1" className="rv__title" value={result.title} ariaLabel="Rename result"
+          aiSuggested={titleOrigin === 'ai'}
+          onCommit={t => api(`/api/entities/${rid}`, 'PATCH', { title: t })} />
+      </div>
 
       <div className="rv__members" ref={membersRef}>
         {members.map((m, i) => (

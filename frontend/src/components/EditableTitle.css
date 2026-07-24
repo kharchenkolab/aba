@@ -1,0 +1,27 @@
+/* The one editable-title affordance — a subtle background fill on hover, the
+   same everywhere (global header, entity card headers, Result/Run titles).
+   Negative margins keep the hover box from shifting the text it sits behind.
+   The input inherits the host font so the swap doesn't jump. */
+.edit-title {
+  cursor: text;
+  border-radius: 5px;
+  padding: 1px 5px;
+  margin: -1px -5px;
+  transition: background .12s;
+}
+.edit-title:hover { background: var(--tree-active-bg); }
+
+.edit-title__ai { display: inline-flex; vertical-align: middle; margin-left: 5px; }
+.edit-title__placeholder { color: var(--text-4); }
+
+.edit-title__input {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--accent-border, var(--accent));
+  border-radius: 5px;
+  padding: 1px 5px;
+  margin: -1px -5px;
+  min-width: 8ch;
+}
+.edit-title__input:focus { outline: none; }

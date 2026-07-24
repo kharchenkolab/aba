@@ -5,6 +5,8 @@ import PromoteDialog from './PromoteDialog'
 import AnnotatedFigure from '../bio/AnnotatedFigure'
 import ThreadHeader from './ThreadHeader'
 import SplitButton from './SplitButton'
+import EditableTitle from './EditableTitle'
+import { renameEntity } from '../lib/api'
 // Importing the bio side has the side-effect of registering all bio
 // focus-view components against the registry. The shell below dispatches
 // via `focus_view_for` — it never references entity-type-specific
@@ -109,12 +111,18 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus, onSel
 
   return (
     <div className={`focus ${compact ? 'focus--compact' : ''}`}>
-      {/* Runs and Results render their own title header; skip the generic one
-          to avoid a duplicate type pill + title. */}
-      {entity.type !== 'analysis' && entity.type !== 'result' && (
+      {/* Runs, Results, and Claims render their own body header; skip the
+          generic one. Claims have no separate title (the statement IS the
+          content, edited in the card), so a generic title here would only
+          repeat the global-header string. */}
+      {entity.type !== 'analysis' && entity.type !== 'result' && entity.type !== 'claim' && (
       <div className="focus__header">
-        <span className={`focus__type focus__type--${entity.type}`}>{entity.type}</span>
-        <h2 className="focus__title">{entity.title}</h2>
+        {/* The type pill lives in the global header above — not repeated here.
+            The title is click-to-edit via the shared component, which also gives
+            dataset/figure/finding/note/table/narrative in-card renaming. */}
+        <EditableTitle as="h2" className="focus__title" value={entity.title} ariaLabel="Rename"
+          aiSuggested={(entity.metadata as { title_origin?: string } | undefined)?.title_origin === 'ai'}
+          onCommit={t => { renameEntity(entity.id, entity.type, t).then(onChange) }} />
         {entity.metadata?.by_reference ? (
           <span
             className="focus__ref-badge"

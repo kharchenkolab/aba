@@ -11,6 +11,8 @@ import SearchPill from './components/SearchPill'
 import { ADVISORS_ENABLED } from './lib/flags'
 import { recentErrorLines } from './lib/errorLog'
 import FocusCanvas from './components/FocusCanvas'
+import EditableTitle from './components/EditableTitle'
+import { renameEntity, renameProject } from './lib/api'
 import FileCanvas from './viewers/FileCanvas'
 import type { FileNode } from './viewers/types'
 import Home from './bio/Home'
@@ -71,44 +73,6 @@ function typeLabel(t?: string): string {
 
 function entityLabel(e: Entity | null): string {
   return type_label_or_fallback(e?.type)
-}
-
-/** Central-header thread title — click to rename inline (mirrors ResultView). */
-function EditableThreadTitle({ thread, onRenamed }: {
-  thread: { id: string; title: string }; onRenamed: () => void
-}) {
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(thread.title)
-  async function save() {
-    const t = draft.trim()
-    setEditing(false)
-    if (!t || t === thread.title) return
-    await fetch(`/api/threads/${encodeURIComponent(thread.id)}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: t }),
-    })
-    onRenamed()
-  }
-  // Edit IN PLACE: keep the "thread" pill, swap only the title text for an
-  // input that fills the remaining width — so nothing jumps.
-  return (
-    <>
-      <span className="canvas-title__type">thread</span>
-      {editing ? (
-        <input className="canvas-title__input" autoFocus value={draft}
-               onFocus={e => e.currentTarget.select()}
-               onChange={e => setDraft(e.target.value)} onBlur={save}
-               onKeyDown={e => {
-                 if (e.key === 'Enter') save()
-                 if (e.key === 'Escape') { setDraft(thread.title); setEditing(false) }
-               }} />
-      ) : (
-        <span className="canvas-title__editable"
-              onClick={() => { setDraft(thread.title); setEditing(true) }}
-              title="Click to rename">{thread.title}</span>
-      )}
-    </>
-  )
 }
 
 export default function App() {
@@ -596,9 +560,6 @@ export default function App() {
     setViewedFile(node)
     url.setFilePath(node.path)
   }
-  // From an entity (entity-first) back to its thread's conversation.
-  const backToThread = () => { setFocusedId('workspace') }
-
   // Hand a request to the Guide (used by overview "describe a resource" /
   // "discuss this question"): leave any mode, drop to chat, send the message.
   const askGuide = (text: string) => {
@@ -971,7 +932,11 @@ export default function App() {
                 <button className="canvas-back" onClick={() => setOverview(false)} title="Back to the workspace">
                   ← {projectName}
                 </button>
-                <span className="canvas-title__type">overview</span>Project overview
+                <span className="canvas-title__type">overview</span>
+                {url.pid
+                  ? <EditableTitle value={projectName} ariaLabel="Rename project"
+                      onCommit={t => { renameProject(url.pid!, t).then(refresh) }} />
+                  : projectName}
               </>
             ) : inventory && currentThread ? (
               <>
@@ -981,15 +946,19 @@ export default function App() {
                 <span className="canvas-title__type">overview</span>Thread overview
               </>
             ) : (<>
-            {posture === 'entity' && scoped && (
-              <button className="canvas-back" onClick={backToThread} title="Back to the thread conversation">
-                ← {currentThread?.title ?? 'thread'}
-              </button>
-            )}
             {scoped
-              ? <><span className="canvas-title__type">{typeLabel(focused!.type)}</span>{focused!.title}</>
+              ? <>
+                  <span className="canvas-title__type">{typeLabel(focused!.type)}</span>
+                  {focused!.type === 'claim'
+                    ? focused!.title   /* claims have no separate title — the statement is the content, edited in the card */
+                    : <EditableTitle value={focused!.title} ariaLabel="Rename"
+                        aiSuggested={(focused!.metadata as { title_origin?: string } | undefined)?.title_origin === 'ai'}
+                        onCommit={t => { renameEntity(focused!.id, focused!.type, t).then(refresh) }} />}
+                </>
               : currentThread
-              ? <EditableThreadTitle thread={currentThread} onRenamed={refresh} />
+              ? <><span className="canvas-title__type">thread</span>
+                  <EditableTitle value={currentThread.title} ariaLabel="Rename thread"
+                    onCommit={t => { renameEntity(currentThread.id, 'thread', t).then(refresh) }} /></>
               : <>{projectName}</>}
             </>)}
           </div>
@@ -1010,9 +979,9 @@ export default function App() {
             )}
             {!overview && currentThread && !inventory && (
               <button className="canvas-inventory" title="Thread overview — all items by status"
+                aria-label="Thread overview"
                 onClick={() => setInventory(true)}>
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"><rect x="3" y="4" width="5" height="16" rx="1"/><rect x="9.5" y="4" width="5" height="16" rx="1"/><rect x="16" y="4" width="5" height="16" rx="1"/></svg>
-                overview
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"><rect x="3" y="4" width="5" height="16" rx="1"/><rect x="9.5" y="4" width="5" height="16" rx="1"/><rect x="16" y="4" width="5" height="16" rx="1"/></svg>
               </button>
             )}
             <button className="canvas-bug" title="Report a bug to the ABA team"

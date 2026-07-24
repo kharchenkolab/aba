@@ -13,6 +13,7 @@ import { useUnpinConfirm } from '../lib/useUnpinConfirm'
 import FileBrowser, { type TreeNode } from './FileBrowser'
 import FileCanvas from '../viewers/FileCanvas'
 import EntityMenu from './EntityMenu'
+import EditableTitle from '../components/EditableTitle'
 import type { FileNode } from '../viewers/types'
 import './RunView.css'
 
@@ -78,8 +79,6 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onPre
   const remoteSites = Array.from(new Set((m.sites ?? []).filter(s => s && s !== 'local')))
   const hpc = remoteSites.length > 0 || m.executor === 'remote-hpc'
   const active = status === 'running' || status === 'queued'
-  const [editing, setEditing] = useState(false)
-  const [title, setTitle] = useState(run.title)
   const [panel, setPanel] = useState<'command' | 'log' | 'details' | null>(
     status === 'failed' || status === 'running' ? 'log' : null)
   // Re-run verbs live in a quiet ⋯ overflow — rarely used, they shouldn't
@@ -322,7 +321,6 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onPre
     }).catch(() => {})
     onChange()
   }
-  const saveTitle = () => { setEditing(false); if (title.trim() && title.trim() !== run.title) patch({ title: title.trim() }) }
   async function cancel() {
     await fetch(`/api/runs/${encodeURIComponent(run.id)}/cancel`, { method: 'POST' }).catch(() => {})
     onChange()
@@ -470,13 +468,9 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onPre
     <div className="runview">
       {/* Title — status pill sits to its right */}
       <div className="runview__titlerow">
-        {editing ? (
-          <input className="runview__title-input" autoFocus value={title}
-                 onChange={e => setTitle(e.target.value)} onBlur={saveTitle}
-                 onKeyDown={e => { if (e.key === 'Enter') saveTitle(); if (e.key === 'Escape') { setTitle(run.title); setEditing(false) } }} />
-        ) : (
-          <h1 className="runview__title" onClick={() => setEditing(true)} title="Click to rename">{run.title}</h1>
-        )}
+        <EditableTitle as="h1" className="runview__title" value={run.title} ariaLabel="Rename run"
+          aiSuggested={(run.metadata as { title_origin?: string } | undefined)?.title_origin === 'ai'}
+          onCommit={t => patch({ title: t })} />
         {pill}
         {failChip}
         <EntityMenu entity={run} onChange={onChange} />
