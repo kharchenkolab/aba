@@ -177,6 +177,19 @@
 .rv__add-row { display: flex; gap: 8px; }
 .rv__add-btn { font-size: 13px; color: var(--text-2); background: var(--bg); border: 1px dashed var(--border-strong); border-radius: 8px; padding: 7px 12px; cursor: pointer; }
 .rv__add-btn:hover { border-color: var(--accent); color: var(--accent); }
+/* "Make new Claim" reads as the accent action in the add-row. */
+.rv__add-btn--claim { color: var(--accent); border-style: solid; }
+.rv__add-btn--claim:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+/* Text-selection "Claim from selection" pill — floats at the selection rect
+   over the members body (mirrors .chat-claim-sel in ChatPane.css). */
+.rv-claim-sel {
+  position: fixed; transform: translateX(-50%); z-index: 60;
+  background: var(--accent); color: #fff; border: none; border-radius: 9999px;
+  font-size: 12px; font-weight: 600; padding: 5px 12px; cursor: pointer;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.22); white-space: nowrap;
+}
+.rv-claim-sel:hover { background: #4338ca; }
 
 .rv__picker { border: 1px solid var(--border-strong); border-radius: 10px; padding: 10px; background: var(--bg); box-shadow: var(--shadow-sm); }
 .rv__picker-head { font-size: 10px; font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-4); margin-bottom: 8px; }

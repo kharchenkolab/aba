@@ -128,6 +128,9 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
   const highlighting = highlightingProp ?? hlLocal
   const setHighlighting = (on: boolean) => (onHighlightingChange ?? setHlLocal)(on)
   const [anyDrawing, setAnyDrawing] = useState(false)
+  // Text-selection → "Claim from selection": the trimmed text + a screen
+  // position for the floating pill (mirrors ChatPane's `sel`).
+  const [sel, setSel] = useState<{ text: string; x: number; y: number } | null>(null)
   // Exit highlight mode when the focused entity changes or the parent
   // signals an annotation-clear (avoids stale ✏️-on state after Esc).
   useEffect(() => { setHighlighting(false) }, [result.id, annotClear])  // eslint-disable-line react-hooks/exhaustive-deps
@@ -161,6 +164,24 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [zoom])
+
+  // Text-selection → "Claim from selection" (mirrors ChatPane): selecting a
+  // span inside the members body surfaces a floating pill that drafts a claim
+  // citing THIS result as evidence. Scoped to membersRef so a selection made
+  // elsewhere on the page is ignored; ≥ 8 chars filters stray clicks/drags.
+  useEffect(() => {
+    function onUp() {
+      const s = window.getSelection()
+      const text = s?.toString().trim() ?? ''
+      const node = s && s.rangeCount ? s.anchorNode : null
+      const host = node?.nodeType === 3 ? node.parentElement : (node as Element | null)
+      if (!text || text.length < 8 || !host || !membersRef.current?.contains(host)) { setSel(null); return }
+      const r = s!.getRangeAt(0).getBoundingClientRect()
+      setSel({ text, x: r.left + r.width / 2, y: r.top })
+    }
+    document.addEventListener('mouseup', onUp)
+    return () => document.removeEventListener('mouseup', onUp)
+  }, [])
 
   // ── Multi-member viewport tracking ──────────────────────────────────────
   // Gated on members.length > 1: a one-panel Result has nothing to
@@ -318,6 +339,16 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
     await fetch(`/api/results/${rid}/upload-evidence`, { method: 'POST', body: fd }).catch(() => {})
     onChange()
   }
+  // Make a claim citing THIS result as evidence, then open it entity-first for
+  // review/edit (mirrors App.createClaim + FocusCanvas.doFigureClaim). Shared by
+  // the text-selection pill and the "Make new Claim" button in the add-row.
+  const makeClaim = async (statement: string) => {
+    const r = await fetch('/api/claims', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ statement, evidence_ids: [result.id], thread_id: threadId }),
+    }).catch(() => null)
+    if (r && r.ok) { const c = await r.json(); onChange(); onFocus(c.id) }
+  }
   const removeMember = (mid: string) => api(`/api/results/${rid}/members/${encodeURIComponent(mid)}`, 'DELETE')
   // Hard-delete one revision in a figure/table chain. The backend re-parents
   // children and re-anchors member.ref so the chain stays navigable. Refuses
@@ -365,6 +396,13 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
 
   return (
     <div className="rv">
+      {sel && (
+        <button className="rv-claim-sel" style={{ left: Math.max(90, sel.x), top: Math.max(56, sel.y - 38) }}
+          onMouseDown={e => e.preventDefault()}
+          onClick={() => { makeClaim(sel.text); window.getSelection()?.removeAllRanges(); setSel(null) }}>
+          ✦ Claim from selection
+        </button>
+      )}
       {/* Title row. The Highlight toggle now lives in App.tsx's
           canvas-actions row (consistent with the Threads view), so it's
           NOT rendered here — each MemberPanel is driven by the lifted
@@ -447,6 +485,9 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
           <input ref={uploadRef} type="file" style={{ display: 'none' }}
                  accept="image/*,.csv,.tsv,.xlsx,.pdf"
                  onChange={e => { const f = e.target.files?.[0]; if (f) uploadEvidence(f); e.target.value = '' }} />
+          <button className="rv__add-btn rv__add-btn--claim"
+                  title="Draft a claim supported by this result — edit it in the claim view"
+                  onClick={() => makeClaim(reading.trim() || result.title)}>✦ Make new Claim</button>
         </div>
         {picker && (
           <div className="rv__picker">
