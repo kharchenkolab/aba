@@ -2,17 +2,23 @@
 
 **An AI-orchestrated workspace for biological data analysis.**
 
-ABA is a research environment where a biologist and an AI agent — **Guide** (powered by
-a language model of your choice, such as Claude models) — work side by side on a real
-analysis project, from raw data all the way to
-results and conclusions. You describe what you want in plain language; Guide plans the
-analysis, runs the code, and produces results you can inspect, revise, and build on.
+ABA is a research environment where a biologist and an AI agent — **Guide** — work side
+by side on a real analysis project, carrying it from raw data all the way to results and
+conclusions. You describe what you want in plain language; Guide plans the analysis, runs
+the code, and produces results you can inspect, revise, and build on. Guide is powered by
+a language model of your choice (such as Claude).
 
 Unlike a chatbot bolted onto a notebook, ABA keeps your work as **structured, typed,
 persistent objects** — datasets, analyses, figures, findings — each stamped with the
 provenance of how it was made. Your project is durable: close the browser, come back
 tomorrow, and everything (data, results, and the reasoning behind them) is where you
 left it. It's built for long-running research, not one-off questions.
+
+<p align="center">
+  <img src="docs/images/aba-result-view.png" width="880"
+       alt="The ABA workspace: a focused Result showing two paired UMAP figures with an auto-generated synthesis, the project sidebar of typed entities (Threads, Data, Claims, Results, Runs, Files) on the left, and Guide's chat on the right where the figure was produced and revised by asking."><br>
+  <em>A <strong>Result</strong> in ABA: paired figures with a written synthesis and a <code>SOURCE</code> provenance stamp, the typed-entity sidebar on the left (Data, Results, Claims, Runs, Files), and Guide's chat on the right — where this figure was produced and then revised just by asking.</em>
+</p>
 
 ## What you can do
 
