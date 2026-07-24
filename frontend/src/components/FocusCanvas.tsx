@@ -20,8 +20,11 @@ interface Props {
   onChange: () => void
   onFocus: (id: string) => void
   onSelectThread?: (id: string) => void
-  onAnnotate?: (a: Annotation) => void
+  onAnnotate?: (a: Annotation, ownerId?: string) => void
   annotClear?: number
+  /** Token of the cell/panel that owns the pinned highlight (App state),
+   *  threaded to the Result view so a captured panel mark stays frozen. */
+  hlOwner?: string | null
   /** Compact peek variant (chat-first): trim meta + provenance for the rail. */
   compact?: boolean
   /** Hand a request to the Guide (e.g. a Run's Re-run / Discuss → chat). */
@@ -52,7 +55,7 @@ type PromoteMode =
   | { kind: 'figure-to-claim' }
   | { kind: 'scenario' }
 
-export default function FocusCanvas({ entity, entities, onChange, onFocus, onSelectThread, onAnnotate, annotClear, compact, onAsk, onPrefill, onChatResult, onBrowseFiles, projectId, highlighting, onHighlightingChange }: Props) {
+export default function FocusCanvas({ entity, entities, onChange, onFocus, onSelectThread, onAnnotate, annotClear, hlOwner, compact, onAsk, onPrefill, onChatResult, onBrowseFiles, projectId, highlighting, onHighlightingChange }: Props) {
   const [promote, setPromote] = useState<PromoteMode | null>(null)
   const [compareOn, setCompareOn] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -167,7 +170,7 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus, onSel
           ? renderCompareBody(entity, baseline)
           : entity.type === 'figure' && onAnnotate
           ? <AnnotatedFigure entity={entity} onAttach={onAnnotate} clearSignal={annotClear} />
-          : renderRegistryView(entity, entities, onFocus, onChange, compact, onAsk, onChatResult, onBrowseFiles, projectId, onAnnotate, annotClear, highlighting, onHighlightingChange, onPrefill)}
+          : renderRegistryView(entity, entities, onFocus, onChange, compact, onAsk, onChatResult, onBrowseFiles, projectId, onAnnotate, annotClear, hlOwner, highlighting, onHighlightingChange, onPrefill)}
       </div>
       <div className="focus__meta">
         <span title={entity.id}>id {entity.id}</span>
@@ -435,8 +438,9 @@ function renderRegistryView(
                   entityId?: string) => void,
   onBrowseFiles?: (path?: string) => void,
   projectId?: string,
-  onAnnotate?: (a: { image: string; note: string }) => void,
+  onAnnotate?: (a: { image: string; note: string }, ownerId?: string) => void,
   annotClear?: number,
+  hlOwner?: string | null,
   highlighting?: boolean,
   onHighlightingChange?: (on: boolean) => void,
   onPrefill?: (text: string) => void,
@@ -458,6 +462,7 @@ function renderRegistryView(
     projectId={projectId}
     onAnnotate={onAnnotate}
     annotClear={annotClear}
+    hlOwner={hlOwner}
     highlighting={highlighting}
     onHighlightingChange={onHighlightingChange}
   />

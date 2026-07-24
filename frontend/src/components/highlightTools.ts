@@ -24,6 +24,14 @@ export const HILITE = 'rgba(253, 224, 71, 0.55)'   // highlighter yellow
 
 export type Pt = { x: number; y: number }
 
+/** A process-unique token identifying one highlight capture. The captured
+ *  mark stays "frozen" on its cell until superseded or dismissed; App tracks
+ *  the current owner by this token, and each cell shows its frozen overlay
+ *  only while it holds the live token. Shared across surfaces (chat cells,
+ *  Result panels) so tokens never collide between them. */
+let _annotSeq = 0
+export const nextAnnotToken = (): string => `hl${++_annotSeq}`
+
 
 /** Concrete shape + position descriptor for a freehand stroke. All math on
  *  normalized (0-1) coords; no DOM access. Stable language the agent can

@@ -12,7 +12,7 @@ import { EntityGlyph, AgentGlyph } from '../components/icons'
 import RevisionStrip, { useFigureRevisions, type RevisionAction } from './RevisionStrip'
 import ProvenanceSection from '../components/ProvenanceSection'
 import ConfirmDialog from '../components/ConfirmDialog'
-import { HILITE, captureHighlight, type Pt } from '../components/highlightTools'
+import { HILITE, captureHighlight, nextAnnotToken, type Pt } from '../components/highlightTools'
 import './ResultView.css'
 
 
@@ -67,7 +67,7 @@ function _canonicalKindLabel(url: string | null | undefined): string {
 const IMG = /\.(png|jpe?g|svg|webp|gif)$/i
 
 export default function ResultView({ result, entities, onChange, onFocus, onAsk, onChatResult,
-                                     onAnnotate, annotClear, highlighting: highlightingProp,
+                                     onAnnotate, annotClear, hlOwner, highlighting: highlightingProp,
                                      onHighlightingChange }: {
   result: Entity
   entities: Entity[]
@@ -81,10 +81,13 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
   /** Capture-handoff for the freehand Highlight tool — sends {image, note}
    *  to the composer (App.tsx:attachAnnotation). When undefined the toggle
    *  hides itself. */
-  onAnnotate?: (a: { image: string; note: string }) => void
+  onAnnotate?: (a: { image: string; note: string }, ownerId?: string) => void
   /** Bumped on focus change / annotation clear; signals MemberPanels to
    *  drop any in-progress stroke. */
   annotClear?: number
+  /** Token of the panel that currently owns the pinned highlight (App state).
+   *  A MemberPanel keeps its captured mark frozen only while it holds this. */
+  hlOwner?: string | null
   /** Highlight mode (lifted from App.tsx so the canvas-actions ✏️ button
    *  drives this view's MemberPanels). Provided when ResultView is hosted
    *  inside FocusCanvas; falls back to local state for standalone tests. */
@@ -388,8 +391,8 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
 
   // Capture-then-attach. On a successful highlight, exit the mode (mirror
   // ChatPane: one mark, one attach, then return to normal interaction).
-  const onPanelAnnotate = (a: { image: string; note: string }) => {
-    onAnnotate?.(a)
+  const onPanelAnnotate = (a: { image: string; note: string }, ownerId?: string) => {
+    onAnnotate?.(a, ownerId)
     setHighlighting(false)
     setAnyDrawing(false)
   }
@@ -437,6 +440,7 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
             anyDrawing={anyDrawing}
             onDrawingChange={setAnyDrawing}
             onAnnotate={onPanelAnnotate}
+            hlOwner={hlOwner}
             entities={entities}
             isActive={trackFocus && m.id === activeMemberId} />
         ))}
@@ -526,7 +530,7 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
 }
 
 function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, onMove, onCaption, onText, onFocus, onChatResult, onAsk, onDeleteRevision, resultTitle, isLastNonAutoMember, revisionsSignal,
-                       highlighting, anyDrawing, onDrawingChange, onAnnotate, entities,
+                       highlighting, anyDrawing, onDrawingChange, onAnnotate, hlOwner, entities,
                        isActive }: {
   member: ResultMember
   idx: number
@@ -563,8 +567,13 @@ function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, on
    *  other panels so the stroke locks to this one for the duration. */
   anyDrawing?: boolean
   onDrawingChange?: (b: boolean) => void
-  /** Capture-handoff: rasterized cell + structured note → composer. */
-  onAnnotate?: (a: { image: string; note: string }) => void
+  /** Capture-handoff: rasterized cell + structured note → composer. `ownerId`
+   *  (a fresh token per capture) lets App track which panel owns the pinned
+   *  mark so this panel can keep its overlay frozen until dismissed. */
+  onAnnotate?: (a: { image: string; note: string }, ownerId?: string) => void
+  /** Token of the panel that owns the pinned highlight (App state); this panel
+   *  shows its frozen mark only while hlOwner === its own capture token. */
+  hlOwner?: string | null
   /** Project entities (for figure-entity lookup inside describeHighlightedFigure). */
   entities?: Entity[]
   /** True when this panel is the multi-member Result's current viewport
@@ -636,6 +645,15 @@ function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, on
   const canHighlight = !!onAnnotate
   const showSurface = !!highlighting && canHighlight && ((hovered && !anyDrawing) || drawing)
   useEffect(() => { if (!highlighting) { setStroke([]); strokeRef.current = []; setHovered(false) } }, [highlighting])
+  // Frozen (pinned) mark — see Message.tsx for the full rationale. After the
+  // snapshot is captured the mark stays on this panel until a newer highlight
+  // supersedes it or the composer chip is dismissed; App arbitrates ownership
+  // via hlOwner against this panel's live capture token. No "invalidate on
+  // move" trigger: the overlay is absolute to the panel and the stroke is in
+  // [0,1] fractions, so it rides the panel through scroll/reflow.
+  const [frozen, setFrozen] = useState<Pt[] | null>(null)
+  const myToken = useRef<string | null>(null)
+  useEffect(() => { if (hlOwner !== myToken.current) setFrozen(null) }, [hlOwner])
 
   // Normalize CSS coords to the panel's [0,1] bbox (clamped) so the user can
   // drag past the edge without breaking the stroke.
@@ -689,15 +707,25 @@ function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, on
         cellText,
         onlyImage,
       })
-      if (result) onAnnotate?.(result)
+      if (result) {
+        const token = nextAnnotToken()
+        myToken.current = token
+        setFrozen([...pts])          // keep the mark on the panel until dismissed
+        onAnnotate?.(result, token)
+      }
     } catch { /* rasterize failed — drop the mark */ }
     finally { setBusy(false); setStroke([]); strokeRef.current = [] }
   }
 
   const strokePts = stroke.map(p => `${p.x * 100},${p.y * 100}`).join(' ')
+  // Show the frozen mark only while this panel still owns the pinned highlight.
+  const frozenActive = !!frozen && frozen.length > 1 && hlOwner != null && hlOwner === myToken.current
+  const frozenPts = frozen ? frozen.map(p => `${p.x * 100},${p.y * 100}`).join(' ') : ''
 
-  // Reusable surface JSX, sized to the contentRef wrapper. Renders only
-  // when showSurface is true (either hovering with mode on, or mid-drag).
+  // Reusable surface JSX, sized to the contentRef wrapper. The active draw
+  // surface shows while hovering with mode on (or mid-drag); otherwise, if this
+  // panel still owns the pinned highlight, its frozen mark stays put — no draw
+  // handler, no hint, click-through so the panel remains interactive.
   const renderHlSurface = () => (
     showSurface ? (
       <div className="rv-panel__hl" onMouseDown={hlDown}>
@@ -708,6 +736,13 @@ function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, on
           </svg>
         )}
         <div className="rv-panel__hl-hint">{busy ? 'capturing…' : 'draw to highlight'}</div>
+      </div>
+    ) : frozenActive ? (
+      <div className="rv-panel__hl rv-panel__hl--frozen" aria-hidden>
+        <svg className="rv-panel__hl-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+          <polyline points={frozenPts} fill="none" stroke={HILITE} strokeWidth="16"
+                    strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+        </svg>
       </div>
     ) : null
   )

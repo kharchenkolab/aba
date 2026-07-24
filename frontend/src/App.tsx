@@ -217,13 +217,22 @@ export default function App() {
   const [filesTarget, setFilesTarget] = useState<{ path: string; n: number }>({ path: '', n: 0 })
   const [composerFocus, setComposerFocus] = useState(0)
   const [annotClear, setAnnotClear] = useState(0)
-  const attachAnnotation = (a: { image: string; note: string }) => {
+  // Which cell/panel owns the currently-pinned freehand highlight. A cell keeps
+  // its captured mark "frozen" (until dismissed) only while it holds this token;
+  // a new highlight overwrites the owner, so the previous cell's mark retires.
+  const [hlOwner, setHlOwner] = useState<string | null>(null)
+  const attachAnnotation = (a: { image: string; note: string }, ownerId: string | null = null) => {
     setAnnotation(a)
     setComposerFocus(n => n + 1)   // jump the cursor to the composer
+    setHlOwner(ownerId)            // Flow A (cell/panel) passes a token; every
+                                   // other source (figure mark, chat-about-figure)
+                                   // defaults to null, retiring any frozen cell.
+    if (ownerId) setAnnotClear(n => n + 1)  // a fresh cell highlight also supersedes any drawn figure mark
   }
   const clearAnnotation = () => {
     setAnnotation(null)
-    setAnnotClear(n => n + 1)      // erase the drawn mark on the figure too
+    setHlOwner(null)              // drop the frozen cell/panel mark
+    setAnnotClear(n => n + 1)     // erase the drawn mark on the figure too
   }
   const [annotation, setAnnotation] = useState<{ image: string; note: string } | null>(null)
   const [searchOpen, setSearchOpen] = useState(false)
@@ -826,6 +835,7 @@ export default function App() {
       composerFocus={composerFocus}
       onAnnotate={attachAnnotation}
       annotClear={annotClear}
+      hlOwner={hlOwner}
       onRetry={retryLast}
       embedded
       compact={compact}
@@ -879,6 +889,7 @@ export default function App() {
           onSelectThread={selectThread}
           onAnnotate={attachAnnotation}
           annotClear={annotClear}
+          hlOwner={hlOwner}
           compact={!primary}
           onAsk={askGuide}
           onPrefill={prefillGuide}

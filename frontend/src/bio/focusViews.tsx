@@ -68,9 +68,12 @@ export interface FocusViewProps {
    *  carry a freehand-highlight surface inside the body. Captured strokes
    *  arrive here and propagate to the composer via App.tsx's
    *  attachAnnotation. Mirrors FocusCanvas's `onAnnotate` for figures. */
-  onAnnotate?: (a: { image: string; note: string }) => void
+  onAnnotate?: (a: { image: string; note: string }, ownerId?: string) => void
   /** Bumped to clear any drawn marks (focus change, attach commit). */
   annotClear?: number
+  /** Token of the panel that owns the pinned highlight (App state) — keeps a
+   *  captured MemberPanel mark frozen until superseded or dismissed. */
+  hlOwner?: string | null
   /** Highlight-mode lifted from App.tsx so the canvas-actions row's
    *  ✏️ button drives ResultView's per-MemberPanel hover surfaces. */
   highlighting?: boolean
@@ -631,10 +634,10 @@ function RunViewAdapter({ entity, entities, onFocus, onChange, onAsk, onPrefill,
                   onAsk={onAsk} onPrefill={onPrefill} onChatResult={onChatResult} onBrowseFiles={onBrowseFiles} />
 }
 
-function ResultViewAdapter({ entity, entities, onFocus, onChange, onAsk, onChatResult, onAnnotate, annotClear, highlighting, onHighlightingChange }: FocusViewProps) {
+function ResultViewAdapter({ entity, entities, onFocus, onChange, onAsk, onChatResult, onAnnotate, annotClear, hlOwner, highlighting, onHighlightingChange }: FocusViewProps) {
   return <ResultView result={entity} entities={entities} onFocus={onFocus} onChange={onChange}
                      onAsk={onAsk} onChatResult={onChatResult}
-                     onAnnotate={onAnnotate} annotClear={annotClear}
+                     onAnnotate={onAnnotate} annotClear={annotClear} hlOwner={hlOwner}
                      highlighting={highlighting} onHighlightingChange={onHighlightingChange} />
 }
 

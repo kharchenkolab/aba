@@ -159,6 +159,51 @@ describe('ResultView — Highlight tool', () => {
     })
   })
 
+  it('captured mark stays FROZEN while this panel owns hlOwner, and clears when ownership passes', async () => {
+    const f = fig('fig_a', 'UMAP clusters')
+    const result = makeResult('fig_a')
+    const onAnnotate = vi.fn()
+    const { rerender } = render(
+      <ResultView result={result} entities={[f]} onChange={() => {}} onFocus={() => {}}
+                  onAnnotate={onAnnotate} highlighting={true} />,
+    )
+    const panel = document.querySelector('.rv-panel') as HTMLElement
+    panel.getBoundingClientRect = () => ({
+      x: 0, y: 0, top: 0, left: 0, bottom: 200, right: 300,
+      width: 300, height: 200, toJSON: () => ({}),
+    } as DOMRect)
+    fireEvent.mouseEnter(panel)
+    const surface = panel.querySelector('.rv-panel__hl') as HTMLElement
+    fireEvent.mouseDown(surface, { clientX: 50, clientY: 60 })
+    fireEvent.mouseMove(window, { clientX: 80, clientY: 90 })
+    fireEvent.mouseMove(window, { clientX: 120, clientY: 110 })
+    await act(async () => { fireEvent.mouseUp(window) })
+    await waitFor(() => expect(onAnnotate).toHaveBeenCalled(), { timeout: 1000 })
+
+    // Contract: onAnnotate hands App a per-capture owner TOKEN as the 2nd arg.
+    const token = onAnnotate.mock.calls[0][1]
+    expect(typeof token).toBe('string')
+    expect(token.length).toBeGreaterThan(0)
+
+    // Before App claims ownership (hlOwner unset), no frozen overlay shows.
+    expect(panel.querySelector('.rv-panel__hl--frozen')).toBeNull()
+
+    // App pins this capture (hlOwner = token) and highlight mode exits: the
+    // mark must now persist as a frozen overlay with NO "draw" hint.
+    rerender(<ResultView result={result} entities={[f]} onChange={() => {}} onFocus={() => {}}
+                         onAnnotate={onAnnotate} highlighting={false} hlOwner={token} />)
+    const frozen = document.querySelector('.rv-panel__hl--frozen')
+    expect(frozen).not.toBeNull()
+    expect(frozen?.querySelector('polyline')).not.toBeNull()
+    expect(document.querySelector('.rv-panel__hl-hint')).toBeNull()
+
+    // Ownership passes to another highlight (or the chip is cleared → null):
+    // this panel's frozen mark retires.
+    rerender(<ResultView result={result} entities={[f]} onChange={() => {}} onFocus={() => {}}
+                         onAnnotate={onAnnotate} highlighting={false} hlOwner={null} />)
+    await waitFor(() => expect(document.querySelector('.rv-panel__hl--frozen')).toBeNull())
+  })
+
   it('exits highlight mode when the focused result changes', () => {
     const f = fig('fig_a')
     const resA = makeResult('fig_a')
