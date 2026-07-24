@@ -384,6 +384,16 @@ def _graft_dir(parent: dict, base, *, ephemeral: bool = True,
     return cnt
 
 
+# Job-sandbox runner scaffolding: process bookkeeping the runner writes at the
+# sandbox root, never analysis products. Skipped by the disk top-up so a job
+# run's output/ shows its products, not its harness (the run log stays
+# reachable through the run's own log surfaces).
+_JOBDIR_SCAFFOLDING = frozenset({
+    "pid", "pid.epoch", "pid.real", "log", "cmd.sh", "runner.sh",
+    "activate.sh", "rusage", "node",
+})
+
+
 def _graft_run_outputs(parent: dict, run: dict, *, cap: int = 300) -> int:
     """Graft a Run's output/ from the PRODUCED LEDGER (exec-record produced[]
     + retention states via run_durable_view), then top up from the run's
@@ -461,11 +471,18 @@ def _graft_run_outputs(parent: dict, run: dict, *, cap: int = 300) -> int:
     if out_dir and cnt < cap:
         try:
             base = _P(out_dir)
-            skip = frozenset(str((base / rel).resolve()) for rel in listed)
+            # rels already listed from the ledger + the sandbox scaffolding a
+            # job runner writes at its root (process bookkeeping, not products
+            # — the run log has its own surfaces). blocks/ is the execution
+            # transcript, folded at the ledger level for the same reason.
+            skip = frozenset(
+                [str((base / rel).resolve()) for rel in listed]
+                + [str((base / n).resolve()) for n in _JOBDIR_SCAFFOLDING])
+            skip_dirs = (str((base / "blocks").resolve()),)
         except Exception:  # noqa: BLE001
-            skip = frozenset()
+            skip, skip_dirs = frozenset(), ()
         cnt += _graft_dir(parent, out_dir, ephemeral=False, skip=skip,
-                          cap=cap - cnt)
+                          skip_dirs=skip_dirs, cap=cap - cnt)
     return cnt
 
 

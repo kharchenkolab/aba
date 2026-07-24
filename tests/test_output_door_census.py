@@ -188,6 +188,25 @@ def test_truncation_is_declared_not_silent(monkeypatch):
     assert "5" in parent["note"] and "8" in parent["note"]  # the cut is NAMED
 
 
+def test_disk_topup_skips_runner_scaffolding(monkeypatch):
+    """The disk top-up lists PRODUCTS, not the job runner's process
+    bookkeeping (pid/log/launcher scripts at the sandbox root, the blocks/
+    transcript dir). Other side: a real product beside them still grafts."""
+    _tid, rid = _mk_run(monkeypatch)
+    ap = Path(get_entity(rid)["artifact_path"])
+    (ap / "blocks").mkdir(parents=True, exist_ok=True)
+    (ap / "blocks" / "0001.out").write_text("x")
+    for n in ("pid", "log", "runner.sh", "activate.sh", "rusage"):
+        (ap / n).write_text("scaffolding")
+    (ap / "result.bin").write_bytes(b"product")
+    monkeypatch.setattr(artmod, "artifacts_for_run", lambda r: [])
+
+    by = _files_under_output(treemod.build_files_tree())
+    assert "result.bin" in by                      # the product is listed
+    for n in ("pid", "log", "runner.sh", "activate.sh", "rusage", "0001.out"):
+        assert n not in by, f"runner scaffolding leaked into output/: {n}"
+
+
 # ── doors 2+3: serve routes (content, download zip) ─────────────────────────
 
 def _routes_app(monkeypatch, tree: dict):

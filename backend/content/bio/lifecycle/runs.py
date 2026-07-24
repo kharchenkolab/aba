@@ -1960,6 +1960,18 @@ def run_durable_view(run_id: str) -> dict:
         if rel:
             by_rel[rel] = a
 
+    # Execution-transcript records (the runtime's per-block code/out/err/rc
+    # files under blocks/) are bookkeeping, not products — live they were 44
+    # of a panel's 438 rows, competing with real outputs for every listing
+    # cap downstream. Folded to a DECLARED summary count, never silently:
+    # the code narrative is surfaced as producing_code, and the raw
+    # transcript stays reachable through the run's exec records.
+    transcript_n = 0
+    for r in [r for r in by_rel
+              if r == "blocks" or r.startswith("blocks/")]:
+        del by_rel[r]
+        transcript_n += 1
+
     # Live on-disk check (weft run_file_stat) — authoritative for in-sandbox
     # vs cleared, and the ONLY signal on a live kernel (no terminal inventory
     # yet; the proxy would mislabel every live file "cleared"). BATCHED (weft
@@ -2057,8 +2069,17 @@ def run_durable_view(run_id: str) -> dict:
             view_url = url or weft_url
         files.append({"rel": rel, "bytes": size, "kind": kind, "state": state,
                       "badge": badge, "url": view_url, "site": site, "large": large})
-        counts[_COUNT_KEY[state]] += 1
+    # A chunked directory store is ONE logical output — its member rows fold
+    # into a single kind="store" row (the manifest + surface probe already
+    # hold this line; the view listed every shard, 385 rows for one store
+    # live). Counting happens AFTER the fold so the summary describes what
+    # the panel actually shows.
+    files = _collapse_store_rows(files, run_id)
+    for f in files:
+        counts[_COUNT_KEY[f["state"]]] += 1
     summary: dict = {**counts, "total": len(files)}
+    if transcript_n:
+        summary["transcript_files"] = transcript_n
     if view_degraded:
         summary["degraded"] = True   # UI: badge honesty, not "discarded"
     # P1 honest surfacing (UI-only — never injected into agent context; see project
@@ -2295,6 +2316,44 @@ def _human_size(n: int) -> str:
             return (f"{f:.0f} {unit}" if unit == "B" else f"{f:.1f} {unit}")
         f /= 1024
     return f"{n} B"
+
+
+def _collapse_store_rows(files: list, run_id: str) -> list:
+    """Durable-view counterpart of `_collapse_store_members` below: a chunked
+    directory store is ONE logical output, so its member rows fold into a
+    single kind="store" row. Unlike the manifest path, sizes here are still
+    raw ints, so the store row carries an honest byte sum over its present
+    members. State is WEAKEST-WINS — a store is only as protected as its
+    least-protected shard; a store whose members are all `cleared` is cleared.
+    The badge names the member count so the aggregation is visible, not
+    hidden. Member order: non-store rows keep their order; store rows append."""
+    from urllib.parse import quote as _q
+    from core.exec.run import _MAX_HARVEST_BYTES
+    _rank = {"at-risk": 0, "in-sandbox": 1, "unknown": 2, "saving": 3,
+             "in-store": 4, "retained": 5}
+    stores: dict[str, list] = {}
+    kept: list = []
+    for f in files:
+        root = next(_store_root_of(f.get("rel") or ""), None)
+        if root is None:
+            kept.append(f)
+        else:
+            stores.setdefault(root, []).append(f)
+    for root, members in stores.items():
+        live = [m for m in members if m["state"] != "cleared"]
+        rep = min(live or members, key=lambda m: _rank.get(m["state"], 0))
+        state = rep["state"] if live else "cleared"
+        size = sum(m.get("bytes") or 0 for m in live)
+        badge = (f"{rep['badge']} · store of {len(live)} files" if live
+                 else rep["badge"])
+        kept.append({"rel": root, "bytes": size, "kind": "store",
+                     "state": state, "badge": badge,
+                     "url": (None if state in ("cleared", "unknown")
+                             else f"/api/runs/{run_id}/file?rel={_q(root)}"),
+                     "site": rep.get("site"),
+                     "large": size > _MAX_HARVEST_BYTES,
+                     "n_members": len(live)})
+    return kept
 
 
 def _collapse_store_members(outputs: list[dict], run_id: str) -> list[dict]:

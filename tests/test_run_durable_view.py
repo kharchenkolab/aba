@@ -353,6 +353,88 @@ def test_durable_view_temporary_by_absence_while_open(monkeypatch):
     assert f_closed["badge"].startswith("temporary")
 
 
+def test_store_members_collapse_to_one_row(monkeypatch):
+    """A chunked directory store is ONE logical output: its member rows fold
+    into a single kind="store" row with an honest byte sum and a declared
+    member count — the manifest and the surface probe already hold this line;
+    the view listed every shard (385 rows for one store, live 2026-07-24)."""
+    monkeypatch.setattr(runsmod, "get_entity",
+                        lambda rid: {"id": rid, "metadata": {"weft_targets": ["krn_s"]}})
+    monkeypatch.setattr(retmod, "retained", lambda **kw: [])
+    _stub_inventories(monkeypatch)
+    _stub_stats(monkeypatch, lambda rel: {"exists": True, "bytes": 10})
+    monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [
+        {"original_name": "out/data.zarr/meta.json", "url": None, "kind": "file", "size": 100},
+        {"original_name": "out/data.zarr/c/0", "url": None, "kind": "file", "size": 200},
+        {"original_name": "out/data.zarr/c/1", "url": None, "kind": "file", "size": 300},
+        {"original_name": "top.csv", "url": None, "kind": "table", "size": 5},
+    ])
+    view = runsmod.run_durable_view("run-s")
+    by = {f["rel"]: f for f in view["files"]}
+    # ceiling AND floor: exactly two rows — the store and the plain file
+    assert set(by) == {"out/data.zarr", "top.csv"}, \
+        "store members must fold into one row (no shard leaks)"
+    st = by["out/data.zarr"]
+    assert st["kind"] == "store" and st["n_members"] == 3
+    assert st["bytes"] == 600                      # honest sum, raw ints
+    assert st["state"] == "in-sandbox"             # all members live-unkept
+    assert "store of 3 files" in st["badge"]       # aggregation is visible
+    assert st["url"] == "/api/runs/run-s/file?rel=out/data.zarr"
+    # summary counts describe what the panel SHOWS (post-fold)
+    assert view["summary"]["total"] == 2
+    assert view["summary"]["in_sandbox"] == 2
+
+
+def test_store_state_is_weakest_of_live_members(monkeypatch):
+    """WIDE: mixed member states → the store claims only its weakest live
+    protection; all-cleared → the store is cleared with no link."""
+    loc_files = {"data.zarr/meta.json": "m"}      # one member retained
+    monkeypatch.setattr(runsmod, "get_entity",
+                        lambda rid: {"id": rid, "metadata": {"weft_targets": ["krn_m"]}})
+    monkeypatch.setattr(retmod, "retained", lambda **kw: [
+        {"state": "done", "site": "local", "in_place": 0,
+         "location": None, "selection": json.dumps(
+             {"include": ["data.zarr/meta.json"]})}])
+    _stub_inventories(monkeypatch)
+    _stub_stats(monkeypatch, lambda rel: {"exists": True, "bytes": _BIG})
+    monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [
+        {"original_name": "data.zarr/meta.json", "url": None, "kind": "file", "size": 1},
+        {"original_name": "data.zarr/c/0", "url": None, "kind": "file", "size": _BIG},
+    ])
+    st = runsmod.run_durable_view("run-m")["files"][0]
+    assert st["kind"] == "store"
+    assert st["state"] == "at-risk", \
+        "a store with one unprotected shard must not claim its strongest state"
+
+    # all members cleared → the store is cleared, linkless, zero live members
+    monkeypatch.setattr(retmod, "retained", lambda **kw: [])
+    _stub_stats(monkeypatch, lambda rel: {"exists": False})
+    st2 = runsmod.run_durable_view("run-m")["files"][0]
+    assert st2["state"] == "cleared" and st2["url"] is None
+    assert st2["n_members"] == 0
+
+
+def test_transcript_rows_fold_to_declared_count(monkeypatch):
+    """Runtime transcript records (blocks/…) are bookkeeping, not products:
+    they leave the file list but their count is DECLARED in the summary —
+    folding is visible, hiding would be silent."""
+    monkeypatch.setattr(runsmod, "get_entity",
+                        lambda rid: {"id": rid, "metadata": {"weft_targets": ["krn_t"]}})
+    monkeypatch.setattr(retmod, "retained", lambda **kw: [])
+    _stub_inventories(monkeypatch)
+    _stub_stats(monkeypatch, lambda rel: {"exists": True, "bytes": 10})
+    monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [
+        {"original_name": "blocks/0001.code", "url": None, "kind": "file", "size": 1},
+        {"original_name": "blocks/0001.out", "url": None, "kind": "file", "size": 1},
+        {"original_name": "result.csv", "url": None, "kind": "table", "size": 9},
+    ])
+    view = runsmod.run_durable_view("run-t2")
+    rels = [f["rel"] for f in view["files"]]
+    assert rels == ["result.csv"], "transcript rows must fold out of the panel"
+    assert view["summary"]["transcript_files"] == 2
+    assert view["summary"]["total"] == 1
+
+
 def test_read_run_file_previews_in_sandbox(monkeypatch):
     """B1b: read_run_file decodes weft run_file_read's base64 preview across the targets."""
     import base64
