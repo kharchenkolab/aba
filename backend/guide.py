@@ -260,13 +260,17 @@ def _build_focus_trailer(focus_entity_id: str) -> str | None:
 # per turn), adjusted as we learn from real sessions.
 _PRIORITY_TOOLS: tuple[str, ...] = (
     "run_python", "run_r",
-    "Skill", "search_skills",
+    "Skill",
     "present_plan", "ask_clarification",
     "register_dataset", "list_data_files",
     "ensure_capability",
     # describe_tool demoted 2026-07-22 (budget: make_isolated_env grew a
     # conda_packages param): the tool that RECOVERS full prose is the one
     # whose own summary suffices — its name is its contract.
+    # search_skills demoted 2026-07-24 (budget: the <system-reminder>-is-
+    # ambient behavior rule landed in behavior_slim): a search box's name IS
+    # its contract, and its results carry their own teaching; Skill keeps
+    # full prose — invocation is the part small models get wrong.
 )
 # find_files rides summary-rendering: its full docstring is the catalog's
 # largest and list_data_files covers the common case; full prose stays one
