@@ -414,10 +414,11 @@ def test_store_state_is_weakest_of_live_members(monkeypatch):
     assert st2["n_members"] == 0
 
 
-def test_transcript_rows_fold_to_declared_count(monkeypatch):
-    """Runtime transcript records (blocks/…) are bookkeeping, not products:
-    they leave the file list but their count is DECLARED in the summary —
-    folding is visible, hiding would be silent."""
+def test_runtime_bookkeeping_folds_to_declared_count(monkeypatch):
+    """Runtime bookkeeping — the blocks/ transcript AND root-level runner
+    scaffolding (pid/log/launchers) — leaves the file list with its count
+    DECLARED in the summary: folding is visible, hiding would be silent.
+    WIDE: the match is exact-root-only — a user's own out/log survives."""
     monkeypatch.setattr(runsmod, "get_entity",
                         lambda rid: {"id": rid, "metadata": {"weft_targets": ["krn_t"]}})
     monkeypatch.setattr(retmod, "retained", lambda **kw: [])
@@ -426,13 +427,19 @@ def test_transcript_rows_fold_to_declared_count(monkeypatch):
     monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [
         {"original_name": "blocks/0001.code", "url": None, "kind": "file", "size": 1},
         {"original_name": "blocks/0001.out", "url": None, "kind": "file", "size": 1},
+        {"original_name": "pid", "url": None, "kind": "file", "size": 1},
+        {"original_name": "runner.sh", "url": None, "kind": "file", "size": 1},
+        {"original_name": "log", "url": None, "kind": "file", "size": 1},
+        {"original_name": "out/log", "url": None, "kind": "file", "size": 3},
         {"original_name": "result.csv", "url": None, "kind": "table", "size": 9},
     ])
     view = runsmod.run_durable_view("run-t2")
-    rels = [f["rel"] for f in view["files"]]
-    assert rels == ["result.csv"], "transcript rows must fold out of the panel"
-    assert view["summary"]["transcript_files"] == 2
-    assert view["summary"]["total"] == 1
+    rels = sorted(f["rel"] for f in view["files"])
+    assert rels == ["out/log", "result.csv"], \
+        "bookkeeping must fold; a user file NAMED like scaffolding in a " \
+        "subdir must survive"
+    assert view["summary"]["runtime_files"] == 5
+    assert view["summary"]["total"] == 2
 
 
 def test_read_run_file_previews_in_sandbox(monkeypatch):

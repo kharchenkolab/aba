@@ -384,16 +384,6 @@ def _graft_dir(parent: dict, base, *, ephemeral: bool = True,
     return cnt
 
 
-# Job-sandbox runner scaffolding: process bookkeeping the runner writes at the
-# sandbox root, never analysis products. Skipped by the disk top-up so a job
-# run's output/ shows its products, not its harness (the run log stays
-# reachable through the run's own log surfaces).
-_JOBDIR_SCAFFOLDING = frozenset({
-    "pid", "pid.epoch", "pid.real", "log", "cmd.sh", "runner.sh",
-    "activate.sh", "rusage", "node",
-})
-
-
 def _graft_run_outputs(parent: dict, run: dict, *, cap: int = 300) -> int:
     """Graft a Run's output/ from the PRODUCED LEDGER (exec-record produced[]
     + retention states via run_durable_view), then top up from the run's
@@ -473,11 +463,13 @@ def _graft_run_outputs(parent: dict, run: dict, *, cap: int = 300) -> int:
             base = _P(out_dir)
             # rels already listed from the ledger + the sandbox scaffolding a
             # job runner writes at its root (process bookkeeping, not products
-            # — the run log has its own surfaces). blocks/ is the execution
+            # — the run log has its own surfaces; one owner for the name set:
+            # the durable view folds the same rels). blocks/ is the execution
             # transcript, folded at the ledger level for the same reason.
+            from content.bio.lifecycle.runs import _RUNNER_SCAFFOLDING
             skip = frozenset(
                 [str((base / rel).resolve()) for rel in listed]
-                + [str((base / n).resolve()) for n in _JOBDIR_SCAFFOLDING])
+                + [str((base / n).resolve()) for n in _RUNNER_SCAFFOLDING])
             skip_dirs = (str((base / "blocks").resolve()),)
         except Exception:  # noqa: BLE001
             skip, skip_dirs = frozenset(), ()

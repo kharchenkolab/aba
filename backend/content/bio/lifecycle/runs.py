@@ -410,6 +410,16 @@ def _retained_so_far(run_id: str) -> tuple:
     return decided, placed
 
 
+# Job-runner scaffolding written at a job sandbox's ROOT — process
+# bookkeeping, never analysis products. Matched as EXACT root-level rels
+# (a user's own out/log or logs/x is untouched). One owner: the durable
+# view folds these from its listing (declared in summary.runtime_files),
+# and the files tree's disk top-up skips them on disk.
+_RUNNER_SCAFFOLDING = frozenset({
+    "pid", "pid.epoch", "pid.real", "log", "cmd.sh", "runner.sh",
+    "activate.sh", "rusage", "node",
+})
+
 # Directory-shaped stores (a chunked columnar/array store is a DIRECTORY, not a file).
 # Harvest lists single files by extension, so these never reach artifacts_for_run —
 # the jobdir scan below is how they enter the keeper set (P1 / #71). Suffix-matched
@@ -1960,17 +1970,19 @@ def run_durable_view(run_id: str) -> dict:
         if rel:
             by_rel[rel] = a
 
-    # Execution-transcript records (the runtime's per-block code/out/err/rc
-    # files under blocks/) are bookkeeping, not products — live they were 44
-    # of a panel's 438 rows, competing with real outputs for every listing
-    # cap downstream. Folded to a DECLARED summary count, never silently:
-    # the code narrative is surfaced as producing_code, and the raw
-    # transcript stays reachable through the run's exec records.
-    transcript_n = 0
+    # Runtime bookkeeping is not a product: the per-block transcript under
+    # blocks/ (44 of a panel's 438 rows live) and the runner scaffolding a
+    # job sandbox carries at its ROOT (pid/log/launcher files — exact root
+    # names only, so a user's own out/log survives). Folded to a DECLARED
+    # summary count, never silently: the code narrative is surfaced as
+    # producing_code, the run log through the run's own log surfaces, and
+    # the raw transcript through its exec records.
+    runtime_n = 0
     for r in [r for r in by_rel
-              if r == "blocks" or r.startswith("blocks/")]:
+              if r == "blocks" or r.startswith("blocks/")
+              or r in _RUNNER_SCAFFOLDING]:
         del by_rel[r]
-        transcript_n += 1
+        runtime_n += 1
 
     # Live on-disk check (weft run_file_stat) — authoritative for in-sandbox
     # vs cleared, and the ONLY signal on a live kernel (no terminal inventory
@@ -2078,8 +2090,8 @@ def run_durable_view(run_id: str) -> dict:
     for f in files:
         counts[_COUNT_KEY[f["state"]]] += 1
     summary: dict = {**counts, "total": len(files)}
-    if transcript_n:
-        summary["transcript_files"] = transcript_n
+    if runtime_n:
+        summary["runtime_files"] = runtime_n
     if view_degraded:
         summary["degraded"] = True   # UI: badge honesty, not "discarded"
     # P1 honest surfacing (UI-only — never injected into agent context; see project
