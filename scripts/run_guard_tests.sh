@@ -202,6 +202,7 @@ FILES=(
   tests/test_route_table.py
   tests/test_router_env.py
   tests/test_run_archive.py
+  tests/test_output_door_census.py
   tests/test_durable_route_convoy.py
   tests/test_run_durable_view.py
   tests/test_run_keep.py

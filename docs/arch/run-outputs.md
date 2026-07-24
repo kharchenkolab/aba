@@ -82,8 +82,10 @@ deleting a fresh copy out from under a viewer.
 |---|---|---|
 | Serve (run file) | `web/routes/runs.py` `/api/runs/{id}/file` | `resolve_run_file` (exact, small gate) → preview read → honest site-naming 413 |
 | Serve (archive) | `/api/runs/{id}/archive` | per-file `resolve_run_file`; skipped files listed in-zip, never dropped |
-| Serve (entity / tree) | `main.py` `/api/entities/{id}/download`, `web/routes/files.py` content/raw/download | dangling `/artifacts` cache → `resolve_entity_output` → materialize under the small gate, else site-naming 413 |
+| Serve (entity / tree) | `main.py` `/api/entities/{id}/download`, `web/routes/files.py` content/raw/download | dangling `/artifacts` cache → run-backed nodes via `resolve_run_file` (`_run_backed_path`) → `resolve_entity_output` → materialize under the small gate, else site-naming 413 / 404 naming the site |
 | List | `run_durable_view` / `run_durable_tree` | recorded truth first; two-axis badges (protection × location); `retained` rows always link the live `/file` URL — remote in-place included |
+| Tree (Files tab) | `files/tree.py` `build_files_tree` → `_graft_run_outputs` | each run's `output/` comes from the PRODUCED LEDGER (`run_durable_view`: states carried, sandbox-lifetime files marked ephemeral, `cleared` unlisted, cap declared) plus a disk top-up of `artifact_path` for legacy jobdir runs, deduped by rel. Never a bare disk walk: under the kernel substrate produced files live in the kernel workspace and a walk of `artifact_path` finds nothing |
+| Export (zip / materialize) | `/api/files/download`, `materialize_tree(resolve=)` | run-backed nodes resolve through the caller-supplied run resolver; files the tree lists but this machine can't serve are NAMED (`SKIPPED-FILES.txt` / `missing`+warning), never silently omitted |
 | Register (`register_dataset`) | `curation._resolve_dataset_path` | `locate_run_output(active_run, name)` **first** (site- and stopped-kernel-aware); the ranked scratch scan is the fallback and the only tier for no-run registrations; the durable `run_key` is captured via the resolver (`_capture_run_key`), site-agnostically |
 | Search (`find_files`) | `project_locate.locate_project_files` | every tier answers `durability`; a live-sandbox hit says it is swept and must be registered/copied before reuse — silence is a claim |
 | View | `viewers` routes + external launcher `_resolve_source` | lookup (`resolve_project_run_output`) returns a **remote marker**, moves nothing; launch calls `resolve_run_store` (guardrail budget, progress, retain-on-view) |
@@ -105,10 +107,15 @@ not be re-derived at a door (misc/paths.md owns the rationale).
   8 MB preview read, forget).
 - `core/data/datasets.py` — the data-plane mechanism the mover reuses
   (`register_source`/`fetch`, `FETCH_GUARDRAIL_BYTES`, fingerprints).
+- `content/bio/files/tree.py` — `_graft_run_outputs` (the ledger-sourced
+  `output/` graft), `web/routes/files.py` `_run_backed_path` (serve fallback
+  for ledger-sourced nodes).
 - Tests: `tests/test_remote_output_resolution.py` (the invariant guard:
   lookup-never-transfers, digest revalidation, atomic installs, presentation
   parity, the produce-remotely → open-here → settle lifecycle),
-  `tests/test_run_durable_view.py`, `tests/test_serving_spine.py`.
+  `tests/test_run_durable_view.py`, `tests/test_serving_spine.py`,
+  `tests/test_output_door_census.py` (every lister/server of run outputs
+  reads the ledger — the door census).
 
 ## Known gaps
 
@@ -117,9 +124,9 @@ not be re-derived at a door (misc/paths.md owns the rationale).
   events (rate, ETA) aren't surfaced yet.
 - **`force=` has no UI affordance.** The override is plumbed end-to-end but no
   surface offers "bring it home anyway" past the guardrail yet.
-- **Files-tree aggregate ZIP** (`/api/files/download` on a folder) silently
-  omits remote-only files; the run-level archive lists them in-zip — the
-  aggregate route should adopt the same manifest honesty.
+- **Files-tab durable states don't refresh.** The tree is built per fetch;
+  a state flip (saving → retained) shows on the next tab load, not live —
+  the Run card's polled panel is the live surface.
 - **Store bring-back is whole-store.** The data-plane fetches only missing
   blobs, but ABA re-fetches a changed store wholesale into a fresh temp; a
   delta-aware install (reusing the content-addressed cache) would cut repeat

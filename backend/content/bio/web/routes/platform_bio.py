@@ -116,8 +116,12 @@ def project_materialize(pid: str, clean: bool = False, include_archived: bool = 
     """
     from core.files.materialize import materialize_tree
     from content.bio.files.tree import build_files_tree
+    from content.bio.web.routes.files import _run_backed_path
     from core import projects
     out = projects.PROJECTS_DIR / pid / "files"
     tree = build_files_tree(include_archived=include_archived)
-    summary = materialize_tree(tree, out, clean=clean)
+    # resolver for ledger-sourced run outputs: their artifact_path is a server
+    # URL; the bytes live in the substrate workspace (kernel jobdir / retained
+    # tree). Without this, every kernel-run output materializes as "missing".
+    summary = materialize_tree(tree, out, clean=clean, resolve=_run_backed_path)
     return summary

@@ -384,6 +384,91 @@ def _graft_dir(parent: dict, base, *, ephemeral: bool = True,
     return cnt
 
 
+def _graft_run_outputs(parent: dict, run: dict, *, cap: int = 300) -> int:
+    """Graft a Run's output/ from the PRODUCED LEDGER (exec-record produced[]
+    + retention states via run_durable_view), then top up from the run's
+    artifact_path on disk for anything the ledger doesn't list.
+
+    The ledger is primary because under the weft-kernel substrate produced
+    files live in the KERNEL WORKSPACE, not in artifact_path — the old
+    disk-walk-only source silently showed an empty output/ for every kernel
+    run (bulk .h5ad/.zarr outputs invisible in the Files tab while the Run
+    card, which reads the ledger, listed them). The disk top-up keeps legacy
+    jobdir runs (whose files really do land in artifact_path) fully listed.
+
+    Honesty rules, matching the durable panel: `cleared` files don't render
+    (the tab lists files that exist; the Run card owns the discard
+    narrative); `in-sandbox`/`at-risk`/`unknown` are marked ephemeral (an
+    address that dies with its sandbox must say so); a cap cut is DECLARED
+    on the parent node, never silent. File nodes carry `run_id` + `rel` so
+    the serve/materialize doors can resolve bytes through the canonical
+    run resolver instead of trusting a URL shape."""
+    from pathlib import Path as _P
+    rid = run["id"]
+    listed: list[str] = []
+    cnt = 0
+    view_files: list[dict] = []
+    try:
+        from core.exec.artifacts import artifacts_for_run
+        if artifacts_for_run(rid):     # cheap local gate: no ledger rows →
+            from content.bio.lifecycle.runs import run_durable_view
+            view_files = [f for f in run_durable_view(rid)["files"]
+                          if f.get("state") != "cleared"]
+    except Exception:  # noqa: BLE001 — substrate trouble ≠ empty run; the
+        pass           # disk top-up below still lists what's locally visible
+
+    folders: dict[str, dict] = {parent["path"]: parent}
+
+    def _ensure(parts: list[str]) -> dict:
+        path, node = parent["path"], parent
+        for p in parts:
+            path = f"{path}/{p}"
+            child = folders.get(path)
+            if child is None:
+                child = _folder(p, path=path, kind="folder")
+                node["children"].append(child)
+                folders[path] = child
+            node = child
+        return node
+
+    for f in view_files[:cap]:
+        rel = f.get("rel") or ""
+        if not rel:
+            continue
+        parts = rel.split("/")
+        node = _ensure(parts[:-1])
+        fnode: dict = {
+            "kind": "file", "name": parts[-1],
+            "path": f"{node['path']}/{parts[-1]}",
+            "artifact_path": f.get("url"),
+            "size": f.get("bytes"),
+            "state": f.get("state"), "badge": f.get("badge"),
+            "run_id": rid, "rel": rel,
+        }
+        if f.get("site"):
+            fnode["site"] = f["site"]
+        if f.get("state") in ("in-sandbox", "at-risk", "unknown"):
+            fnode["ephemeral"] = True
+        node["children"].append(fnode)
+        listed.append(rel)
+        cnt += 1
+    if len(view_files) > cap:
+        parent["truncated"] = True
+        parent["note"] = (f"showing {cap} of {len(view_files)} produced files "
+                          f"— open the Run for the full list")
+
+    out_dir = run.get("artifact_path")
+    if out_dir and cnt < cap:
+        try:
+            base = _P(out_dir)
+            skip = frozenset(str((base / rel).resolve()) for rel in listed)
+        except Exception:  # noqa: BLE001
+            skip = frozenset()
+        cnt += _graft_dir(parent, out_dir, ephemeral=False, skip=skip,
+                          cap=cap - cnt)
+    return cnt
+
+
 def _run_output_dirs(entities: list[dict]) -> tuple:
     """Resolved output-dir paths of all analysis Runs (their artifact_path) — so
     the catch-all working/ node can skip files that belong under a Run."""
@@ -592,16 +677,15 @@ def build_files_tree(*, include_archived: bool = False) -> dict:
                             "synthesized_content": code,
                         })
 
-                    # Full output directory — every file the pipeline wrote
-                    # (.rds/.h5ad/subfolders/…), nested as on disk. This is the
-                    # browsable bundle; the curated figures/tables below are the
+                    # Full output listing — every file the run PRODUCED, from
+                    # the ledger (durable states included) plus any legacy
+                    # on-disk files under artifact_path. This is the browsable
+                    # bundle; the curated figures/tables below are the
                     # harvested subset (also kept as entities, pinnable).
-                    out_dir = run.get("artifact_path")
-                    if out_dir:
-                        out_node = _folder("output", path=f"{r_path}/output", kind="folder")
-                        _graft_dir(out_node, out_dir, ephemeral=False, cap=300)
-                        if out_node["children"]:
-                            r_folder["children"].append(out_node)
+                    out_node = _folder("output", path=f"{r_path}/output", kind="folder")
+                    _graft_run_outputs(out_node, run, cap=300)
+                    if out_node["children"]:
+                        r_folder["children"].append(out_node)
 
                     # Group run's children by type into subfolders.
                     children = run_children(run["id"])

@@ -25,10 +25,18 @@ def materialize_tree(
     out_dir: Path,
     *,
     clean: bool = False,
+    resolve=None,
 ) -> dict:
     """Walk a tree of {kind: file|folder|readme|root} nodes and write the
     corresponding files/dirs/symlinks under out_dir. Domain-neutral —
-    the caller produces the tree (e.g., bio's build_files_tree)."""
+    the caller produces the tree (e.g., bio's build_files_tree).
+
+    `resolve(node) -> Path | None` (optional): the caller's byte resolver,
+    consulted when a file node's `artifact_path` doesn't resolve to disk —
+    e.g. ledger-sourced run outputs whose artifact_path is a SERVER URL and
+    whose bytes live in a substrate workspace. Keeps this module pure
+    mechanism: it knows nothing about runs, only that the caller may know
+    where bytes are."""
     summary: dict = {
         "out_dir": str(out_dir),
         "linked": 0, "copied": 0, "synthesized": 0, "skipped": 0,
@@ -38,18 +46,19 @@ def materialize_tree(
         shutil.rmtree(out_dir, ignore_errors=True)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    _materialize_node(tree, out_dir, summary)
+    _materialize_node(tree, out_dir, summary, resolve)
     return summary
 
 
-def _materialize_node(node: dict, out_dir: Path, summary: dict) -> None:
+def _materialize_node(node: dict, out_dir: Path, summary: dict,
+                      resolve=None) -> None:
     kind = node.get("kind")
     if kind in ("root", "folder"):
         # Make this folder (root maps to out_dir itself).
         target = out_dir / node["path"] if node["path"] else out_dir
         target.mkdir(parents=True, exist_ok=True)
         for child in node.get("children", []):
-            _materialize_node(child, out_dir, summary)
+            _materialize_node(child, out_dir, summary, resolve)
         return
 
     if kind == "readme":
@@ -84,6 +93,11 @@ def _materialize_node(node: dict, out_dir: Path, summary: dict) -> None:
 
     # Artifact-backed file
     src = _resolve_artifact_disk_path(node.get("artifact_path"))
+    if (src is None or not src.exists()) and resolve is not None:
+        try:
+            src = resolve(node)
+        except Exception:  # noqa: BLE001 — resolver trouble = missing, warned below
+            src = None
     if src is None or not src.exists():
         summary["missing"] += 1
         summary["warnings"].append(f"missing artifact for {node['path']}: {node.get('artifact_path')}")
