@@ -1,5 +1,5 @@
-"""Bio's project sidebar renderer — the "[PROJECT — current snapshot]"
-block injected into the system prompt each turn.
+"""Bio's project sidebar renderer — the "[PROJECT STATE]" ambient block
+injected into the per-turn volatile context.
 
 Decides which entity types to surface (datasets + threads + curation
 counts) and how to format them. Bio-specific by design: the SHAPE of
@@ -28,7 +28,11 @@ def render_bio_project_sidebar(thread_id: Optional[str] = None) -> str:
     belongs HERE — queryable, deterministic, no LLM. The thread's own
     chat history stays as the conversational record.
     """
-    parts: list[str] = ["[PROJECT — current snapshot]"]
+    # Header carries no "snapshot"/notification framing — as an appended tail
+    # block it otherwise reads as a fresh message the model acknowledges every
+    # turn ("Acknowledged the snapshot"); the behavior rule + this neutral label
+    # keep it ambient. See behavior.md "<system-reminder> blocks are ambient".
+    parts: list[str] = ["[PROJECT STATE]"]
 
     # Datasets: small N, very useful. Show name + path + the layout
     # hint that register_dataset computed (e.g. "6 flat files (.mtx.gz,
@@ -89,7 +93,7 @@ def render_bio_project_sidebar(thread_id: Optional[str] = None) -> str:
     if any(n for _, n in _counts):
         parts.append("Curated entities: " + "  ".join(f"{t}s={n}" for t, n in _counts))
 
-    parts.append("[/PROJECT]")
+    parts.append("[/PROJECT STATE]")
     # Collected nothing → don't emit a useless wrapper. The agent
     # shouldn't be told about an empty project state every turn.
     if len(parts) <= 2:
