@@ -740,6 +740,7 @@ def _register_dataset_url(url: str, site: str | None, title: str,
           "origin_class": rec["origin_class"],
           "descriptor": rec.get("descriptor") or {},
           "dataset_site": site or "local"}
+    md["title_origin"] = "ai"   # dataset titles are agent-chosen; shows the ❄ until the user renames
     eid = create_entity(entity_type="dataset", title=title,
                         artifact_path=abspath,
                         derivation=imported(url),
@@ -1125,6 +1126,7 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
             _md["import_fingerprint"] = _fp(abspath)
         except Exception:  # noqa: BLE001 — a missing baseline just means no drift detection
             pass
+    _md["title_origin"] = "ai"   # dataset titles are agent-chosen; shows the ❄ until the user renames
     eid = create_entity(
         entity_type="dataset", title=title,
         artifact_path=abspath if exists else None,

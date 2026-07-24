@@ -22,7 +22,7 @@ from pathlib import Path
 
 from core.graph import _schema as _schema_mod
 from core.graph._schema import init_db
-from core.graph.entities import update_entity
+from core.graph.entities import update_entity, get_entity
 
 # Per-project state is consolidated under PROJECTS_DIR/<pid>/ (data, work,
 # artifacts, project.db) — see core.config.project_root() and friends.
@@ -190,6 +190,22 @@ def init() -> None:
     _park_scratch()
 
 
+def _heal_workspace_title(pid: str) -> None:
+    """Sync the in-project 'workspace' entity title (what the project-view header
+    reads) to the registry name — heals drift from a rename that landed while
+    this project wasn't current. Caller must have pid's DB bound. Best-effort;
+    never raises. Cheap: called only on first-open per pid per process."""
+    try:
+        nm = next((p.get("name") for p in _load() if p.get("id") == pid), None)
+        if not nm:
+            return
+        ws = get_entity("workspace")
+        if ws and ws.get("title") != nm:
+            update_entity("workspace", title=nm)
+    except Exception:  # noqa: BLE001 — a title-sync hiccup must never block a project open
+        pass
+
+
 def set_current(pid: str) -> None:
     if _single():
         return
@@ -221,6 +237,7 @@ def set_current(pid: str) -> None:
             dispatch("on_project_first_open", {"pid": pid})
         except Exception:  # noqa: BLE001
             pass
+        _heal_workspace_title(pid)
     # Content-side project-open hooks (display-path backfill, etc.) run
     # via the hook dispatcher. Errors are swallowed by dispatch() — one
     # bad hook must not block a project switch.
@@ -273,6 +290,7 @@ def ensure_opened(pid: str) -> None:
             dispatch("on_project_first_open", {"pid": pid})
         except Exception:  # noqa: BLE001
             pass
+        _heal_workspace_title(pid)
     # Phase 2 (modularity_audit2 §2D): backfill typed derivations for
     # pre-provenance entities so old results show their origin when the scientist
     # returns. Here (not set_current): this runs inside `with bind(pid)`, so
@@ -368,10 +386,24 @@ def create_project(name: str) -> dict:
 def rename_project(pid: str, name: str) -> None:
     if _single():
         return
+    clean = ""
     with _locked_registry() as reg:
         for p in reg:
             if p["id"] == pid:
-                p["name"] = (name or p["name"]).strip()[:80]
+                clean = (name or p["name"]).strip()[:80]
+                p["name"] = clean
+    # Keep the in-project title (the "workspace" entity — what the project-view
+    # header reads) in sync with the registry name, so renaming from the Home
+    # screen doesn't leave the open project showing its old name. update_entity
+    # writes the CURRENT project's store, so this reaches pid only when it's
+    # current; a non-current project heals on its next first-open (set_current).
+    if clean and pid == current():
+        try:
+            ws = get_entity("workspace")
+            if ws and ws.get("title") != clean:
+                update_entity("workspace", title=clean)
+        except Exception:  # noqa: BLE001 — a rename must not fail on a title-sync hiccup
+            pass
     _emit_project_meta(pid)
 
 

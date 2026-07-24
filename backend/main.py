@@ -219,19 +219,23 @@ def entities_patch(entity_id: str, req: EntityPatch, _pid: str = Depends(require
     # update_result_member (result_members.py); this catches the
     # entity-level edits.
     user_edited_result = False
-    if meta_updates or ("title" in fields):
+    title_changed = "title" in fields
+    if meta_updates or title_changed:
         ent_probe = get_entity(entity_id)
         if ent_probe and ent_probe.get("type") == "result":
             user_edited_result = True
-    if meta_updates or user_edited_result:
+    if meta_updates or user_edited_result or title_changed:
         ent = get_entity(entity_id)
         if not ent:
             raise HTTPException(404, f"Entity {entity_id} not found")
         merged = {**(ent.get("metadata") or {}), **meta_updates}
+        # A user title change clears the AI-suggested origin on ANY entity type
+        # (drops the Guide ❄ glyph once they've made the title their own), not
+        # only Results. The `invested` flip stays Result-specific.
+        if title_changed:
+            merged["title_origin"] = "user"
         if user_edited_result:
             merged["invested"] = True
-            if "title" in fields:
-                merged["title_origin"] = "user"   # renamed → drop the Guide glyph
         fields["metadata"] = merged
     # status whitelist
     if "status" in fields and fields["status"] not in (
