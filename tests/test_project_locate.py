@@ -59,6 +59,39 @@ def test_live_local_sandbox_file_is_found(monkeypatch, tmp_path):
     assert out["searched"]["live_kernels"]["local"] == 1
 
 
+def test_terminal_kernels_are_not_walked_as_live_sandboxes(monkeypatch, tmp_path):
+    """list_kernels returns every kernel the workspace KNOWS — on an aged
+    deployment that's mostly terminal rows (179 of 184 live-measured). T1 is
+    the LIVE tier: walking every terminal kernel's surviving jobdir grew the
+    search unboundedly with deployment age and labeled long-stopped scratch
+    'live sandbox'. Floor AND ceiling: the running kernel is walked, the
+    stopped/died ones are not (their bytes stay reachable via the manifest
+    tier and the run resolvers, which deliberately DO reach them)."""
+    for kid in ("krn_live", "krn_old", "krn_dead"):
+        jd = tmp_path / "ws" / "site-local" / kid
+        jd.mkdir(parents=True)
+        (jd / f"{kid}_file.csv").write_text("x")
+
+    class _C:
+        def sync_call(self, name, *a):
+            return {"kernels": [
+                {"kernel_id": "krn_live", "site": "local",
+                 "jobdir": "krn_live", "state": "running"},
+                {"kernel_id": "krn_old", "site": "local",
+                 "jobdir": "krn_old", "state": "stopped"},
+                {"kernel_id": "krn_dead", "site": "local",
+                 "jobdir": "krn_dead", "state": "died"},
+            ]}
+    monkeypatch.setattr("core.compute.adapter.get_compute", lambda: _C())
+    monkeypatch.setattr("core.compute.adapter.weft_workspace",
+                        lambda: tmp_path / "ws")
+    monkeypatch.setattr(pl, "_manifest_tier", lambda *a, **k: None)
+    out = pl.locate_project_files("*_file.csv")
+    names = {h["name"] for h in out["matches"]}
+    assert names == {"krn_live_file.csv"}, names
+    assert out["searched"]["live_kernels"]["local"] == 1
+
+
 def test_remote_inventory_file_found_without_transfer(monkeypatch):
     """A file that exists only in a REMOTE sandbox is found via the held
     inventory (metadata), labeled remote, with the fetch cost in `opens`."""

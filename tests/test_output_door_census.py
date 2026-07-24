@@ -281,6 +281,66 @@ def test_download_zip_includes_resolvable_and_names_the_rest(monkeypatch):
     assert "far.parquet" in manifest and "siteB" in manifest
 
 
+# ── door 5: the viewer lookup — a tree match never beats byte resolution ────
+
+def _viewer_tree(rid: str, ap=None) -> dict:
+    return {"kind": "root", "name": "", "path": "", "children": [
+        {"kind": "file", "name": "data.zarr", "path": "runs/r1/output/out/data.zarr",
+         "artifact_path": ap, "size": 600, "state": "in-sandbox", "badge": "",
+         "run_id": rid, "rel": "out/data.zarr"}]}
+
+
+def test_viewer_lookup_falls_through_when_ledger_node_has_no_bytes(monkeypatch):
+    """The regression class (live 2026-07-24): the ledger change made bulk run
+    outputs MATCH in the files tree, and the matched node — whose
+    artifact_path is a URL or None, an address for browsers — SHADOWED the
+    project-wide byte resolver the viewer previously reached. A node the
+    launcher can't open must fall through, by the ledger's recorded rel."""
+    import content.bio.web.routes.viewers as vr
+    monkeypatch.setattr(treemod, "build_files_tree",
+                        lambda **kw: _viewer_tree("run-x"))
+    seen = {}
+
+    def _proj(name, **kw):
+        seen["name"] = name
+        return ("run-x", "/abs/kernel-ws/out/data.zarr")
+    monkeypatch.setattr(runsmod, "resolve_project_run_output", _proj)
+    node = vr._resolve_files_node(None, "data.zarr")
+    assert node["artifact_path"] == "/abs/kernel-ws/out/data.zarr"
+    assert node["run_id"] == "run-x"
+    assert seen["name"] == "out/data.zarr", \
+        "fall-through must resolve by the ledger's recorded rel"
+
+
+def test_viewer_lookup_keeps_locally_addressable_ledger_node(monkeypatch):
+    """Other side: an in-store ledger node whose /artifacts copy IS on disk
+    passes through unchanged — no gratuitous re-resolution."""
+    import content.bio.web.routes.viewers as vr
+    art = Path(os.environ["ARTIFACTS_DIR"]) / "small.png"
+    art.parent.mkdir(parents=True, exist_ok=True)
+    art.write_bytes(b"png")
+    monkeypatch.setattr(treemod, "build_files_tree",
+                        lambda **kw: _viewer_tree("run-x", ap="/artifacts/small.png"))
+
+    def _never(name, **kw):
+        raise AssertionError("resolvable node must not re-resolve")
+    monkeypatch.setattr(runsmod, "resolve_project_run_output", _never)
+    node = vr._resolve_files_node(None, "data.zarr")
+    assert node["artifact_path"] == "/artifacts/small.png"
+
+
+def test_viewer_lookup_full_miss_still_404s(monkeypatch):
+    from fastapi import HTTPException
+    import content.bio.web.routes.viewers as vr
+    monkeypatch.setattr(treemod, "build_files_tree",
+                        lambda **kw: _viewer_tree("run-x"))
+    monkeypatch.setattr(runsmod, "resolve_project_run_output",
+                        lambda name, **kw: None)
+    with pytest.raises(HTTPException) as e:
+        vr._resolve_files_node(None, "data.zarr")
+    assert e.value.status_code == 404
+
+
 # ── door 4: materialize ──────────────────────────────────────────────────────
 
 def test_materialize_uses_the_callers_resolver(tmp_path):

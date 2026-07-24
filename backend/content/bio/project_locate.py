@@ -99,6 +99,15 @@ def _live_sandbox_tier(pattern: str, hits: list, searched: dict,
         return
     n_local = n_remote = 0
     for k in kernels:
+        # list_kernels returns every kernel the WORKSPACE KNOWS (weft store
+        # rows, any state — 179 of 184 were stopped on one live box). T1 is
+        # the LIVE tier: walking each terminal kernel's surviving jobdir made
+        # this search grow unboundedly with deployment age and labeled
+        # long-stopped scratch "live sandbox". Terminal states skip; their
+        # bytes stay reachable through the manifest tier and the run
+        # resolvers (which deliberately DO reach stopped-kernel jobdirs).
+        if (k.get("state") or "").lower() in ("stopped", "died"):
+            continue
         site = k.get("site") or "local"
         kid = k.get("kernel_id") or k.get("id")
         if site == "local":

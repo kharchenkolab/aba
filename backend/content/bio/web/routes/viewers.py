@@ -67,7 +67,22 @@ def _resolve_files_node(entity_id: str | None, path: str | None) -> dict:
         tree = build_files_tree(include_archived=False)
         n = find_file_node(tree, path)
         if n is not None:
-            return n
+            if not (n.get("run_id") and n.get("rel")):
+                return n     # entity/disk-grafted nodes: launcher has its own fallbacks
+            # LEDGER-SOURCED run-output node: its artifact_path is a server URL
+            # or None — an address for browsers, never bytes. Returning it as-is
+            # SHADOWED the byte-resolving fallback below (before the ledger
+            # change these files weren't in the tree, so the fallback always
+            # ran) — live regression: an unretained store output matched here
+            # and the launcher had no source. A locally-addressable node (e.g.
+            # an in-store /artifacts copy) passes through; anything else falls
+            # THROUGH to the project resolver by the ledger's recorded rel —
+            # a tree match must never beat byte resolution.
+            from core.files.materialize import _resolve_artifact_disk_path
+            src = _resolve_artifact_disk_path(n.get("artifact_path"))
+            if src is not None and src.exists():
+                return n
+            path = n["rel"]
         # Not in the entity-graph tree — a fresh weft Run output (e.g. a `.lstar.zarr` store in
         # the live kernel jobdir). Resolve it directly from the Run's outputs (retained tree /
         # jobdir / sandbox), the same fallback the open_viewer tool uses, so launch/download work
