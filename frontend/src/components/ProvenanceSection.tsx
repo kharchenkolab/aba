@@ -112,6 +112,13 @@ export default function ProvenanceSection({ entity, onFocus, label = 'Provenance
   const down = data?.lineage?.downstream ?? data?.downstream ?? []
   const originText = fmtDerivation(entity.derivation)
   const actorText = fmtActor(attr.actor ?? entity.actor)
+  const originKind = entity.derivation?.kind
+  // Origin worth its OWN row: imported (carries a source), created-here, or
+  // unrecorded. 'exec' is redundant with Method; 'derived_from' is already the
+  // Inputs/Lineage rows. (An imported dataset can also carry the registering
+  // run's exec via exec_id — that shows as Method/Environment, so the source
+  // needs this explicit row or it never appears.)
+  const showOrigin = !!originText && originKind !== 'exec' && originKind !== 'derived_from'
 
   const hasMethod = !!(method.recipe_id || method.code || method.language || method.command)
   const hasEnv = !!(env.language_version || (env.key_packages && env.key_packages.length))
@@ -123,6 +130,9 @@ export default function ProvenanceSection({ entity, onFocus, label = 'Provenance
   const via = method.recipe_id
     || (method.language ? `${method.language}${env.language_version ? ' ' + env.language_version : ''}` : '')
   const summaryBits: string[] = []
+  // An imported entity's headline IS its origin — lead with it so the source
+  // shows even collapsed and the registering run's method can't mask it.
+  if (originKind === 'imported' && originText) summaryBits.push(originText)
   if (inputs.length) {
     const first = inputs[0].name || inputs[0].title || inputs[0].kind
     summaryBits.push(`from ${first}${inputs.length > 1 ? ` +${inputs.length - 1}` : ''}`)
@@ -155,6 +165,12 @@ export default function ProvenanceSection({ entity, onFocus, label = 'Provenance
       </button>
       {open && (
         <div className="prov__grid">
+          {showOrigin && (
+            <>
+              <div className="prov__k">Origin</div>
+              <div className="prov__v">{originText}</div>
+            </>
+          )}
           {inputs.length > 0 && (
             <>
               <div className="prov__k">Inputs</div>
