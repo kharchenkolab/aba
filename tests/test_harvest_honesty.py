@@ -244,6 +244,88 @@ def test_detached_harness_reports_final_cwd(tmp_path):
     assert w and "register_dataset" in w
 
 
+# ── out-of-band env installs (sweep item D): the identity tripwire ──────────
+
+def _env_row_world(monkeypatch, prefix: Path):
+    """Stub project_env's internals: one in-memory registry row, a counting
+    fake substrate snapshot, a session pointing at `prefix`."""
+    import core.compute.project_env as pe
+    row = {"rev": 3, "additions": [], "snapshot": {}}
+    calls = {"n": 0}
+    monkeypatch.setattr(pe, "ensure", lambda pid, lang: {
+        "session_id": "ses_t", "runtime": {"prefix": str(prefix)}})
+    monkeypatch.setattr(pe, "get", lambda pid, lang: row)
+    monkeypatch.setattr(pe, "_save_row", lambda pid, lang, r: None)
+
+    class _Ad:
+        def session_snapshot(self, sid, name=""):
+            calls["n"] += 1
+            return {"env_id": f"env:v1:snap{calls['n']}"}
+    monkeypatch.setattr(pe._adapter, "get_compute", lambda: _Ad())
+    monkeypatch.setattr(pe.named_envs, "_sync", lambda x: x)
+    return pe, row, calls
+
+
+def _mk_prefix(base: Path, *dists: str) -> Path:
+    sp = base / "lib" / "python3.12" / "site-packages"
+    sp.mkdir(parents=True, exist_ok=True)
+    for d in dists:
+        (sp / f"{d}.dist-info").mkdir(exist_ok=True)
+    return base
+
+
+def test_out_of_band_install_dirties_the_snapshot_cache(tmp_path, monkeypatch):
+    prefix = _mk_prefix(tmp_path / "pfx", "pkg_a-1.0")
+    pe, row, calls = _env_row_world(monkeypatch, prefix)
+    eid1 = pe.snapshot("p1", "python")
+    assert eid1 == "env:v1:snap1" and calls["n"] == 1
+    # unchanged prefix → dirty-cache hit, no substrate round trip
+    assert pe.snapshot("p1", "python") == eid1 and calls["n"] == 1
+    # agent code pip-installs OUT OF BAND: prefix changes, rev does not
+    _mk_prefix(prefix, "rogue_pkg-2.0")
+    eid2 = pe.snapshot("p1", "python")
+    assert eid2 == "env:v1:snap2" and calls["n"] == 2, \
+        "a mutated prefix must re-snapshot, not serve the stale identity"
+    # the event is RECORDED — the registry stays honest about what it
+    # cannot describe — and the rev moved with it
+    (ev,) = [a for a in row["additions"] if a.get("eco") == "out-of-band"]
+    assert "outside the platform install verbs" in ev["note"]
+    assert row["rev"] == 4
+    # and the new signature is remembered: quiet again until the next change
+    assert pe.snapshot("p1", "python") == eid2 and calls["n"] == 2
+
+
+def test_out_of_band_marker_is_skipped_by_the_session_replay():
+    """The marker row carries no `specs` — the session-rebuild replay must
+    skip it BEFORE touching add['specs'] (a real rebuild would otherwise
+    KeyError far from any bench). Source pin on the ordering, since the
+    rebuild path needs a live substrate to exercise behaviorally."""
+    import re
+    src = (Path(_BACKEND) / "core/compute/project_env.py").read_text()
+    loop = re.search(r"for add in additions:.*?# installs are the FLIP",
+                     src, re.S)
+    assert loop, "replay loop not found"
+    body = loop.group(0)
+    assert '"out-of-band"' in body, "replay no longer skips the marker rows"
+    assert body.index('"out-of-band"') < body.index('add["specs"]')
+
+
+def test_tripwire_abstains_without_a_statable_prefix(tmp_path, monkeypatch):
+    """WIDE: activation-only topology (no prefix) and legacy rows (no
+    recorded signature) must serve the cache exactly as before — the
+    tripwire abstains rather than guessing."""
+    import core.compute.project_env as pe
+    assert pe._prefix_signature(None, "python") is None
+    assert pe._prefix_signature({"prefix": str(tmp_path / "empty")},
+                                "python") is None
+    prefix = _mk_prefix(tmp_path / "pfx2", "pkg_a-1.0")
+    pe2, row, calls = _env_row_world(monkeypatch, prefix)
+    # legacy row: cached snapshot WITHOUT prefix_sig → cache honoured
+    row["snapshot"] = {"env_id": "env:v1:legacy", "at_rev": 3}
+    assert pe2.snapshot("p1", "python") == "env:v1:legacy"
+    assert calls["n"] == 0
+
+
 if __name__ == "__main__":
     import subprocess as _sp
     raise SystemExit(_sp.call([sys.executable, "-m", "pytest", __file__, "-v"]))

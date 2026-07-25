@@ -199,6 +199,14 @@ def ensure(pid: str, language: str) -> dict:
               f"under the new env.")
     rt = res.get("runtime")
     for add in additions:                      # replay the recorded deltas
+        if add.get("eco") == "out-of-band" or not (
+                add.get("eco") == "installer" or add.get("specs")):
+            # event markers (a prefix mutation recorded by the snapshot
+            # tripwire) carry nothing to replay — they exist so the registry
+            # is honest about changes it cannot describe. Skipping is the
+            # honest replay too: whatever the in-code installer did cannot
+            # be reproduced from here (that is exactly why it was flagged).
+            continue
         if add.get("eco") == "installer":      # captured arbitrary installer
             _ikw = {k: add[k] for k in ("writes_to", "verify") if add.get(k)}
             while True:
@@ -514,23 +522,72 @@ def run_installer(pid: str, language: str, cmd: str, *, note: str = "",
     return out
 
 
+def _prefix_signature(rt: Optional[dict], language: str) -> Optional[str]:
+    """Cheap content signature of a LOCAL session prefix — sorted package-
+    metadata dir names + their newest mtime, hashed. The out-of-band
+    tripwire's comparator (harvest-honesty sweep item D): an in-code
+    installer (subprocess pip / in-interpreter install) mutates the prefix
+    WITHOUT bumping the registry rev, so the dirty-cached identity lies.
+    None = abstain (no locally statable prefix — activation-only topology)."""
+    p = (rt or {}).get("prefix")
+    if not p:
+        return None
+    import glob as _glob
+    import hashlib as _hl
+    import os as _os
+    pats = ([_os.path.join(str(p), "lib", "R", "library", "*")]
+            if language == "r" else
+            [_os.path.join(str(p), "lib", "python*", "site-packages",
+                           "*.dist-info")])
+    names: list[str] = []
+    latest = 0.0
+    for pat in pats:
+        for d in _glob.glob(pat):
+            names.append(_os.path.basename(d))
+            try:
+                latest = max(latest, _os.stat(d).st_mtime)
+            except OSError:
+                pass
+    if not names:
+        return None
+    return _hl.sha1(("\n".join(sorted(names))
+                     + f"|{latest:.0f}").encode()).hexdigest()[:16]
+
+
 def snapshot(pid: str, language: str) -> str:
     """A FROZEN EnvID of the session's current state (for background jobs and
     exports). Dirty-cached: unchanged session → the previous snapshot's id
     (identity is content-addressed; re-snapshotting an unchanged set would
-    yield the same env anyway — this just skips the round trip)."""
+    yield the same env anyway — this just skips the round trip).
+
+    The cache key is rev + a cheap PREFIX SIGNATURE: an out-of-band install
+    (agent code shelling out to a package manager) changes the prefix but
+    not the rev, and used to make every later identity claim — and every
+    job realized from it — silently omit the package. Now it is RECORDED
+    as an `out-of-band` addition (the registry stays honest about the event
+    it cannot describe) and the session is re-snapshotted so the frozen
+    identity carries the real content."""
     pid = str(pid)
     s = ensure(pid, language)
     row = get(pid, language)
     snap = row.get("snapshot") or {}
+    sig = _prefix_signature(s.get("runtime"), language)
     if snap.get("env_id") and snap.get("at_rev") == row.get("rev"):
-        return snap["env_id"]
+        if sig is None or not snap.get("prefix_sig") or sig == snap["prefix_sig"]:
+            return snap["env_id"]      # abstain / legacy row / genuinely unchanged
+        row["additions"].append({
+            "eco": "out-of-band", "at": time.time(),
+            "note": "session prefix changed outside the platform install "
+                    "verbs (in-code installer?) — re-snapshotted so the "
+                    "frozen identity stays true"})
+        row["rev"] = int(row.get("rev") or 0) + 1
     ad = _adapter.get_compute()
     res = named_envs._sync(ad.session_snapshot(
         s["session_id"], name=f"aba-{pid}-default-{language}"))
     eid = res["env_id"]
     row["snapshot"] = {"env_id": eid, "at_rev": row.get("rev"),
-                       "at": time.time()}
+                       "at": time.time(),
+                       **({"prefix_sig": sig} if sig else {})}
     _save_row(pid, language, row)
     return eid
 
