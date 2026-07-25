@@ -261,8 +261,8 @@ def _build_focus_trailer(focus_entity_id: str) -> str | None:
 _PRIORITY_TOOLS: tuple[str, ...] = (
     "run_python", "run_r",
     "Skill",
-    "present_plan", "ask_clarification",
-    "register_dataset", "list_data_files",
+    "present_plan",
+    "register_dataset",
     "ensure_capability",
     # describe_tool demoted 2026-07-22 (budget: make_isolated_env grew a
     # conda_packages param): the tool that RECOVERS full prose is the one
@@ -271,6 +271,12 @@ _PRIORITY_TOOLS: tuple[str, ...] = (
     # ambient behavior rule landed in behavior_slim): a search box's name IS
     # its contract, and its results carry their own teaching; Skill keeps
     # full prose — invocation is the part small models get wrong.
+    # list_data_files + ask_clarification demoted 2026-07-25 (budget: the
+    # figures no-markdown-image rule grew figures.md — SECOND ceiling trip in
+    # two days at <60-token slack, so this pair buys ~185 tokens of headroom):
+    # a lister's name is its contract and its RESULT rows teach the shape
+    # better than prose; ask_clarification's summary keeps the when-to-use
+    # line, and plan_first.md carries the don't-interrupt discipline anyway.
 )
 # find_files rides summary-rendering: its full docstring is the catalog's
 # largest and list_data_files covers the common case; full prose stays one
