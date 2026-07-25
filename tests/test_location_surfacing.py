@@ -199,6 +199,55 @@ def test_viewer_link_local_source_carries_no_note(monkeypatch):
     assert out["ok"] is True and "note" not in out
 
 
+# ── 7. plan placement lint ───────────────────────────────────────────────────
+
+def test_plan_lint_flags_a_site_blind_plan(monkeypatch):
+    _patch_entities(monkeypatch, [_REMOTE, _LOCAL])
+    from content.bio.data_location import plan_placement_note
+    note = plan_placement_note('{"steps": [{"description": "load and summarize"}]}')
+    assert note is not None
+    assert "siteA" in note and "series-a" in note
+    assert "site='siteA'" in note                    # the lever is named
+
+
+def test_plan_lint_quiet_when_deliberate_or_local(monkeypatch):
+    from content.bio.data_location import plan_placement_note
+    # the plan mentions the site → placement is deliberate → quiet
+    _patch_entities(monkeypatch, [_REMOTE])
+    assert plan_placement_note('{"steps":[{"description":"run it on siteA"}]}') is None
+    # all-local project → quiet
+    _patch_entities(monkeypatch, [_LOCAL])
+    assert plan_placement_note('{"steps":[{"description":"anything"}]}') is None
+    # mirrored remote → either copy works → quiet
+    m = {**_REMOTE, "metadata": {**_REMOTE["metadata"],
+                                 "local_mirror": {"path": "/x"}}}
+    _patch_entities(monkeypatch, [m])
+    assert plan_placement_note('{"steps":[{"description":"anything"}]}') is None
+
+
+def test_plan_intercept_consults_the_lint():
+    """Seam pin: the present_plan intercept must run the lint (structural —
+    the intercept needs a full agent turn to exercise behaviorally)."""
+    import re
+    src = (Path(_BACKEND) / "guide.py").read_text()
+    m = re.search(r'if name == "present_plan":.*?_runtime_halt_after', src, re.S)
+    assert m and "plan_placement_note" in m.group(0), \
+        "present_plan no longer consults data_location.plan_placement_note"
+
+
+# ── 8. viewer launch page: the remote failure offers the FIX ────────────────
+
+def test_launch_page_offers_mirror_and_retry(tmp_path):
+    from core.viewers.launch_page import render
+    html = render(tmp_path)                          # no dist → CSS links empty
+    assert 'id="vl-mirror"' in html                  # the affordance exists
+    assert "/mirror" in html and "mirrorAndRetry" in html
+    # gated on the remote-failure signature + an entity-backed source — a
+    # plain local failure must NOT grow a mirror button
+    assert "lives on|bring it home|not on this machine" in html
+    assert "remoteish && params.entity_id" in html   # both gates, together
+
+
 if __name__ == "__main__":
     import subprocess
     raise SystemExit(subprocess.call(

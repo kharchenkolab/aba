@@ -90,6 +90,10 @@ _HTML = r"""<!doctype html>
       <div class="vl-err-detail" id="vl-errdetail"></div>
       <div class="vl-actions">
         <button class="vl-btn vl-btn--primary" id="vl-retry">Try again</button>
+        <!-- Revealed only for entity-backed sources whose error says the
+             bytes live on another machine: offers the FIX (the dataset
+             mirror route), not just a retry that would fail identically. -->
+        <button class="vl-btn vl-hidden" id="vl-mirror">Mirror the data here &amp; retry</button>
         <button class="vl-btn" id="vl-report">Report to the ABA team</button>
       </div>
     </div>
@@ -124,7 +128,34 @@ _HTML = r"""<!doctype html>
       if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
       $("vl-loading").classList.add("vl-hidden");
       $("vl-errdetail").textContent = msg || "Unknown error.";
+      // A "the bytes live elsewhere" failure on an entity-backed source has a
+      // one-click fix: mirror the dataset home (size-gated, verified), then
+      // relaunch. Retry alone would fail identically.
+      var remoteish = /lives on|bring it home|not on this machine/i.test(msg || "");
+      $("vl-mirror").classList.toggle("vl-hidden", !(remoteish && params.entity_id));
       $("vl-error").classList.remove("vl-hidden");
+    }
+
+    function mirrorAndRetry() {
+      var btn = $("vl-mirror");
+      btn.disabled = true; btn.textContent = "Mirroring…";
+      fetch(api("/datasets/" + encodeURIComponent(params.entity_id) + "/mirror"), {
+        method: "POST", headers: { "X-Project-Id": project },
+      })
+        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+        .then(function (res) {
+          btn.disabled = false; btn.textContent = "Mirror the data here & retry";
+          if (!res.ok) {
+            showError(typeof (res.d && res.d.detail) === "string"
+                      ? res.d.detail : "Mirror failed.");
+            return;
+          }
+          launch();
+        })
+        .catch(function (e) {
+          btn.disabled = false; btn.textContent = "Mirror the data here & retry";
+          showError(String(e && e.message || e));
+        });
     }
 
     function tick() {
@@ -187,6 +218,7 @@ _HTML = r"""<!doctype html>
     }
 
     $("vl-retry").addEventListener("click", launch);
+    $("vl-mirror").addEventListener("click", mirrorAndRetry);
     $("vl-report").addEventListener("click", function () {
       var ctx = { where: "viewer-launch", viewer: label || params.viewer_id,
                   file: params.path || params.entity_id, project: project,

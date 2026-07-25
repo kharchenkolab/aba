@@ -74,6 +74,39 @@ def remote_preview_answer(e: dict) -> dict | None:
             "total_bytes": loc["total_bytes"]}
 
 
+def plan_placement_note(plan_text: str) -> str | None:
+    """Advisory for the present_plan ack: when a registered dataset lives on
+    a remote site and the plan never mentions that site, say so — "remote
+    compute follows the data" was prose; this is the check at the decision
+    point (live 2026-07-26: a plan targeted local while its only input lived
+    remote, and only the user's question surfaced it). Advisory, never a
+    block: plans may legitimately mirror first or work on derived local
+    data — the note asks for the placement to be DELIBERATE, not different.
+    Mirrored datasets don't trigger (either copy works)."""
+    import re
+    from core.graph.entities import list_entities
+    remote: dict[str, list[str]] = {}
+    for e in list_entities(type_filter="dataset", include_archived=False):
+        loc = dataset_location(e)
+        if loc["remote"] and not loc["mirrored"]:
+            remote.setdefault(loc["site"], []).append(
+                (e.get("title") or e.get("id") or "dataset").strip())
+    if not remote:
+        return None
+    missing = {s: names for s, names in remote.items()
+               if not re.search(rf"\b{re.escape(s)}\b", plan_text)}
+    if not missing:
+        return None
+    frag = "; ".join(
+        f"{', '.join(names[:3])}{' (+' + str(len(names) - 3) + ' more)' if len(names) > 3 else ''}"
+        f" lives on {site}" for site, names in sorted(missing.items()))
+    first_site = next(iter(sorted(missing)))
+    return (f"PLACEMENT CHECK: {frag} — but no plan step mentions that site. "
+            f"Remote compute follows the data: run those steps there "
+            f"(site='{first_site}'), mirror the data locally first, or state "
+            f"why running elsewhere is right.")
+
+
 def remote_use_note(e: dict) -> str | None:
     """Actionable one-liner for tool results naming a remote dataset:
     what to DO about the location, not just the fact. None for local."""

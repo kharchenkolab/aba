@@ -309,6 +309,13 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
       values.filter((value): value is string => !!value).forEach((value, i) => meta.push(<span key={`text-${i}`}>{value}</span>))
     }
     if (entity.type === 'dataset') {
+      // WHERE the bytes live rides the row (surfacing census 2026-07-26) —
+      // a remote home gets a small site chip; local datasets gain nothing.
+      const homeSite = (entity.metadata as { home?: { site?: string } } | undefined)?.home?.site
+      if (homeSite && homeSite !== 'local') {
+        meta.push(<span key="site" className="tree__site-chip"
+                        title={`Data lives on ${homeSite}`}>{homeSite}</span>)
+      }
       const fc = entity.metadata?.file_count as number | undefined
       const bytes = entity.metadata?.size_bytes as number | undefined
       if (typeof fc === 'number') {

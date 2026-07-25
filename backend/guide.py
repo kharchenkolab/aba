@@ -953,6 +953,18 @@ async def stream_response(
                         "plan_orientation_preamble", str(_pid), str(store_tid), default="")
                     _note = ("Plan shown to the user with Go/Adjust controls. "
                              "Wait for their decision before executing.")
+                    # Placement lint (location-surfacing census 2026-07-26):
+                    # registered data on a remote site + a plan that never
+                    # mentions that site → the ack says so, so execution can
+                    # follow the data even when the plan text didn't.
+                    try:
+                        from content.bio.data_location import plan_placement_note
+                        import json as _pl_json
+                        _pnote = plan_placement_note(_pl_json.dumps(plan.to_dict()))
+                    except Exception:  # noqa: BLE001 — advisory, never blocks
+                        _pnote = None
+                    if _pnote:
+                        _note += "\n\n" + _pnote
                     if _orient:
                         _note += ("\n\nWhen you resume, your first run_python runs in the "
                                   "new Run's working dir — use these canonical paths verbatim "
