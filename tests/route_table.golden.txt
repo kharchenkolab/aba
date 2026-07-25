@@ -133,6 +133,7 @@ POST /api/compute/sites/{name}/verify
 POST /api/context-suggestions/reject-all
 POST /api/context-suggestions/{sid}/action
 POST /api/datasets
+POST /api/datasets/{did}/mirror
 POST /api/datasets/{did}/recheck
 POST /api/datasets/{did}/relink
 POST /api/entities/{entity_id}/advise
