@@ -19,6 +19,7 @@ guess. Never resubmit an unchanged failing request more than once.
 | `verified: unknown` | the CHECK could not run (interpreter/site trouble) | retry the check, not the install — unknown ≠ failed |
 | `session.cold_base` | this base cannot be cloned here; delta lanes only | use the levers in hints (package-layer installs work; bespoke installers need `writes_to=`) |
 | "Installed, but not loadable" | a build reported success while producing nothing | treat as a build failure: see the realize_failed row |
+| `env.solve_failed` whose log names a missing `activate.sh` / `getcwd` error | the environment's realized files are GONE from disk (swept/deleted) — not a solver or network problem, retrying is futile whatever `retryable` says | restart the kernel/session (a fresh start re-realizes the environment from its recorded spec); if it recurs, tell the user — the machine's env storage is being reclaimed |
 | `task.invalid` | the request itself is malformed | fix the call per hints; not a retry case |
 
 Paths: a file result carrying `durability: ephemeral` (or an `opens` note
