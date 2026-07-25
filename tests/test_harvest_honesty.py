@@ -127,6 +127,24 @@ def test_one_shot_lane_quiet_on_normal_run(tmp_path):
                for f in out.get("files") or [])
 
 
+def test_r_lane_composes_probe_in_the_right_order():
+    """Seam pin for the R one-shot (behavioral parity needs an R runtime the
+    hermetic suite doesn't assume): the prologue must sit AFTER the
+    platform's setwd preamble — recording the dir the platform CHOSE, not
+    the launch dir — and the epilogue last."""
+    import re
+    src = (Path(_BACKEND) / "core/exec/run.py").read_text()
+    m = re.search(r'\(scratch / "script\.R"\)\.write_text\((.*?)\)\n', src, re.S)
+    assert m, "R compose site not found"
+    compose = m.group(1)
+    assert compose.index("preamble") < compose.index('cwd_probe_prologue("r")')
+    assert compose.index('cwd_probe_prologue("r")') < compose.index("code")
+    assert compose.rindex('cwd_probe_epilogue("r")') > compose.index("code")
+    # and the R probe strings are well-formed R
+    assert ".aba_start_dir <- getwd()" in cwd_probe_prologue("r")
+    assert "writeLines" in cwd_probe_epilogue("r")
+
+
 # ── the stale-stamp window counter ───────────────────────────────────────────
 
 def test_preserved_mtime_writes_warn_instead_of_vanishing(tmp_path):
