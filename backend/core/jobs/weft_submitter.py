@@ -662,6 +662,18 @@ class WeftSubmitter:
                             "files": files, "warnings": warnings})
             except Exception:  # noqa: BLE001 — files still in run dir/Files panel
                 pass
+        # cwd escape (harvest honesty): the node harness reports where the
+        # script ENDED. Files written outside the node jobdir are structurally
+        # invisible to output collection — the live case that showed 2 of 6
+        # outputs on a Run card. Say so instead of showing nothing.
+        try:
+            from core.exec.run import cwd_escape_warning
+            _esc = cwd_escape_warning(node.get("start_cwd"),
+                                      node.get("final_cwd"))
+            if _esc:
+                res["warnings"] = [*(res.get("warnings") or []), _esc]
+        except Exception:  # noqa: BLE001 — warning must never break a poll
+            pass
         if node.get("status") != "error":
             # REMOTE-ONLY outputs (too large to come home) still enter
             # PROVENANCE: a produced row with no url, so the exec record /

@@ -24,6 +24,42 @@ from typing import Optional
 _log = logging.getLogger(__name__)
 
 
+def _with_cwd_probe(sess, code: str, lang: str, cwd) -> str:
+    """Wrap a JUPYTER kernel block with the cwd probe (core.exec.run): the
+    prologue records where the block STARTED, the epilogue writes start+final
+    to a dot-sentinel in the HARVEST ROOT (fixed, aba-known — the start dir
+    itself is what may have drifted). Weft kernels are excluded twice over:
+    they cannot chdir (the block protocol breaks loudly) and probe lines
+    would pollute their recorded transcript."""
+    if getattr(sess, "work_dir", None):
+        return code
+    from core.exec.run import cwd_probe_prologue, cwd_probe_epilogue
+    return (cwd_probe_prologue(lang) + code
+            + cwd_probe_epilogue(lang, sentinel_dir=str(cwd)))
+
+
+def _reconcile_kernel_cwd(sess, cwd) -> list:
+    """Post-block: read the probe sentinel; warn when the kernel ENDED
+    outside the tracked dir (files written there are unharvested — the
+    warning names the valid levers), and record the REAL dir into the
+    session marker so _ensure_kernel_cwd restores the platform cwd on the
+    next block (self-heal instead of a permanently lying marker). Returns
+    warning strings; empty when the block died pre-epilogue (no claim)."""
+    if getattr(sess, "work_dir", None):
+        return []
+    from core.exec.run import read_cwd_sentinel, cwd_escape_warning
+    _start, final = read_cwd_sentinel(cwd)
+    if not final:
+        return []
+    out = []
+    esc = cwd_escape_warning(str(cwd), final)
+    if esc:
+        out.append(esc)
+    if final != getattr(sess, "_aba_cwd", None):
+        sess._aba_cwd = final
+    return out
+
+
 def _run_scratch_cwd(project_id: str, thread_id: str):
     """Working dir for this run_python/run_r cell: the active Run's own output
     directory (so a pipeline's files group into one browsable bundle), else the
@@ -81,6 +117,12 @@ def _ensure_kernel_cwd(sess, lang: str, cwd) -> None:
     path = str(cwd)
     prev = getattr(sess, "_aba_cwd", None)
     if prev == path:
+        # NOTE the marker is only as true as the last reconcile: agent code
+        # can chdir mid-block, so trusting `prev` alone let a desynced marker
+        # skip the restore forever (harvest-honesty sweep, 2026-07-26). The
+        # per-block probe (_with_cwd_probe/_reconcile_kernel_cwd) records the
+        # REAL final dir into the marker after every block, so a drifted
+        # kernel reaches this comparison with the truth and gets restored.
         return
     try:
         if lang == "r":
@@ -407,7 +449,11 @@ def _prior_run_files_preamble(project_id: str, thread_id: str,
                          f"an EPHEMERAL sandbox, swept when this kernel stops: "
                          f"when the user wants a produced file KEPT, call the "
                          f"keep_outputs tool; register_dataset is only for "
-                         f"real datasets)")
+                         f"real datasets). Do NOT chdir/setwd outside this "
+                         f"dir: files written elsewhere are NOT tracked, NOT "
+                         f"on the Run card, and NOT keepable — if you must "
+                         f"write elsewhere, register_dataset the absolute "
+                         f"path afterwards.")
         # Surface the RESOLVED DATA_DIR + the input files actually present (incl.
         # SUBDIRS) so the agent doesn't conclude "no data — ask the user to
         # upload" when files are on disk but unregistered (forensic: coloc/foci).
@@ -999,6 +1045,11 @@ def _run_remote_sync(input_: dict, ctx: dict | None, project_id: str,
                    "execution_mode": "remote-sync",
                    "note": f"ran on {site} in a fresh process there "
                            f"(no interactive state); outputs harvested back"}
+            # warnings were silently DROPPED on this lane (blank figures, size
+            # caps, and now the cwd-escape signal) — pass them through like
+            # every other lane does
+            if res.get("warnings"):
+                out["output_warnings"] = res["warnings"]
             # Provenance parity with the background lane: write the exec record
             # (code + produced + the weft placement block "ran on <site>") and
             # inject exec_id, so the on_post_tool hook links artifacts to it and
@@ -1193,7 +1244,8 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
             # kernel stops (run_inventory/run_retain/run_forget). No-op for jupyter.
             from content.bio.lifecycle.runs import record_weft_target, active_run_id
             record_weft_target(active_run_id(str(thread_id)), getattr(sess, "kernel_id", None))
-            res = sess.execute(code, cancel_token=cancel_token, timeout_s=timeout_s)
+            res = sess.execute(_with_cwd_probe(sess, code, "python", cwd),
+                               cancel_token=cancel_token, timeout_s=timeout_s)
             if res.timed_out:
                 return {"error": f"Code execution timed out ({timeout_s}s limit)"}
             if res.cancelled:
@@ -1202,8 +1254,16 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
                                 f"({getattr(cancel_token, 'reason', '')}). No further work happened."}
             # weft kernels write into their sandbox (sess.work_dir), not aba scratch
             # — they can't chdir. Harvest from there; jupyter falls back to cwd.
+            # GAP WINDOW (harvest honesty): scan from the END of the previous
+            # harvest, not this block's start — a background writer's files
+            # landing BETWEEN blocks used to fall in the gap and vanish; now
+            # they attach to the next block (tracked beats lost).
+            _hts = _time.time()
             plots, tables, files, warns = harvest_artifacts(
-                getattr(sess, "work_dir", None) or cwd, since_ts=start_ts)
+                getattr(sess, "work_dir", None) or cwd,
+                since_ts=getattr(sess, "_aba_last_harvest_ts", None) or start_ts)
+            sess._aba_last_harvest_ts = _hts
+            warns = [*warns, *_reconcile_kernel_cwd(sess, cwd)]
             # Session-derived: reproduction needs this thread's ordered cells,
             # not the single cell alone (kernels.md §8.1).
             from core.exec.output_cap import snip_middle
@@ -1428,7 +1488,8 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
         _ensure_kernel_cwd(sess, "r", cwd)
         from content.bio.lifecycle.runs import record_weft_target, active_run_id
         record_weft_target(active_run_id(str(thread_id)), getattr(sess, "kernel_id", None))
-        res = sess.execute(code, cancel_token=cancel_token, timeout_s=timeout_s)
+        res = sess.execute(_with_cwd_probe(sess, code, "r", cwd),
+                           cancel_token=cancel_token, timeout_s=timeout_s)
     except Exception as e:  # noqa: BLE001
         # Parity with run_python's kernel self-heal: a transient failure (slow
         # first IRkernel boot on a fresh install) gets a hard reset + ONE
@@ -1482,8 +1543,13 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
         return {"status": "cancelled",
                 "note": f"Run was cancelled by the user "
                         f"({getattr(cancel_token, 'reason', '')}). No further work happened."}
+    # gap window + cwd reconcile: parity with the python kernel lane above
+    _hts = _time.time()
     plots, tables, files, warns = harvest_artifacts(
-        getattr(sess, "work_dir", None) or cwd, since_ts=start_ts)
+        getattr(sess, "work_dir", None) or cwd,
+        since_ts=getattr(sess, "_aba_last_harvest_ts", None) or start_ts)
+    sess._aba_last_harvest_ts = _hts
+    warns = [*warns, *_reconcile_kernel_cwd(sess, cwd)]
     from core.exec.output_cap import snip_middle
     out = {"stdout": snip_middle(res.stdout or ""), "stderr": snip_middle(res.stderr or ""),
            "returncode": res.returncode, "plots": plots, "tables": tables,

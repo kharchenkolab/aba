@@ -95,7 +95,11 @@ def run_python_code(
     _seed = 0
     lines.append(f"import random as _aba_rnd; _aba_rnd.seed({_seed})")
     lines.append(f"try:\n    import numpy as _aba_np; _aba_np.random.seed({_seed})\nexcept Exception: pass")
-    (scratch / "script.py").write_text("\n".join(lines) + "\n" + code)
+    # probe prologue sits AFTER the platform preamble (which owns the starting
+    # dir) and BEFORE the agent's code; the epilogue runs last
+    (scratch / "script.py").write_text(
+        "\n".join(lines) + "\n" + cwd_probe_prologue("python") + code
+        + cwd_probe_epilogue("python"))
     # Harvest only what THIS run produced. When run_id is the active Run, the
     # scratch IS the Run's work dir (shared with prior cells), so filter by the
     # script's mtime (same FS as the outputs → no cross-host clock skew) to
@@ -158,6 +162,10 @@ def run_python_code(
 
     plots, tables, files, warns = harvest_artifacts(scratch, since_ts=_since,
                                                     project_id=str(project_id))
+    _st, _fi = read_cwd_sentinel(scratch)
+    _esc = cwd_escape_warning(_st, _fi)
+    if _esc:
+        warns = [*warns, _esc]
     from core.exec.output_cap import snip_middle
     # Provenance (provenance.md §3.1): snapshot the env DESCRIPTOR through the
     # interpreter that ran — the background/Slurm analog of the kernel-session
@@ -261,7 +269,10 @@ def run_r_code(
     preamble_lines.append(f'setwd({str(scratch)!r})')
     preamble_lines.append("set.seed(0)")   # provenance.md §3.3 — bit-stable re-run
     preamble = "\n".join(preamble_lines)
-    (scratch / "script.R").write_text(preamble + "\n" + code)
+    # probe prologue AFTER the preamble's setwd (it must record the dir the
+    # platform chose, not the launch dir); epilogue last
+    (scratch / "script.R").write_text(
+        preamble + "\n" + cwd_probe_prologue("r") + code + cwd_probe_epilogue("r"))
     _since = (scratch / "script.R").stat().st_mtime   # harvest only this run's outputs
 
     ex = MaterializingExecutor()
@@ -307,6 +318,10 @@ def run_r_code(
 
     plots, tables, files, warns = harvest_artifacts(scratch, since_ts=_since,
                                                     project_id=str(project_id))
+    _st, _fi = read_cwd_sentinel(scratch)
+    _esc = cwd_escape_warning(_st, _fi)
+    if _esc:
+        warns = [*warns, _esc]
     from core.exec.output_cap import snip_middle
     # Provenance: snapshot the R env with the SAME .libPaths() the run used.
     # Best-effort — skipped (never faked) when no direct Rscript path exists
@@ -336,6 +351,85 @@ def run_r_code(
     return out
 
 
+# ── working-directory escape probe (harvest honesty, 2026-07-26) ────────────
+# The harvest contract scans the run's working tree — but agent code can
+# chdir/setwd elsewhere mid-block, and NOTHING recorded where the process
+# ENDED UP: outputs written there vanished from produced[] with zero signal
+# (live: a multi-step run's card showed 2 of 6 outputs). The probe is a
+# prologue that records the STARTING dir inside the script and an epilogue
+# that writes "<start>\n<final>" to a dot-sentinel IN the starting dir —
+# self-contained (no controller paths baked in), so the same pair works in
+# every lane including a remote node harness. A script that dies before the
+# epilogue leaves no sentinel and the comparison simply doesn't happen.
+_FINAL_CWD_SENTINEL = ".aba-final-cwd"
+
+
+def cwd_probe_prologue(lang: str) -> str:
+    if lang == "r":
+        return '.aba_start_dir <- getwd()\n'
+    return 'import os as _aba_os; _ABA_START_DIR = _aba_os.getcwd()\n'
+
+
+def cwd_probe_epilogue(lang: str, sentinel_dir: Optional[str] = None) -> str:
+    """`sentinel_dir=None`: write into the START dir (one-shot lanes / remote
+    harness, where the start dir is the only address both sides know).
+    Explicit `sentinel_dir`: write to that absolute dir — the persistent-
+    kernel lane uses the harvest root, because there the start dir itself is
+    what may have silently drifted (a prior block's chdir) and a sentinel
+    left in the drifted dir would never be found."""
+    if lang == "r":
+        target = (f'file.path({sentinel_dir!r}, "{_FINAL_CWD_SENTINEL}")'
+                  if sentinel_dir else
+                  f'file.path(.aba_start_dir, "{_FINAL_CWD_SENTINEL}")')
+        return (f'\ntry(writeLines(c(.aba_start_dir, getwd()), {target}), '
+                'silent = TRUE)\n')
+    target = (f"_aba_os.path.join({sentinel_dir!r}, {_FINAL_CWD_SENTINEL!r})"
+              if sentinel_dir else
+              f"_aba_os.path.join(_ABA_START_DIR, {_FINAL_CWD_SENTINEL!r})")
+    return ("\ntry:\n"
+            "    import os as _aba_os\n"
+            f"    with open({target}, 'w') as _aba_f:\n"
+            "        _aba_f.write(_ABA_START_DIR + '\\n' + _aba_os.getcwd())\n"
+            "except Exception:\n"
+            "    pass\n")
+
+
+def read_cwd_sentinel(start_dir) -> tuple[Optional[str], Optional[str]]:
+    """(start, final) from the sentinel, consuming it; (None, None) when the
+    script died before the epilogue — no claim is made either way."""
+    p = Path(start_dir) / _FINAL_CWD_SENTINEL
+    try:
+        lines = p.read_text().splitlines()
+        p.unlink(missing_ok=True)
+        if len(lines) >= 2:
+            return lines[0].strip() or None, lines[1].strip() or None
+    except OSError:
+        pass
+    return None, None
+
+
+def cwd_escape_warning(start: Optional[str], final: Optional[str]) -> Optional[str]:
+    """The typed warning when a block ENDED outside its tracked tree. Moves
+    WITHIN the tree are fine (harvest is recursive). The remedy deliberately
+    does NOT say keep_outputs — retention is jobdir-scoped end to end, so a
+    keep naming an outside path would silently keep nothing; the valid levers
+    are register-by-absolute-path (read-in-place) or writing into WORK_DIR."""
+    if not start or not final:
+        return None
+    try:
+        s = os.path.realpath(start)
+        f = os.path.realpath(final)
+    except OSError:
+        return None
+    if f == s or f.startswith(s + os.sep):
+        return None
+    return (f"this code finished in working directory {final} — OUTSIDE the "
+            f"run's tracked directory ({start}). Files written there are NOT "
+            f"harvested, will NOT appear on the Run card, and CANNOT be kept "
+            f"with keep_outputs. To track them: register_dataset the absolute "
+            f"path (read-in-place), or write outputs into WORK_DIR instead.")
+
+
 _FILE_EXTS = (
     ".pdf", ".svg", ".html", ".htm",
     ".rds", ".h5", ".h5ad", ".npy", ".npz",
@@ -353,15 +447,25 @@ _HARVEST_SKIP_DIRS = frozenset((
 ))
 
 
-def _iter_kept(scratch: Path, suffixes: tuple[str, ...], since_ts: float):
+def _iter_kept(scratch: Path, suffixes: tuple[str, ...], since_ts: float,
+               stale: Optional[list] = None):
     """Walk `scratch` recursively for files whose suffix matches `suffixes`
     (lowercased compare). Yields Path objects mtime-filtered by since_ts;
     skips hidden files, thumb sidecars, and known-transient subdirs.
 
+    `stale` (optional list) collects the mtime-window's SILENT REJECTS that
+    carry the archive-extraction signature: ctime >= since_ts (the inode
+    appeared during this window) but mtime < since_ts (the content stamp is
+    older — tar/unzip/cp -p/rsync -t preserve source times). Files from
+    EARLIER blocks fail both clocks and are not collected, so the signal is
+    precise: "appeared now, stamped old". Without this, extracting an
+    archive of outputs harvested NOTHING with zero signal (harvest-honesty
+    sweep, 2026-07-26 — the relink comparator has documented this exact
+    mtime-rewrite behavior for years while the harvest gate stayed blind).
+
     Recursive harvest fixes the case where a recipe writes per-sample
-    plots into a subdir (e.g. pagoda2's pagoda2_GSM.../qc_*.png) — those
-    used to be invisible to the chat tool-result even though they showed
-    up in the Run view (2026-06-04)."""
+    plots into a subdir — those used to be invisible to the chat
+    tool-result even though they showed up in the Run view (2026-06-04)."""
     suff = tuple(s.lower() for s in suffixes) if suffixes else None  # None = ANY suffix
     for f in scratch.rglob("*"):
         # Skip any path under a transient subdir at any depth.
@@ -380,9 +484,12 @@ def _iter_kept(scratch: Path, suffixes: tuple[str, ...], since_ts: float):
         if suff is not None and f.suffix.lower() not in suff:
             continue
         try:
-            if f.stat().st_mtime < since_ts:
-                continue
+            st = f.stat()
         except OSError:
+            continue
+        if st.st_mtime < since_ts:
+            if stale is not None and st.st_ctime >= since_ts:
+                stale.append(f)     # appeared now, stamped old — see docstring
             continue
         yield f
 
@@ -537,7 +644,10 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0,
     # can answer for it. Same caps discipline as everything else (counted,
     # not silent).
     _known = _FILE_EXTS + (".png", ".csv", ".tsv")
-    for f in _iter_kept(scratch, None, since_ts):
+    # this all-suffix pass sees every window reject once — collect the
+    # stale-stamped appearances here (see _iter_kept docstring)
+    _stale: list = []
+    for f in _iter_kept(scratch, None, since_ts, stale=_stale):
         if f.suffix.lower() in _known or f.name in _created:
             continue
         # The runner's own wrapper is the since_ts reference stamp (its mtime
@@ -681,6 +791,15 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0,
         warnings.append(
             f"{_skipped_cap[0]} additional output file(s) were NOT copied to the artifact store "
             f"(hit the max_files={max_files} cap); they remain browsable in the run folder.")
+    if _stale:
+        _ex = ", ".join(sorted(str(f.relative_to(scratch)) for f in _stale)[:3])
+        warnings.append(
+            f"{len(_stale)} file(s) appeared under the run dir during this "
+            f"step but carry timestamps OLDER than the step start (archive "
+            f"extraction / copy with preserved times?) — they were NOT "
+            f"harvested and will not appear on the Run card (e.g. {_ex}). "
+            f"Re-save or `touch` them, or keep/register them explicitly, to "
+            f"track them.")
     return plots, tables, files, warnings
 
 

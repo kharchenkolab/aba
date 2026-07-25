@@ -76,6 +76,33 @@ changes on any write (even a same-size rewrite) → re-fetch.
 as if current; half-written files observable mid-fetch; a concurrent open
 deleting a fresh copy out from under a viewer.
 
+## Harvest honesty (what the tracking contract does when defeated)
+
+The harvest scans the run's working tree within a time window — two things
+agent code can do defeat that silently, and both now SAY so instead:
+
+- **Working-directory escape.** Every script lane wraps agent code with a
+  cwd probe (prologue records the start dir; epilogue writes start+final to
+  a dot-sentinel — `core/exec/run.py` `cwd_probe_*`; the detached node
+  harness carries its own inline copy and reports `start_cwd`/`final_cwd`
+  in `result.json`). A block that ENDS outside its tree gets a typed warning
+  on the result's warning channel naming the valid levers — register the
+  absolute path (read-in-place) or write into WORK_DIR; deliberately never
+  keep_outputs, which is jobdir-scoped end to end and would keep nothing.
+  Persistent (jupyter) kernels also reconcile the session cwd marker from
+  the probe each block, so a drifted kernel warns and self-heals rather
+  than lying for the rest of the session; weft kernels are excluded (their
+  block protocol breaks loudly on chdir).
+- **Stale-stamped appearances.** Files that APPEAR during the window but
+  carry an older content stamp (archive extraction, `cp -p`, `rsync -t`)
+  are counted via the ctime≥window/mtime<window signature and warned about
+  — earlier blocks' files fail both clocks and stay silent.
+- **Between-block writes.** Kernel lanes harvest from the END of the
+  previous harvest, not the block start, so a background writer's files
+  attach to the next block instead of vanishing in the gap.
+
+Guard: `tests/test_harvest_honesty.py` (per-lane, red-proven).
+
 ## The consumption surfaces (all through the canonical pair)
 
 | Surface | Entry | Policy |
@@ -127,6 +154,12 @@ not be re-derived at a door (misc/paths.md owns the rationale).
 - **Files-tab durable states don't refresh.** The tree is built per fetch;
   a state flip (saving → retained) shows on the next tab load, not live —
   the Run card's polled panel is the live surface.
+- **Out-of-band env installs aren't drift-checked.** An in-code package
+  install (subprocess pip / in-interpreter installer) mutates the live
+  session prefix without bumping the env registry's revision, so the
+  dirty-cached env identity omits it and downstream realizations silently
+  lack the package. Needs a prefix-state tripwire at snapshot time
+  (harvest-honesty sweep item D, deferred).
 - **Store bring-back is whole-store.** The data-plane fetches only missing
   blobs, but ABA re-fetches a changed store wholesale into a fresh temp; a
   delta-aware install (reusing the content-addressed cache) would cut repeat
