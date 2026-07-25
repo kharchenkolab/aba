@@ -827,8 +827,16 @@ def _run_remote_kernel(input_: dict, ctx: dict | None, project_id: str,
         print(f"[run_python] remote kernel unavailable on {site} "
               f"({type(e).__name__}: {e}); falling back to one-shot", flush=True)
         return None
-    from content.bio.lifecycle.runs import record_weft_target, active_run_id
-    record_weft_target(active_run_id(str(thread_id)), getattr(sess, "kernel_id", None))
+    from content.bio.lifecycle.runs import (record_weft_target, active_run_id,
+                                            note_run_site)
+    _rid_now = active_run_id(str(thread_id))
+    record_weft_target(_rid_now, getattr(sess, "kernel_id", None))
+    # Placement stamps at DISPATCH, not completion: the stamp used to land
+    # only when the step's result registered, so for the whole duration of a
+    # long remote step the Run card claimed "ran locally" and only later
+    # flipped (live UX finding 2026-07-26). The session's site is the truth
+    # of where this step is EXECUTING — stamp it before execute() blocks.
+    note_run_site(_rid_now, getattr(sess, "site", None))
     inv0 = _kernel_sandbox_inventory(sess.kernel_id)
     res = sess.execute(code, cancel_token=cancel_token, timeout_s=timeout_s)
     if res.timed_out:

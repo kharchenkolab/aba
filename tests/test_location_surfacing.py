@@ -235,6 +235,22 @@ def test_plan_intercept_consults_the_lint():
         "present_plan no longer consults data_location.plan_placement_note"
 
 
+# ── 9. run placement stamps at DISPATCH, not completion ─────────────────────
+
+def test_kernel_dispatch_stamps_placement_before_execute():
+    """Seam pin: the remote-kernel lane must note_run_site() BEFORE the
+    blocking execute() — the stamp used to land only at result registration,
+    so a long remote step's Run card claimed 'ran locally' the whole time
+    and flipped only at the end (live UX finding). Structural: the lane
+    needs a live session to exercise behaviorally."""
+    import re
+    src = (Path(_BACKEND) / "content/bio/tools/run_exec.py").read_text()
+    m = re.search(r"record_weft_target.*?sess\.execute\(", src, re.S)
+    assert m, "kernel dispatch block not found"
+    assert "note_run_site" in m.group(0), \
+        "dispatch no longer stamps placement before execute()"
+
+
 # ── 8. viewer launch page: the remote failure offers the FIX ────────────────
 
 def test_launch_page_offers_mirror_and_retry(tmp_path):
