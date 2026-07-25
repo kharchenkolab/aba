@@ -115,7 +115,10 @@ interface TablePreview {
 }
 interface NonePreview { kind: 'none' }
 interface ErrorPreview { kind: 'error'; error: string }
-type Preview = TablePreview | NonePreview | ErrorPreview
+/** Remote-homed dataset with no local bytes: the preview names the site
+ *  instead of silently rendering nothing (surfacing census 2026-07-26). */
+interface RemotePreview { kind: 'remote'; site: string; total_bytes?: number | null }
+type Preview = TablePreview | NonePreview | ErrorPreview | RemotePreview
 
 
 /** Paginated CSV/TSV preview. Used by DatasetView (header + table)
@@ -436,6 +439,13 @@ function DatasetView({ entity, onFocus, onChange, onChatResult, onPrefill, proje
       {preview?.kind === 'table' && <PreviewTable entityId={entity.id} pageSize={15} />}
       {preview?.kind === 'error' && (
         <div className="focus__placeholder">preview error: {preview.error}</div>
+      )}
+      {preview?.kind === 'remote' && (
+        <div className="focus__placeholder">
+          No local copy to preview — the data lives on <strong>{preview.site}</strong>
+          {preview.total_bytes ? ` (${formatBytes(Number(preview.total_bytes))})` : ''}.
+          Use “Mirror locally” above to preview here.
+        </div>
       )}
       <ExternalViewerActions entity={entity} />
       <DatasetFiles entity={entity} onFocus={onFocus} onChatResult={onChatResult}

@@ -57,6 +57,7 @@ def list_data_files(_input: dict) -> dict:
     from pathlib import Path as _Path
     files = []
     registered_names = set()
+    any_remote = False
     for d in _registered_datasets():
         path = d.get("path")
         name = d.get("name", "")
@@ -68,9 +69,24 @@ def list_data_files(_input: dict) -> dict:
                 size = _Path(path).stat().st_size
         except Exception:
             pass
-        files.append({"filename": name, "size_bytes": size,
-                      "path": str(path) if path else None,
-                      "title": d.get("title"), "registered": True})
+        # LOCATION IS PART OF THE LISTING (surfacing census 2026-07-26): the
+        # home site is recorded at registration, but this surface rendered
+        # path/title only — silence read as "local", and live the agent
+        # probed the local disk three times for a remote-homed dataset
+        # before inferring the site from an unrelated ambient line. `site`
+        # is always explicit; a remote entry also carries the recorded size
+        # (a local stat of a remote path rendered size as null) and an
+        # actionable note.
+        entry = {"filename": name, "size_bytes": size,
+                 "path": str(path) if path else None,
+                 "title": d.get("title"), "registered": True,
+                 "site": d.get("site") or "local"}
+        if d.get("remote"):
+            any_remote = True
+            entry["size_bytes"] = size if size is not None else d.get("total_bytes")
+            if d.get("note"):
+                entry["note"] = d["note"]
+        files.append(entry)
 
     # Also surface data files sitting in DATA_DIR that aren't registered as
     # datasets — otherwise the agent sees "no datasets", concludes the project
@@ -127,6 +143,11 @@ def list_data_files(_input: dict) -> dict:
                    "These datasets do NOT live in DATA_DIR (e.g. they were registered "
                    "from a work scratch dir or an explicit absolute path); the "
                    "DATA_DIR/<filename> shortcut won't resolve.")
+    if any_remote:
+        message += (" NOTE: entries with a non-local `site` are NOT on this "
+                    "machine — their paths only resolve on that site (run "
+                    "compute there with site=<name>), or mirror them locally "
+                    "first.")
     out = {"files": files, "data_dir": data_dir_str, "message": message}
     return out
 
@@ -139,14 +160,26 @@ def _registered_datasets() -> list[dict]:
     agent saw the right path in list_data_files but then built a
     DATA_DIR-shaped path from prior and hit "path not found")."""
     from core.graph.entities import list_entities
+    from content.bio.data_location import dataset_location, remote_use_note
     out = []
     for e in list_entities(include_archived=False):
         if e.get("type") != "dataset":
             continue
         path = e.get("artifact_path")
         name = Path(path).name if path else (e.get("title") or "")
-        if name:
-            out.append({"name": name, "path": path, "title": e.get("title")})
+        if not name:
+            continue
+        # location facts ride every row (surfacing census 2026-07-26) —
+        # additive keys, so callers reading only name/path/title are
+        # untouched; a local dataset carries site="local" and no note.
+        loc = dataset_location(e)
+        row = {"name": name, "path": path, "title": e.get("title"),
+               "site": loc["site"], "remote": loc["remote"],
+               "total_bytes": loc["total_bytes"]}
+        note = remote_use_note(e)
+        if note:
+            row["note"] = note
+        out.append(row)
     return out
 
 

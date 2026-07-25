@@ -255,16 +255,19 @@ def _prior_run_files_preamble(project_id: str, thread_id: str,
             n = name.lower()
             return not any(n.endswith(s) for s in _PREAMBLE_SKIP_SUFFIXES)
 
-        # (1) Registered datasets — name + path + layout_hint (if recorded).
-        datasets: list[tuple[str, str, str]] = []   # (title, path, hint)
+        # (1) Registered datasets — name + path + layout_hint (if recorded)
+        # + WHERE the bytes live (surfacing census 2026-07-26: path-only
+        # lines read as "local"; a remote home is named on every surface).
+        datasets: list[tuple[str, str, str, str]] = []   # (title, path, hint, loc)
         try:
+            from content.bio.data_location import location_suffix
             for d in list_entities(type_filter="dataset", include_archived=False):
                 ap = d.get("artifact_path") or ""
                 if not ap: continue
                 title = (d.get("title") or d.get("id") or "").strip()
                 md = d.get("metadata") or {}
                 hint = (md.get("layout_hint") or "").strip()
-                datasets.append((title, ap, hint))
+                datasets.append((title, ap, hint, location_suffix(d)))
         except Exception:  # noqa: BLE001
             pass
 
@@ -344,7 +347,7 @@ def _prior_run_files_preamble(project_id: str, thread_id: str,
                     if f.name in seen_names: continue
                     # Skip directories that are registered datasets — they
                     # already appear in section (1).
-                    if f.is_dir() and any(str(f) == ap for _, ap, _ in datasets):
+                    if f.is_dir() and any(str(f) == ap for _, ap, *_ in datasets):
                         continue
                     seen_names.add(f.name)
                     suffix = "/" if f.is_dir() else ""
@@ -422,10 +425,10 @@ def _prior_run_files_preamble(project_id: str, thread_id: str,
         lines.append("")
         if datasets:
             lines.append("Registered datasets in this project (canonical paths — use verbatim):")
-            for title, path, hint in datasets:
+            for title, path, hint, loc in datasets:
                 label = title or path.rsplit("/", 1)[-1]
                 tail = f"  [{hint}]" if hint else ""
-                lines.append(f"  - {label} → {path}{tail}")
+                lines.append(f"  - {label} → {path}{tail}{loc}")
                 # List a few representative filenames inside directory-
                 # shaped datasets so the agent sees layout patterns
                 # (sample prefixes, 10x triplet roles, etc.) without

@@ -112,13 +112,44 @@ def open_viewer_impl(params: dict, ctx: dict | None = None) -> dict:
         q["path"] = link_path
     viewer_url = "/viewer-launch?" + urlencode(q)
 
+    # LOCATION PRE-FLIGHT (surfacing census 2026-07-26): a link minted for a
+    # REMOTE-homed source used to look identical to a local one and died at
+    # click time ("lives on <site>" as a raw error card). The link stays
+    # valid — the launcher fetches home under the transfer gate — but the
+    # result now SAYS what opening will cost, and names the mirror lever
+    # when the gate would refuse. Facts from recorded metadata only.
+    note = None
+    if entity_id:
+        try:
+            from content.bio.data_location import dataset_location
+            from core.data.datasets import FETCH_GUARDRAIL_BYTES
+            ent = get_entity(entity_id)
+            loc = dataset_location(ent or {})
+            if loc["remote"]:
+                size = loc["total_bytes"]
+                if size and size > FETCH_GUARDRAIL_BYTES:
+                    note = (f"source lives on {loc['site']} and is "
+                            f"{size / 1e9:.1f} GB — OVER the transfer gate, so "
+                            f"opening from here will refuse. Work with it on "
+                            f"{loc['site']}, or reduce it there first.")
+                else:
+                    mb = f" (~{size / 1e6:.0f} MB)" if size else ""
+                    note = (f"source lives on {loc['site']}{mb} — opening "
+                            f"fetches it to this machine first; if that is "
+                            f"refused, mirror the dataset locally (its card "
+                            f"has Mirror locally), then reopen.")
+        except Exception:  # noqa: BLE001 — annotation must never block the link
+            pass
+
     label = v.label or v.id
+    out_note = {"note": note} if note else {}
     return {
         "ok": True,
         "viewer_id": v.id,
         "label": label,
         "resolved_path": link_path,
         "viewer_url": viewer_url,
+        **out_note,
         "_agent_hint": (
             f"Success: present viewer_url to the user as a markdown link — [{label}]({viewer_url}) — "
             "NOT the raw URL, and NOT with an emoji (the UI draws the button). It opens a new tab, "

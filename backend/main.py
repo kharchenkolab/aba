@@ -507,6 +507,15 @@ def entities_preview(entity_id: str, limit: int = 20, offset: int = 0):
         raise HTTPException(404, f"Entity {entity_id} not found")
 
     offset = max(0, offset)
+    # A remote-homed dataset with no local bytes must say WHERE it lives, not
+    # silently return "none" (surfacing census 2026-07-26: the card rendered
+    # nothing and the site stayed a mystery). Typed answer → the card offers
+    # the mirror flow. Logic owned by content.bio.data_location.
+    if e["type"] == "dataset":
+        from content.bio.data_location import remote_preview_answer
+        _r = remote_preview_answer(e)
+        if _r:
+            return _r
     if e["type"] in ("dataset", "table") and e["artifact_path"]:
         raw = e["artifact_path"]
         # Tables are stored as /artifacts/<pid>/<id>.csv; datasets as disk paths.

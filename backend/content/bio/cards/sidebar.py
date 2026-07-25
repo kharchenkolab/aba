@@ -48,6 +48,7 @@ def render_bio_project_sidebar(thread_id: Optional[str] = None) -> str:
     # Paths paragraph.
     datasets = list_entities(type_filter="dataset", include_archived=False)
     if datasets:
+        from content.bio.data_location import location_suffix
         parts.append(f"Datasets ({len(datasets)}):")
         for e in datasets[:10]:
             title = (e.get("title") or "").strip() or e.get("id", "")
@@ -58,6 +59,11 @@ def render_bio_project_sidebar(thread_id: Optional[str] = None) -> str:
                 line += f"  →  {path}"
             if layout:
                 line += f"  ·  {layout}"
+            # WHERE the bytes live rides every naming surface (surfacing
+            # census 2026-07-26): a remote home gets " · on <site>"; a local
+            # dataset gains zero noise. The path alone read as "local" and
+            # cost a live session three blind local probes.
+            line += location_suffix(e)
             parts.append(line)
         if len(datasets) > 10:
             parts.append(f"  (… {len(datasets) - 10} more — list_data_files for full list)")
