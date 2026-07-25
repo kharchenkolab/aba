@@ -154,12 +154,14 @@ not be re-derived at a door (misc/paths.md owns the rationale).
 - **Files-tab durable states don't refresh.** The tree is built per fetch;
   a state flip (saving → retained) shows on the next tab load, not live —
   the Run card's polled panel is the live surface.
-- **Out-of-band env installs aren't drift-checked.** An in-code package
-  install (subprocess pip / in-interpreter installer) mutates the live
-  session prefix without bumping the env registry's revision, so the
-  dirty-cached env identity omits it and downstream realizations silently
-  lack the package. Needs a prefix-state tripwire at snapshot time
-  (harvest-honesty sweep item D, deferred).
+- **Out-of-band env installs are tripwired at snapshot, not at install
+  time.** An in-code package install (subprocess pip) mutates the live
+  session prefix without touching the registry; the snapshot dirty-cache
+  now keys on a cheap prefix signature, records the event as an
+  `out-of-band` addition, and re-snapshots so the frozen identity stays
+  true (`core/compute/project_env.py` `_prefix_signature`; replay skips
+  marker rows). The residual gap: identity claims between the rogue
+  install and the next snapshot still serve the stale id.
 - **Store bring-back is whole-store.** The data-plane fetches only missing
   blobs, but ABA re-fetches a changed store wholesale into a fresh temp; a
   delta-aware install (reusing the content-addressed cache) would cut repeat
