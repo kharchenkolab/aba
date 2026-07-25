@@ -303,6 +303,87 @@ function FigureView({ entity }: FocusViewProps) {
 }
 
 
+/** WHERE the data lives, and what to do about it (live UX finding 2026-07-25:
+ *  a by-reference dataset's site was invisible everywhere on the card — the
+ *  header pill said only "external" — with no affordance to bring bytes
+ *  home). Renders only for datasets with a recorded non-local home. Safety
+ *  comes from the SAME ledger query the strip and chat use, shown per-item
+ *  here now that the all-safe strip is quiet by design. */
+export function DatasetHomeRow({ entity, onChange, projectId }: {
+  entity: Entity; onChange: () => void; projectId?: string
+}) {
+  const md = (entity.metadata ?? {}) as {
+    home?: { site?: string; path?: string }
+    local_mirror?: { path?: string; at?: number }
+  }
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState<string | null>(null)
+  const [safety, setSafety] = useState<{ state: string; why: string } | null>(null)
+  useEffect(() => {
+    let dead = false
+    setSafety(null)
+    fetch(`/api/projects/${encodeURIComponent(projectId || 'default')}/data-ledger`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => {
+        if (dead || !d) return
+        const it = (d.items as { entity_id: string; state: string; why: string }[] | undefined)
+          ?.find(i => i.entity_id === entity.id)
+        if (it) setSafety({ state: it.state, why: it.why })
+      })
+      .catch(() => {})
+    return () => { dead = true }
+  }, [entity.id, projectId])
+
+  const home = md.home
+  if (!home?.site || home.site === 'local') return null
+
+  const mirror = async () => {
+    setBusy(true); setNote(null)
+    try {
+      const r = await fetch(`/api/datasets/${encodeURIComponent(entity.id)}/mirror`, { method: 'POST' })
+      if (!r.ok) {
+        const d = await r.json().catch(() => null)
+        setNote(typeof d?.detail === 'string' ? d.detail : `mirror failed (${r.status})`)
+      } else onChange()
+    } finally { setBusy(false) }
+  }
+
+  const stateWord: Record<string, string> = { at_risk: 'at risk', changed: 'source changed' }
+  return (
+    <>
+      <div className="focus__row">
+        <span className="focus__row-label">lives on</span>
+        <span className="focus__row-val">
+          <strong>{home.site}</strong>
+          {home.path ? <> · <code>{home.path}</code></> : null}
+          {md.local_mirror
+            ? <span className="focus__muted"> · mirrored locally</span>
+            : <button className="focus__inline-btn" disabled={busy} onClick={mirror}
+                      title="Copy the bytes into this project (size-gated, content-verified)">
+                {busy ? 'mirroring…' : 'Mirror locally'}
+              </button>}
+        </span>
+      </div>
+      {safety && (
+        <div className="focus__row">
+          <span className="focus__row-label">safety</span>
+          <span className={`focus__row-val ${safety.state === 'safe'
+            ? 'focus__muted' : `focus__safety--${safety.state}`}`}>
+            {safety.state === 'safe' ? 'safe' : (stateWord[safety.state] || safety.state)} — {safety.why}
+          </span>
+        </div>
+      )}
+      {note && (
+        <div className="focus__row">
+          <span className="focus__row-label" />
+          <span className="focus__row-val focus__safety--at_risk">{note}</span>
+        </div>
+      )}
+    </>
+  )
+}
+
+
 function DatasetView({ entity, onFocus, onChange, onChatResult, onPrefill, projectId }: FocusViewProps) {
   const [preview, setPreview] = useState<Preview | null>(null)
   useEffect(() => {
@@ -324,6 +405,7 @@ function DatasetView({ entity, onFocus, onChange, onChatResult, onPrefill, proje
           <span className="focus__row-label">file</span>
           <code className="focus__row-val">{entity.artifact_path ?? '—'}</code>
         </div>
+        <DatasetHomeRow entity={entity} onChange={onChange} projectId={projectId} />
         {entity.metadata?.source ? (
           <div className="focus__row">
             <span className="focus__row-label">source</span>

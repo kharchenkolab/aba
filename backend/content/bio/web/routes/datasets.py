@@ -110,6 +110,51 @@ def dataset_relink(did: str, body: _RelinkBody, _pid: str = Depends(require_proj
     return {"ok": True, "home": out["home"]}
 
 
+@router.post("/api/datasets/{did}/mirror")
+def dataset_mirror(did: str, _pid: str = Depends(require_project)):
+    """The card's "Mirror locally": bring a by-reference dataset's bytes home
+    through the SAME data plane compute uses — guardrailed (an honest 413
+    names size + limit + placement suggestion, never a silent multi-GB
+    transfer) and fingerprint-verified (a drifted/missing home surfaces as
+    409 instead of fetching stale). The durable home stays authoritative;
+    the local copy lands in the project data dir and is recorded as
+    `artifact_path` + `metadata.local_mirror`, so previews and viewers serve
+    without a remote hop."""
+    import time
+    from core.config import project_data_dir
+    from core.projects import current_project_id
+    from core.data.datasets import fetch, explain_data_error
+
+    ent = get_entity(did)
+    if not ent or ent.get("type") != "dataset":
+        raise HTTPException(404, f"no dataset {did}")
+    md = dict(ent.get("metadata") or {})
+    home = md.get("home") or {}
+    if not home.get("path") or (home.get("site") or "local") == "local":
+        raise HTTPException(400, "this dataset already lives on this machine")
+
+    base = Path(home["path"]).name or (ent.get("title") or "dataset")
+    desc = md.get("descriptor") or {}
+    is_dir = (md.get("layout") == "directory"
+              or (desc.get("n_files") or 0) > 1)
+    dest = (_unique_dir_path if is_dir else _unique_path)(
+        Path(str(project_data_dir(current_project_id()))) / base)
+    out = fetch(md, str(dest))
+    if out.get("error") == "fetch_guardrail":
+        raise HTTPException(
+            413, f"{(out.get('total_bytes') or 0) / 1e9:.1f} GB exceeds the "
+                 f"{out['limit'] / 1e9:.0f} GB transfer gate — "
+                 f"{out.get('suggestion') or 'work where the data lives'}")
+    if out.get("error"):
+        msg = explain_data_error(out) or out.get("state") or out["error"]
+        raise HTTPException(409, f"cannot mirror: {msg}")
+    local = out.get("path") or str(dest)
+    md["local_mirror"] = {"path": local, "at": int(time.time()),
+                          "ref": out.get("ref")}
+    update_entity(did, artifact_path=local, metadata=md)
+    return {"ok": True, "path": local}
+
+
 @router.get("/api/datasets/{did}/tree")
 def dataset_tree(did: str):
     """The dataset's subtree from the files tree (its directory contents,

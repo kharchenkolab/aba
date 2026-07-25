@@ -128,7 +128,10 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus, onSel
             className="focus__ref-badge"
             title={`Imported by reference — the payload lives at ${String(entity.metadata?.ref_path ?? '')} and is not copied into ABA.`}
           >
-            ↪ external
+            {/* Name WHERE it lives, not just that it's elsewhere — "external"
+                alone left the site a mystery (live UX finding). */}
+            ↪ external{(entity.metadata as { home?: { site?: string } })?.home?.site
+              ? ` · ${(entity.metadata as { home?: { site?: string } }).home!.site}` : ''}
           </span>
         ) : null}
         {entity.scenario_of && baseline && (

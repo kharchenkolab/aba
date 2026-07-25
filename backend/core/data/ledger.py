@@ -154,7 +154,14 @@ def data_ledger(project_id: Optional[str] = None) -> dict:
               "at_risk": sum(1 for i in items if i["state"] == "at_risk"),
               "changed": sum(1 for i in items if i["state"] == "changed"),
               "unknown": sum(1 for i in items if i["state"] == "unknown")}
-    sites = sorted({i["site"] for i in items if i["site"] and i["site"] != "local"})
+    # An item's `site` may be a COMPOSITE display string (a keep spanning
+    # local+remote reads "local/mendel") — remote_sites is an enumeration of
+    # real site NAMES, so decompose before collecting (the composite leaked
+    # into the UI as a phantom third site: "(some on local/mendel, mendel)").
+    sites = sorted({part
+                    for i in items if i["site"]
+                    for part in str(i["site"]).split("/")
+                    if part and part != "local"})
     out = {"items": items, "totals": totals, "remote_sites": sites,
            "multi_site": bool(sites), "degraded": not keeps_ok}
     if not keeps_ok:

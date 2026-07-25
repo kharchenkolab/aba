@@ -615,3 +615,28 @@
 .focus__drift-relink { display: flex; gap: 6px; margin-top: 6px; }
 .focus__drift-relink input { flex: 0 1 320px; font-size: 12px; padding: 3px 6px; }
 .focus__drift-note { margin-top: 5px; font-size: 12px; color: #78350f; }
+
+/* Dataset home/safety rows (live UX finding 2026-07-25): inline card action +
+   muted/warn accents, matching the rows' quiet label/value language. */
+.focus__inline-action {
+  margin-left: 10px; padding: 1px 10px; font-size: 12px;
+  border: 1px solid var(--border); border-radius: 9999px;
+  background: var(--surface-3); color: var(--text-2); cursor: pointer;
+}
+.focus__inline-action:hover { background: var(--bg-soft); }
+.focus__inline-action:disabled { opacity: .6; cursor: default; }
+.focus__muted { color: var(--text-4); }
+.focus__safety--warn { color: #b45309; }
+
+/* Dataset home row (lives-on / mirror / safety) — live UX finding 2026-07-25 */
+.focus__inline-btn {
+  margin-left: 8px; font-size: 11px; font-weight: 600;
+  padding: 1px 8px; border-radius: 9999px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--surface-3); color: var(--text-2);
+}
+.focus__inline-btn:hover { background: var(--bg-soft); }
+.focus__inline-btn:disabled { opacity: .6; cursor: default; }
+.focus__muted { color: var(--text-4); }
+.focus__safety--at_risk { color: #b91c1c; }
+.focus__safety--changed { color: #b45309; }
+.focus__safety--unknown { color: var(--text-3); }

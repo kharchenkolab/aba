@@ -38,6 +38,7 @@ FILES=(
   tests/test_vision_refs.py
   tests/test_env_integrity.py
   tests/test_env_resolution.py
+  tests/test_dataset_mirror.py
   tests/test_dataset_scratch_binding.py
   tests/test_dataset_integrity_gate.py
   tests/test_nested_env_mount_path.py

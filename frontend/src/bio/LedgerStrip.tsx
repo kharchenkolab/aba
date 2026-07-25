@@ -66,25 +66,25 @@ export default function LedgerStrip({ projectId, onFocus, fingerprint }: {
       </div>
     )
   }
-  // Quiet by default: all safe AND single-machine → say nothing at all.
-  if (!attention && !led.multi_site) return null
+  // Quiet by default: ALL SAFE → say nothing, multi-site included. "86 items
+  // · 86 safe (some on …)" was chrome answering a question nobody asked —
+  // where an item lives belongs on its card; this strip exists to flag what
+  // needs ATTENTION, and quiet means safe (the quiescence contract above).
+  if (!attention) return null
 
   const flagged = led.items.filter(i => i.state !== 'safe')
   return (
     <div className="ledger">
       <div className="ledger__line">
-        <span>
-          {t.items} item{t.items === 1 ? '' : 's'} · {t.safe} safe
-          {led.multi_site && ` (some on ${led.remote_sites.join(', ')})`}
+        <span className="ledger__lead">
+          {attention} of {t.items} item{t.items === 1 ? '' : 's'} need{attention === 1 ? 's' : ''} attention
         </span>
         {t.at_risk > 0 && <span className="ledger__flag ledger__flag--risk">{t.at_risk} at risk</span>}
         {t.changed > 0 && <span className="ledger__flag ledger__flag--changed">{t.changed} source changed</span>}
         {t.unknown > 0 && <span className="ledger__flag">{t.unknown} unknown</span>}
-        {attention > 0 && (
-          <button className="ledger__review" onClick={() => setOpen(o => !o)}>
-            {open ? 'Hide' : 'Review'}
-          </button>
-        )}
+        <button className="ledger__review" onClick={() => setOpen(o => !o)}>
+          {open ? 'Hide' : 'Review'}
+        </button>
       </div>
       {open && attention > 0 && (
         <ul className="ledger__list">
