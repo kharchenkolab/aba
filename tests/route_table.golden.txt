@@ -1,6 +1,7 @@
 DELETE /api/claims/{cid}/alternatives/{aid}
 DELETE /api/claims/{cid}/caveats/{caid}
 DELETE /api/claims/{cid}/evidence/{rid}
+DELETE /api/claims/{cid}/notes/{nid}
 DELETE /api/compute/sites/{name}
 DELETE /api/entities/{entity_id}
 DELETE /api/entities/{entity_id}/messages
@@ -119,6 +120,7 @@ POST /api/claims/{cid}/alternatives
 POST /api/claims/{cid}/alternatives/{aid}/promote
 POST /api/claims/{cid}/caveats
 POST /api/claims/{cid}/evidence
+POST /api/claims/{cid}/notes
 POST /api/claims/{cid}/status
 POST /api/compute/hostkey
 POST /api/compute/keysetup
