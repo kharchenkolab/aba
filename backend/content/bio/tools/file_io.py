@@ -473,6 +473,25 @@ def _resolve_project_path(path_str: str, ctx: dict | None,
     work_root = project_work_dir(pid).resolve()
     data_root = project_data_dir(pid).resolve()
 
+    # A SERVED ARTIFACT URL is the handle our own tool results hand back — a
+    # harvested output arrives as {"url": "/artifacts/<pid>/<hash>.ext"}. Treated
+    # as a filesystem path it resolves to a literal `/artifacts/...` that cannot
+    # exist, so `view_file` on the URL a run had JUST returned answered "file not
+    # found" (live, thr_a1f7f687: run_r harvested bundle_files.txt, handed back
+    # its URL, and the next call could not open it — the agent had to re-run the
+    # step and print to stdout instead). `view_artifact` has always mapped these;
+    # this door must too, or the platform contradicts itself between consecutive
+    # results. Mapped BEFORE the absolute/relative split; the sandbox check below
+    # still refuses it for write/edit, since a served artifact is not editable.
+    if raw.startswith("/artifacts/"):
+        try:
+            from core.web.artifacts import _artifact_url_to_path
+            d = _artifact_url_to_path(raw)
+        except Exception:  # noqa: BLE001 — fall through to plain path handling
+            d = None
+        if d is not None:
+            raw = str(d)
+
     p = Path(raw)
     if not p.is_absolute():
         # Relative: anchor at the active run's cwd if one is open, else the
