@@ -616,6 +616,11 @@ class WeftKernelSession:
             msg = (died_msg or "".join(stderr)).strip() or (
                 "The compute kernel died mid-execution (killed, crashed, or out "
                 "of memory / walltime). Rerun the cell — the session will restart.")
+            from core.exec.kernels.cwd_guard import cwd_drift_diagnosis
+            hint = cwd_drift_diagnosis(msg, "".join(stderr), code,
+                                       getattr(self, "lang", "python"))
+            if hint:
+                msg = f"{msg}\n\n{hint}"
             return ExecResult(returncode=1, stdout="".join(stdout), stderr=msg,
                               cancelled=False, timed_out=False)
         if cancelled:

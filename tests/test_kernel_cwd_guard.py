@@ -1,4 +1,4 @@
-"""Weft kernels cannot chdir — the predicate and the refusal.
+"""Weft kernels cannot be LEFT in a different working directory.
 
 A weft kernel's driver writes its own per-block files (`blocks/NNNN.*`) RELATIVE
 to the process cwd, so the first block that changes the working directory
@@ -14,9 +14,11 @@ Two guarded things:
    kernel, so the work_dir spelling reads every REMOTE weft kernel as
    chdir-able. That exact mistake shipped a `setwd(<controller path>)` into
    remote kernels.
-2. `chdir_offense` / `chdir_refusal` — the stopgap refusal. Its FALSE-POSITIVE
-   ceilings matter as much as its detection: refusing legitimate code is the way
-   this guard would do more harm than the bug.
+2. `cwd_drift_diagnosis` — the death message. A refusal was built and REMOVED
+   (see the section comment below); what remains makes the failure legible so an
+   agent corrects itself instead of looping. `chdir_offense` survives only to
+   SHARPEN that message, so its false-positive ceilings still matter: a wrong
+   "this line did it" misdirects the fix.
 """
 from __future__ import annotations
 
@@ -30,7 +32,7 @@ pytestmark = pytest.mark.platform
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 from core.exec.kernels.cwd_guard import (  # noqa: E402
-    chdir_offense, chdir_refusal, is_weft_kernel)
+    chdir_offense, cwd_drift_diagnosis, is_weft_kernel)
 
 
 # ── the identity predicate ───────────────────────────────────────────────────
@@ -90,14 +92,14 @@ def test_detects_python_chdir_spellings():
     assert chdir_offense("x = 1; os.chdir('/tmp')", "python")
 
 
-def test_clean_code_is_not_refused():
+def test_clean_code_is_not_flagged():
     assert chdir_offense('saveRDS(obj, file.path(work_dir, "o.rds"))', "r") is None
     assert chdir_offense("import os\np = os.path.join(w, 'x.png')", "python") is None
     assert chdir_offense("", "r") is None
     assert chdir_offense("print(getwd())", "r") is None
 
 
-# ── false-positive ceilings (the part that keeps a refusal safe) ─────────────
+# ── false-positive ceilings (they keep the DIAGNOSIS from misdirecting) ─────
 
 def test_commented_out_chdir_is_ignored():
     assert chdir_offense("# setwd('/tmp')\nx <- 1", "r") is None
@@ -118,7 +120,7 @@ def test_a_hash_inside_a_string_does_not_hide_a_real_offense():
 
 def test_language_scoping():
     """R's setwd is not Python's, and vice versa — a mismatched pattern would
-    both miss offenses and refuse innocent code."""
+    both miss offenses and finger innocent lines."""
     assert chdir_offense("setwd('/tmp')", "python") is None
     assert chdir_offense("os.chdir('/tmp')", "r") is None
 
@@ -128,21 +130,58 @@ def test_kwarg_named_chdir_is_not_a_call():
     assert chdir_offense("subprocess.run(cmd, chdir=True)", "python") is None
 
 
-# ── the refusal payload ──────────────────────────────────────────────────────
+# ── the diagnosis (replaces the removed refusal) ─────────────────────────────
+#
+# A refusal based on scanning submitted code was built and REMOVED: a chdir
+# inside a library function is invisible to it (no protection where the user has
+# no control), and enforcing it would have disabled an ordinary idiom across all
+# kernel work including local sessions. The fatal pattern is also narrower than
+# "calls chdir" — a chdir RESTORED before the block ends is harmless — which no
+# static scan can tell apart. So aba's job is to make the death legible.
 
-def test_refusal_names_the_cause_the_cost_and_the_way_out():
-    out = chdir_refusal("setwd(work_dir)", "r")
-    assert out["status"] == "error"
-    assert out["error"] == "kernel.chdir_forbidden"
-    assert out["offending_line"] == "setwd(work_dir)"
-    note = out["note"]
-    assert "Nothing was run" in note          # no partial execution to reason about
-    assert "file.path(" in note                # the R way out, not the python one
-    assert "os.path.join" not in note
-    assert "blocks/" in note                   # says WHY, not just "forbidden"
+_DEATH = ("Error in file(con, \"w\") : cannot open the connection\n"
+          "In addition: Warning message:\n"
+          "In file(con, \"w\") : cannot open file 'blocks/0002.rc.tmp': "
+          "No such file or directory\nExecution halted")
 
 
-def test_refusal_is_language_appropriate_for_python():
-    note = chdir_refusal("os.chdir('/tmp')", "python")["note"]
-    assert "os.chdir()" in note and "os.path.join" in note
-    assert "file.path(" not in note
+def test_diagnosis_fires_on_the_driver_write_signature():
+    out = cwd_drift_diagnosis(_DEATH, "", "setwd(work_dir)", "r")
+    assert out and "working directory moved" in out
+    assert "setwd(work_dir)" in out            # names the visible offender
+    assert "file.path(" in out                 # the R way out
+    assert "substrate limitation" in out       # not the user's fault
+
+
+def test_diagnosis_is_honest_when_the_source_is_clean():
+    """The case the refusal could never handle: a package chdir'd internally.
+    The death signature is still present, so the explanation must still fire —
+    and must NOT claim the block did it."""
+    out = cwd_drift_diagnosis(_DEATH, "", "library(somepkg)\nrun_it()", "r")
+    assert out and "library call likely did" in out
+    assert "setwd(" not in out.split("To avoid")[0].replace("setwd()", "")
+
+
+def test_no_diagnosis_for_unrelated_deaths():
+    """CEILING: a wrong explanation is worse than none. OOM / walltime / kill
+    must not be labelled a cwd problem."""
+    for other in ("Killed (out of memory)",
+                  "slurm: JOB 123 CANCELLED DUE TO TIME LIMIT",
+                  "kernel stopped", ""):
+        assert cwd_drift_diagnosis(other, "", "setwd('/x')", "r") is None
+
+
+def test_diagnosis_language_appropriate():
+    out = cwd_drift_diagnosis(_DEATH, "", "os.chdir('/tmp')", "python")
+    assert "os.path.join" in out and "contextlib.chdir" in out
+    assert "file.path(" not in out
+
+
+def test_offense_detection_still_used_only_to_sharpen():
+    """chdir_offense survives as a DIAGNOSTIC aid, with its false-positive
+    ceilings intact — a wrong "this line did it" would misdirect the fix."""
+    assert chdir_offense("# setwd('/tmp')", "r") is None
+    assert chdir_offense('message("call setwd(x)")', "r") is None
+    assert chdir_offense("subprocess.run(cmd, chdir=True)", "python") is None
+    assert chdir_offense('lbl <- "col#1"; setwd("/tmp")', "r")
+    assert chdir_offense("setwd('/tmp')", "python") is None   # language scoping
