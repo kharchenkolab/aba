@@ -191,6 +191,7 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
               est_cores: Annotated[int | None, Field(description=_D_EST_CORES)] = None,
               est_mem_gb: Annotated[int | None, Field(description=_D_EST_MEM)] = None,
               est_gpu: Annotated[bool, Field(description=_D_EST_GPU)] = False,
+              fresh: bool = False,
               title: str | None = None,
               env: str | None = None,
               execution: Annotated[str | None, Field(description=_D_EXECUTION)] = None,
@@ -258,5 +259,5 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
                           "site": site,
                           "estimated_runtime_min": estimated_runtime_min,
                           "est_cores": est_cores, "est_mem_gb": est_mem_gb,
-                          "est_gpu": est_gpu,
+                          "est_gpu": est_gpu, "fresh": fresh,
                           "title": title, "env": env}, ctx)

@@ -316,15 +316,22 @@ def _recheck_consumed_inputs(run_id: str) -> None:
             if md.get("source_changed") or md.get("source_missing"):
                 continue                    # already flagged — nothing new to say
             out = revalidate(md)
-            if out.get("state") == "drifted":
+            state = out.get("state")
+            # BOTH bad shapes count (review finding: `missing` was skipped —
+            # a run that DELETES/MOVES an input home in place is the other
+            # side of the same invisibility): drifted → source_changed,
+            # missing → source_missing, matching the drift banner's fields.
+            if state in ("drifted", "missing"):
                 modified.append(d["id"])
-                patch_metadata(d["id"], {"source_changed": True,
+                flag = "source_changed" if state == "drifted" else "source_missing"
+                patch_metadata(d["id"], {flag: True,
                                          "source_checked_at": int(_time.time())})
         if modified:
-            run_block = dict((get_entity(run_id) or {}).get("metadata", {})
-                             .get("run") or {})
-            run_block["inputs_modified"] = modified
-            patch_metadata(run_id, {"run": run_block})
+            # dotted nested key — a whole-`run` read-modify-write here races
+            # the manifest writer on the same key (the exact recheck-confirmed
+            # race note_run_site documents below); single-key patch has no
+            # RMW window.
+            patch_metadata(run_id, {"run.inputs_modified": modified})
     except Exception as e:  # noqa: BLE001 — a recheck failure never blocks close
         _log.debug("close_run input recheck failed for %s: %s", run_id, e)
 

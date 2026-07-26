@@ -563,6 +563,46 @@ def test_run_r_sync_site_falls_back_to_one_shot_when_kernel_declines(monkeypatch
     assert seen.get("sync_lang") == "run_r", seen
 
 
+def test_run_r_catalog_exposes_and_forwards_fresh():
+    """Docs-vs-contract guard: the run_r catalog surface advertises a clean
+    one-shot process (fresh=true), so it MUST both EXPOSE a `fresh` param and
+    FORWARD it into the impl input — mirroring run_python, whose signature and
+    _impl({...}) dict already carry it. Armed for the mismatch where the
+    docstring promised fresh but the signature/forwarding dropped it: red if the
+    param is removed OR the forwarding is removed."""
+    import inspect
+    from mcp.server.fastmcp import FastMCP
+    from content.bio.mcp_servers.aba_core.tools.run_exec import (
+        register_run_exec_tools)
+    import content.bio.tools as bt
+
+    mcp = FastMCP("aba_core")
+    register_run_exec_tools(mcp)
+    mgr = getattr(mcp, "_tool_manager", None) or getattr(mcp, "_tools", None)
+    tools = mgr._tools if hasattr(mgr, "_tools") else mgr
+    fn = tools["run_r"].fn
+
+    # 1) SIGNATURE exposes `fresh` (defaulting False, plain like run_python) —
+    #    fails if the param is dropped from run_r's signature.
+    sig = inspect.signature(fn)
+    assert "fresh" in sig.parameters, \
+        f"run_r catalog signature omits `fresh`: {list(sig.parameters)}"
+    assert sig.parameters["fresh"].default is False, \
+        f"`fresh` should default False like run_python: {sig.parameters['fresh']}"
+
+    # 2) FORWARDING: calling run_r(fresh=True) must reach the impl input as
+    #    fresh=True — fails if the _impl({...}) dict drops "fresh".
+    seen: dict = {}
+    orig = bt.run_r
+    bt.run_r = lambda input_, ctx=None: (seen.update(input_), {"status": "ok"})[1]
+    try:
+        fn(code="z <- 1", fresh=True)
+    finally:
+        bt.run_r = orig
+    assert seen.get("fresh") is True, \
+        f"run_r did not forward fresh into the impl input: fresh={seen.get('fresh')!r}"
+
+
 def _run():
     import traceback
     fails = 0

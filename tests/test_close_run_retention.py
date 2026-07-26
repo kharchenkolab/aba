@@ -93,8 +93,30 @@ def test_input_mutation_on_run_site_is_flagged(monkeypatch):
     runsmod._recheck_consumed_inputs("run-1")
     ds_patch = [p for p in patches if p[0] == "ds_a"]
     assert ds_patch and ds_patch[0][1]["source_changed"] is True
+    # dotted single-key stamp — a whole-`run` RMW here races the manifest
+    # writer (the recheck-confirmed race class)
     run_patch = [p for p in patches if p[0] == "run-1"]
-    assert run_patch and run_patch[0][1]["run"]["inputs_modified"] == ["ds_a"]
+    assert run_patch and run_patch[0][1]["run.inputs_modified"] == ["ds_a"]
+
+
+def test_input_deleted_on_run_site_is_flagged_missing(monkeypatch):
+    """Review finding (the OTHER side of the drift check): a run that
+    DELETES or MOVES an input home in place returns `missing`, not
+    `drifted` — it must stamp source_missing, never slip through."""
+    patches = _stub_recheck_world(
+        monkeypatch,
+        datasets=[_ds("gone", "siteX"), _ds("moved", "local")],
+        run_sites=["siteX"],
+        states={"gone": "missing", "moved": "drifted"})
+    runsmod._recheck_consumed_inputs("run-1")
+    gone = [p for p in patches if p[0] == "ds_gone"]
+    assert gone and gone[0][1]["source_missing"] is True
+    assert "source_changed" not in gone[0][1]
+    moved = [p for p in patches if p[0] == "ds_moved"]
+    assert moved and moved[0][1]["source_changed"] is True
+    run_patch = [p for p in patches if p[0] == "run-1"]
+    assert run_patch and sorted(run_patch[0][1]["run.inputs_modified"]) == \
+        ["ds_gone", "ds_moved"]
 
 
 def test_recheck_skips_untouched_machines_and_cas_and_already_flagged(monkeypatch):
