@@ -3,6 +3,7 @@ opaque strings. Per arch3_plan.md Pass B."""
 from __future__ import annotations
 import json
 import logging
+import re
 from typing import Optional
 
 from core.graph._schema import _conn, _utcnow, gen_entity_id, WORKSPACE_ID
@@ -216,15 +217,44 @@ def list_entities(
         # tree + entity feed. An explicit type_filter overrides this.
         q += " AND type NOT IN (%s)" % ",".join("?" * len(HIDDEN_TYPES))
         args.extend(HIDDEN_TYPES)
-    if title_query:
+    # TOKENIZED title search. This was one contiguous `LIKE %query%`, so any
+    # multi-word phrasing failed against a title with punctuation between the
+    # words — the tool returned an empty list for an entity the caller could see
+    # listed elsewhere. Live consequence (2026-07-26): two such empty results
+    # convinced an agent a registered dataset did not exist, and it deleted the
+    # backing file with raw `os.remove` in a remote code block instead of using
+    # the entity verbs. Every token must appear SOMEWHERE in the title (AND), in
+    # any order; contiguous matches still rank first.
+    tokens = [t for t in re.split(r"\s+", title_query.strip().lower()) if t] \
+        if title_query else []
+    for t in tokens:
         q += " AND lower(title) LIKE ?"
-        args.append(f"%{title_query.lower()}%")
+        args.append(f"%{t}%")
     q += " ORDER BY pinned DESC, created_at"
-    if limit is not None:
+    # With a query we rank in python, so the LIMIT must be applied AFTER
+    # ranking — pushing it into SQL would truncate by creation order and could
+    # drop the best match. No query → the original SQL path, unchanged.
+    sql_limit = limit is not None and not tokens
+    if sql_limit:
         q += " LIMIT ? OFFSET ?"
         args.append(int(limit)); args.append(int(offset))
     with _conn() as c:
-        return [_row_to_entity(r) for r in c.execute(q, args).fetchall()]
+        rows = [_row_to_entity(r) for r in c.execute(q, args).fetchall()]
+    if not tokens:
+        return rows
+    whole = " ".join(tokens)
+
+    def _rank(e: dict) -> int:
+        t = (e.get("title") or "").lower()
+        if whole and whole in t:
+            return 0                      # the phrase, verbatim
+        if t.startswith(tokens[0]):
+            return 1                      # leading token anchors the title
+        return 2
+    rows.sort(key=_rank)                  # stable: preserves pinned/created_at
+    if limit is not None:
+        return rows[int(offset):int(offset) + int(limit)]
+    return rows[int(offset):] if offset else rows
 
 
 def count_entities(
