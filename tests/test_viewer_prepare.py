@@ -58,3 +58,20 @@ def test_phase_updates_before_completion():
 
 def test_unknown_job_is_none():
     assert prepare.status("nope") is None
+
+
+def test_job_thread_inherits_caller_context():
+    """The worker runs under a COPY of the caller's context: contextvars do
+    not propagate into raw threads, and the project binding is a contextvar —
+    without propagation, any runner that reads the project graph resolves
+    against the DEFAULT project (live failure: the streaming ref arm and the
+    source-not-found honesty bridge both silently degraded inside the job)."""
+    import contextvars
+    v = contextvars.ContextVar("prepare_probe", default="unset")
+    v.set("caller-context")
+    seen = {}
+    jid = prepare.start(lambda set_phase: (seen.__setitem__("v", v.get()), _Res("/u/"))[1])
+    s = _wait(jid, "ready")
+    assert s["status"] == "ready"
+    assert seen["v"] == "caller-context", \
+        f"job thread must see the caller's context, saw {seen['v']!r}"

@@ -9,6 +9,7 @@ daemon thread per job, with finished jobs pruned so the map can't grow unbounded
 """
 from __future__ import annotations
 
+import contextvars
 import secrets
 import threading
 import time
@@ -85,7 +86,14 @@ def start(runner: Runner, label: Optional[str] = None) -> str:
                     j.error = str(e) or e.__class__.__name__
                     j.phase, j.status, j.ended_at = "Failed", "error", time.time()
 
-    threading.Thread(target=_work, name=f"prepare-{jid}", daemon=True).start()
+    # Run the job under a COPY of the caller's context: contextvars do not
+    # propagate into raw threads, so without this the worker sees the DEFAULT
+    # project binding — any launcher code that reads the project graph
+    # (get_entity for the streaming ref arm, the source-not-found honesty
+    # bridge) silently resolves against the wrong project DB and degrades.
+    ctx = contextvars.copy_context()
+    threading.Thread(target=lambda: ctx.run(_work),
+                     name=f"prepare-{jid}", daemon=True).start()
     return jid
 
 
