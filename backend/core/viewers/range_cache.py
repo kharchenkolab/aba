@@ -201,16 +201,16 @@ def serve_remote_chunk(pid: str, relpath: str) -> Optional[ChunkOutcome]:
     if os.path.isfile(cache_file):
         return ChunkOutcome("ok", path=cache_file,      # cache hit — no backhaul
                             immutable=immutable)
-    # Miss: prefer ONE batched call carrying the target + guessed siblings
-    # (each cold call pays a WAN floor; the batch pays it once). An older
-    # substrate without rels=[...] raises TypeError on the first try — noted
-    # once, singular ranged loop thereafter.
-    if _BATCH_OK["ok"]:
-        try:
-            return _fetch_via_batch(pid, entry, store_key, safe, cache_file, site)
-        except _BatchUnsupported:
-            _BATCH_OK["ok"] = False
-    return _fetch_and_cache(entry, safe, cache_file, site)
+    # Miss: the TARGET is served synchronously via the singular one-shot read
+    # (nothing may sit between the browser and its chunk — a synchronous
+    # neighborhood batch was measured to inflate first-touch latency 3-10x by
+    # paying its transfer before answering). The guessed chunk-grid siblings
+    # warm in a BACKGROUND batch instead: fire-and-forget, best-effort,
+    # deduped — by the time the viewer walks the grid they are cache hits.
+    out = _fetch_and_cache(entry, safe, cache_file, site)
+    if out.status == "ok" and _BATCH_OK["ok"]:
+        _spawn_prefetch(pid, entry, store_key, safe, site)
+    return out
 
 
 class _BatchUnsupported(Exception):
@@ -269,17 +269,56 @@ def _retry_once(fn):
         raise
 
 
-def _fetch_via_batch(pid: str, entry: dict, store_key: str, safe: str,
-                     cache_file: str, site: str) -> ChunkOutcome:
-    """ONE batched backhaul call for the missed chunk + guessed siblings:
-    every returned member installs into the cache (guesses warm it ahead of
-    the browser), per-entry typed errors on guesses are free, and only the
-    TARGET's outcome maps to a response. A target deferred repeatedly in
-    `not_read` (member bigger than the call budget) falls back to the singular
-    ranged loop, which handles any size. Raises _BatchUnsupported on an old
-    substrate (TypeError: no rels kwarg)."""
+# In-flight prefetch neighborhoods, keyed (pid, store_key, seed rel) — a
+# browser fires ~6 parallel grid requests whose neighborhoods overlap heavily;
+# one prefetch per seed is plenty and duplicates would multiply channel load.
+_PREFETCH_LOCK = threading.Lock()
+_PREFETCH_INFLIGHT: set = set()
+# Tests flip this to run the prefetch inline (deterministic); production runs
+# it on a daemon thread so it never sits between the browser and its chunk.
+PREFETCH_INLINE = False
+
+
+def _spawn_prefetch(pid: str, entry: dict, store_key: str, safe: str,
+                    site: str) -> None:
+    """Fire-and-forget neighborhood warm-up for a just-missed chunk: one
+    batched call for the guessed grid siblings, installed into the cache,
+    every failure silently dropped (a failed guess is a future miss, nothing
+    more). Never blocks or fails the serve that triggered it."""
+    guesses = _numeric_siblings(safe, PREFETCH_SIBLINGS)
+    if not guesses:
+        return
+    key = (pid, store_key, safe)
+    with _PREFETCH_LOCK:
+        if key in _PREFETCH_INFLIGHT:
+            return
+        _PREFETCH_INFLIGHT.add(key)
+
+    def run():
+        try:
+            _prefetch_siblings(pid, entry, store_key, guesses, site)
+        except _BatchUnsupported:
+            _BATCH_OK["ok"] = False
+        except Exception:  # noqa: BLE001 — best-effort by contract
+            pass
+        finally:
+            with _PREFETCH_LOCK:
+                _PREFETCH_INFLIGHT.discard(key)
+
+    if PREFETCH_INLINE:
+        run()
+    else:
+        threading.Thread(target=run, name=f"chunk-prefetch-{store_key}",
+                         daemon=True).start()
+
+
+def _prefetch_siblings(pid: str, entry: dict, store_key: str,
+                       guesses: list, site: str) -> None:
+    """ONE batched backhaul call for the guessed siblings; installs whatever
+    comes back. Typed per-entry errors (wrong guesses) cost nothing; rels the
+    call budget deferred to `not_read` are abandoned — they are just future
+    misses. Raises _BatchUnsupported on an old substrate (no rels kwarg)."""
     from core.compute import retention
-    from core.compute.errors import ComputeError
     croot = _cache_root(pid, site, store_key)
     if entry.get("ref") is not None:
         ref = entry["ref"]
@@ -291,59 +330,20 @@ def _fetch_via_batch(pid: str, entry: dict, store_key: str, safe: str,
         call = lambda rels: retention.file_read_range(target, rels=rels)          # noqa: E731
         to_remote = lambda r: f"{base}/{r}"                                       # noqa: E731
         from_remote = lambda r: r[len(base) + 1:] if r.startswith(base + "/") else r  # noqa: E731
-
-    want = [safe]
-    for g in _numeric_siblings(safe, PREFETCH_SIBLINGS):
-        if _safe_rel(g) == g and not os.path.isfile(os.path.join(croot, g)):
-            want.append(g)
-    pending = [to_remote(r) for r in want]
-    immutable = entry.get("ref") is not None
-    for _round in range(3):
-        try:
-            reply = _retry_once(lambda: call(pending))
-        except TypeError:
-            raise _BatchUnsupported()
-        except ComputeError as e:
-            if e.code == "data.missing":
-                return ChunkOutcome("missing", http=404,
-                                    detail="chunk not found on remote store", site=site)
-            if e.code == "task.invalid":
-                return ChunkOutcome("missing", http=404,
-                                    detail="invalid chunk path", site=site)
-            return ChunkOutcome("error", http=502, site=site,
-                                detail=f"chunk backhaul failed on {site}: {e.code}")
-        except Exception as e:  # noqa: BLE001 — adapter down → 502
-            return ChunkOutcome("error", http=502, site=site,
-                                detail=f"chunk backhaul unavailable on {site}: {type(e).__name__}")
-        target_err = None
-        for rrel, ent in (reply.get("files") or {}).items():
-            lrel = from_remote(rrel)
-            if not isinstance(ent, dict):
-                continue
-            if ent.get("error"):
-                if lrel == safe:
-                    target_err = str(ent["error"])
-                continue                      # a failed GUESS is free
-            _install_bytes(os.path.join(croot, lrel),
-                           base64.b64decode(ent.get("bytes_b64") or ""))
-        if os.path.isfile(cache_file):
-            _sweep_to_cap(os.path.dirname(cache_file), keep=cache_file)
-            return ChunkOutcome("ok", path=cache_file, immutable=immutable)
-        if target_err in ("data.missing",):
-            return ChunkOutcome("missing", http=404,
-                                detail="chunk not found on remote store", site=site)
-        if target_err == "task.invalid":
-            return ChunkOutcome("missing", http=404,
-                                detail="invalid chunk path", site=site)
-        if target_err and target_err != "internal.error":
-            return ChunkOutcome("error", http=502, site=site,
-                                detail=f"chunk backhaul failed on {site}: {target_err}")
-        # Target deferred (not_read) or retryable-flaky: loop for the TARGET
-        # alone; abandoned guess leftovers are just future misses.
-        pending = [to_remote(safe)]
-    # Three rounds without the target (member > call budget, or persistent
-    # flake): the singular ranged loop handles any size.
-    return _fetch_and_cache(entry, safe, cache_file, site)
+    want = [g for g in guesses
+            if _safe_rel(g) == g and not os.path.isfile(os.path.join(croot, g))]
+    if not want:
+        return
+    try:
+        reply = call([to_remote(r) for r in want])
+    except TypeError:
+        raise _BatchUnsupported()
+    for rrel, ent in (reply.get("files") or {}).items():
+        if not isinstance(ent, dict) or ent.get("error"):
+            continue                          # a failed guess is free
+        _install_bytes(os.path.join(croot, from_remote(rrel)),
+                       base64.b64decode(ent.get("bytes_b64") or ""))
+    _sweep_to_cap(croot)
 
 
 def _install_bytes(dest: str, data: bytes) -> None:

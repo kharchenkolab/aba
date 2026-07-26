@@ -477,14 +477,17 @@ def _batch_fake(payload_by_rel: dict, calls: list, *, error_rels: dict = None,
 
 
 def _with_batch(fake):
-    """Install `fake` as the ref-arm verb with the batch lane enabled; returns
-    a restore callable."""
+    """Install `fake` as the ref-arm verb with the batch lane enabled and the
+    prefetch INLINE (deterministic for tests); returns a restore callable."""
     _orig, _flag = retention.data_read_range, dict(rc._BATCH_OK)
+    _inline = rc.PREFETCH_INLINE
     retention.data_read_range = fake
     rc._BATCH_OK["ok"] = True
+    rc.PREFETCH_INLINE = True
     def restore():
         retention.data_read_range = _orig
         rc._BATCH_OK.update(_flag)
+        rc.PREFETCH_INLINE = _inline
     return restore
 
 
@@ -497,7 +500,11 @@ def test_numeric_sibling_guesses():
     assert rc._numeric_siblings("0", 4) == ["1", "2", "3", "4"]  # single axis
 
 
-def test_batch_miss_prefetches_siblings_in_one_call():
+def test_miss_serves_target_singular_then_one_inline_prefetch():
+    """TTFB honesty: the TARGET is answered by the singular one-shot path
+    FIRST (nothing sits between the browser and its chunk); the guessed
+    siblings ride exactly ONE batched prefetch call and later serves of them
+    are cache hits with zero further backhaul (armed on the call log)."""
     pid = "s_batch1"
     _register(pid, "s-b1.store", base_rel="", site="siteB1", target=None,
               ref="dref:abc1")
@@ -508,55 +515,47 @@ def test_batch_miss_prefetches_siblings_in_one_call():
         out = rc.serve_remote_chunk(pid, "s-b1.store/c/0/0")
         assert out.status == "ok" and out.immutable is True
         assert open(out.path, "rb").read() == b"A" * 20
-        assert len(calls) == 1 and calls[0][0] == "batch", calls   # ONE round trip
-        assert "c/0/0" in calls[0][1] and len(calls[0][1]) > 1     # target + guesses
-        # the guessed siblings are ALREADY CACHED: hits, no further backhaul
+        kinds = [c[0] for c in calls]
+        assert kinds[0] == "singular", "target must be served on the singular lane first"
+        assert kinds.count("batch") == 1, kinds        # one neighborhood call
+        batch_rels = calls[kinds.index("batch")][1]
+        assert "c/0/0" not in batch_rels, "the target is never re-fetched by prefetch"
+        assert "c/0/1" in batch_rels and "c/1/0" in batch_rels
+        n = len(calls)
         for sib in ("c/0/1", "c/1/0"):
             o2 = rc.serve_remote_chunk(pid, f"s-b1.store/{sib}")
             assert o2.status == "ok", sib
-        assert len(calls) == 1, "sibling serves must be cache hits (armed)"
+        assert len(calls) == n, "prefetched siblings must be cache hits (armed)"
     finally:
         restore()
 
 
-def test_batch_target_deferred_once_loops_for_target():
+def test_prefetch_abandons_not_read_and_error_entries():
+    # Budget-deferred guesses and wrong guesses are ABANDONED silently (future
+    # misses) — exactly one batch call, no loop, and the deferred/wrong rels
+    # are not cached.
     pid = "s_batch2"
     _register(pid, "s-b2.store", base_rel="", site="siteB2", target=None,
               ref="dref:abc2")
     payload = {"c/5/5": b"T" * 10, "c/5/6": b"S" * 10}
     calls: list = []
-    restore = _with_batch(_batch_fake(payload, calls, defer_once={"c/5/5"}))
+    restore = _with_batch(_batch_fake(payload, calls, defer_always={"c/5/6"}))
     try:
         out = rc.serve_remote_chunk(pid, "s-b2.store/c/5/5")
         assert out.status == "ok"
-        assert [c[0] for c in calls] == ["batch", "batch"]
-        assert calls[1][1] == ("c/5/5",), "the retry round is for the TARGET alone"
-    finally:
-        restore()
-
-
-def test_batch_target_always_deferred_falls_back_singular():
-    # A member bigger than the batch call budget defers forever — the singular
-    # ranged loop (any size) must take over after bounded rounds.
-    pid = "s_batch3"
-    _register(pid, "s-b3.store", base_rel="", site="siteB3", target=None,
-              ref="dref:abc3")
-    payload = {"big/9": b"Z" * 30}
-    calls: list = []
-    restore = _with_batch(_batch_fake(payload, calls, defer_always={"big/9"}))
-    try:
-        out = rc.serve_remote_chunk(pid, "s-b3.store/big/9")
-        assert out.status == "ok"
-        assert open(out.path, "rb").read() == b"Z" * 30
         kinds = [c[0] for c in calls]
-        assert kinds.count("batch") == 3 and "singular" in kinds, kinds
+        assert kinds.count("batch") == 1, "not_read must NOT trigger a second call"
+        croot = rc._cache_root(pid, "siteB2", "s-b2.store")
+        assert not os.path.exists(os.path.join(croot, "c/5/6"))   # deferred
+        assert not os.path.exists(os.path.join(croot, "c/6/5"))   # wrong guess
     finally:
         restore()
 
 
 def test_batch_unsupported_flips_to_singular_once():
-    # Old substrate: the verb has no rels kwarg → TypeError → the batch lane
-    # flips OFF for the process and later misses go straight to singular.
+    # Old substrate: the verb has no rels kwarg → TypeError inside the prefetch
+    # → the batch lane flips OFF for the process; later misses serve singular
+    # with NO further batch attempts, and the serve itself never fails.
     pid = "s_batch4"
     _register(pid, "s-b4.store", base_rel="", site="siteB4", target=None,
               ref="dref:abc4")
@@ -578,20 +577,6 @@ def test_batch_unsupported_flips_to_singular_once():
         assert rc.serve_remote_chunk(pid, "s-b4.store/c/2").status == "ok"
         assert attempts["batch"] == 1, "TypeError must flip the batch lane OFF once"
         assert rc._BATCH_OK["ok"] is False
-    finally:
-        restore()
-
-
-def test_batch_target_missing_entry_is_404():
-    pid = "s_batch5"
-    _register(pid, "s-b5.store", base_rel="", site="siteB5", target=None,
-              ref="dref:abc5")
-    calls: list = []
-    restore = _with_batch(_batch_fake({}, calls))   # every rel → typed missing
-    try:
-        out = rc.serve_remote_chunk(pid, "s-b5.store/c/3/3")
-        assert out.status == "missing" and out.http == 404
-        assert len(calls) == 1, "typed per-entry miss must not loop"
     finally:
         restore()
 
@@ -1771,11 +1756,9 @@ _TESTS = [
     test_digest_change_wipes_cache_same_digest_keeps,
     test_digest_change_wipes_prev_site_cache,
     test_numeric_sibling_guesses,
-    test_batch_miss_prefetches_siblings_in_one_call,
-    test_batch_target_deferred_once_loops_for_target,
-    test_batch_target_always_deferred_falls_back_singular,
+    test_miss_serves_target_singular_then_one_inline_prefetch,
+    test_prefetch_abandons_not_read_and_error_entries,
     test_batch_unsupported_flips_to_singular_once,
-    test_batch_target_missing_entry_is_404,
     test_retryable_internal_error_retries_once,
     test_ref_arm_outcomes_carry_immutable_run_arm_not,
     test_route_cache_headers_by_mutability,
