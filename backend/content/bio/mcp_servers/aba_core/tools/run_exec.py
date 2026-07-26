@@ -234,7 +234,10 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
         Rscript via `run_python(subprocess.run(['Rscript', ...]))` —
         background=True IS the supported path for long R work. `site` runs the
         step ON a declared remote machine — same rules as run_python's `site`
-        (alone = synchronous fresh process there; + background for long steps).
+        (alone = synchronous, in a PERSISTENT session there: variables and
+        loaded objects survive between your site= calls, so multi-step remote
+        work needs no reload-from-disk each step; fresh=true for a clean
+        one-shot; + background for long steps).
 
         ROUTING NOTE: When the goal is a MODIFIED VERSION of an existing
         focused figure/table (cairo_pdf of a current figure, ggsave with

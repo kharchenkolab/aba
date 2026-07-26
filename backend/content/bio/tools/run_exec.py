@@ -831,13 +831,18 @@ def _fetch_new_kernel_files(kernel_id: str, inv0: dict, project_id: str,
 
 
 def _run_remote_kernel(input_: dict, ctx: dict | None, project_id: str,
-                       thread_id: str, site: str):
+                       thread_id: str, site: str, lang: str = "python"):
     """Persistent interactive session ON a remote site (P1, misc/bug1.md): the
     same kernel-pool contract as the local lane — variables persist between
     calls — with outputs fetched over the weft data plane. Returns None when
     no remote kernel can be established (caller falls back to the one-shot
     sync lane); once a session EXISTS, results and errors are returned from
-    it — its state is the point."""
+    it — its state is the point.
+
+    `lang` selects the interpreter; the pool + setup are already language-
+    and site-generic, so both interpreter lanes reach a persistent remote
+    session (the fresh-process-per-call lane was what forced agent code to
+    chdir out of the tracked sandbox to keep cross-step state — 2026-07-26)."""
     import time as _time
     from datetime import datetime as _dt, timezone as _tz
     from pathlib import Path
@@ -850,7 +855,7 @@ def _run_remote_kernel(input_: dict, ctx: dict | None, project_id: str,
     timeout_s = max(5, min(int(input_.get("timeout_s") or 300), 1800))
     cancel_token = (ctx or {}).get("cancel_token")
     from core.compute.named_envs import resolve_env
-    env_name = resolve_env(project_id, "python", explicit=input_.get("env"))
+    env_name = resolve_env(project_id, lang, explicit=input_.get("env"))
     if env_name and env_name.lower() in ("system", "none"):
         env_name = "system"   # bare kernel: node interpreter, no realization
     elif env_name:
@@ -864,13 +869,13 @@ def _run_remote_kernel(input_: dict, ctx: dict | None, project_id: str,
     started_iso = _dt.now(_tz.utc).isoformat()
     try:
         sess = get_pool().get_or_start(
-            scope_key, "python",
+            scope_key, lang,
             cwd=str(scratch_dir(project_id, f"thread-{thread_id}")),
             env_name=env_name, site=site)
     except KernelCapacityError as cap:
         return {"error": str(cap), "at_capacity": True}
     except Exception as e:  # noqa: BLE001 — no session on the site → one-shot lane
-        print(f"[run_python] remote kernel unavailable on {site} "
+        print(f"[run_{lang}] remote kernel unavailable on {site} "
               f"({type(e).__name__}: {e}); falling back to one-shot", flush=True)
         return None
     from content.bio.lifecycle.runs import (record_weft_target, active_run_id,
@@ -896,10 +901,10 @@ def _run_remote_kernel(input_: dict, ctx: dict | None, project_id: str,
     plots, tables, files, warns = (harvest_artifacts(Path(fetch_dir), since_ts=0)
                                    if fetch_dir else ([], [], [], []))
     note = (f"ran on {site} in a persistent session there — variables persist "
-            f"for your next run_python(site={site!r}) call")
+            f"for your next run_{lang}(site={site!r}) call")
     if env_name == "system":
-        note += (" (env='system': the node's own interpreter, stdlib only — "
-                 "no environment realized, nothing installable)")
+        note += (" (env='system': the node's own interpreter — no environment "
+                 "realized, nothing installable)")
     if res.returncode == 0 and not (res.stdout or "").strip():
         # known substrate issue (weft kernel capture race, see
         # misc/bug2_weft_kernel_stdout.md): a block's stdout is intermittently
@@ -928,7 +933,7 @@ def _run_remote_kernel(input_: dict, ctx: dict | None, project_id: str,
     # `site:krn_*` dirs under the backend process cwd (found as droppings
     # in the repo after the live studies)
     _eid = _write_exec_record(
-        lang="python", ctx=ctx, code=code,
+        lang=lang, ctx=ctx, code=code,
         cwd=str(scratch_dir(str(project_id), f"thread-{thread_id}")),
         sess=sess,
         started_iso=started_iso, started_ts=start_ts, res=res,
@@ -939,7 +944,7 @@ def _run_remote_kernel(input_: dict, ctx: dict | None, project_id: str,
     if warns:
         out["figure_warnings"] = warns
     if res.returncode == 0:
-        ns = _kernel_namespace_preview(sess, "python")
+        ns = _kernel_namespace_preview(sess, lang)
         if ns:
             out["namespace"] = ns
     return out
@@ -1381,8 +1386,18 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
     env_name = resolve_env(str(project_id), "r", explicit=input_.get("env"))
 
     if input_.get("site") and not input_.get("background"):
-        # SYNC remote run: like a local call, executed THERE (fresh process).
-        # Long steps go background=True — deferred + continuation.
+        # SYNC remote run. Parity with run_python: prefer the PERSISTENT
+        # session on the site (state survives between calls — multi-step
+        # remote work stops reloading from disk each step, the shape that
+        # forced cwd-escapes); a kernel that can't start falls back to the
+        # one-shot fresh-process lane, never to local.
+        site = str(input_["site"]).strip()
+        if (site and site != "local" and KERNEL_ENABLED
+                and not input_.get("fresh") and not input_.get("_kernel_fallback")):
+            out = _run_remote_kernel(input_, ctx, str(project_id),
+                                     str(thread_id), site, lang="r")
+            if out is not None:
+                return out
         return _run_remote_sync(input_, ctx, str(project_id), str(thread_id),
                                 "run_r")
     override = "background" if input_.get("background") else None

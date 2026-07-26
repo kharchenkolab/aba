@@ -70,9 +70,12 @@ run_python/run_r ─► LocalRouter.decide() ─► "local"  ─► KernelPool.g
 - **`KernelSession`** — the transport-agnostic interface, implemented by
   **`WeftKernelSession`** (`core/exec/kernels/weft.py`): weft's file-block
   kernel protocol behind the seam — local or **on a remote site**
-  (`run_python(site=…)` without `background` holds a persistent interpreter
-  THERE: `get_or_start(..., site=)` → `for_pool(site=)` → `kernel_start(site,
-  lang, env_id=…)`, scope key `thread@site`). A remote kernel attaches a
+  (`run_python`/`run_r` `site=` without `background` holds a persistent
+  interpreter THERE: `get_or_start(..., site=)` → `for_pool(site=)` →
+  `kernel_start(site, lang, env_id=…)`, scope key `thread@site`). Both
+  interpreter lanes reach it — the dispatch and `_run_remote_kernel` carry a
+  `lang`; a kernel that can't start falls back to the fresh-process sync
+  lane, never to local. A remote kernel attaches a
   FROZEN env id (a named env's id, else the project snapshot — the same
   identity a detached job runs under), pre-realized on the site via
   `ensure_ready(site=…)` — or, with `env='system'`, attaches BARE (neither

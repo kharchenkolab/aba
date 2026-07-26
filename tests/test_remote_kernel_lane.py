@@ -510,6 +510,59 @@ def test_walltime_explicit_default_flag_wins():
         FAKE.partitions_hint = None
 
 
+def test_remote_kernel_r_lang_starts_an_r_session():
+    """Parity: _run_remote_kernel(lang='r') stands up a PERSISTENT R session
+    on the site (the pool/setup are language-generic; only the run_r dispatch
+    used to skip this lane, forcing fresh-process-per-call — the shape that
+    drove cwd-escapes)."""
+    starts0 = len(FAKE.kernel_starts)
+    r = rex._run_remote_kernel({"code": "y <- 1"}, {"thread_id": "thrR"},
+                               _PID, "thrR", "mendel", lang="r")
+    assert r is not None and r.get("returncode") == 0, str(r)[:200]
+    st = FAKE.kernel_starts[starts0]
+    assert st["lang"] == "r", f"kernel must start as R: {st}"
+    assert st["site"] == "mendel"
+    assert r["execution_mode"] == "remote-session"
+    assert "run_r(site=" in r["note"], r["note"]
+
+
+def test_run_r_sync_site_prefers_the_persistent_kernel(monkeypatch):
+    """Dispatch wiring: run_r with site= and no background enters the
+    persistent-kernel lane (lang='r'), NOT the fresh-process sync lane."""
+    seen = {}
+
+    def _rk(*a, **k):
+        seen["kernel"] = (a, k)
+        return {"status": "ok", "execution_mode": "remote-session"}
+
+    def _rs(*a, **k):
+        seen["sync"] = True
+        return {"status": "ok"}
+    monkeypatch.setattr(rex, "_run_remote_kernel", _rk)
+    monkeypatch.setattr(rex, "_run_remote_sync", _rs)
+    out = rex.run_r({"code": "z <- 2", "site": "mendel"},
+                    {"thread_id": "thrRD"})
+    assert out.get("execution_mode") == "remote-session"
+    assert "kernel" in seen and "sync" not in seen, seen
+    assert seen["kernel"][1].get("lang") == "r", seen["kernel"]
+
+
+def test_run_r_sync_site_falls_back_to_one_shot_when_kernel_declines(monkeypatch):
+    """Same fallback contract as run_python: a kernel that can't start drops
+    to the fresh-process sync lane — never to local."""
+    seen = {}
+
+    def _rs(*a, **k):
+        seen["sync_lang"] = a[-1]
+        return {"status": "ok", "execution_mode": "remote-sync"}
+    monkeypatch.setattr(rex, "_run_remote_kernel", lambda *a, **k: None)
+    monkeypatch.setattr(rex, "_run_remote_sync", _rs)
+    out = rex.run_r({"code": "z <- 2", "site": "mendel"},
+                    {"thread_id": "thrRF"})
+    assert out.get("execution_mode") == "remote-sync"
+    assert seen.get("sync_lang") == "run_r", seen
+
+
 def _run():
     import traceback
     fails = 0
