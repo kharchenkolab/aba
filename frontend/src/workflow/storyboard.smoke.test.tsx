@@ -34,6 +34,9 @@ describe('workflow storyboard', () => {
     const { getByText, unmount } = render(<Record world={scene('e2').world} />)
     getByText('working session')
     getByText(/recorded in the sediment the moment it launched/)
+    // close is the floor, not the gate: checkpoint distillation is always at hand
+    fireEvent.click(getByText('distill so far'))
+    getByText(/nothing closed, the sitting continues/)
     unmount()
   })
 

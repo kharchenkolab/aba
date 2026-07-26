@@ -70,8 +70,13 @@ answer, made concrete in the **workflow storyboard** (`/workflow.html`):
   session) — the document records actions as they happen; results return
   into the conversation; fragments/notes are drafted into the strata DURING
   the session (visible `draft` badges).
-- **Session close is a distillation moment**: the panel proposes what enters
-  the record (fragment → trail, addendum draft → question, keeps →
+- **Session close is a distillation moment** — but the floor, not the
+  gate: the record accretes throughout (runs at launch, drafts as they
+  earn themselves, ratifiable in place), contradictions interrupt
+  immediately, and **distill so far** runs the same routing-table review
+  mid-stream without closing anything. Close guarantees the review
+  happens at least once, proposes what enters the record (fragment →
+  trail, addendum draft → question, note → another question, keeps →
   retention); nothing enters without ratification; the transcript files
   under its anchor — reachable from the section head (▷), the desk, and
   every sediment line it produced. Work is findable from what it touched.

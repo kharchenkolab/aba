@@ -100,6 +100,13 @@ export default function WorkPanel({ panel, onClose, onAdvance, onExpand, continu
               : 'working session'}
           </div>
           {panel.status && !archived && <div className="wpanel__status">{panel.status}</div>}
+          {!archived && !panel.closing && (
+            <button className="wpanel__distill"
+                    title="checkpoint distillation — the routing table, mid-stream: review and ratify what this sitting has drafted so far without closing anything. Close is the floor, not the gate: it only guarantees this review happens at least once per episode"
+                    onClick={() => setExtra(x => [...x, { role: 'system', note: 'checkpoint — everything drafted so far reviewed in place; nothing closed, the sitting continues' }])}>
+              distill so far
+            </button>
+          )}
           {onExpand && (
             <button className="wpanel__close" onClick={onExpand}
                     title="open as a full page — for sifting artifacts, reading the whole exchange">⤢</button>

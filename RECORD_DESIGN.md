@@ -182,10 +182,22 @@ second:
   produced them. Results return *into* the conversation; fragments and
   notes are drafted into the strata *during* the session, wearing
   visible `draft` badges.
-- **Session close is a distillation moment, not an exit.** The panel
-  proposes what enters the record — fragment → trail, addendum draft →
-  question, keep/lapse → retention — and nothing enters without
-  ratification. The transcript files under its anchor.
+- **Session close is a distillation moment, not an exit — and not the
+  gate.** The record has been accreting the whole time: runs at launch,
+  drafts the moment something earns them (fragments, notes, addendum
+  proposals appear in the strata mid-work, wearing draft badges and
+  amber periphery — surfacing high-potential findings while the work is
+  hot is exactly the drafting advisor's job, §14.8). Drafts are
+  ratifiable **in place, the instant they appear** (one click, §8), and
+  a finding that contradicts ratified prose waits for nothing — it
+  interrupts (§14.1, Class X). Close reviews the routing table
+  (fragment → trail, addendum draft → question, keep/lapse →
+  retention), and nothing enters without ratification; the same review
+  is available **mid-stream** — "distill so far" produces the routing
+  table at any moment without closing anything. Close only guarantees
+  the review happens at least once per episode, brackets the sitting,
+  and catches in the leftovers shelf what even the drafting pass
+  missed. The transcript files under its anchor.
 - **Sessions are first-class, because the redux is a map and sessions
   are the territory.** Curation is lossy by design, so the episode must
   stay reachable: the work record's **by-session grain** shows each
