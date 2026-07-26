@@ -4,7 +4,7 @@
  * Each scene mounts the SAME Record renderer over a different World (the
  * document exactly as it stands at that moment, plus what's open). The bar
  * navigates; some scenes advance through their own affordances (typing in
- * the day-0 composer, clicking `work ▸` on a question, `file & close` on a
+ * the day-0 composer, clicking `▷ work` on a question, `file & close` on a
  * session) — the story moves the way the scientist would.
  */
 import { useEffect, useState } from 'react'

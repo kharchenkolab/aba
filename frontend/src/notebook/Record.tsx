@@ -277,7 +277,7 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
         <span className="nsec__dsince">dormant since {s.dormant.since}</span>
         {w.work && (
           <button className="nsec__work" onClick={() => onWork?.(s.id)}
-                  title="wake it — a session opens with the question and its history in scope">wake ▸</button>
+                  title="the play button, pointed at a sleeping question — a sitting opens with the question and its whole history in scope. Working never creates a thread: the question IS the thread; a sitting is a bounded episode on it"><SessGlyph /> wake</button>
         )}
       </section>
     )
@@ -313,10 +313,10 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
             methods mode
           </button>
         )}
-        {w.work && (
+        {w.work && !anchored && (
           <button className="nsec__work" onClick={() => onWork?.(s.id)}
-                  title="open a working session on this question — the agent starts with the question, its evidence, and its trails already in scope">
-            work ▸
+                  title="the play button, pointed at this question — a sitting opens with the question, its evidence, and its trails already in scope. Working never creates a thread: the question IS the thread; work adds bounded sittings to it. When a sitting is live here, this face becomes ▶ — you rejoin, never fork">
+            <SessGlyph /> work
           </button>
         )}
       </div>
@@ -413,7 +413,7 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
 // reads as the section's draft plan. The list is the scientist's most
 // DIRECT control surface: adding, rewording, parking an item is the
 // user's own intent and carries no ceremony (the propose→ratify gate
-// exists for the agent's writes); every planned item launches (work ▸).
+// exists for the agent's writes); every planned item launches (▷ work).
 type PlanItem = NonNullable<Section['plan']>[number]
 function PlanBlock({ s, w, onWork }: { s: Section; w: World; onWork?: (id: string) => void }) {
   const [items, setItems] = useState<PlanItem[]>(() => (s.plan ?? []).map(p => ({ ...p })))
@@ -480,8 +480,8 @@ function PlanBlock({ s, w, onWork }: { s: Section; w: World; onWork?: (id: strin
             <span className="plan__acts">
               {w.work && (
                 <button className="nsec__work" onClick={() => onWork?.(s.id)}
-                        title="launch this line — a session opens scoped by the stub: its charge, its intent, the evidence so far, and this item. Ask for a fuller technical plan first if you want one; it returns through the same ratification gate">
-                  work ▸
+                        title="the play button, pointed at this planned line — a sitting opens scoped by the stub: its charge, its intent, the evidence so far, and this item; it rides the question's thread. Ask for a fuller technical plan first if you want one; it returns through the same ratification gate">
+                  <SessGlyph /> work
                 </button>
               )}
               <button className="plan__x" title="park it — off the plan, remembered, one-click undo"
@@ -677,7 +677,7 @@ function SpineQRow({ q, ctx, onAdvance, badge }: {
         {q.holds && <span className="spq__holds" title="the claim this line holds while it sleeps — live maturity">● {q.holds}</span>}
         <span className="spq__date">held since {q.since}</span>
         <button className="nsec__work" onClick={() => onAdvance?.(`wake:${q.id}`)}
-                title="wake it — a session opens with the question and its whole history in scope">wake ▸</button>
+                title="the play button, pointed at a sleeping question — a sitting opens with its whole history in scope; the question's thread simply continues">wake ▸</button>
         {badge}
       </div>
     )

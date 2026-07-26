@@ -319,7 +319,7 @@ const e6Panel: PanelState = {
     { role: 'guide', text: 'Marked as a committed direction. There isn’t enough evidence to write anything yet — one flagged panel and a hunch — so the section opens as a stub and I’ve sketched the shape as a plan: four analyses that would establish it. The prose will follow the evidence; the shape is yours to ratify.' },
     { note: 'stub opened · draft plan proposed → the story so far ↓ (ratify the shape, not prose)', role: 'system' },
     { role: 'you', text: 'The sketch is right. Start with the spatial distribution once the decomposition’s done.' },
-    { role: 'guide', text: 'Queued behind it. The other three stay planned — each carries its own work ▸ when you want it, and I can draft a fuller technical plan for any of them before a run ever starts.' },
+    { role: 'guide', text: 'Queued behind it. The other three stay planned — each carries its own ▷ work when you want it, and I can draft a fuller technical plan for any of them before a run ever starts.' },
   ],
 }
 const e6: Scene = {
@@ -407,7 +407,7 @@ const m1: Scene = {
     'authored prose, ranked by consequence, every paragraph a door — and it flags what it ' +
     'could NOT resolve. The absence policy beneath it: numbers stayed current, structure ' +
     'held, timers paused. To pick up the winter thread you start work from where you stand:',
-  advance: { on: 'work:q1', hint: 'click  work ▸  on the first question to open a session' },
+  advance: { on: 'work:q1', hint: 'click  ▷ work  on the first question to open a sitting' },
   world: {
     ...mBase,
     briefing: {

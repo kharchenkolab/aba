@@ -210,7 +210,8 @@ export interface World {
   digestFig?: string
   /** sediment entries expanded on first render */
   openSediment?: string[]
-  /** render "work ▸" affordances on section heads (the work loop is wired) */
+  /** render "▷ work" affordances (the play button pointed at anchors —
+   *  sittings open on the anchor's thread; work never creates a thread) */
   work?: boolean
   /** the project-grain face: spine over arcs (replaces the strata) */
   spine?: Spine

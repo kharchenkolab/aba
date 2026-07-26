@@ -132,6 +132,13 @@ session at rest (filed/parked), **▶** filled green = live now. It rhymes
 with runs' own ▶ state marks: the arrow family is the execution/session
 domain, fill is liveness. **⚡** contradiction/condition · **⌖** held
 excerpt · **draft** badge = agent-proposed, awaiting ratification.
+The outline arrow is also the VERB (PK: work is a play-button variant):
+`▷ work` / `▷ wake` on an anchor with no live sitting opens one; ▷ on a
+filed sitting reopens that episode; a live anchor wears ▶ and pressing
+it rejoins — one live sitting per anchor, no third arrow. On the
+substrate, working never creates a thread: questions create threads
+(threads ARE questions); work adds bounded sittings to them, and
+project-anchored sittings ride the main thread.
 
 **The Record recurses (PK: this won't scale past ~5 questions — and the
 one-paper calibration was off by 10×).** A Science-scale paper is 4–6 main

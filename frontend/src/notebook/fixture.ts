@@ -42,7 +42,7 @@ export interface Section {
   /** archived working sessions filed under this question */
   sessions?: { label: string; when: string; meta: string }[]
   /** scale face: a dormant question compacts to ONE quiet line — question,
-   *  what it holds, since when — with a wake ▸ door. No dead scaffolding. */
+   *  what it holds, since when — with a ▷ wake door. No dead scaffolding. */
   dormant?: { since: string; holds?: string }
   /** a PROACTIVE importance marker — the scientist's commitment, declared
    *  BEFORE the evidence exists. The floor converts, never refuses: prose

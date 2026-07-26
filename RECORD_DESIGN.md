@@ -201,6 +201,39 @@ second:
   launched them; trail fragments carry "▷ turn N" (provenance for
   prose); search covers what was SAID, landing on the turn highlighted.
 
+**Threads, sittings, anchors — the mapping.** The conversational
+primitive is the *anchored sitting*, not the thread; the Record files,
+counts, and reopens sittings by anchor, and "which thread am I in" is
+not a question the surface ever asks. On the substrate:
+
+- **Working never creates a thread.** The birth of a QUESTION creates a
+  thread (threads are questions, §13.1); work adds bounded sittings to
+  it — a question's sittings ride its thread, so `▷ work` on a question
+  is, in classic-UI terms, exactly the play button on that thread, with
+  the episode bracketed. Project-anchored sittings (day 0, marking
+  directions) ride the main thread. The classic UI's per-question
+  threads survive untouched — coexistence needs no re-plumbing, and
+  "shared threads" need not exist as containers.
+- **Context is assembled from the graph, never inherited from
+  transcripts.** A sitting's scope is its anchor's neighborhood — the
+  question's claims, evidence, trails, open items, plan — plus its
+  *ancestors at their compact renditions* (the arc's holds-line, the
+  project abstract, at L0/L1 — §14.3 is what makes hierarchical context
+  affordable). Cross-question sharing therefore requires no shared
+  transcript: claims, results, and trails are project-global entities,
+  citable from chat exactly as from prose; a specific past exchange
+  enters as an explicit citation (a ▷ episode, or its turn), never as
+  ambient transcript bleed; and cross-question *writes* stay proposals
+  (§6). The epistemic boundary survives because imports are explicit.
+- **Hierarchy runs through anchors; lineage runs through chains.**
+  Anchors form the natural ladder — project · arc · question · trail /
+  plan item / figure — scope inherits *down* it (as renditions),
+  products route *up* it through ratification. Chain edges
+  (`continues ← / continued by →`) record lineage across sittings,
+  orthogonal to the hierarchy. And because arcs are views over
+  questions (§9), re-drawing the hierarchy re-scopes future sittings
+  without touching where past ones filed.
+
 ## 6 · Live anchoring — the document as a working surface
 
 With the Record on screen and a session docked at the right margin, the
@@ -241,7 +274,13 @@ Uniform, small, and closed — every mark means one thing everywhere:
 
 - **▷ / ▶** — THE session/execution marker; the arrow shape is the
   domain, fill/color is liveness (▷ outline teal = at rest, ▶ filled
-  green = live now; runs' own state marks rhyme with it).
+  green = live now; runs' own state marks rhyme with it). The outline
+  arrow is also the **verb** — the play button, pointed at an anchor:
+  `▷ work` / `▷ wake` on an element with no live sitting opens one;
+  ▷ on a filed sitting reopens that episode; when a sitting is live on
+  an anchor its face is ▶ and pressing it REJOINS — one live sitting
+  per anchor, never a fork. There is no third arrow: starting,
+  resuming, and rejoining are one gesture whose face follows state.
 - **⚡** condition (contradiction, failure) · **⌖** held excerpt ·
   **`draft`** agent-proposed, awaiting ratification · **†** epitaph
   (dead line) · **⋱** trail · **○◐◕●◮** claim maturity.
