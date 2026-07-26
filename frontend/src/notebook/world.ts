@@ -216,6 +216,40 @@ export interface World {
   spine?: Spine
   /** a question page one level below the spine — breadcrumb back up */
   crumb?: { up: string; arc: string }
+
+  // ---------------------------------------------- editorial governance (§14)
+
+  /** re-entry past a few days is a BRIEFING, not a diff: authored prose,
+   *  past tense, ranked by consequence, scaled to time away — and it flags
+   *  what it could not resolve. Content stayed current; structure held. */
+  briefing?: {
+    away: string
+    paras: { text: string; elId?: string }[]
+    flag?: { text: string; elId?: string }
+    held: string
+  }
+  /** the trust ratchet, downward: after a run of accepts the system
+   *  proposes lowering its own ceremony — visibly, and reversibly */
+  ratchet?: { text: string }
+  /** a batched RESTRUCTURING PROPOSAL — structural change arrives as ONE
+   *  artifact, reviewed in one sitting. Hysteresis, not weather: proposed
+   *  only after the preference held across cycles; each item priced in
+   *  reader-visible units, with the rejected alternative shown; "never"
+   *  writes a rule. Class 2 applies by default (visible expiry, veto);
+   *  class 3 waits indefinitely. */
+  rfc?: {
+    title: string
+    note: string
+    items: {
+      verb: string          // fold · split · promote · demote
+      what: string
+      why: string           // in evidence terms
+      impact: string        // what it costs the READER; renditions do the work
+      alt?: string          // the alternative considered, and why rejected
+      cls: 2 | 3
+      expires?: string
+    }[]
+  }
 }
 
 export const coastalWorld: World = {

@@ -380,23 +380,34 @@ face* for the same underlying ABA entity system.
 
 ## 12 · What the storyboard demonstrates
 
-Fifteen interactive scenes, one parameterized renderer
+Sixteen interactive scenes, one parameterized renderer
 (`/workflow.html`, arrow keys / pills / `?step=` deep links; some scenes
 advance through their own affordances — typing in the day-0 composer,
 `work ▸`, `file & close`, `open ▸` on a spine line):
 
-- **I · Early days (E1–E5)** — the hard, nothing-to-anchor-on case: a
+- **I · Early days (E1–E6)** — the hard, nothing-to-anchor-on case: a
   new project is a composer, not a document; the first exchange births
   the sediment; noticing becomes notes; the first question is born
-  mid-conversation; day 3 reads as a lab diary.
-- **II · Mature (M1–M8)** — re-entry and orientation; a session opened
-  from a question with scope in hand; the churn loop with live
-  accretion; session close as distillation; the morning after (the
-  by-session work record); the session page (territory behind the map);
-  live anchoring; year 2 — in-page compaction and the triage surfaces.
+  mid-conversation; day 3 reads as a lab diary; and the future is
+  marked (E6, §14.5) — a proactive importance declaration converts into
+  a committed-direction stub whose content is a draft plan.
+- **II · Mature (M1–M8)** — re-entry as a briefing, not a diff (§14.7),
+  with the absence policy stated; a session opened from a question with
+  scope in hand; the churn loop with live accretion; session close as
+  distillation; the morning after (the by-session work record); the
+  session page (territory behind the map); live anchoring; year 2 —
+  in-page compaction, the triage surfaces, and the trust ratchet
+  (§14.1) earning ceremony away in the tray.
 - **III · Very mature (M9–M10)** — the spine: recursion, arcs,
-  epitaphs, rolled-up periphery; descend into one question and find the
-  whole earlier prototype there.
+  epitaphs, rolled-up periphery, and structural change arriving as a
+  batched restructuring proposal (§14.2) — priced in reader-visible
+  terms, alternative shown, "never" writes a rule; descend into one
+  question and find the whole earlier prototype there.
+
+Throughout, section heads unfold their governing metadata in place
+(§ ▾ — charge, budget, authorship, the one-click pin; §14.6), and the
+mature Q2 carries its intent marker and plan remnant from E6 — the
+committed direction, traceable from declaration to absorbed evidence.
 
 ## 13 · Coexistence — the Record as a face over live ABA projects
 

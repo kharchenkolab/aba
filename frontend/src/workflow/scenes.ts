@@ -1,8 +1,8 @@
 /**
- * The workflow storyboard — ten moments of a scientist working THROUGH the
- * Record (not beside it). Each scene is a full World: the document exactly
- * as it stands at that moment, plus what the scientist has open (desk,
- * working panel, archived transcripts).
+ * The workflow storyboard — sixteen moments of a scientist working THROUGH
+ * the Record (not beside it). Each scene is a full World: the document
+ * exactly as it stands at that moment, plus what the scientist has open
+ * (desk, working panel, archived transcripts).
  *
  * Part I — EARLY DAYS (day 0–3): the hard case, nothing to anchor on.
  *   The project is born as a composer; the document builds itself from the
@@ -288,6 +288,73 @@ const e5: Scene = {
   },
 }
 
+// ---- E6 · the future is marked: intent precedes evidence
+// The scientist knows where they intend to dig BEFORE the evidence is in.
+// Declaring it CONVERTS, never refuses: a committed-direction stub whose
+// content at this stage IS the plan — prose tracks evidence, structure
+// tracks intent, and the sketch wears its future tense openly.
+const e6Q2: Section = {
+  id: 'q2', question: 'What drives the anomaly cluster?', phase: 'early',
+  paragraphs: [], addenda: [],
+  intent: { on: 'Mar 04' },
+  planDraft: true,
+  charge: 'Committed direction: the anomaly cluster is to become a main line. Prose follows the evidence; this shape is the plan.',
+  authored: 'shape drafted by Guide · awaiting your ratification',
+  open: [
+    'Are the anomaly events spatially clustered?',
+    'Do they track an external forcing — tides, weather, servicing?',
+  ],
+  plan: [
+    { text: 'Spatial distribution of anomaly events against the coastline', state: 'planned' },
+    { text: 'Tide / weather covariate join on daily counts', state: 'planned' },
+    { text: 'Estuary-distance gradient — does amplitude decay with distance?', state: 'planned' },
+    { text: 'Detector-bias check on storm days', state: 'planned' },
+  ],
+}
+const e6Panel: PanelState = {
+  scope: [{ kind: 'project', label: 'Coastal sensor study' }],
+  status: 'session open · 3 min',
+  msgs: [
+    { role: 'you', text: 'Before it slips: the anomaly clustering I keep seeing in the QC panels — that will be an important piece of this study. I want it as a main line alongside calibration.' },
+    { role: 'guide', text: 'Marked as a committed direction. There isn’t enough evidence to write anything yet — one flagged panel and a hunch — so the section opens as a stub and I’ve sketched the shape as a plan: four analyses that would establish it. The prose will follow the evidence; the shape is yours to ratify.' },
+    { note: 'stub opened · draft plan proposed → the story so far ↓ (ratify the shape, not prose)', role: 'system' },
+    { role: 'you', text: 'The sketch is right. Start with the spatial distribution once the decomposition’s done.' },
+    { role: 'guide', text: 'Queued behind it. The other three stay planned — each carries its own work ▸ when you want it, and I can draft a fuller technical plan for any of them before a run ever starts.' },
+  ],
+}
+const e6: Scene = {
+  id: 'e6', group: 'early', title: 'the future is marked',
+  narration:
+    'The scientist knows where they intend to dig BEFORE the evidence exists — and saying so ' +
+    'CONVERTS, never refuses: a committed-direction stub opens whose content, at this stage, IS ' +
+    'the plan. Prose tracks evidence; structure tracks intent — the skeleton wears its future ' +
+    'tense openly (a draft shape, ratified once), each planned analysis is a door and a ' +
+    'launcher, and growth along this line is now pre-consented.',
+  world: {
+    project: { ...P0, lastVisit: '2026-03-02' },
+    ...emptyWorld,
+    whatsNew: {
+      since: 'Mar 02',
+      items: [
+        { ts: 'Mar 04', text: 'committed direction marked — “anomaly cluster” · stub + draft plan (4 analyses)', elId: 'el-q2' },
+        { ts: 'Mar 03', text: 'seasonal decomposition — stable summer gain; winter panels noisy', elId: 'el-e_seasonal' },
+        { ts: 'Mar 03', text: 'trail started — “Something is off in the seasonal component”', elId: 'el-T1' },
+      ],
+    },
+    sections: [{ ...e4Sections[0], sessions: [{ label: 'seasonal first cut', when: 'Mar 03', meta: '2 runs · 1 fragment' }] }, e6Q2],
+    trails: e5Trails,
+    looseNotes: e3Notes.map(n => ({ ...n, draft: false })),
+    sediment: e5Sediment, figureTitles: titlesOf(e5Sediment), provenance: eProv,
+    pendingDrafts: 2,
+    panel: e6Panel,
+    desk: {
+      line: '1 open session',
+      items: [{ label: 'project · marking directions', meta: 'started 08:55', live: true }],
+    },
+    sessions: [seasonalCut],
+  },
+}
+
 // =======================================================================
 // PART II — MATURE (month 4). The coastal world as the notebook knows it.
 // =======================================================================
@@ -334,12 +401,23 @@ const matureSed = coastalWorld.sediment.map(e =>
 const m1: Scene = {
   id: 'm1', group: 'mature', title: 'month 4 — re-entry',
   narration:
-    'Month 4, back after a week away. Orientation is READING: the delta strip, then the ' +
-    'pending addendum — the decision carries its evidence in the prose. The desk holds ' +
-    'the resume point. To pick up the winter thread you start work from where you stand:',
+    'Month 4, back after 8 days away. Past a few days, re-entry is a BRIEFING, not a diff: ' +
+    'authored prose, ranked by consequence, every paragraph a door — and it flags what it ' +
+    'could NOT resolve. The absence policy beneath it: numbers stayed current, structure ' +
+    'held, timers paused. To pick up the winter thread you start work from where you stand:',
   advance: { on: 'work:q1', hint: 'click  work ▸  on the first question to open a session' },
   world: {
     ...mBase,
+    briefing: {
+      away: '8 days',
+      paras: [
+        { text: 'The standing condition is the winter contradiction: R12’s winter refit opposes R9’s full-year slope, and the 2025 hold-out that will arbitrate is running on hpc right now.', elId: 'el-q1a1' },
+        { text: 'The drift claim advanced to supported. Batch 7 arrived and passed QC (the usual three sensors flagged) — but its upstream source changed, so a drift flag stands until the next sweep.', elId: 'el-q1p2' },
+        { text: 'Your committed direction moved while you were away: daily anomaly counts track the tidal coefficient (ρ = 0.61) — trail T2 now reads coherent across six weeks, and Q2’s plan is down to its last two analyses.', elId: 'el-q2' },
+      ],
+      flag: { text: 'One decision I could not make for you: the Q1 addendum (Jul 16) qualifies prose you ratified — it waits below, untouched.', elId: 'el-q1a1' },
+      held: 'while you were away: numbers and figures stayed current · structure held — nothing moved · 2 decisions waited (their timers paused)',
+    },
     sediment: matureSed,
     desk: {
       line: 'no open sessions',
@@ -683,6 +761,9 @@ const m8: Scene = {
     }), ...stalledTrails],
     sedimentTotal: 214,
     deltas: [contradictionDelta],
+    // the trust ratchet: ceremony is EARNED AWAY — after a run of accepts
+    // the system proposes lowering its own ceremony, visibly and reversibly
+    ratchet: { text: 'you’ve accepted the last 31 number refreshes without changes — stop showing them individually? they still land in the briefing and the ledger.' },
   },
 }
 
@@ -828,7 +909,9 @@ const m9: Scene = {
     'Dead lines are EPITAPHS — hypothesis, verdict, the run that killed it; the paper reports the ' +
     'survivors, the record keeps the casualties (⌘K “gap-filling”). Closed arcs fold whole; the ' +
     'periphery rolls up per arc; the triage band is unchanged — it was always derived, never ' +
-    'positional.',
+    'positional. And structural change arrives BATCHED: one proposal, one sitting — held across ' +
+    'cycles before it was raised, priced in reader-visible terms, the rejected alternative shown; ' +
+    '“never” writes a rule.',
   advance: { on: 'descend:q22', hint: 'click  open ▸  on the winter-anomaly question (A2) to descend to its page' },
   world: {
     project: { title: 'Coastal sensor study', started: '2026-03-02', lastVisit: '2028-05-03' },
@@ -855,6 +938,28 @@ const m9: Scene = {
       { elId: 'el-q32', kind: 'condition', label: 'interpolation blocked — kriging residuals non-stationary (R190 vs R171)' },
       { elId: 'el-sediment', kind: 'accretion', count: 5, label: '5 runs this week' },
     ],
+    // structural change arrives BATCHED — one proposal, one sitting;
+    // hysteresis, not weather. Each item priced in reader-visible units,
+    // the rejected alternative shown, "never" writes a rule.
+    rfc: {
+      title: 'restructuring proposal — May 12',
+      note: 'preference held for 3 consecutive weekly evaluations · priced in reader-visible terms · structural budget this cycle: 2 items',
+      items: [
+        {
+          verb: 'fold', what: 'A4 · Methods & harmonization → archive rank', cls: 2,
+          expires: 'applies May 26 unless vetoed · timer pauses while you’re away',
+          why: 'every line closed or held; no new inbound link in 6 months (last: R148, Jan)',
+          impact: 'one holds-line replaces three rows · nothing is reworded — the fold SELECTS the abstract rendition you ratified in Jan · every link keeps resolving',
+          alt: 'leave it open — rejected: its only motion in half a year is the NOAA question going dormant',
+        },
+        {
+          verb: 'split', what: 'A3 · Spatial structure → “site pairing” + “field interpolation”', cls: 3,
+          why: 'two live directions under one arc: pairing runs today (▶) while interpolation is BLOCKED on non-stationarity (R190 vs R171) — one amber roll-up now mixes unrelated states',
+          impact: '2 arcs · 3 questions re-home · no prose moves and no page changes — addressing is by entity, nothing 404s',
+          alt: 'sub-headers within A3 — rejected: the periphery cannot roll up half an arc',
+        },
+      ],
+    },
   },
 }
 
@@ -879,10 +984,10 @@ const m10: Scene = {
   },
 }
 
-export const SCENES: Scene[] = [e1, e2, e3, e4, e5, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10]
+export const SCENES: Scene[] = [e1, e2, e3, e4, e5, e6, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10]
 
 export const GROUPS: { id: 'early' | 'mature' | 'late'; label: string }[] = [
-  { id: 'early', label: 'I · early days (day 0–3)' },
+  { id: 'early', label: 'I · early days (day 0–4)' },
   { id: 'mature', label: 'II · mature project (month 4)' },
   { id: 'late', label: 'III · very mature (year 3)' },
 ]

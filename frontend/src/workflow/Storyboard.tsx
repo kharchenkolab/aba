@@ -1,5 +1,5 @@
 /**
- * Storyboard — ten moments of a scientist working through the Record.
+ * Storyboard — sixteen moments of a scientist working through the Record.
  *
  * Each scene mounts the SAME Record renderer over a different World (the
  * document exactly as it stands at that moment, plus what's open). The bar

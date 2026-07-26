@@ -13,6 +13,9 @@ import { SCENES } from './scenes'
 // element.scrollIntoView is not implemented in jsdom
 window.HTMLElement.prototype.scrollIntoView = () => {}
 
+// scenes are looked up by id, never by index — insertions must not shift tests
+const scene = (id: string) => SCENES.find(s => s.id === id)!
+
 describe('workflow storyboard', () => {
   it('renders every scene without throwing', () => {
     for (const s of SCENES) {
@@ -22,41 +25,41 @@ describe('workflow storyboard', () => {
   })
 
   it('E1 is the composer-only day-0 face', () => {
-    const { getByPlaceholderText, unmount } = render(<Record world={SCENES[0].world} />)
+    const { getByPlaceholderText, unmount } = render(<Record world={scene('e1').world} />)
     expect(getByPlaceholderText(/What are we working with/)).toBeTruthy()
     unmount()
   })
 
   it('E2 shows the working panel and the first sediment line', () => {
-    const { getByText, unmount } = render(<Record world={SCENES[1].world} />)
+    const { getByText, unmount } = render(<Record world={scene('e2').world} />)
     getByText('working session')
     getByText(/recorded in the sediment the moment it launched/)
     unmount()
   })
 
   it('E4 renders the stub question section', () => {
-    const { getAllByText, getByText, unmount } = render(<Record world={SCENES[3].world} />)
+    const { getAllByText, getByText, unmount } = render(<Record world={scene('e4').world} />)
     expect(getAllByText('Is the calibration stable across seasons?').length).toBeGreaterThan(0)
     getByText(/Nothing ratified yet/)
     unmount()
   })
 
   it('M4 shows the session-close distillation face', () => {
-    const { getByText, unmount } = render(<Record world={SCENES[8].world} />)
+    const { getByText, unmount } = render(<Record world={scene('m4').world} />)
     getByText(/session close — the distillation moment/)
     getByText('file & close')
     unmount()
   })
 
   it('M5 files the transcript under its question and sediment lines', () => {
-    const { getAllByText, getByText, unmount } = render(<Record world={SCENES[9].world} />)
+    const { getAllByText, getByText, unmount } = render(<Record world={scene('m5').world} />)
     getByText(/winter dig · Jul 20 · 5 runs · 1 fragment · 1 draft — transcript/)
     expect(getAllByText(/^winter dig$/).length + getAllByText(/winter dig/).length).toBeGreaterThan(1) // section + sediment session chips
     unmount()
   })
 
   it('M5 renders the work record at session grain with leftovers counted', () => {
-    const { getByText, unmount } = render(<Record world={SCENES[9].world} />)
+    const { getByText, unmount } = render(<Record world={scene('m5').world} />)
     getByText('by session')
     getByText(/2 unexamined/)
     getByText(/outside sessions/)
@@ -64,7 +67,7 @@ describe('workflow storyboard', () => {
   })
 
   it('M6 opens the session page: distillate, leftovers shelf, addressable turns, continue composer', () => {
-    const { getByText, getByPlaceholderText, unmount } = render(<Record world={SCENES[10].world} />)
+    const { getByText, getByPlaceholderText, unmount } = render(<Record world={scene('m6').world} />)
     getByText(/what entered the record from here/)
     getByText(/leftovers — produced here, never pinned/)
     getByText(/may bear on Q2/)
@@ -76,7 +79,7 @@ describe('workflow storyboard', () => {
   it('transcript search finds what was SAID and tags the session stratum', () => {
     // covered via the world's sessions: "never serviced" occurs only in the
     // winter-dig transcript, not in any stratum text
-    const { getByPlaceholderText, container, unmount } = render(<Record world={SCENES[9].world} />)
+    const { getByPlaceholderText, container, unmount } = render(<Record world={scene('m5').world} />)
     const input = getByPlaceholderText('search the record…') as HTMLInputElement
     fireEvent.change(input, { target: { value: 'never serviced' } })
     const hit = container.querySelector('.toc__hit-stratum--session')
@@ -86,7 +89,7 @@ describe('workflow storyboard', () => {
   })
 
   it('M7 shows live anchoring: standing anchor, TOC deltas, impact set, looking-at, cross proposal', () => {
-    const { getByText, container, unmount } = render(<Record world={SCENES[11].world} />)
+    const { getByText, container, unmount } = render(<Record world={scene('m7').world} />)
     getByText(/winter dig · working here/)               // standing anchor state
     getByText(/touched:/)                                 // impact set
     getByText(/looking at:/)                              // deixis doc → chat
@@ -98,7 +101,7 @@ describe('workflow storyboard', () => {
   })
 
   it('M8 is the scale + triage face: band slots, tray parity, dormant/stalled compaction', () => {
-    const { getByText, container, unmount } = render(<Record world={SCENES[12].world} />)
+    const { getByText, container, unmount } = render(<Record world={scene('m8').world} />)
     getByText(/4 need you/)                                       // band count (derived)
     fireEvent.click(getByText(/4 need you/))
     expect(container.querySelectorAll('.tray__row').length).toBe(4)  // tray parity with the count
@@ -113,7 +116,7 @@ describe('workflow storyboard', () => {
   })
 
   it('M9 is the spine: arcs fold, faces follow state, epitaphs, roll-up periphery, parity', () => {
-    const m9 = SCENES.find(s => s.id === 'm9')!
+    const m9 = scene('m9')
     const { getByText, getAllByText, container, unmount } = render(<Record world={m9.world} />)
     getByText(/rolling synthesis · drafted by Guide/)              // the ratified abstract
     expect(container.querySelectorAll('.arc').length).toBe(4)      // four arcs
@@ -140,7 +143,7 @@ describe('workflow storyboard', () => {
   })
 
   it('M9 epitaphs are searchable — "did we ever try X?" answers with the killing run', () => {
-    const m9 = SCENES.find(s => s.id === 'm9')!
+    const m9 = scene('m9')
     const { getByPlaceholderText, container, unmount } = render(<Record world={m9.world} />)
     const input = getByPlaceholderText('search the record…') as HTMLInputElement
     fireEvent.change(input, { target: { value: 'gap-filling' } })
@@ -151,14 +154,14 @@ describe('workflow storyboard', () => {
   })
 
   it('M9 descends: open ▸ on the winter question advances; M10 wears the crumb', () => {
-    const m9 = SCENES.find(s => s.id === 'm9')!
+    const m9 = scene('m9')
     let advanced = ''
     const { getAllByText, unmount } = render(<Record world={m9.world} onAdvance={t => { advanced = t }} />)
     const q22row = getAllByText('open ▸').find(b => b.closest('.spq')?.textContent?.includes('winter anomaly recur'))!
     fireEvent.click(q22row)
     expect(advanced).toBe('descend:q22')
     unmount()
-    const m10 = SCENES.find(s => s.id === 'm10')!
+    const m10 = scene('m10')
     const r2 = render(<Record world={m10.world} />)
     r2.getByText(/‹ Coastal sensor study/)                         // the breadcrumb up
     r2.getAllByText(/Does the winter anomaly recur/)               // the question IS the page title
@@ -167,10 +170,71 @@ describe('workflow storyboard', () => {
   })
 
   it("what's-new items are doors (clickable when they have a target)", () => {
-    const { getByText, container, unmount } = render(<Record world={SCENES[9].world} />)
+    const { getByText, container, unmount } = render(<Record world={scene('m5').world} />)
     fireEvent.click(container.querySelector('.wnew__head')!)
     const door = getByText(/addendum drafted for Q1/).closest('button')
     expect(door).toBeTruthy()
+    unmount()
+  })
+
+  it('E6: intent precedes evidence — committed-direction stub with a draft plan', () => {
+    const { getByText, container, unmount } = render(<Record world={scene('e6').world} />)
+    getByText('committed direction · Mar 04')                       // the intent marker
+    getByText(/prose follows the evidence; the shape below is the plan/)
+    getByText(/draft plan — proposed by Guide · ratify the shape, not prose/)
+    getByText(/evidence 0 of 4 planned analyses/)                   // the honest gap
+    expect(container.querySelectorAll('.plan__item').length).toBe(4)
+    // the draft shape is a pending DECISION: it rides the tray with Ratify
+    fireEvent.click(getByText(/2 need you/))
+    getByText(/draft plan · 4 analyses — ratify the shape\?/)
+    unmount()
+  })
+
+  it('M1 re-entry is a briefing, not a diff — consequence-ranked, flags the unresolved, structure held', () => {
+    const { getByText, container, unmount } = render(<Record world={scene('m1').world} />)
+    getByText(/since you last read this — 8 days/)
+    getByText(/⚠ One decision I could not make for you/)
+    getByText(/structure held — nothing moved · 2 decisions waited/)
+    expect(container.querySelectorAll('.brief__para').length).toBe(3)
+    unmount()
+  })
+
+  it('M1 the mature Q2 wears its intent and its plan remnant (2 of 4 absorbed)', () => {
+    const { getByText, unmount } = render(<Record world={scene('m1').world} />)
+    getByText('committed direction · Mar 04')
+    getByText(/evidence 2 of 4 planned analyses/)
+    unmount()
+  })
+
+  it('M8 the trust ratchet offers to earn ceremony away, visibly', () => {
+    const { getByText, unmount } = render(<Record world={scene('m8').world} />)
+    fireEvent.click(getByText(/4 need you/))
+    getByText(/accepted the last 31 number refreshes/)
+    fireEvent.click(getByText('yes, fold them'))
+    getByText(/land in the briefing and the ledger only/)
+    unmount()
+  })
+
+  it('M9 structural change arrives batched: the RFC prices items, shows alternatives, never writes a rule', () => {
+    const { getByText, container, unmount } = render(<Record world={scene('m9').world} />)
+    getByText(/restructuring proposal — May 12/)
+    getByText(/preference held for 3 consecutive weekly evaluations/)
+    expect(container.querySelectorAll('.rfc__item').length).toBe(2)
+    getByText(/applies May 26 unless vetoed/)                       // class 2: visible expiry
+    getByText('waits for you')                                      // class 3: never expires
+    getByText(/the fold SELECTS the abstract rendition you ratified/)  // renditions, not rewrites
+    fireEvent.click(getByText('never'))
+    getByText(/written to the charter/)
+    unmount()
+  })
+
+  it('governing metadata unfolds in place: charge, budget, authorship, the pin', () => {
+    const { getByText, getAllByText, unmount } = render(<Record world={scene('m1').world} />)
+    fireEvent.click(getAllByText(/^§/)[0])                          // unfold Q1's § panel
+    getByText(/the grant’s central promise/)
+    getByText(/~1,600 w · actual 430 w/)
+    fireEvent.click(getByText(/○ open — click to pin/))
+    getByText(/● pinned — agents propose, never act here/)
     unmount()
   })
 

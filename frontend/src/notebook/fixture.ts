@@ -44,6 +44,22 @@ export interface Section {
   /** scale face: a dormant question compacts to ONE quiet line — question,
    *  what it holds, since when — with a wake ▸ door. No dead scaffolding. */
   dormant?: { since: string; holds?: string }
+  /** a PROACTIVE importance marker — the scientist's commitment, declared
+   *  BEFORE the evidence exists. The floor converts, never refuses: prose
+   *  tracks evidence, structure tracks intent. */
+  intent?: { on: string }
+  /** the future tense: planned analyses forming the section's draft plan.
+   *  Each item is a door and a launcher; the skeleton is ratified as a
+   *  SHAPE, then filled by work at lowered ceremony. */
+  plan?: { text: string; state: 'planned' | 'taken-up' | 'produced' | 'absorbed'; meta?: string }[]
+  /** the skeleton is still a proposal — awaiting "ratify the shape" */
+  planDraft?: boolean
+  /** the section's governing metadata, edited IN PLACE (the spine is the
+   *  map — there is no separate plan pane) */
+  charge?: string
+  budget?: string
+  authored?: string
+  pinned?: boolean
 }
 
 export interface Fragment {
@@ -144,6 +160,9 @@ export const sections: Section[] = [
     id: 'q1',
     question: 'Is the calibration stable across seasons?',
     phase: 'mid',
+    charge: 'Establish whether year-round comparability is achievable, and under what correction — the grant’s central promise. Keep the winter mechanism open until the hold-out arbitrates; frame nothing as thermal-only before it lands.',
+    budget: '~1,600 w · actual 430 w',
+    authored: 'drafted by Guide · 100% ratified by you',
     paragraphs: [
       {
         id: 'q1p1',
@@ -169,6 +188,16 @@ export const sections: Section[] = [
     id: 'q2',
     question: 'What drives the anomaly cluster?',
     phase: 'early',
+    intent: { on: 'Mar 04' },
+    charge: 'Characterize the anomaly cluster and its driver candidates. A committed direction, marked ahead of the evidence — prose stays behind the evidence; the plan carries the shape.',
+    budget: '~1,200 w · actual 90 w',
+    authored: 'drafted by Guide · 100% ratified by you',
+    plan: [
+      { text: 'Spatial distribution of anomaly events against the coastline', state: 'absorbed', meta: '→ fig, in prose' },
+      { text: 'Tide / weather covariate join on daily counts', state: 'absorbed', meta: '→ ρ = 0.61, in prose' },
+      { text: 'Estuary-distance gradient — does amplitude decay with distance?', state: 'planned' },
+      { text: 'Detector-bias check on storm days', state: 'planned' },
+    ],
     paragraphs: [
       {
         id: 'q2p1',

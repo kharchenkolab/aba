@@ -183,13 +183,32 @@ slide-over below 1000px; **⌘K omnibox** (ask or find, from anywhere);
 face — dormant questions compact to one line, stalled trails fold, the
 sediment declares its recent window.
 
-**The storyboard** (`frontend/src/workflow/`) plays this as fifteen
+**Editorial governance** (RECORD_DESIGN §14, mocked across the scenes):
+proactive importance converts, never refuses — declaring a direction
+important ahead of the evidence births a **committed-direction stub**
+whose content is a **draft plan** (intent chip, planned-work list with
+per-item `work ▸` launchers, the honest gap line "evidence 0 of 4
+planned analyses"; ratify the SHAPE, not prose — the plan rides the tray
+as a decision). Re-entry past a few days is a **briefing, not a diff**
+(authored prose, consequence-ranked, doors; flags what it could not
+resolve; the absence-policy footer: content current, structure held,
+timers paused). The **trust ratchet** in the tray earns ceremony away
+visibly ("accepted the last 31 refreshes — stop showing them?").
+Structural change arrives as a **batched restructuring proposal** on the
+spine: hysteresis note (held across cycles), each item priced in
+reader-visible terms with class semantics (class 2 applies-by-default
+with visible expiry; class 3 waits), the rejected alternative shown,
+"never" writes a rule. Section heads unfold **governing metadata in
+place** (`§ ▾` — charge, budget, authorship split, one-click pin).
+
+**The storyboard** (`frontend/src/workflow/`) plays this as sixteen
 interactive scenes over the SAME Record renderer (parameterized over a
 `World`, `src/notebook/world.ts` — `/notebook.html` is unchanged):
-*Part I, early days (day 0–3)* — the hard, nothing-to-anchor-on case: a new
+*Part I, early days (day 0–4)* — the hard, nothing-to-anchor-on case: a new
 project is a composer, not a document (E1); the first exchange births the
 sediment (E2); noticing becomes notes (E3); the first question is born
-mid-conversation as a stub section (E4); day 3 reads as a lab diary (E5).
+mid-conversation as a stub section (E4); day 3 reads as a lab diary (E5);
+the future is marked — intent precedes evidence (E6).
 *Part II, mature (month 4)* — re-entry and orientation (M1); a session
 opened from a question with scope in hand (M2); the churn loop with live
 accretion (M3); walking away = distillation (M4); the morning after —

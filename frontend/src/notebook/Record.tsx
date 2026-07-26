@@ -59,7 +59,7 @@ const sessionLive = (w: World, id?: string) =>
  *  with an undo window. Decisions (addenda, claim drafts) stay manual. */
 export interface PendingItem {
   key: string
-  kind: 'addendum' | 'fragment' | 'note' | 'claim draft'
+  kind: 'addendum' | 'fragment' | 'note' | 'claim draft' | 'plan'
   label: string
   elId: string
   routine: boolean
@@ -69,6 +69,11 @@ function derivePending(w: World): PendingItem[] {
   for (const s of w.sections) {
     for (const a of s.addenda) if (a.status === 'pending') {
       out.push({ key: a.id, kind: 'addendum', label: `${s.question} — addendum · ${a.on}`, elId: `el-${a.id}`, routine: false })
+    }
+    // a draft plan awaits "ratify the SHAPE" — one consent, spent up front;
+    // filling it later happens at lowered ceremony
+    if (s.planDraft && s.plan?.length) {
+      out.push({ key: `${s.id}-plan`, kind: 'plan', label: `${s.question} — draft plan · ${s.plan.length} analyses — ratify the shape?`, elId: `el-plan-${s.id}`, routine: false })
     }
   }
   for (const t of w.trails) {
@@ -260,6 +265,8 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
 }) {
   const { w } = ctx
   const phaseNote = { early: 'early — mostly noticing', mid: 'mid — condensing', late: 'late — writing up' }[s.phase]
+  const [govOpen, setGovOpen] = useState(false)
+  const [pinned, setPinned] = useState(!!s.pinned)
   // scale face: a dormant question is ONE quiet line — what it asks, what it
   // holds, since when — with a wake door; no dead scaffolding on screen
   if (s.dormant) {
@@ -287,7 +294,19 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
       )}
       <div className="nsec__head">
         <h3>{s.question}</h3>
+        {s.intent && (
+          <span className="nsec__intent"
+                title="a committed direction — marked by you, ahead of the evidence. The floor converts, never refuses: prose tracks evidence, structure tracks intent; growth along this line is pre-consented within the charge">
+            committed direction · {s.intent.on}
+          </span>
+        )}
         <span className="nsec__phase" title="phase is per-question, derived from content — a young question in an old project is simply early">{phaseNote}</span>
+        {s.charge && (
+          <button className={`nsec__govtoggle ${govOpen ? 'is-on' : ''}`} onClick={() => setGovOpen(o => !o)}
+                  title="the section's governing metadata — charge, budget, authorship, pin. Edited in place: the spine IS the map; there is no separate plan pane">
+            § {govOpen ? '▾' : '▸'}
+          </button>
+        )}
         {s.paragraphs.length > 0 && (
           <button className={`nsec__methods ${methods ? 'is-on' : ''}`} onClick={onMethods}
                   title="expand every referenced result into its methods detail — generated from provenance, never hand-maintained">
@@ -301,6 +320,20 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
           </button>
         )}
       </div>
+      {govOpen && s.charge && (
+        <div className="nsec__gov">
+          <div className="nsec__govrow"><b>charge</b><span>{s.charge}</span></div>
+          <div className="nsec__govrow"><b>phase</b><span>{phaseNote}</span></div>
+          {s.budget && <div className="nsec__govrow"><b>budget</b><span>{s.budget}</span></div>}
+          {s.authored && <div className="nsec__govrow"><b>authored</b><span>{s.authored}</span></div>}
+          <div className="nsec__govrow"><b>state</b>
+            <button className={`nsec__pin ${pinned ? 'is-pinned' : ''}`} onClick={() => setPinned(p => !p)}
+                    title="the one-click veto — a pinned section is territory: agents may propose here, never act">
+              {pinned ? '● pinned — agents propose, never act here' : '○ open — click to pin'}
+            </button>
+          </div>
+        </div>
+      )}
       {s.sessions && s.sessions.length > 0 && (
         <div className="nsec__sessions">
           {s.sessions.map(x => (
@@ -313,7 +346,9 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
       )}
       {s.paragraphs.length === 0 && (
         <div className="nsec__stub">
-          <p>Nothing ratified yet — the story is written from evidence, not ahead of it.</p>
+          <p>{s.plan?.length
+            ? 'Nothing ratified yet — prose follows the evidence; the shape below is the plan.'
+            : 'Nothing ratified yet — the story is written from evidence, not ahead of it.'}</p>
           {s.open && s.open.length > 0 && (
             <ul className="nsec__open">
               {s.open.map(o => <li key={o}>{o}</li>)}
@@ -368,6 +403,46 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
           </div>
         )
       })}
+      {s.plan && s.plan.length > 0 && (() => {
+        // the manuscript's FUTURE TENSE: structure may run ahead of the
+        // evidence, prose may not — the skeleton wears its tense openly and
+        // collectively reads as the section's draft plan
+        const done = s.plan.filter(p => p.state === 'produced' || p.state === 'absorbed').length
+        const mark = { planned: '○', 'taken-up': '▷', produced: '✓', absorbed: '↑' }
+        const markTitle = {
+          planned: 'planned — not yet taken up',
+          'taken-up': 'taken up — a session is on it',
+          produced: 'produced — the run landed; evidence in hand',
+          absorbed: 'absorbed — its evidence now lives in the prose',
+        }
+        return (
+          <div className="plan" id={`el-plan-${s.id}`}
+               title="planned work lives IN the section it would feed — the to-do list is distributed through the manuscript, not pooled in a backlog">
+            <div className="plan__head">
+              <span>{s.planDraft
+                ? 'draft plan — proposed by Guide · ratify the shape, not prose'
+                : 'the plan — structure ahead of the evidence, honestly future-tense'}</span>
+              <span className="plan__gap"
+                    title="the gap between declared importance and present evidence is an honest, visible state — never thin prose pretending otherwise">
+                evidence {done} of {s.plan.length} planned analyses
+              </span>
+            </div>
+            {s.plan.map((p, i) => (
+              <div key={i} className={`plan__item plan__item--${p.state}`}>
+                <span className="plan__mark" title={markTitle[p.state]}>{mark[p.state]}</span>
+                <span className="plan__text">{p.text}</span>
+                {p.meta && <span className="plan__meta">{p.meta}</span>}
+                {p.state === 'planned' && w.work && (
+                  <button className="nsec__work" onClick={() => onWork?.(s.id)}
+                          title="launch this line — a session opens scoped by the stub: its charge, its intent, the evidence so far, and this item. Ask for a fuller technical plan first if you want one; it returns through the same ratification gate">
+                    work ▸
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )
+      })()}
     </section>
   )
 }
@@ -880,6 +955,8 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
   const [prevSyn, setPrevSyn] = useState(false)
   const [view, setView] = useState<'record' | 'onepager' | 'digest'>(
     () => new URLSearchParams(window.location.search).get('view') === 'onepager' && w.onePager ? 'onepager' : 'record')
+  const [rfcState, setRfcState] = useState<'open' | 'accepted' | 'partial' | 'deferred' | 'never'>('open')
+  const [ratchetState, setRatchetState] = useState<'open' | 'yes' | 'keep'>('open')
   const [newOpen, setNewOpen] = useState(false)
   const [q, setQ] = useState('')
   const [scope, setScope] = useState<'story' | 'noticed' | 'everything'>('everything')
@@ -1258,8 +1335,9 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
                   <div key={p.key} className="tray__row">
                     <span className={`tray__kind tray__kind--${p.routine ? 'routine' : 'decision'}`}>{p.kind}</span>
                     <span className="tray__label">{p.label}</span>
-                    {p.kind === 'addendum' && (
+                    {(p.kind === 'addendum' || p.kind === 'plan') && (
                       <button className="btn btn--primary"
+                              title={p.kind === 'plan' ? 'ratify the SHAPE — one consent, spent up front; filling it happens at lowered ceremony' : undefined}
                               onClick={() => { setRatified(s => new Set(s).add(p.key)); setUndoable({ keys: [p.key], label: 'ratified 1' }) }}>
                         Ratify
                       </button>
@@ -1274,10 +1352,53 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
                             title="see it in context before deciding">go →</button>
                   </div>
                 ))}
+                {/* the trust ratchet, downward: ceremony is earned away —
+                    visibly, reversibly; it rises again on rejection */}
+                {w.ratchet && ratchetState === 'open' && (
+                  <div className="tray__ratchet">
+                    <span>⟡ {w.ratchet.text}</span>
+                    <button className="btn" onClick={() => setRatchetState('yes')}>yes, fold them</button>
+                    <button className="btn" onClick={() => setRatchetState('keep')}>keep showing me</button>
+                  </div>
+                )}
+                {w.ratchet && ratchetState === 'yes' && (
+                  <div className="tray__ratchet tray__ratchet--done">
+                    done — number refreshes land in the briefing and the ledger only; reversible in governance
+                  </div>
+                )}
                 <div className="tray__foot">decide here or in place — same state either way · dismissals are remembered</div>
               </div>
             )}
           </TriageBand>
+        )}
+
+        {/* re-entry past a few days: a BRIEFING, not a diff — authored,
+            past tense, ranked by consequence, scaled to time away */}
+        {w.briefing && (
+          <section className="brief"
+                   title="a colleague's twenty seconds, not a changelog: what changed in the science, in the order a colleague would say it — and what the system could not resolve">
+            <div className="brief__head">
+              since you last read this — {w.briefing.away}
+              <em>a briefing, not a diff · ranked by consequence</em>
+            </div>
+            {w.briefing.paras.map((p, i) => p.elId ? (
+              <button key={i} className="brief__para brief__para--door" onClick={() => scrollTo(p.elId!)} title="jump to it">
+                {p.text}<span className="wnew__go"> →</span>
+              </button>
+            ) : (
+              <p key={i} className="brief__para">{p.text}</p>
+            ))}
+            {w.briefing.flag && (
+              <button className="brief__flag" onClick={() => w.briefing!.flag!.elId && scrollTo(w.briefing!.flag!.elId)}
+                      title="the cheapest trust-building move a system can make: flagging its own inability to resolve something">
+                ⚠ {w.briefing.flag.text}
+              </button>
+            )}
+            <div className="brief__held"
+                 title="the absence policy: the fast clock ran (numbers, figures, sediment stayed current); nothing structural applied; class-2 expiry timers PAUSED while you were away">
+              {w.briefing.held}
+            </div>
+          </section>
         )}
 
         {/* what's new */}
@@ -1311,6 +1432,55 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
                 ))}
               </div>
             )}
+          </section>
+        )}
+
+        {/* structural change arrives BATCHED — one proposal, one sitting.
+            Hysteresis, not weather: proposed only after the preference held
+            across cycles, priced in what it costs the READER, with the
+            rejected alternative shown; "never" writes a rule. */}
+        {w.rfc && rfcState === 'open' && (
+          <section className="rfc">
+            <div className="rfc__head">
+              <span className="rfc__title">{w.rfc.title}</span>
+              <span className="rfc__note">{w.rfc.note}</span>
+            </div>
+            {w.rfc.items.map((it, i) => (
+              <div key={i} className="rfc__item">
+                <div className="rfc__line1">
+                  <span className={`rfc__verb`}>{it.verb}</span>
+                  <span className="rfc__what">{it.what}</span>
+                  <span className={`rfc__cls rfc__cls--${it.cls}`}
+                        title={it.cls === 2
+                          ? 'class 2 — local and reversible BY DEFINITION, so it may apply by default: the timer is visible, the veto is one click, and it pauses while you are away'
+                          : 'class 3 — structural; never auto, never expires, waits indefinitely'}>
+                    {it.cls === 2 ? (it.expires ?? 'applies by default · veto') : 'waits for you'}
+                  </span>
+                </div>
+                <div className="rfc__row"><b>why</b><span>{it.why}</span></div>
+                <div className="rfc__row"><b>costs you</b><span>{it.impact}</span></div>
+                {it.alt && <div className="rfc__row rfc__row--alt"><b>also considered</b><span>{it.alt}</span></div>}
+              </div>
+            ))}
+            <div className="rfc__actions">
+              <button className="btn btn--primary" onClick={() => setRfcState('accepted')}>accept both</button>
+              <button className="btn" onClick={() => setRfcState('partial')}>accept the fold only</button>
+              <button className="btn" onClick={() => setRfcState('deferred')}
+                      title="held — class-3 items wait indefinitely; the class-2 timer pauses">not yet</button>
+              <button className="btn" onClick={() => setRfcState('never')}
+                      title="writes a rule — this will not be proposed again unless the evidence moves">never</button>
+            </div>
+          </section>
+        )}
+        {w.rfc && rfcState !== 'open' && (
+          <section className="rfc rfc--done">
+            <span>
+              {rfcState === 'accepted' && 'restructure applied — nothing to relearn: links are entity-addressed, the tray count is unchanged (it was always derived, never positional)'}
+              {rfcState === 'partial' && 'the fold applied — no words moved, the fold selects the rendition you already ratified; the split stays on the table (class 3 waits, it will not nag)'}
+              {rfcState === 'deferred' && 'held — the class-2 timer paused; both items wait for your next visit'}
+              {rfcState === 'never' && 'noted as a rule — “don’t re-propose unless the evidence moves” written to the charter; ceremony for structural proposals here raised'}
+            </span>
+            <button className="btn" onClick={() => setRfcState('open')}>undo</button>
           </section>
         )}
 
