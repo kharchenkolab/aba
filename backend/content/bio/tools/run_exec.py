@@ -1008,14 +1008,25 @@ def _run_remote_kernel(input_: dict, ctx: dict | None, project_id: str,
         note += (" (env='system': the node's own interpreter — no environment "
                  "realized, nothing installable)")
     if res.returncode == 0 and not (res.stdout or "").strip():
-        # known substrate issue (weft kernel capture race, see
-        # misc/bug2_weft_kernel_stdout.md): a block's stdout is intermittently
-        # never captured node-side while rc=0 is real. Say so — an agent that
-        # sees silent-success otherwise concludes the site is broken.
-        note += (". NOTE: no stdout was captured for this block (known "
-                 "remote-session capture issue — the code DID run, exit 0). "
-                 "If you needed printed values, assign them to variables and "
-                 "read them in the next call, or write results to a file.")
+        # A silent successful block. This used to ACCUSE the substrate of a
+        # capture race (misc/bug2_weft_kernel_stdout.md) and advise writing
+        # results to a FILE — but it fires on any silent block, including code
+        # that legitimately prints nothing, and the far more common cause is
+        # plain: the kernel driver does not auto-print the value of a top-level
+        # expression the way an R console or a notebook cell does, so a trailing
+        # bare `files` / `df` / `head(x)` evaluates and is discarded. Live
+        # (thr_a1f7f687) the old wording sent an agent to write a listing to a
+        # file, harvest it, and finally re-run the same work with cat() — three
+        # remote round trips for one directory listing. State the likely cause
+        # and the cheap fix; claim a substrate bug only with evidence of one.
+        note += (". NOTE: this block produced no stdout (exit 0 — it DID run). "
+                 "Most often that means a value was never printed: the kernel "
+                 "does not echo a bare top-level expression the way a console "
+                 "or notebook cell does. Print explicitly — "
+                 + ("cat()/print()" if lang == "r" else "print()")
+                 + " — rather than ending a line with the value alone. If you "
+                 "DID print explicitly and still see nothing, say so: that is a "
+                 "capture fault worth reporting, not normal.")
     if remote_only:
         note += (f". {len(remote_only)} larger output(s) remain on {site} — still "
                  f"yours by NAME (find_files finds them; opening fetches on demand): "
