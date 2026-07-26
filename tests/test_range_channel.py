@@ -69,9 +69,14 @@ def _reader(payload_by_rel: dict, calls: list, *, cap: int = 8):
 
 
 def _register(pid, store_key, *, target="krn_x", base_rel="output/s.store",
-              site="siteA", size=100, digest="d1"):
-    rc.register_remote_store(pid, store_key, target=target, base_rel=base_rel,
-                             site=site, size=size, digest=digest)
+              site="siteA", size=100, digest="d1", ref=None):
+    if ref is not None:
+        rc.register_remote_store(pid, store_key, site=site, ref=ref,
+                                 size=size, digest=digest)
+    else:
+        rc.register_remote_store(pid, store_key, target=target,
+                                 base_rel=base_rel, site=site, size=size,
+                                 digest=digest)
 
 
 # ── FAKE ref-arm ranged-read verb (data_read_range) ──────────────────────────
@@ -426,6 +431,246 @@ def test_aborted_assembly_leaves_no_partial_temp():
         assert leftovers == [], f"aborted assembly left files behind: {leftovers}"
     finally:
         retention.file_read_range = _orig
+
+
+# ── batched backhaul + sibling prefetch ──────────────────────────────────────
+
+def _batch_fake(payload_by_rel: dict, calls: list, *, error_rels: dict = None,
+                defer_once: set = None, defer_always: set = None):
+    """A FAKE range verb speaking BOTH shapes: singular (rel/offset) like
+    `_reader`, and batch (`rels=[...]`) returning weft's `{"files", "not_read"}`
+    envelope — absent members as typed per-entry errors, `defer_*` rels landing
+    in not_read (once, or every round)."""
+    err = error_rels or {}
+    d_once = set(defer_once or ())
+    d_always = set(defer_always or ())
+
+    def fake(*args, rel=None, rels=None, offset=0, length=None, site=None):
+        if rels is not None:
+            calls.append(("batch", tuple(rels)))
+            files, not_read = {}, []
+            for r in rels:
+                if r in d_always or r in d_once:
+                    d_once.discard(r)
+                    not_read.append(r)
+                elif r in err:
+                    files[r] = {"error": err[r]}
+                elif r in payload_by_rel:
+                    b = payload_by_rel[r]
+                    files[r] = {"nbytes": len(b), "size": len(b), "eof": True,
+                                "capped": False,
+                                "bytes_b64": base64.b64encode(b).decode()}
+                else:
+                    files[r] = {"error": "data.missing"}
+            return {"files": files, "not_read": not_read}
+        r = rel if rel is not None else (args[1] if len(args) > 1 else None)
+        calls.append(("singular", r, offset))
+        data = payload_by_rel.get(r)
+        if data is None:
+            raise ComputeError("data.missing", "gone", stage="weft", retryable=True)
+        b = data[offset:offset + 8]
+        return {"offset": offset, "nbytes": len(b), "size": len(data),
+                "eof": offset + len(b) >= len(data),
+                "capped": offset + len(b) < len(data),
+                "bytes_b64": base64.b64encode(b).decode()}
+    return fake
+
+
+def _with_batch(fake):
+    """Install `fake` as the ref-arm verb with the batch lane enabled; returns
+    a restore callable."""
+    _orig, _flag = retention.data_read_range, dict(rc._BATCH_OK)
+    retention.data_read_range = fake
+    rc._BATCH_OK["ok"] = True
+    def restore():
+        retention.data_read_range = _orig
+        rc._BATCH_OK.update(_flag)
+    return restore
+
+
+def test_numeric_sibling_guesses():
+    got = rc._numeric_siblings("c/2/7", 8)
+    assert "c/2/8" in got and "c/3/7" in got     # both axes advance
+    assert "c/2/7" not in got and len(got) <= 8
+    assert len(got) == len(set(got))             # no dupes
+    assert rc._numeric_siblings("zarr.json", 8) == []   # no numeric tail
+    assert rc._numeric_siblings("0", 4) == ["1", "2", "3", "4"]  # single axis
+
+
+def test_batch_miss_prefetches_siblings_in_one_call():
+    pid = "s_batch1"
+    _register(pid, "s-b1.store", base_rel="", site="siteB1", target=None,
+              ref="dref:abc1")
+    payload = {"c/0/0": b"A" * 20, "c/0/1": b"B" * 20, "c/1/0": b"C" * 20}
+    calls: list = []
+    restore = _with_batch(_batch_fake(payload, calls))
+    try:
+        out = rc.serve_remote_chunk(pid, "s-b1.store/c/0/0")
+        assert out.status == "ok" and out.immutable is True
+        assert open(out.path, "rb").read() == b"A" * 20
+        assert len(calls) == 1 and calls[0][0] == "batch", calls   # ONE round trip
+        assert "c/0/0" in calls[0][1] and len(calls[0][1]) > 1     # target + guesses
+        # the guessed siblings are ALREADY CACHED: hits, no further backhaul
+        for sib in ("c/0/1", "c/1/0"):
+            o2 = rc.serve_remote_chunk(pid, f"s-b1.store/{sib}")
+            assert o2.status == "ok", sib
+        assert len(calls) == 1, "sibling serves must be cache hits (armed)"
+    finally:
+        restore()
+
+
+def test_batch_target_deferred_once_loops_for_target():
+    pid = "s_batch2"
+    _register(pid, "s-b2.store", base_rel="", site="siteB2", target=None,
+              ref="dref:abc2")
+    payload = {"c/5/5": b"T" * 10, "c/5/6": b"S" * 10}
+    calls: list = []
+    restore = _with_batch(_batch_fake(payload, calls, defer_once={"c/5/5"}))
+    try:
+        out = rc.serve_remote_chunk(pid, "s-b2.store/c/5/5")
+        assert out.status == "ok"
+        assert [c[0] for c in calls] == ["batch", "batch"]
+        assert calls[1][1] == ("c/5/5",), "the retry round is for the TARGET alone"
+    finally:
+        restore()
+
+
+def test_batch_target_always_deferred_falls_back_singular():
+    # A member bigger than the batch call budget defers forever — the singular
+    # ranged loop (any size) must take over after bounded rounds.
+    pid = "s_batch3"
+    _register(pid, "s-b3.store", base_rel="", site="siteB3", target=None,
+              ref="dref:abc3")
+    payload = {"big/9": b"Z" * 30}
+    calls: list = []
+    restore = _with_batch(_batch_fake(payload, calls, defer_always={"big/9"}))
+    try:
+        out = rc.serve_remote_chunk(pid, "s-b3.store/big/9")
+        assert out.status == "ok"
+        assert open(out.path, "rb").read() == b"Z" * 30
+        kinds = [c[0] for c in calls]
+        assert kinds.count("batch") == 3 and "singular" in kinds, kinds
+    finally:
+        restore()
+
+
+def test_batch_unsupported_flips_to_singular_once():
+    # Old substrate: the verb has no rels kwarg → TypeError → the batch lane
+    # flips OFF for the process and later misses go straight to singular.
+    pid = "s_batch4"
+    _register(pid, "s-b4.store", base_rel="", site="siteB4", target=None,
+              ref="dref:abc4")
+    attempts = {"batch": 0}
+    payload = {"c/1": b"y" * 12, "c/2": b"y" * 12}
+    def old_verb(*args, rel=None, offset=0, length=None, site=None, **kw):
+        if "rels" in kw:
+            attempts["batch"] += 1
+            raise TypeError("unexpected keyword argument 'rels'")
+        r = rel if rel is not None else (args[1] if len(args) > 1 else None)
+        b = payload[r][offset:offset + 8]
+        return {"offset": offset, "nbytes": len(b), "size": len(payload[r]),
+                "eof": offset + len(b) >= len(payload[r]),
+                "capped": offset + len(b) < len(payload[r]),
+                "bytes_b64": base64.b64encode(b).decode()}
+    restore = _with_batch(old_verb)
+    try:
+        assert rc.serve_remote_chunk(pid, "s-b4.store/c/1").status == "ok"
+        assert rc.serve_remote_chunk(pid, "s-b4.store/c/2").status == "ok"
+        assert attempts["batch"] == 1, "TypeError must flip the batch lane OFF once"
+        assert rc._BATCH_OK["ok"] is False
+    finally:
+        restore()
+
+
+def test_batch_target_missing_entry_is_404():
+    pid = "s_batch5"
+    _register(pid, "s-b5.store", base_rel="", site="siteB5", target=None,
+              ref="dref:abc5")
+    calls: list = []
+    restore = _with_batch(_batch_fake({}, calls))   # every rel → typed missing
+    try:
+        out = rc.serve_remote_chunk(pid, "s-b5.store/c/3/3")
+        assert out.status == "missing" and out.http == 404
+        assert len(calls) == 1, "typed per-entry miss must not loop"
+    finally:
+        restore()
+
+
+def test_retryable_internal_error_retries_once():
+    # weft contract: marker-less probe = internal.error RETRYABLE. One retry,
+    # then the failure surfaces as 502. Ceiling: exactly 2 attempts, never 3.
+    pid = "s_retry"
+    _register(pid, "s-rt.store", base_rel="b", site="siteRT")   # run arm: singular lane
+    payload = b"ok-bytes"
+    calls = {"n": 0}
+    def flaky(target, rel, *, offset=0, length=None, **kw):
+        if kw.get("rels") is not None:
+            raise TypeError("no rels")
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ComputeError("internal.error", "marker-less", stage="weft",
+                               retryable=True)
+        b = payload[offset:offset + 8]
+        return {"offset": offset, "nbytes": len(b), "size": len(payload),
+                "eof": offset + len(b) >= len(payload),
+                "capped": offset + len(b) < len(payload),
+                "bytes_b64": base64.b64encode(b).decode()}
+    _orig, _flag = retention.file_read_range, dict(rc._BATCH_OK)
+    retention.file_read_range = flaky
+    rc._BATCH_OK["ok"] = False           # singular lane directly
+    try:
+        out = rc.serve_remote_chunk(pid, "s-rt.store/c1")
+        assert out.status == "ok" and open(out.path, "rb").read() == payload
+        calls["n"] = 0
+        def dead(target, rel, *, offset=0, length=None, **kw):
+            calls["n"] += 1
+            raise ComputeError("internal.error", "marker-less", stage="weft",
+                               retryable=True)
+        retention.file_read_range = dead
+        out2 = rc.serve_remote_chunk(pid, "s-rt.store/c2")
+        assert out2.status == "error" and out2.http == 502
+        assert calls["n"] == 2, "retryable = exactly ONE retry (ceiling)"
+    finally:
+        retention.file_read_range = _orig
+        rc._BATCH_OK.update(_flag)
+
+
+def test_ref_arm_outcomes_carry_immutable_run_arm_not():
+    pid = "s_imm"
+    _register(pid, "s-im.store", base_rel="", site="siteI", target=None,
+              ref="dref:imm1")
+    calls: list = []
+    restore = _with_batch(_batch_fake({"m/1": b"x" * 4}, calls))
+    try:
+        first = rc.serve_remote_chunk(pid, "s-im.store/m/1")
+        hit = rc.serve_remote_chunk(pid, "s-im.store/m/1")
+        assert first.immutable is True and hit.immutable is True
+    finally:
+        restore()
+    _register(pid, "s-run.store", base_rel="b", site="siteI")   # run arm
+    calls2: list = []
+    _orig, _flag = retention.file_read_range, dict(rc._BATCH_OK)
+    retention.file_read_range = _reader({"b/m/1": b"q" * 4}, calls2)
+    rc._BATCH_OK["ok"] = False
+    try:
+        out = rc.serve_remote_chunk(pid, "s-run.store/m/1")
+        assert out.status == "ok" and out.immutable is False
+    finally:
+        retention.file_read_range = _orig
+        rc._BATCH_OK.update(_flag)
+
+
+def test_route_cache_headers_by_mutability(monkeypatch, tmp_path):
+    from fastapi import HTTPException  # noqa: F401
+    f = tmp_path / "chunk.bin"; f.write_bytes(b"zz")
+    for immutable, want in ((True, "immutable"), (False, "no-cache")):
+        monkeypatch.setattr(
+            "core.viewers.range_cache.serve_remote_chunk",
+            lambda _pid, _rel, _i=immutable: rc.ChunkOutcome(
+                "ok", path=str(f), immutable=_i))
+        resp = _pagoda3_store()("prj_h", "nolocal.store/m")
+        cc = resp.headers.get("cache-control", "")
+        assert want in cc, (immutable, cc)
 
 
 # ── the store route branch (main.pagoda3_store) ──────────────────────────────
@@ -1525,6 +1770,15 @@ _TESTS = [
     test_verb_absent_midsession_502,
     test_digest_change_wipes_cache_same_digest_keeps,
     test_digest_change_wipes_prev_site_cache,
+    test_numeric_sibling_guesses,
+    test_batch_miss_prefetches_siblings_in_one_call,
+    test_batch_target_deferred_once_loops_for_target,
+    test_batch_target_always_deferred_falls_back_singular,
+    test_batch_unsupported_flips_to_singular_once,
+    test_batch_target_missing_entry_is_404,
+    test_retryable_internal_error_retries_once,
+    test_ref_arm_outcomes_carry_immutable_run_arm_not,
+    test_route_cache_headers_by_mutability,
     test_lru_sweep_evicts_oldest,
     test_sweep_never_evicts_the_just_installed_file,
     test_lookup_does_not_create_registry_dir,

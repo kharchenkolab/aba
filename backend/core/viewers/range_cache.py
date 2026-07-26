@@ -43,7 +43,17 @@ from core.config import project_root
 # files are small and re-fetchable).
 CACHE_CAP_BYTES = 512 * 1024 * 1024
 
+# Prefetch breadth: on a chunk-grid miss, up to this many GUESSED sibling
+# coordinates ride the same batched backhaul call. Wrong guesses come back as
+# per-entry typed errors inside that one call — no extra round trips, no budget
+# consumed — so over-guessing is cheap and under-guessing wastes floors.
+PREFETCH_SIBLINGS = 24
+
 _REG_LOCK = threading.Lock()
+# Whether the deployed substrate accepts rels=[...] batch reads — flips False
+# on the first TypeError (older verb signature) and every miss thereafter goes
+# straight to the singular ranged loop.
+_BATCH_OK: dict = {"ok": True}
 
 
 # ── outcome the store route maps to a response ───────────────────────────────
@@ -59,6 +69,11 @@ class ChunkOutcome:
     http: int = 200
     detail: str = ""
     site: Optional[str] = None
+    # REF-arm stores are content-addressed (a byte change mints a new ref → a
+    # new store_key/URL), so their chunks may be browser-cached as immutable.
+    # RUN-arm store_keys survive re-derives (digest-wipe refreshes the server
+    # cache but not a browser's), so they must keep revalidating.
+    immutable: bool = False
 
 
 # ── confinement (own copy — core must not import the bio safe-join) ──────────
@@ -181,10 +196,168 @@ def serve_remote_chunk(pid: str, relpath: str) -> Optional[ChunkOutcome]:
     if safe is None:
         return ChunkOutcome("reject", http=403, detail="chunk path escapes store")
     site = entry["site"]
+    immutable = entry.get("ref") is not None
     cache_file = os.path.join(_cache_root(pid, site, store_key), safe)
     if os.path.isfile(cache_file):
-        return ChunkOutcome("ok", path=cache_file)      # cache hit — no backhaul
+        return ChunkOutcome("ok", path=cache_file,      # cache hit — no backhaul
+                            immutable=immutable)
+    # Miss: prefer ONE batched call carrying the target + guessed siblings
+    # (each cold call pays a WAN floor; the batch pays it once). An older
+    # substrate without rels=[...] raises TypeError on the first try — noted
+    # once, singular ranged loop thereafter.
+    if _BATCH_OK["ok"]:
+        try:
+            return _fetch_via_batch(pid, entry, store_key, safe, cache_file, site)
+        except _BatchUnsupported:
+            _BATCH_OK["ok"] = False
     return _fetch_and_cache(entry, safe, cache_file, site)
+
+
+class _BatchUnsupported(Exception):
+    """The deployed substrate's range verb predates rels=[...]."""
+
+
+def _numeric_siblings(safe: str, k: int) -> list:
+    """Guess up to `k` sibling chunk rels by advancing the TRAILING integer
+    path segments (chunk-grid coordinates, e.g. c/2/7 → c/2/8, c/3/7 …).
+    Format-agnostic: purely path-structural, and a wrong guess costs only a
+    typed per-entry error inside the same batched call. Rels with no integer
+    tail (metadata files) get no guesses."""
+    parts = safe.split("/")
+    coords = []
+    while parts and parts[-1].isdigit():
+        coords.insert(0, int(parts.pop()))
+    if not coords:
+        return []
+    base = "/".join(parts)
+
+    def rel_for(c):
+        tail = "/".join(str(x) for x in c)
+        return f"{base}/{tail}" if base else tail
+
+    out, seen = [], {safe}
+    stride = max(1, k // 2) if len(coords) > 1 else k
+    for i in range(1, stride + 1):           # walk the fastest axis forward
+        c = list(coords)
+        c[-1] += i
+        r = rel_for(c)
+        if r not in seen:
+            seen.add(r); out.append(r)
+    if len(coords) > 1:                      # and the next-slower axis
+        for i in range(1, (k - len(out)) + 1):
+            c = list(coords)
+            c[-2] += i
+            r = rel_for(c)
+            if r not in seen:
+                seen.add(r); out.append(r)
+            if len(out) >= k:
+                break
+    return out[:k]
+
+
+def _retry_once(fn):
+    """Run `fn`; retry ONCE on a RETRYABLE typed error that is not a semantic
+    miss (weft's `internal.error` marker-less-probe class is retryable by
+    contract — one retry, then the failure surfaces)."""
+    from core.compute.errors import ComputeError
+    try:
+        return fn()
+    except ComputeError as e:
+        if getattr(e, "retryable", False) and e.code not in ("data.missing",
+                                                             "task.invalid"):
+            return fn()
+        raise
+
+
+def _fetch_via_batch(pid: str, entry: dict, store_key: str, safe: str,
+                     cache_file: str, site: str) -> ChunkOutcome:
+    """ONE batched backhaul call for the missed chunk + guessed siblings:
+    every returned member installs into the cache (guesses warm it ahead of
+    the browser), per-entry typed errors on guesses are free, and only the
+    TARGET's outcome maps to a response. A target deferred repeatedly in
+    `not_read` (member bigger than the call budget) falls back to the singular
+    ranged loop, which handles any size. Raises _BatchUnsupported on an old
+    substrate (TypeError: no rels kwarg)."""
+    from core.compute import retention
+    from core.compute.errors import ComputeError
+    croot = _cache_root(pid, site, store_key)
+    if entry.get("ref") is not None:
+        ref = entry["ref"]
+        call = lambda rels: retention.data_read_range(ref, rels=rels, site=site)  # noqa: E731
+        to_remote = lambda r: r                                                   # noqa: E731
+        from_remote = lambda r: r                                                 # noqa: E731
+    else:
+        target, base = entry["target"], entry["base_rel"].rstrip("/")
+        call = lambda rels: retention.file_read_range(target, rels=rels)          # noqa: E731
+        to_remote = lambda r: f"{base}/{r}"                                       # noqa: E731
+        from_remote = lambda r: r[len(base) + 1:] if r.startswith(base + "/") else r  # noqa: E731
+
+    want = [safe]
+    for g in _numeric_siblings(safe, PREFETCH_SIBLINGS):
+        if _safe_rel(g) == g and not os.path.isfile(os.path.join(croot, g)):
+            want.append(g)
+    pending = [to_remote(r) for r in want]
+    immutable = entry.get("ref") is not None
+    for _round in range(3):
+        try:
+            reply = _retry_once(lambda: call(pending))
+        except TypeError:
+            raise _BatchUnsupported()
+        except ComputeError as e:
+            if e.code == "data.missing":
+                return ChunkOutcome("missing", http=404,
+                                    detail="chunk not found on remote store", site=site)
+            if e.code == "task.invalid":
+                return ChunkOutcome("missing", http=404,
+                                    detail="invalid chunk path", site=site)
+            return ChunkOutcome("error", http=502, site=site,
+                                detail=f"chunk backhaul failed on {site}: {e.code}")
+        except Exception as e:  # noqa: BLE001 — adapter down → 502
+            return ChunkOutcome("error", http=502, site=site,
+                                detail=f"chunk backhaul unavailable on {site}: {type(e).__name__}")
+        target_err = None
+        for rrel, ent in (reply.get("files") or {}).items():
+            lrel = from_remote(rrel)
+            if not isinstance(ent, dict):
+                continue
+            if ent.get("error"):
+                if lrel == safe:
+                    target_err = str(ent["error"])
+                continue                      # a failed GUESS is free
+            _install_bytes(os.path.join(croot, lrel),
+                           base64.b64decode(ent.get("bytes_b64") or ""))
+        if os.path.isfile(cache_file):
+            _sweep_to_cap(os.path.dirname(cache_file), keep=cache_file)
+            return ChunkOutcome("ok", path=cache_file, immutable=immutable)
+        if target_err in ("data.missing",):
+            return ChunkOutcome("missing", http=404,
+                                detail="chunk not found on remote store", site=site)
+        if target_err == "task.invalid":
+            return ChunkOutcome("missing", http=404,
+                                detail="invalid chunk path", site=site)
+        if target_err and target_err != "internal.error":
+            return ChunkOutcome("error", http=502, site=site,
+                                detail=f"chunk backhaul failed on {site}: {target_err}")
+        # Target deferred (not_read) or retryable-flaky: loop for the TARGET
+        # alone; abandoned guess leftovers are just future misses.
+        pending = [to_remote(safe)]
+    # Three rounds without the target (member > call budget, or persistent
+    # flake): the singular ranged loop handles any size.
+    return _fetch_and_cache(entry, safe, cache_file, site)
+
+
+def _install_bytes(dest: str, data: bytes) -> None:
+    """Atomic whole-member install (unique temp → os.replace); best-effort —
+    a failed guess install is just a future miss, and the caller re-checks the
+    TARGET's file before claiming ok."""
+    tmp = f"{dest}.partial.{os.getpid()}.{uuid.uuid4().hex}"
+    try:
+        os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+        with open(tmp, "wb") as fh:
+            fh.write(data)
+        os.replace(tmp, dest)
+    except OSError:
+        _discard(tmp)
 
 
 def _chunk_reader(entry: dict, safe: str):
@@ -225,7 +398,7 @@ def _fetch_and_cache(entry: dict, safe: str, cache_file: str,
     try:
         with open(tmp, "wb") as fh:
             while True:
-                r = read(offset)
+                r = _retry_once(lambda: read(offset))  # noqa: B023 — offset rebinds per loop
                 nbytes = int(r.get("nbytes") or 0)
                 if nbytes:
                     fh.write(base64.b64decode(r.get("bytes_b64") or ""))
@@ -257,7 +430,8 @@ def _fetch_and_cache(entry: dict, safe: str, cache_file: str,
         return ChunkOutcome("error", http=502, site=site,
                             detail=f"chunk backhaul unavailable on {site}: {type(e).__name__}")
     _sweep_to_cap(os.path.dirname(cache_file), keep=cache_file)
-    return ChunkOutcome("ok", path=cache_file)
+    return ChunkOutcome("ok", path=cache_file,
+                        immutable=entry.get("ref") is not None)
 
 
 def _discard(tmp: str) -> None:

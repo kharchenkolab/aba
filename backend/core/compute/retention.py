@@ -214,8 +214,9 @@ def range_read_available(verb: str = _RANGE_VERB) -> bool:
     return cached
 
 
-def file_read_range(target: str, rel: str, *, offset: int = 0,
-                    length: Optional[int] = None) -> dict:
+def file_read_range(target: str, rel: Optional[str] = None, *, offset: int = 0,
+                    length: Optional[int] = None,
+                    rels: Optional[list] = None) -> dict:
     """One ranged read from a target's sandbox/keep — the chunk-streaming
     backhaul doorway (mirrors `file_read`, run-keyed addressing). Returns
     `{target, path, at, offset, nbytes, size, eof, capped, bytes_b64}` (`at` in
@@ -227,13 +228,23 @@ def file_read_range(target: str, rel: str, *, offset: int = 0,
     returned when bytes were expected but the file vanished, so key a streamer on
     THIS, never on nbytes==0), `task.invalid` (containment escape / bad intake).
     Raises AttributeError when the verb is ABSENT (older substrate) — probe
-    `range_read_available()` first and degrade. Each call costs ~2 ssh
-    round-trips over a WAN; the per-chunk cache is what makes that fine."""
+    `range_read_available()` first and degrade. A singular call costs ~1 app
+    round-trip over a WAN (one-shot absence-or-read since weft shim v9); the
+    per-chunk cache is what makes that fine.
+
+    `rels=[...]` batches WHOLE members in ONE remote invocation (mutually
+    exclusive with rel/offset/length): returns `{"files": {rel: entry |
+    {"error": <code>}}, "not_read": [rels deferred at the call budget —
+    loop, never silently truncated]}`. Old substrates without the batch
+    raise TypeError (unexpected kwarg) — callers degrade to singular."""
+    if rels is not None:
+        return _call(_RANGE_VERB, target, rels=rels)
     return _call(_RANGE_VERB, target, rel, offset=offset, length=length)
 
 
 def data_read_range(ref: str, rel: Optional[str] = None, *, offset: int = 0,
-                    length: Optional[int] = None, site: Optional[str] = None) -> dict:
+                    length: Optional[int] = None, site: Optional[str] = None,
+                    rels: Optional[list] = None) -> dict:
     """One ranged read addressed by a DATA-PLANE content `ref` — the ref-arm
     sibling of `file_read_range` over ONE shared weft engine, with the IDENTICAL
     envelope + semantics. Returns `{ref, at, via, offset, nbytes, size, eof,
@@ -252,8 +263,16 @@ def data_read_range(ref: str, rel: Optional[str] = None, *, offset: int = 0,
     no-rel-on-TREE, containment/intake). Raises AttributeError when the verb is
     ABSENT — a deployment may have the run verb but NOT this one, so probe
     `range_read_available(DATA_RANGE_VERB)` (a distinct per-verb cache) first and
-    degrade. Each call costs ~2 ssh round-trips over a WAN; the per-chunk cache
-    is what makes that fine."""
+    degrade. A singular call costs ~1 app round-trip over a WAN (one-shot
+    absence-or-read since weft shim v9); the per-chunk cache is what makes that
+    fine.
+
+    `rels=[...]` batches WHOLE tree members in ONE remote invocation (mutually
+    exclusive with rel/offset/length): `{"files": {rel: entry | {"error":
+    <code>}}, "not_read": [...]}` with the remainder deferred EXPLICITLY at the
+    call budget. Old substrates raise TypeError — degrade to singular."""
+    if rels is not None:
+        return _call(DATA_RANGE_VERB, ref, rels=rels, site=site)
     return _call(DATA_RANGE_VERB, ref, rel=rel, offset=offset, length=length,
                  site=site)
 

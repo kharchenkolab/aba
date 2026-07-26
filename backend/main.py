@@ -1522,7 +1522,16 @@ def pagoda3_store(pid: str, relpath: str):
         out = None
     if out is not None:
         if out.status == "ok" and out.path:
-            return _store_headers(FileResponse(out.path))
+            resp = FileResponse(out.path)
+            resp.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+            # Content-addressed (ref-arm) chunks never change under their URL —
+            # a byte change mints a new store_key — so the browser may cache
+            # them as immutable (kills the ~10x per-member revalidation churn).
+            # Run-arm keys survive re-derives → keep the no-cache revalidation.
+            resp.headers["Cache-Control"] = (
+                "public, max-age=31536000, immutable" if out.immutable
+                else "no-cache")
+            return resp
         raise HTTPException(out.http, out.detail)
     raise HTTPException(404, f"no store file {relpath!r}")
 
