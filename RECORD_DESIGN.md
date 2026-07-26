@@ -204,35 +204,62 @@ second:
 **Threads, sittings, anchors — the mapping.** The conversational
 primitive is the *anchored sitting*, not the thread; the Record files,
 counts, and reopens sittings by anchor, and "which thread am I in" is
-not a question the surface ever asks. On the substrate:
+not a question the surface ever asks. The mapping only works because of
+one decoupling, stated first:
 
-- **Working never creates a thread.** The birth of a QUESTION creates a
-  thread (threads are questions, §13.1); work adds bounded sittings to
-  it — a question's sittings ride its thread, so `▷ work` on a question
-  is, in classic-UI terms, exactly the play button on that thread, with
-  the episode bracketed. Project-anchored sittings (day 0, marking
-  directions) ride the main thread. The classic UI's per-question
-  threads survive untouched — coexistence needs no re-plumbing, and
-  "shared threads" need not exist as containers.
-- **Context is assembled from the graph, never inherited from
-  transcripts.** A sitting's scope is its anchor's neighborhood — the
-  question's claims, evidence, trails, open items, plan — plus its
-  *ancestors at their compact renditions* (the arc's holds-line, the
-  project abstract, at L0/L1 — §14.3 is what makes hierarchical context
-  affordable). Cross-question sharing therefore requires no shared
-  transcript: claims, results, and trails are project-global entities,
-  citable from chat exactly as from prose; a specific past exchange
-  enters as an explicit citation (a ▷ episode, or its turn), never as
-  ambient transcript bleed; and cross-question *writes* stay proposals
-  (§6). The epistemic boundary survives because imports are explicit.
+- **The anchor is an address, not a container.** A sitting's anchor
+  records where it was *summoned* — the provenance of attention, the
+  default scope, the default filing — and claims nothing about where
+  its products belong. A real analysis session uncovers many things:
+  evidence bearing on several questions at once, a hunch that opens a
+  trail, an artifact relevant to nothing yet. Products are entities in
+  the ONE project graph, and each lands wherever its edges point.
+- **Multi-relevance is the norm, and the graph prices it at zero.**
+  Evidence is many-to-many by construction: one finding can support
+  Q1's claim *and* cut against Q2's assumption; both sections then cite
+  it — live views over one entity, no copy, nothing to go stale (first
+  principle 1 is what makes this free). At close, the distillation
+  proposes a **routing table** — every product with its proposed
+  destination set — reviewed as ONE act with per-line toggles: not one
+  filing, and not N separate ceremonies (the consent arithmetic of
+  §14.1 would not survive N). §6's cross-boundary rule reads correctly
+  at this grain: out-of-anchor writes are not rare — they are simply
+  never silent.
+- **The sitting is findable from every shore it touched.** It files
+  under its anchor, but the work record and every section's session
+  list index it by its *touched set* ("produced 2 of the results cited
+  here") — so the conversation that produced Q2's evidence is one ▷
+  away from Q2, even though it was summoned from Q1. And when a sitting
+  drifts wholly away from its anchor, the close moment may propose a
+  **split** ("turns 1–6 were Q1; turns 7–19 opened a new line — file as
+  two episodes?"): sittings are bounded by attention, and the close
+  moment makes them honest about topic.
+- **Working never creates a thread; questions create threads.** On the
+  substrate a sitting rides its anchor's thread (threads are questions,
+  §13.1) — `▷ work` on a question is the classic play button on that
+  thread, with the episode bracketed; project-anchored sittings ride
+  the main thread; the classic UI's per-question threads survive
+  untouched. Thread-contains-conversation was always an approximation
+  there too — and provenance never needed containment: Q2's citation
+  walks to the producing run and its turn regardless of which thread
+  hosted the exchange (the turn-grade join).
+- **Context assembles from the graph, never from transcripts.** A
+  sitting's scope is its anchor's neighborhood — claims, evidence,
+  trails, open items, plan — plus its *ancestors at their compact
+  renditions* (the arc's holds-line, the project abstract at L0/L1;
+  §14.3 makes hierarchical context affordable). Cross-question sharing
+  needs no shared transcript: entities are project-global and citable
+  from chat exactly as from prose; a specific past exchange enters as
+  an explicit citation (a ▷ episode, or its turn), never as ambient
+  transcript bleed. The epistemic boundary survives because imports are
+  explicit.
 - **Hierarchy runs through anchors; lineage runs through chains.**
-  Anchors form the natural ladder — project · arc · question · trail /
-  plan item / figure — scope inherits *down* it (as renditions),
-  products route *up* it through ratification. Chain edges
-  (`continues ← / continued by →`) record lineage across sittings,
-  orthogonal to the hierarchy. And because arcs are views over
-  questions (§9), re-drawing the hierarchy re-scopes future sittings
-  without touching where past ones filed.
+  Scope inherits *down* the anchor ladder (as renditions); products
+  route *up* through ratification; chain edges (`continues ← /
+  continued by →`) record lineage across sittings, orthogonal to the
+  hierarchy. Because arcs are views over questions (§9), re-drawing the
+  hierarchy re-scopes future sittings without touching where past ones
+  filed.
 
 ## 6 · Live anchoring — the document as a working surface
 
@@ -264,7 +291,10 @@ document must track the work without wrestling the reader (rule 8):
   what the distillation reviews.
 - **Cross-boundary relevance stays a proposal** ("may bear on Q2 — file
   a note?"). The agent never writes outside the session's anchor
-  silently.
+  silently — not because cross-relevance is rare (it is the norm; the
+  distillation routes one sitting's products to many destinations in a
+  single review, §5) but because out-of-anchor writes must never be
+  silent.
 - **hold ⌖** parks an excerpt on the desk for two-locus work; clears at
   session close.
 

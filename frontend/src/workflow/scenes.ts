@@ -545,10 +545,11 @@ const m4Panel: PanelState = {
     { role: 'guide', text: 'Per-station: the winter sign flips at 31 of 48 stations, serviced or not. This is real structure, not an artifact of the January visits. The 2025 hold-out (still running) stays the arbiter of mechanism.' },
   ],
   closing: {
-    summary: '48 min · 5 runs (2 kept, 3 exploratory) · 1 fragment · 1 addendum draft · 1 keep proposal',
+    summary: '48 min · 5 runs (2 kept, 3 exploratory) · 1 fragment · 1 addendum draft · 1 cross-question note · 1 keep proposal',
     distillates: [
       { text: '“Flip persists excluding serviced stations (−0.29 ± 0.12); 31/48 stations flip individually”', dest: 'trail T1', state: 'accepted' },
       { text: 'Addendum draft for Q1 — service-visit explanation ruled out; mechanism still open, hold-out pending', dest: 'Q1 · inbox', state: 'to inbox' },
+      { text: 'Note → Q2: the per-station slopes also track distance to coast — may bear on the estuary reading (one finding, two questions)', dest: 'Q2 · inbox', state: 'to inbox' },
       { text: 'Keep the two final refits durably; three exploratory outputs lapse in 30 d', dest: 'retention · inbox', state: 'to inbox' },
     ],
   },
@@ -556,10 +557,11 @@ const m4Panel: PanelState = {
 const m4: Scene = {
   id: 'm4', group: 'mature', title: 'walking away',
   narration:
-    'Closing a session is a DISTILLATION moment, not an exit. The panel proposes what ' +
-    'enters the record — a trail fragment, an addendum draft, a retention decision — and ' +
-    'nothing enters without your ratification. The transcript files under Q1, out of the ' +
-    'way but never lost.',
+    'Closing a session is a DISTILLATION moment, not an exit — and it proposes a ROUTING ' +
+    'TABLE, not a single filing: a fragment to T1, an addendum to Q1, a note to Q2 (one ' +
+    'sitting can feed many questions — the anchor is an address, not a container), a ' +
+    'retention decision. One review, per-line toggles, nothing enters without you. The ' +
+    'transcript files under Q1 but stays one ▷ away from everything it touched.',
   advance: { on: 'file-close', hint: 'click  file & close  in the panel to finish the session' },
   world: {
     ...mBase,
@@ -581,6 +583,7 @@ const winterDigFiled: SessionRec = {
   distillate: [
     { text: '“Flip persists excluding serviced stations (−0.29 ± 0.12); 31/48 stations flip individually”', dest: 'trail T1' },
     { text: 'Addendum for Q1 — service-visit explanation ruled out; hold-out pending', dest: 'Q1 · awaiting ratification' },
+    { text: 'Note → Q2: per-station slopes track distance to coast — may bear on the estuary reading', dest: 'Q2 · awaiting ratification' },
     { text: 'Keep the two final refits durably; three exploratory outputs lapse in 30 d', dest: 'retention · awaiting ratification' },
   ],
   leftovers: [
