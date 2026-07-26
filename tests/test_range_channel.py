@@ -645,6 +645,66 @@ def test_ref_arm_outcomes_carry_immutable_run_arm_not():
         rc._BATCH_OK.update(_flag)
 
 
+def test_backhaul_emits_console_events(monkeypatch):
+    """Instrumentation guard (ARMED): an actual backhaul emits exactly ONE
+    `console` event carrying site+bytes+duration+status; a cache hit and a
+    wrong-guess 404 emit NOTHING (flood ceiling — probe traffic is hundreds
+    of ~ms misses); a failed backhaul emits severity=error with the typed
+    code. Red-proven by removing the obs.emit calls in _fetch_and_cache."""
+    from core.runtime import notifications
+    got: list = []
+    monkeypatch.setattr(notifications, "broadcast", got.append)
+    pid = "s_obs"
+    _register(pid, "s-obs.store", base_rel="b", site="siteOBS")
+    payload = b"chunk-bytes!"
+    calls: list = []
+    monkeypatch.setattr(retention, "file_read_range", _reader({"b/c1": payload}, calls))
+    monkeypatch.setattr(rc, "_BATCH_OK", {"ok": False})     # singular lane only
+    assert rc.serve_remote_chunk(pid, "s-obs.store/c1").status == "ok"
+    evs = [e for e in got if e.get("type") == "console"]
+    assert len(evs) == 1, "one backhaul = one event"
+    ev = evs[0]
+    assert ev["category"] == "data" and ev["verb"] == "chunk backhaul"
+    assert ev["site"] == "siteOBS" and ev["status"] == "ok"
+    assert ev["bytes"] == len(payload) and ev["dur_ms"] >= 0
+    assert ev["summary"] == "c1"
+    got.clear()
+    assert rc.serve_remote_chunk(pid, "s-obs.store/c1").status == "ok"   # hit
+    assert rc.serve_remote_chunk(pid, "s-obs.store/nope").status == "missing"
+    assert not [e for e in got if e.get("type") == "console"], \
+        "cache hits and 404 probes stay silent"
+    def dead(target, rel, *, offset=0, length=None, **kw):
+        raise ComputeError("internal.error", "x", stage="weft", retryable=False)
+    monkeypatch.setattr(retention, "file_read_range", dead)
+    assert rc.serve_remote_chunk(pid, "s-obs.store/c2").status == "error"
+    evs = [e for e in got if e.get("type") == "console"]
+    assert len(evs) == 1 and evs[0]["severity"] == "error"
+    assert evs[0]["status"] == "internal.error" and evs[0]["site"] == "siteOBS"
+
+
+def test_prefetch_batch_emits_one_summary_event(monkeypatch):
+    """The inline prefetch batch emits ONE `console` event summarizing the
+    warm-up (count + bytes), not one per sibling (ceiling)."""
+    from core.runtime import notifications
+    got: list = []
+    monkeypatch.setattr(notifications, "broadcast", got.append)
+    pid = "s_obs2"
+    _register(pid, "s-ob2.store", base_rel="", target=None, site="siteOB2",
+              ref="ref-ob2")
+    payload = {"c/0": b"a" * 4, "c/1": b"b" * 4, "c/2": b"c" * 4}
+    calls: list = []
+    restore = _with_batch(_batch_fake(payload, calls))
+    try:
+        assert rc.serve_remote_chunk(pid, "s-ob2.store/c/0").status == "ok"
+    finally:
+        restore()
+    pf = [e for e in got if e.get("type") == "console"
+          and e.get("verb") == "prefetch batch"]
+    assert len(pf) == 1, "one batch = one summary event"
+    assert pf[0]["site"] == "siteOB2" and pf[0]["bytes"] == 8   # c/1 + c/2
+    assert pf[0]["summary"].startswith("2/")
+
+
 def test_route_cache_headers_by_mutability(monkeypatch, tmp_path):
     from fastapi import HTTPException  # noqa: F401
     f = tmp_path / "chunk.bin"; f.write_bytes(b"zz")
@@ -1761,6 +1821,8 @@ _TESTS = [
     test_batch_unsupported_flips_to_singular_once,
     test_retryable_internal_error_retries_once,
     test_ref_arm_outcomes_carry_immutable_run_arm_not,
+    test_backhaul_emits_console_events,
+    test_prefetch_batch_emits_one_summary_event,
     test_route_cache_headers_by_mutability,
     test_lru_sweep_evicts_oldest,
     test_sweep_never_evicts_the_just_installed_file,

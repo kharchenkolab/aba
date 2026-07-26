@@ -193,6 +193,21 @@ export interface ComputeEvent {
   ok?: boolean | null;
 }
 
+/** Structured observability event for the Console drawer: platform and substrate activity (transfers, jobs, kernels, env ops, chunk streaming) normalized to one envelope. `category` drives the facet filter (run/data/env/compute/serve/system), `verb` is the action name, `detail` carries the raw payload for row expansion. */
+export interface ConsoleEvent {
+  type: 'console';
+  category: string;
+  verb: string;
+  site?: string | null;
+  severity?: 'info' | 'warn' | 'error';
+  summary?: string | null;
+  dur_ms?: number | null;
+  bytes?: number | null;
+  status?: string | null;
+  ref?: string | null;
+  detail?: Record<string, unknown> | null;
+}
+
 /** Every event the per-turn chat stream can carry. */
 export type SSEEvent =
   | ManifestEvent
@@ -219,4 +234,5 @@ export type NotificationEvent =
   | HelloEvent
   | EntityUpdatedEvent
   | ModuleEvent
-  | ComputeEvent;
+  | ComputeEvent
+  | ConsoleEvent;

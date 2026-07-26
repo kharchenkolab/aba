@@ -10,6 +10,7 @@ import AdvisorStrip from './components/AdvisorStrip'
 import SearchPill from './components/SearchPill'
 import { ADVISORS_ENABLED } from './lib/flags'
 import { recentErrorLines } from './lib/errorLog'
+import { noteNotification } from './console'
 import FocusCanvas from './components/FocusCanvas'
 import EditableTitle from './components/EditableTitle'
 import { renameEntity, renameProject } from './lib/api'
@@ -263,6 +264,9 @@ export default function App() {
     es.onmessage = (msg) => {
       try {
         const ev = JSON.parse(msg.data) as import('./wire').NotificationEvent
+        // Every out-of-band event also folds into the Console feed store
+        // (structured `console` envelopes, entity updates, module progress).
+        noteNotification(ev)
         if (ev.type === 'entity_updated') refresh()
         // Module install progress → ModuleToasts + the Modules tab listen for this.
         else if (ev.type === 'module') window.dispatchEvent(new CustomEvent('aba:module', { detail: ev }))
@@ -417,7 +421,7 @@ export default function App() {
           pendingClarification, answerClarification, answerClarificationEnable,
           pendingApproval, respondApproval, stopTurn,
           queuedMessages, enqueue, dropQueue, dropQueueAt, steer,
-          eventLog, jobs, currentRunId } = useChat(
+          jobs, currentRunId } = useChat(
     focusedId, refresh, annotation, `${projectKey}:${chatReload}`, threadId, url.pid ?? undefined,
   )
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -1103,7 +1107,6 @@ export default function App() {
             manifest={manifest}
             focusEntityId={focusedId}
             threadId={threadId === 'default' ? (currentThread?.id ?? null) : threadId}
-            eventLog={eventLog}
             jobs={jobs}
             onClose={() => setDrawerOpen(false)}
           />

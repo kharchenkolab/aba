@@ -32,6 +32,7 @@ FILES=(
   tests/test_history_prefix_stability.py
   tests/test_tier2_synth_real_path.py
   tests/test_wire_contract.py
+  tests/test_console_events.py
   # output / env-layer unit guards
   tests/test_harvest_identity.py
   tests/test_harvest_honesty.py

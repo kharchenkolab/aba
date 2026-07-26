@@ -48,12 +48,66 @@ def _broadcast(site: str, phase: str, **kw) -> None:
     notifications.broadcast(wire.compute(site=site, phase=phase, **kw))
 
 
+# ── substrate event → Console envelope mapping (pure; unit-tested) ────────────
+# Family prefix → console category. Kinds outside this table are dropped —
+# a new weft family stays invisible until deliberately mapped (silence is a
+# mapping decision, not an accident: test_console_events pins the table).
+_FAMILY_CATEGORY = {
+    "transfer": "data", "data": "data", "retain": "data", "gc": "data",
+    "collect": "data", "cas": "data",
+    "job": "run", "array": "run", "run": "run", "kernel": "run",
+    "env": "env", "realize": "env", "overlay": "env", "session": "env",
+    "bundle": "env",
+    "site": "compute", "bootstrap": "compute", "poller": "compute",
+    "service": "serve",
+}
+_ERROR_MARKS = ("failed", "error", "unreachable", "lost", "integrity", "bad")
+_WARN_MARKS = ("warning", "skipped", "unverified", "unportable", "fallback",
+               "missing", "deferred", "cancelled", "interrupted")
+
+
+def console_event_for(ev: dict) -> dict | None:
+    """Map one substrate event (`{kind, site?, job_id?, **payload}`) to a
+    `console` wire payload, or None when the family isn't console-worthy."""
+    from core.runtime import wire
+    kind = str(ev.get("kind") or "")
+    family = kind.split(".", 1)[0]
+    category = _FAMILY_CATEGORY.get(family)
+    if category is None:
+        return None
+    tail = kind.split(".", 1)[1] if "." in kind else ""
+    severity = ("error" if any(m in tail for m in _ERROR_MARKS)
+                else "warn" if any(m in tail for m in _WARN_MARKS)
+                else "info")
+    wall = ev.get("wall_s")
+    exit_code = ev.get("exit_code")
+    summary = " · ".join(
+        str(v) for v in (ev.get("step"), ev.get("note"), ev.get("src")) if v) or None
+    detail = {k: v for k, v in ev.items()
+              if k not in ("kind", "site") and v is not None} or None
+    fields = {
+        "severity": severity,
+        "site": str(ev["site"]) if ev.get("site") else None,
+        "summary": summary,
+        "dur_ms": int(float(wall) * 1000) if isinstance(wall, (int, float)) else None,
+        "bytes": ev.get("bytes_total") if isinstance(ev.get("bytes_total"), int) else None,
+        "status": str(exit_code) if exit_code is not None else None,
+        "ref": str(ev["job_id"]) if ev.get("job_id") else None,
+        "detail": detail,
+    }
+    return wire.console(category=category, verb=kind,
+                        **{k: v for k, v in fields.items() if v is not None})
+
+
 def wire_event_relay() -> bool:
-    """Relay weft's site lifecycle events (bootstrap.step narration,
-    site.registered/unregistered/probed_deep) onto the notification bus as
-    `compute` events — the tab's live-refresh signal. Called from lifespan
-    right after the substrate configures; False when offline."""
+    """Relay weft's event feed onto the notification bus. Two consumers, two
+    envelopes: bootstrap./site. kinds keep the legacy `compute` event (the
+    Settings → Compute tab's live-refresh contract), and every mapped family
+    ALSO lands as a structured `console` event (the Console drawer's feed).
+    Called from lifespan right after the substrate configures; False when
+    offline."""
     from core.compute.adapter import get_compute
+    from core.runtime import notifications
     try:
         comp = get_compute()
     except ComputeError:
@@ -61,10 +115,12 @@ def wire_event_relay() -> bool:
 
     def _cb(ev: dict) -> None:  # runs on weft's emitting thread
         kind = str(ev.get("kind") or "")
-        if not kind.startswith(("bootstrap.", "site.")):
-            return
-        _broadcast(str(ev.get("site") or ""), kind,
-                   step=ev.get("step"), note=ev.get("note"))
+        if kind.startswith(("bootstrap.", "site.")):
+            _broadcast(str(ev.get("site") or ""), kind,
+                       step=ev.get("step"), note=ev.get("note"))
+        payload = console_event_for(ev)
+        if payload is not None:
+            notifications.broadcast(payload)
 
     comp.subscribe_events(_cb)
     return True

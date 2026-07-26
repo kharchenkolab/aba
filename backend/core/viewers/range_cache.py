@@ -32,6 +32,7 @@ import base64
 import json
 import os
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from typing import Optional
@@ -334,16 +335,25 @@ def _prefetch_siblings(pid: str, entry: dict, store_key: str,
             if _safe_rel(g) == g and not os.path.isfile(os.path.join(croot, g))]
     if not want:
         return
+    t0 = time.monotonic()
     try:
         reply = call([to_remote(r) for r in want])
     except TypeError:
         raise _BatchUnsupported()
+    warmed = total = 0
     for rrel, ent in (reply.get("files") or {}).items():
         if not isinstance(ent, dict) or ent.get("error"):
             continue                          # a failed guess is free
-        _install_bytes(os.path.join(croot, from_remote(rrel)),
-                       base64.b64decode(ent.get("bytes_b64") or ""))
+        data = base64.b64decode(ent.get("bytes_b64") or "")
+        _install_bytes(os.path.join(croot, from_remote(rrel)), data)
+        warmed += 1
+        total += len(data)
     _sweep_to_cap(croot)
+    if warmed:
+        from core.runtime import obs
+        obs.emit("data", "prefetch batch", site=site,
+                 summary=f"{warmed}/{len(want)} siblings warmed",
+                 bytes=total, dur_ms=int((time.monotonic() - t0) * 1000))
 
 
 def _install_bytes(dest: str, data: bytes) -> None:
@@ -391,10 +401,12 @@ def _fetch_and_cache(entry: dict, safe: str, cache_file: str,
     a reader never sees a half-written chunk and the content is identical
     either way."""
     from core.compute.errors import ComputeError
+    from core.runtime import obs
     read = _chunk_reader(entry, safe)
     os.makedirs(os.path.dirname(cache_file) or ".", exist_ok=True)
     tmp = f"{cache_file}.partial.{os.getpid()}.{uuid.uuid4().hex}"
     offset = 0
+    t0 = time.monotonic()
     try:
         with open(tmp, "wb") as fh:
             while True:
@@ -416,6 +428,9 @@ def _fetch_and_cache(entry: dict, safe: str, cache_file: str,
         if e.code == "task.invalid":
             return ChunkOutcome("missing", http=404,
                                 detail="invalid chunk path", site=site)
+        obs.emit("data", "chunk backhaul", site=site, severity="error",
+                 summary=safe, status=e.code,
+                 dur_ms=int((time.monotonic() - t0) * 1000))
         return ChunkOutcome("error", http=502, site=site,
                             detail=f"chunk backhaul failed on {site}: {e.code}")
     except OSError:
@@ -427,9 +442,16 @@ def _fetch_and_cache(entry: dict, safe: str, cache_file: str,
                             detail="chunk cache install failed")
     except Exception as e:  # noqa: BLE001 — verb absent / adapter down → 502
         _discard(tmp)
+        obs.emit("data", "chunk backhaul", site=site, severity="error",
+                 summary=safe, status=type(e).__name__,
+                 dur_ms=int((time.monotonic() - t0) * 1000))
         return ChunkOutcome("error", http=502, site=site,
                             detail=f"chunk backhaul unavailable on {site}: {type(e).__name__}")
     _sweep_to_cap(os.path.dirname(cache_file), keep=cache_file)
+    # `missing` outcomes deliberately do NOT emit: wrong-guess 404 probes are
+    # normal viewer traffic (hundreds, ~ms each) and would flood the feed.
+    obs.emit("data", "chunk backhaul", site=site, summary=safe, status="ok",
+             bytes=offset, dur_ms=int((time.monotonic() - t0) * 1000))
     return ChunkOutcome("ok", path=cache_file,
                         immutable=entry.get("ref") is not None)
 

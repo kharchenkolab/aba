@@ -2,18 +2,19 @@
  * Drawer — the right-rail (i) panel, now tabbed for observability:
  *   • Context — the structured Manifest the backend assembles each turn
  *     (what the agent sees). The original, default-useful view.
- *   • Console — a live tail of the SSE event stream with a detail-level
- *     selector (Progress / Tools / Debug). A dev/test X-ray; client-side view
- *     over events we already stream (no extra server cost).
+ *   • Console — the structured system event feed (platform/Console.tsx):
+ *     agent turns, tool calls, substrate activity, faceted + dense.
  *   • Jobs — background jobs (run_python background=true) and their status.
  *
  * Casual users get immediate-thread progress in the chat; this panel is the
- * deeper view, off the default path. Read-only.
+ * deeper view, off the default path. Read-only. Width is drag-resizable on
+ * the left edge (persisted).
  */
 import React, { useEffect, useRef, useState } from 'react'
-import type { ManifestSnapshot, LogEntry, JobInfo } from '../types'
+import type { ManifestSnapshot, JobInfo } from '../types'
 import SearchInput from '../components/SearchInput'
 import ConfirmDialog from '../components/ConfirmDialog'
+import Console from './Console'
 import './Drawer.css'
 
 type Tab = 'console' | 'jobs' | 'context' | 'env'
@@ -22,16 +23,47 @@ interface Props {
   manifest: ManifestSnapshot | null
   focusEntityId: string
   threadId: string | null
-  eventLog?: LogEntry[]
   jobs?: JobInfo[]
   onClose?: () => void
 }
 
-export default function Drawer({ manifest, focusEntityId, threadId, eventLog = [], jobs = [], onClose }: Props) {
+const WIDTH_KEY = 'aba.drawer.w'
+const MIN_W = 280
+const MAX_W = 720
+
+export default function Drawer({ manifest, focusEntityId, threadId, jobs = [], onClose }: Props) {
   // Remember the last-selected tab per user: devs land on Console/Jobs,
   // everyone else stays on Context (the broadly-useful default).
   const [tab, setTab] = useState<Tab>(() => (localStorage.getItem('aba.drawer.tab') as Tab) || 'console')
   useEffect(() => { localStorage.setItem('aba.drawer.tab', tab) }, [tab])
+
+  // Drag-resizable width, persisted. The handle sits on the drawer's left
+  // border; dragging left widens (the drawer grows toward the content).
+  const [width, setWidth] = useState<number>(() => {
+    const w = Number(localStorage.getItem(WIDTH_KEY))
+    return Number.isFinite(w) && w >= MIN_W && w <= MAX_W ? w : 320
+  })
+  const drag = useRef<{ x: number; w: number } | null>(null)
+  useEffect(() => {
+    const move = (e: MouseEvent) => {
+      if (!drag.current) return
+      const w = drag.current.w + (drag.current.x - e.clientX)
+      setWidth(Math.min(MAX_W, Math.max(MIN_W, w)))
+    }
+    const up = () => {
+      if (!drag.current) return
+      drag.current = null
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      setWidth(w => { localStorage.setItem(WIDTH_KEY, String(w)); return w })
+    }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
+    return () => {
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', up)
+    }
+  }, [])
 
   const tabs: Tab[] = ['console', 'context', 'env', 'jobs']
   const label = (t: Tab) =>
@@ -40,7 +72,14 @@ export default function Drawer({ manifest, focusEntityId, threadId, eventLog = [
       : t === 'env' ? 'Env' : 'Context'
 
   return (
-    <aside className="drawer">
+    <aside className="drawer" style={{ width, maxWidth: MAX_W }}>
+      <div className="drawer__resize" title="Drag to resize"
+        onMouseDown={e => {
+          e.preventDefault()
+          drag.current = { x: e.clientX, w: width }
+          document.body.style.cursor = 'col-resize'
+          document.body.style.userSelect = 'none'
+        }} />
       <header className="drawer__head">
         <div className="drawer__tabs" role="tablist">
           {tabs.map(t => (
@@ -54,7 +93,7 @@ export default function Drawer({ manifest, focusEntityId, threadId, eventLog = [
       </header>
       <div className="drawer__body">
         {tab === 'context' && <ContextTab manifest={manifest} focusEntityId={focusEntityId} threadId={threadId} />}
-        {tab === 'console' && <ConsoleTab log={eventLog} />}
+        {tab === 'console' && <Console />}
         {tab === 'env' && <EnvTab />}
         {tab === 'jobs' && <JobsTab jobs={jobs} />}
       </div>
@@ -405,46 +444,6 @@ function HistMsg({ idx, msg, q }: { idx: number; msg: { role: string; content: u
         {q ? highlight(json, q) : json}
       </pre>
     </details>
-  )
-}
-
-// ---------- Console tab (SSE event tail + detail level) ----------
-const LEVELS: { v: 1 | 2 | 3; label: string }[] = [
-  { v: 1, label: 'Progress' }, { v: 2, label: 'Tools' }, { v: 3, label: 'Debug' },
-]
-function ConsoleTab({ log }: { log: LogEntry[] }) {
-  const [level, setLevel] = useState<1 | 2 | 3>(
-    () => (Number(localStorage.getItem('aba.console.level')) as 1 | 2 | 3) || 3)
-  useEffect(() => { localStorage.setItem('aba.console.level', String(level)) }, [level])
-  const endRef = useRef<HTMLDivElement>(null)
-  const shown = log.filter(e => e.level <= level)
-  useEffect(() => { endRef.current?.scrollIntoView({ block: 'end' }) }, [shown.length])
-
-  return (
-    <div className="console">
-      <div className="console__bar">
-        <span className="console__bar-label">detail</span>
-        {LEVELS.map(l => (
-          <button key={l.v} className={`console__lvl ${level === l.v ? 'is-active' : ''}`} onClick={() => setLevel(l.v)}>
-            {l.label}
-          </button>
-        ))}
-      </div>
-      {shown.length === 0
-        ? <div className="drawer__empty">No activity yet. Run a turn to see the agent's events.</div>
-        : (
-          <div className="console__log">
-            {shown.map((e, i) => (
-              <div key={i} className={`console__row console__row--${e.type}`}>
-                <span className="console__t">{fmtTime(e.t)}</span>
-                <span className="console__type">{e.type}</span>
-                <span className="console__label">{e.label}</span>
-              </div>
-            ))}
-            <div ref={endRef} />
-          </div>
-        )}
-    </div>
   )
 }
 

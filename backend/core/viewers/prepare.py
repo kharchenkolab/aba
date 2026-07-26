@@ -70,6 +70,8 @@ def start(runner: Runner, label: Optional[str] = None) -> str:
                 j.phase = p
 
     def _work() -> None:
+        from core.runtime import obs
+        t0 = time.monotonic()
         try:
             res = runner(_set_phase)
             with _LOCK:
@@ -79,12 +81,17 @@ def start(runner: Runner, label: Optional[str] = None) -> str:
                     j.set_local_storage = getattr(res, "set_local_storage", None)
                     j.label = getattr(res, "label", None) or j.label
                     j.phase, j.status, j.ended_at = "Ready", "ready", time.time()
+            obs.emit("serve", "viewer prepare", status="ok", summary=label,
+                     ref=jid, dur_ms=int((time.monotonic() - t0) * 1000))
         except Exception as e:  # noqa: BLE001
             with _LOCK:
                 j = _JOBS.get(jid)
                 if j:
                     j.error = str(e) or e.__class__.__name__
                     j.phase, j.status, j.ended_at = "Failed", "error", time.time()
+            obs.emit("serve", "viewer prepare", severity="error", summary=label,
+                     status=str(e) or e.__class__.__name__, ref=jid,
+                     dur_ms=int((time.monotonic() - t0) * 1000))
 
     # Run the job under a COPY of the caller's context: contextvars do not
     # propagate into raw threads, so without this the worker sees the DEFAULT

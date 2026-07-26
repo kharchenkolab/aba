@@ -112,6 +112,21 @@ this doc owns only its display. The [`provenance.md`](provenance.md) sibling own
 of the Provenance panel (`FocusCanvas.tsx:549`); the entity graph it reads is owned by
 [`entity-model.md`](entity-model.md).
 
+**Observability: the Console feed.** The ⓘ Drawer's Console tab renders one structured
+timeline over BOTH wire channels (`core/runtime/wire.py`): per-turn SSE events fold in via
+`noteTurnEvent` (`useChat.ts`), out-of-band `/api/notifications` events via
+`noteNotification` (`App.tsx`) — including the `console` envelope (`{category, verb, site,
+severity, summary, dur_ms, bytes, status, ref, detail}`) that carries substrate activity
+(transfers, jobs, kernels, env ops, chunk backhauls) relayed from weft's event feed
+(`core/web/routers/compute.py:console_event_for`) and platform instrumentation
+(`core/runtime/obs.py:emit`). The store (`frontend/src/console.ts`) is a framework-free
+ring-capped singleton: a tool call is ONE row updated in place (start opens it live,
+progress/chunk ticks fold into counters, result closes it with status + duration); rendering
+(`platform/Console.tsx`) is facet-filtered (category × site × errors-only × text), has no
+time column (hover for timestamp; faint dividers mark >60s gaps), and colors sites by stable
+hue. The legacy `compute` notify event stays as the Settings→Compute tab's refresh signal;
+the console deliberately skips it (the relay double-publishes those kinds as `console`).
+
 ## Deixis & the uniform primitives
 
 **The URL is the deixis state.** `useUrlState` (`App.tsx:119`) makes project / thread /
@@ -149,6 +164,8 @@ domain state in the client.
 | `frontend/src/lib/{api.ts,flags.ts}` | typed API client seam + `ApiError`; frontend feature flags |
 | `frontend/src/oodBase.ts` | the global `fetch`/`EventSource`/img-`src` monkeypatch — base-prefix routing |
 | `frontend/src/useChat.ts` · `lib/sseReader.ts` | chat turn state; sends `focus_entity_id`; consumes the SSE manifest (first event) |
+| `frontend/src/console.ts` · `platform/Console.tsx` | the Console feed store (merge, ring cap, tool-call grouping, facet filter — `console.test.ts`) + its dense faceted rendering (`Console.render.test.tsx`) |
+| `core/runtime/obs.py` · `core/web/routers/compute.py:console_event_for` | `console`-event emit helper (never raises) + the substrate-event→envelope mapping (`tests/test_console_events.py`) |
 | `core/viewers/registry.py` · `main.py:2403` | backend viewer registry + `/api/viewers/registry` wire |
 | `core/entity_types/registry.py` · `main.py:489` | declarative type registry + `/api/entity-types` catalog |
 | `core/manifest/assembler.py` · `content/bio/cards/*.py` | per-type card builders (manifest projection — see `context-and-memory.md`) |
