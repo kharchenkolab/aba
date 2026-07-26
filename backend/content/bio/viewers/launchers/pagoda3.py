@@ -417,6 +417,40 @@ def _resolve_source(node: dict, pid: str, set_phase=None) -> Path:
     return p            # nonexistent → caller surfaces a clean error
 
 
+def _source_not_found(node: dict) -> FileNotFoundError:
+    """The terminal error for a source that missed EVERY resolver tier. Honesty
+    bridge: when the node is ENTITY-backed and that entity's RECORDED facts say
+    the bytes are a by-reference REMOTE home (`dataset_location` — entity-level
+    facts only, no probe, no new resolution tier), the generic "source not
+    found" wording is a lie of omission — it fails the launch page's remote
+    regex, hiding the mirror lever that the entity facts prove WOULD work, and
+    contradicts the link-mint pre-flight (which reads the same recorded facts).
+    Found live: a by-reference remote dataset whose producing run was
+    unresolvable (run entity deleted, target-less exec, keeps forgotten) missed
+    the run-keyed remote raise in `_resolve_source` and fell through here. Same
+    error SHAPE as that raise ("lives on <site>") so the lever engages.
+    Run-keyed streaming deliberately can't serve this class (that needs the
+    substrate's registered-data addressing arm — separate work). Non-entity /
+    non-by-reference / local sources keep the EXACT generic wording
+    (ceiling-guarded)."""
+    name = node.get("name") or node.get("path")
+    eid = node.get("entity_id")
+    if eid:
+        try:
+            from core.graph.entities import get_entity
+            from content.bio.data_location import dataset_location
+            loc = dataset_location(get_entity(eid) or {})
+            if loc.get("remote") and loc.get("by_reference"):
+                return FileNotFoundError(
+                    f"pagoda3: {name!r} lives on {loc['site']} — it isn't on "
+                    f"this machine, and no run placement can fetch it from "
+                    f"here. Mirror the dataset locally (its card has Mirror "
+                    f"locally), then reopen.")
+        except Exception:  # noqa: BLE001 — the bridge must never mask the plain error
+            pass
+    return FileNotFoundError(f"pagoda3: source not found for {name!r}")
+
+
 def launch(node: dict, ctx: dict) -> LaunchResult:
     from core.config import project_root
     from core.projects import current_project_id
@@ -456,8 +490,7 @@ def launch(node: dict, ctx: dict) -> LaunchResult:
 
     src = _resolve_source(node, pid, set_phase)
     if not src.exists():
-        raise FileNotFoundError(
-            f"pagoda3: source not found for {node.get('name') or node.get('path')!r}")
+        raise _source_not_found(node)   # honesty bridge: entity-remote facts → remote wording
 
     root = project_root(pid)
     cache_dir = root / "pagoda3"

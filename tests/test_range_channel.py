@@ -695,6 +695,116 @@ def test_register_remote_stream_registers_and_returns_key(monkeypatch):
     assert e["base_rel"] == "output/foo.store"
 
 
+# ── terminal-error honesty bridge (entity-remote facts → remote wording) ─────
+# The launch page's mirror lever keys on THIS regex over the error text plus an
+# entity id (core/viewers/launch_page.py). The bridge's whole point is matching
+# it, so the guard tests against the same expression — wording drift that
+# un-matches the lever fails here.
+_REMOTEISH = __import__("re").compile(
+    r"lives on|bring it home|not on this machine|remote site", __import__("re").I)
+
+
+def _patch_launch_shell(monkeypatch, tmp_path, *, resolved):
+    """Wire `launch()` up to its terminal-error site: dist present (no module
+    install), streaming registration a miss, `_resolve_source` returning
+    `resolved` — so the test exercises the REAL failure branch in launch()."""
+    import content.bio.viewers.launchers.pagoda3 as p3
+    dist = tmp_path / "dist"
+    dist.mkdir(parents=True, exist_ok=True)
+    (dist / "index.html").write_text("x")
+    monkeypatch.setattr(p3, "pagoda3_dist_path", lambda: dist)
+    monkeypatch.setattr(p3, "_register_remote_stream", lambda node, pid: None)
+    monkeypatch.setattr(p3, "_resolve_source",
+                        lambda node, pid, sp=None: Path(resolved))
+    return p3
+
+
+def test_launch_terminal_error_names_home_site_for_by_ref_remote(monkeypatch, tmp_path):
+    # THE bridge case: entity-backed, by-reference remote home, every resolver
+    # tier missed (run unresolvable) → the error must match the launch page's
+    # remote regex AND name the entity's home site, so the mirror lever engages.
+    p3 = _patch_launch_shell(monkeypatch, tmp_path, resolved="/nonexistent/x/data.store")
+    monkeypatch.setattr("core.graph.entities.get_entity", lambda eid: {
+        "id": eid, "metadata": {"home": {"site": "siteA", "path": "/r/data.store"},
+                                "by_reference": True}})
+    try:
+        p3.launch({"entity_id": "ds_1", "name": "data.store",
+                   "artifact_path": "/r/data.store"}, {"project_id": "brg1"})
+        assert False, "expected FileNotFoundError"
+    except FileNotFoundError as ex:
+        msg = str(ex)
+    assert _REMOTEISH.search(msg), f"error must engage the mirror lever: {msg!r}"
+    assert "siteA" in msg, msg
+    assert "source not found" not in msg, msg
+
+
+def test_launch_terminal_error_generic_shape_ceilings(monkeypatch, tmp_path):
+    # CEILING (a): a non-by-reference entity and a no-entity node keep the EXACT
+    # generic wording (byte-identical to the pre-bridge raise).
+    p3 = _patch_launch_shell(monkeypatch, tmp_path, resolved="/nonexistent/x/data.store")
+    # non-by-reference entity (local, workspace-managed)
+    monkeypatch.setattr("core.graph.entities.get_entity",
+                        lambda eid: {"id": eid, "metadata": {}})
+    for node in ({"entity_id": "ds_2", "name": "data.store"},   # entity, not by-ref
+                 {"name": "data.store"}):                        # no entity at all
+        try:
+            p3.launch(node, {"project_id": "brg2"})
+            assert False, "expected FileNotFoundError"
+        except FileNotFoundError as ex:
+            assert str(ex) == "pagoda3: source not found for 'data.store'", str(ex)
+    # by-reference but LOCAL home (site unset ⇒ local): generic too; and the
+    # entity itself GONE (hard-deleted alongside the run): generic, never a raise
+    for ent in ({"id": "x", "metadata": {"by_reference": True}}, None):
+        monkeypatch.setattr("core.graph.entities.get_entity",
+                            lambda eid, _e=ent: _e)
+        try:
+            p3.launch({"entity_id": "ds_3", "name": "data.store"}, {"project_id": "brg2"})
+            assert False, "expected FileNotFoundError"
+        except FileNotFoundError as ex:
+            assert str(ex) == "pagoda3: source not found for 'data.store'", str(ex)
+
+
+def test_by_ref_remote_with_local_mirror_resolves_locally(monkeypatch, tmp_path):
+    # CEILING (b): a by-reference dataset WITH a working local mirror resolves
+    # through the local tiers exactly as today — the bridge only rewords the
+    # TERMINAL error of an already-failed resolution, it adds no tier. ARMED:
+    # get_entity is a sentinel; a local hit must not even consult the entity.
+    import content.bio.viewers.launchers.pagoda3 as p3
+    store = tmp_path / "mirror" / "data.store"
+    store.mkdir(parents=True)
+    (store / "meta.json").write_text("{}")
+    seen = {"entity": False}
+
+    def _sentinel(eid):
+        seen["entity"] = True
+        return {"id": eid, "metadata": {"home": {"site": "siteA", "path": "/r/d"},
+                                        "by_reference": True}}
+    monkeypatch.setattr("core.graph.entities.get_entity", _sentinel)
+    src = p3._resolve_source({"entity_id": "ds_4", "name": "data.store",
+                              "artifact_path": str(store)}, "brg3")
+    assert src == store                       # local mirror wins, as today
+    assert seen["entity"] is False, "a local hit must not consult entity facts"
+
+
+def test_run_resolvable_remote_raise_unchanged(monkeypatch):
+    # The run-keyed remote raise (resolve_run_store miss + run_output_site
+    # naming a remote site) keeps its "bring it home" shape — the bridge sits
+    # BEHIND it, at the terminal error only.
+    import content.bio.viewers.launchers.pagoda3 as p3
+    monkeypatch.setattr("content.bio.project_locate.locate_project_files",
+                        lambda name, limit=6: {"matches": []})
+    monkeypatch.setattr("content.bio.lifecycle.runs.resolve_run_store",
+                        lambda rid, name, **k: None)
+    monkeypatch.setattr("content.bio.lifecycle.runs.run_output_site",
+                        lambda rid, name: "siteB")
+    try:
+        p3._resolve_source({"run_id": "run_1", "name": "data.store"}, "brg4")
+        assert False, "expected FileNotFoundError"
+    except FileNotFoundError as ex:
+        msg = str(ex)
+    assert "lives on siteB" in msg and "bring it home" in msg, msg
+
+
 _TESTS = [
     test_safe_rel_accepts_normal_chunk,
     test_safe_rel_rejects_traversal_absolute_empty,
@@ -732,6 +842,10 @@ _TESTS = [
     test_note_helpers_called_only_from_shared_decision,
     test_register_remote_stream_degrades_when_verb_absent,
     test_register_remote_stream_registers_and_returns_key,
+    test_launch_terminal_error_names_home_site_for_by_ref_remote,
+    test_launch_terminal_error_generic_shape_ceilings,
+    test_by_ref_remote_with_local_mirror_resolves_locally,
+    test_run_resolvable_remote_raise_unchanged,
 ]
 
 
@@ -767,7 +881,12 @@ def _standalone() -> int:
     for t in _TESTS:
         mp = _MP()
         try:
-            kw = {"monkeypatch": mp} if "monkeypatch" in inspect.signature(t).parameters else {}
+            params = inspect.signature(t).parameters
+            kw = {}
+            if "monkeypatch" in params:
+                kw["monkeypatch"] = mp
+            if "tmp_path" in params:
+                kw["tmp_path"] = Path(tempfile.mkdtemp(prefix="aba_range_tp_"))
             t(**kw)
             print(f"  [PASS] {t.__name__}")
         except Exception as e:  # noqa: BLE001
