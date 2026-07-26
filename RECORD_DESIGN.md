@@ -685,6 +685,17 @@ silent drop:
   present evidence renders as an honest state — *"committed direction ·
   evidence 0 of 4 planned analyses"* — never as thin prose pretending
   otherwise.
+- **Two ladders, one page: prose tracks evidence; structure may track
+  intent.** At creation or significant promotion of a direction, the
+  agent writes only as much *prose* as the present evidence carries —
+  the evidence floor of §14.4 applied to depth, not just placement. But
+  it may sketch the *shape* of the expansion well beyond that: sub-stubs
+  with one-line charges, planned-work items, open questions. The sketch
+  wears the future tense explicitly — stub faces, `draft` badges, todo
+  marks, never blank headings posing as sections — and collectively it
+  reads as the section's **draft plan**, offered like any proposal.
+  Ratifying the skeleton is what turns a suggested shape into committed
+  direction, and the pre-consent below then applies to filling it.
 - **Planned-work items are first-class**, with a lifecycle: proposed →
   planned (ratified) → taken up (▷ its session) → produced (the run /
   finding) → absorbed (an evidence chip in the grown section). They live
