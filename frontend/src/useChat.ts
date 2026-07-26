@@ -851,16 +851,35 @@ export function useChat(
         // Aborted by a thread/project switch, or superseded — drop it silently
         // so nothing leaks into the new thread.
         if (ac.signal.aborted || !live()) return
-        setStreamMsg(null)
         setStreaming(false)
+        // COMMIT the work before reporting the failure. The live turn renders
+        // from `streamMsg`, so clearing it (as this used to, before appending
+        // the error) threw away everything the turn had produced — text, plots,
+        // tool steps, the lot. A backend restart mid-turn therefore left the
+        // user staring at their own opening message and a bare "network error",
+        // with a long multi-step analysis apparently erased (live 2026-07-26).
+        // The same shape as `done`: fold streamingBlocks into `messages`, then
+        // append the error AFTER it so the failure reads as the end of the turn
+        // rather than a replacement for it. `retryLast` (already wired to the
+        // error surface) continues from here.
         setMessages(prev => [
           ...prev,
+          ...(streamingBlocks.length
+            ? [{ id: assistantId, role: 'assistant' as const,
+                 blocks: [...streamingBlocks] }]
+            : []),
           {
             id: `err-${Date.now()}`,
             role: 'assistant',
             blocks: [{ type: 'error', text: "Couldn't reach the server.", detail: String(e) }],
           },
         ])
+        setStreamMsg(null)
+        // Deliberately NOT re-reading the thread here. `loadMessages` REPLACES
+        // `messages`, so a reload would wipe the error we just appended and
+        // could double-render the partial turn. The commit above already keeps
+        // the record whole for this view, and the server's copy is what a manual
+        // reload or the next turn will read anyway.
       }
     },
     // projectId MUST be in deps — without it the closure captures whatever
