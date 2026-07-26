@@ -874,7 +874,29 @@ def _run_remote_kernel(input_: dict, ctx: dict | None, project_id: str,
             env_name=env_name, site=site)
     except KernelCapacityError as cap:
         return {"error": str(cap), "at_capacity": True}
-    except Exception as e:  # noqa: BLE001 — no session on the site → one-shot lane
+    except Exception as e:  # noqa: BLE001 — classified: env failure vs no session
+        from core.compute.errors import describe as _describe, is_env_resolution_failure
+        if is_env_resolution_failure(e):
+            # The env could not be resolved — NOT a "no kernel here" condition.
+            # Falling through to the one-shot lane used to end with the step
+            # running on the node's own interpreter (that lane swallowed the
+            # same failure), so the agent got a silently different stack. Say
+            # the cause instead; the one-shot lane would only fail identically.
+            print(f"[run_{lang}] env unresolved for {site} "
+                  f"({getattr(e, 'code', type(e).__name__)}) — refusing to "
+                  f"relocate the step to the node interpreter", flush=True)
+            return {"status": "error", "site": site,
+                    "error": getattr(e, "code", "env.unresolved"),
+                    "note": (f"The project's {lang} environment could not be "
+                             f"resolved for {site}: {_describe(e, limit=400)} "
+                             f"Nothing was run. This step was NOT relocated to "
+                             f"the node's own interpreter — that would silently "
+                             f"swap the project's environment for an arbitrary "
+                             f"one. Levers: make_isolated_env(...) + env=<name>; "
+                             f"env='system' for the node's bare interpreter on "
+                             f"purpose; or repair the project environment if an "
+                             f"install made it unsolvable."),
+                    **({"hints": e.hints} if getattr(e, "hints", None) else {})}
         print(f"[run_{lang}] remote kernel unavailable on {site} "
               f"({type(e).__name__}: {e}); falling back to one-shot", flush=True)
         return None

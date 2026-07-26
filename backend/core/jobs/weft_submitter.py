@@ -23,6 +23,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+from core.compute.errors import ComputeError, describe
 from core.data.workspace import scratch_dir
 
 _TERMINAL = {"DONE", "FAILED", "CANCELLED"}
@@ -350,16 +351,50 @@ class WeftSubmitter:
             from core.compute import named_envs
             row = named_envs.resolve(str(pid), params["env"])
             if row is None:
-                print(f"[jobs.weft] unknown isolated env {params['env']!r} — "
-                      f"detached job runs on the node's system runtime")
-                return None, None
+                # A named env the caller asked for and we cannot find is a
+                # REFUSAL, not a licence to run somewhere else (this used to
+                # print and quietly fall through to the node's interpreter).
+                raise ComputeError(
+                    "env.unknown",
+                    f"no isolated env {params['env']!r} in project {pid}",
+                    stage="aba",
+                    hints={"fix": f"create it with make_isolated_env("
+                                  f"name={params['env']!r}), or omit env= to "
+                                  f"use the project environment"})
             return row["env_id"], params["env"]
+        from core.compute import base_env, project_env
+        from core.compute.errors import is_env_resolution_failure
         try:
-            from core.compute import base_env, project_env
             base_env.require(lang)
             return project_env.snapshot(str(pid), lang), None
-        except Exception:  # noqa: BLE001 — env-less, honestly graded
-            return None, None
+        except Exception as e:  # noqa: BLE001 — classified, never degraded
+            if not is_env_resolution_failure(e):
+                raise
+            # The declared env could not be resolved. FAIL — do not relocate the
+            # step to the node's PATH interpreter (see errors.py policy note).
+            # weft's diagnosis (solver_message / stderr_tail) rides along, and
+            # since weft now writes solve/<hash>/solve.err plus a solve event,
+            # the cause survives even if a future caller swallows this.
+            raise ComputeError(
+                "env.unresolved",
+                f"the project's {lang} environment could not be resolved for a "
+                f"step on site {self.site!r}: {describe(e, limit=400)}",
+                stage="aba",
+                hints={
+                    "cause": getattr(e, "code", type(e).__name__),
+                    **({"substrate_hints": e.hints} if getattr(e, "hints", None) else {}),
+                    "why_not_degraded": "running this on the node's own "
+                                        "interpreter would silently swap the "
+                                        "project's environment for an "
+                                        "arbitrary one",
+                    "levers": [
+                        "make_isolated_env(...) + env=<name> — an env you control",
+                        "env='system' — deliberately the node's bare "
+                        "interpreter (no packages)",
+                        "repair the project environment if an addition made it "
+                        "unsolvable (inspect_env shows the conflict)",
+                    ],
+                }) from e
 
     def _build_detached_task(self, job: dict, params: dict,
                              env_id: Optional[str],

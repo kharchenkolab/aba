@@ -110,8 +110,29 @@ def inspect_env(input_: dict, ctx: dict | None = None) -> dict:
                 "created_at": _row.get("created_at"),
                 "realizations": _reals,
             })
-        return {"status": "ok", "scope": "overview", "language": "r" if is_r else "python",
-                "tiers": ov, "named_envs": catalog}
+        # Can the default session still be FROZEN? Every remote/background step
+        # depends on it (a snapshot is how the default env travels to another
+        # machine), and nothing used to ask until a step needed it — so a
+        # project could sit with a broken remote lane for hours. Reported here
+        # so the state is VISIBLE, with the repair lever named.
+        _health = None
+        if pid:
+            from core.compute import project_env as _pe
+            try:
+                _health = _pe.snapshot_health(str(pid), "r" if is_r else "python")
+            except Exception:  # noqa: BLE001 — diagnosis must not fail the tool
+                _health = None
+        out = {"status": "ok", "scope": "overview",
+               "language": "r" if is_r else "python",
+               "tiers": ov, "named_envs": catalog}
+        if _health is not None:
+            out["default_session"] = _health
+            if _health.get("ok") is False:
+                out["warning"] = (
+                    "The project's default environment cannot be FROZEN, so "
+                    "remote and background steps in this project cannot run in "
+                    "it. See default_session.error and default_session.fix.")
+        return out
 
     if is_r:
         # Probe the runtime bare run_r actually uses: the project's ACTIVE R
@@ -1920,8 +1941,18 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
             # (session_install) — the running kernel imports it after the cache
             # invalidation below (no restart); the next background job's snapshot
             # picks it up as a frozen EnvID.
-            _penv.install(str(_projects.current() or "_none"), "python",
-                          list(prov["pip"]), eco="pypi")
+            # solve_at_add: this is the AGENT-FACING install, so correctness
+            # beats the seconds a full solve costs. Without it the substrate
+            # defers the conflict check to snapshot time, where a
+            # base-contradicting leaf has already shadowed a pinned dep in the
+            # pip overlay — the install reports ready, and the project's remote
+            # python lane is left un-snapshottable (live incident 2026-07-26).
+            # With it, such a leaf raises env.solve_conflict HERE, nothing
+            # installed or recorded, and _is_constraint_conflict routes it to an
+            # isolated env below.
+            _res = _penv.install(str(_projects.current() or "_none"), "python",
+                                 list(prov["pip"]), eco="pypi",
+                                 solve_at_add=True)
         except Exception as e:  # noqa: BLE001
             # Solve-driven placement (env_refactor.md): if the constrained install
             # is UNSAT against the pinned base (the package needs versions the
@@ -1960,6 +1991,15 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
                                  f"or a missing system library. NOT marking ready."),
                         "detail": _detail}
         note = "Installed into the project's weft session; importable from run_python now."
+        # The overlay shadowed base-pinned packages: the install stands, but the
+        # agent must know the stack it is now running is NOT the base's pinned
+        # one (this is the signal that used to be dropped entirely).
+        _shadow = (_res or {}).get("shadows_base") if isinstance(_res, dict) else None
+        if _shadow:
+            note += (f" NOTE: this add SHADOWS base-pinned package(s) in the "
+                     f"session overlay ({_shadow}) — versions differ from the "
+                     f"pinned base. If results depend on those versions, use "
+                     f"make_isolated_env instead.")
         if imp:
             note += f" Import it with `import {imp}`."
         else:

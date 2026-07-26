@@ -347,11 +347,25 @@ def _check_envelope_soft(env: dict) -> list:
 
 
 def install(pid: str, language: str, specs: list[str], *,
-            eco: str = "pypi", **opts) -> dict:
+            eco: str = "pypi", solve_at_add: Optional[bool] = None,
+            **opts) -> dict:
     """LIVE install into the project's default session (the running kernel
     sees it after an importlib cache invalidation — no restart). Recorded in
     the registry so a rebuilt session replays it, and the snapshot goes dirty
     (the next background job/export mints a fresh EnvID).
+
+    `solve_at_add=True` pulls the substrate's DEFERRED conflict check forward
+    (weft `fast=False`): the pypi lane normally skips the manifest re-solve and
+    leaves the check to the snapshot's own solve, so a leaf that contradicts the
+    base's pins installs "successfully" into the pip overlay — shadowing a
+    pinned dep — and only fails later, when the snapshot is minted. Asking for
+    the solve HERE means such a leaf raises `env.solve_conflict` at add time,
+    with nothing installed and nothing recorded, so the caller can route it to
+    an isolated env instead of leaving the project's default session
+    un-snapshottable. Costs one full solve (seconds) — right for agent-facing
+    capability installs, wrong for bulk internal adds. Identity is
+    content-addressed, so the validating solve mints the same EnvID the eventual
+    snapshot resolves to and the later snapshot hits the cached solve.
 
     `specs` speak the SUBSTRATE's spec vocabulary, not a reduced one: for
     eco='cran' that is plain names, `name ==X.Y.Z`, and `owner/repo@ref` git
@@ -377,10 +391,20 @@ def install(pid: str, language: str, specs: list[str], *,
     # that stay on session_install: extra opts the verb's tagged request
     # doesn't speak yet (cran_repos), and pre-verb substrates (no attribute).
     _verb = getattr(ad, "ensure_available", None) if not opts else None
+    _fast_kw = {} if solve_at_add is None else {"fast": not solve_at_add}
     if _verb is not None:
-        out = dict(named_envs._sync(
-            _verb({"session": s["session_id"]}, {eco: list(specs)},
-                  verify=_verify)) or {})
+        try:
+            out = dict(named_envs._sync(
+                _verb({"session": s["session_id"]}, {eco: list(specs)},
+                      verify=_verify, **_fast_kw)) or {})
+        except TypeError:
+            # pre-lever substrate: no fast= on the tagged verb. Degrade to the
+            # default lane — the conflict then surfaces at snapshot time, which
+            # is LOUD now (weft_submitter/_run_remote_kernel raise instead of
+            # relocating to the node interpreter), just later than we'd like.
+            out = dict(named_envs._sync(
+                _verb({"session": s["session_id"]}, {eco: list(specs)},
+                      verify=_verify)) or {})
         _problems = _check_envelope_soft(out)
         if _problems:
             # the pinned cross-repo contract, checked where the payload
@@ -394,10 +418,21 @@ def install(pid: str, language: str, specs: list[str], *,
                     for n in (a.get("resolved") or [])]
             if _res:
                 out["resolved"] = _res
+        # The overlay's base-shadow warning is the EARLIEST signal that a leaf
+        # contradicts the base's pins (one dropped warning is how a single pypi
+        # add silently made a project's remote python lane un-snapshottable —
+        # the pip overlay shadowed a conda-pinned dep and nothing said so until
+        # the snapshot's deferred solve, which was then swallowed). Flatten it
+        # so the agent-facing caller can say it out loud.
+        if "shadows_base" not in out:
+            _sh = [a["shadows_base"] for a in (out.get("attempts") or [])
+                   if a.get("shadows_base")]
+            if _sh:
+                out["shadows_base"] = _sh[0] if len(_sh) == 1 else _sh
     else:
         out = dict(named_envs._sync(
             ad.session_install(s["session_id"], **{eco: list(specs)},
-                               **opts,
+                               **opts, **_fast_kw,
                                **({"verify": _verify} if _verify else {}))) or {})
     row = get(pid, language)
     row["additions"].append({"eco": eco, "specs": list(specs),
@@ -625,6 +660,115 @@ def stop_all_sessions(pid: str) -> dict:
         except Exception as e:  # noqa: BLE001 — a dead session is already freed
             errors.append(f"{lang}/{sid}: {e}")
     return {"stopped": stopped, "errors": errors}
+
+
+def snapshot_health(pid: str, language: str) -> dict:
+    """Can this session still be FROZEN? — the question every remote/background
+    step silently depends on.
+
+    A session is snapshottable while its recorded additions still solve against
+    the base. One addition that contradicts the base's pins makes every future
+    snapshot fail, and since a snapshot is how the default env travels to
+    another machine, the project's whole remote lane goes with it. Nothing used
+    to ask this question until a step needed it (and the answer was then
+    swallowed), so a project could sit broken for hours.
+
+    Returns {ok, rev, at_rev, stale, additions, error?} — never raises."""
+    pid = str(pid)
+    row = get(pid, language) or {}
+    rev, at_rev = row.get("rev"), (row.get("snapshot") or {}).get("at_rev")
+    out = {
+        "ok": None, "rev": rev, "at_rev": at_rev,
+        # a snapshot older than the current rev is what forces a re-solve; when
+        # that re-solve is the failing one, THIS is the visible symptom
+        "stale": bool(row) and at_rev != rev,
+        "additions": [{"eco": a.get("eco"), "specs": a.get("specs")}
+                      for a in (row.get("additions") or [])],
+    }
+    if not row:
+        return {**out, "ok": None, "note": "no default session recorded yet"}
+    try:
+        out["env_id"] = snapshot(pid, language)
+        out["ok"] = True
+        # A successful freeze UPDATES the row, so the rev/at_rev/stale read
+        # above is already history — re-read it, or the report says
+        # "ok: true, stale: true", which is the opposite of clarifying.
+        fresh = get(pid, language) or {}
+        out["rev"] = fresh.get("rev")
+        out["at_rev"] = (fresh.get("snapshot") or {}).get("at_rev")
+        out["stale"] = out["at_rev"] != out["rev"]
+    except Exception as e:  # noqa: BLE001 — a diagnosis must never raise
+        from core.compute.errors import describe as _d
+        out["ok"] = False
+        out["error"] = {"code": getattr(e, "code", type(e).__name__),
+                        "detail": _d(e, limit=600),
+                        **({"hints": e.hints} if getattr(e, "hints", None) else {})}
+        out["fix"] = ("an addition contradicts the base pack's pins — repair with "
+                      "project_env.repair(pid, language, drop_last=True) (or name "
+                      "the specs to drop), then install it via make_isolated_env "
+                      "instead")
+    return out
+
+
+def repair(pid: str, language: str, *, drop_specs: Optional[list] = None,
+           drop_last: bool = False) -> dict:
+    """Make an un-snapshottable session solvable again by DROPPING recorded
+    additions and replaying the rest.
+
+    The substrate has no un-install verb, and it should not need one: the
+    registry is the record of what was added, and `ensure()` already rebuilds a
+    stopped session from the base pack with its additions replayed. So repair is
+    a registry edit plus a stop — prune the offending addition(s), stop the
+    session, and let the next `ensure()` reconstruct the session without them.
+
+    `drop_last=True` drops the most recent addition (nearly always the culprit:
+    the session solved before it and not after). `drop_specs=[...]` drops every
+    addition whose specs intersect that list. Dropping nothing is refused —
+    that would stop the session for no reason.
+
+    Returns {dropped, kept, rebuilt, health} where `health` is the post-repair
+    verdict, so the caller never has to trust the repair blindly."""
+    pid = str(pid)
+    row = get(pid, language)
+    if not row:
+        return {"dropped": [], "kept": [], "rebuilt": False,
+                "note": f"no default {language} session recorded for {pid}"}
+    adds = list(row.get("additions") or [])
+    want = {str(s).lower() for s in (drop_specs or [])}
+
+    def _hit(a: dict, is_last: bool) -> bool:
+        if drop_last and is_last:
+            return True
+        return bool(want & {str(s).lower() for s in (a.get("specs") or [])})
+
+    last_i = len(adds) - 1
+    dropped = [a for i, a in enumerate(adds) if _hit(a, i == last_i)]
+    if not dropped:
+        return {"dropped": [], "kept": adds, "rebuilt": False,
+                "note": "nothing matched — pass drop_last=True or name specs "
+                        "present in `additions` (see snapshot_health)"}
+    kept = [a for a in adds if a not in dropped]
+    # Stop FIRST: a live session is adopted as-is by ensure(), so the replay
+    # only happens once the old prefix is gone.
+    try:
+        named_envs._sync(_adapter.get_compute().session_stop(row["session_id"]))
+    except Exception:  # noqa: BLE001 — already dead is already stopped
+        pass
+    # Re-base the rev on the kept set and clear the stale snapshot, so the next
+    # snapshot re-solves the repaired spec instead of returning a cached id.
+    row = {**row, "additions": kept, "rev": len(kept), "snapshot": None}
+    _save_row(pid, language, row)
+    rebuilt = False
+    try:
+        ensure(pid, language)          # rebuild from base + replay `kept`
+        rebuilt = True
+    except Exception:  # noqa: BLE001 — report it in `health` below
+        pass
+    return {"dropped": [{"eco": a.get("eco"), "specs": a.get("specs")}
+                        for a in dropped],
+            "kept": [{"eco": a.get("eco"), "specs": a.get("specs")} for a in kept],
+            "rebuilt": rebuilt,
+            "health": snapshot_health(pid, language)}
 
 
 def reset(pid: str, language: str) -> None:

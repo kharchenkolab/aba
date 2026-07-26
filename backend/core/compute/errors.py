@@ -42,6 +42,38 @@ class ComputeError(RuntimeError):
                 "meaning": self.meaning}
 
 
+# ── env-resolution policy (ONE definition, two consumers) ───────────────────
+# A step that asked for the project's environment and could not GET it must
+# fail loudly. It must never be relocated to whatever interpreter happens to
+# sit on the node's PATH: that silently swaps the whole scientific stack for an
+# arbitrary one (live incident 2026-07-26 — an un-snapshottable session sent
+# every remote python step to a node's system python 3.8 with a broken
+# user-site package, for hours, reported as success). The node interpreter is
+# reachable ONLY through the explicit `env='system'` lever.
+#
+# Both consumers — core/jobs/weft_submitter._detached_env (the one-shot/detached
+# choke point) and content/bio/tools/run_exec._run_remote_kernel (the
+# interactive lane) — ask this ONE question, so the policy cannot drift.
+_ENV_FAILURE_CODES = frozenset({"no_base_pack"})
+_ENV_FAILURE_PREFIXES = ("env.", "session.")
+
+
+def is_env_resolution_failure(exc: BaseException) -> bool:
+    """Did this failure mean "the declared environment could not be resolved"
+    (as opposed to a transport hiccup, a capacity limit, or a missing kernel)?
+
+    True for the substrate's env/session families (`env.solve_conflict`,
+    `env.solve_failed`, `env.platform_mismatch`, `session.cold_base`, …) and
+    aba's own `no_base_pack`. Non-ComputeError exceptions count as env failures
+    when they arise on the env-resolution path — the caller decides scope by
+    where it applies this; an unexpected exception there is exactly the shape
+    that used to degrade silently."""
+    code = getattr(exc, "code", None)
+    if not isinstance(code, str):
+        return True          # untyped failure on the env path: do NOT degrade
+    return code in _ENV_FAILURE_CODES or code.startswith(_ENV_FAILURE_PREFIXES)
+
+
 def describe(exc: BaseException, *, limit: int = 700) -> str:
     """Agent-facing rendering of a substrate failure INCLUDING its hints.
 

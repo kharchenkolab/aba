@@ -91,6 +91,18 @@ def test_vendored_is_v1_with_the_converged_vocabulary():
     assert {"halted", "budget", "grammar"} <= SKIP_REASONS
 
 
+def test_additive_attempt_keys_stay_declared():
+    """The per-attempt provenance keys aba READS must remain in the contract.
+    `shadows_base` is the overlay's base-shadow warning — the earliest signal
+    of a base-contradicting leaf (it was being dropped by the envelope
+    entirely, which is how one pypi add silently poisoned a project's remote
+    lane). A removal here is a contract event, not a cleanup."""
+    assert "shadows_base" in SPEC["attempt"], \
+        "attempt.shadows_base dropped from the contract — aba surfaces it"
+    assert "repositories" in SPEC["attempt"]
+    assert "verified_site" in SPEC["success"]
+
+
 def test_canonical_success_envelope_passes():
     env = {"satisfied": True, "changed": True,
            "attempts": [

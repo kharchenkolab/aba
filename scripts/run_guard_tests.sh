@@ -40,6 +40,9 @@ FILES=(
   tests/test_vision_refs.py
   tests/test_env_integrity.py
   tests/test_env_resolution.py
+  tests/test_env_resolution_honesty.py
+  tests/test_capability_install_conflict.py
+  tests/test_env_session_repair.py
   tests/test_dataset_mirror.py
   tests/test_location_surfacing.py
   tests/test_dataset_scratch_binding.py
