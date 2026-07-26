@@ -343,11 +343,22 @@ def _graft_dir(parent: dict, base, *, ephemeral: bool = True,
 
     def _ensure(parts: list[str]) -> dict:
         path, node = parent["path"], parent
+        disk = base
         for p in parts:
             path = f"{path}/{p}" if path else p
+            disk = disk / p
             child = folders.get(path)
             if child is None:
                 child = _folder(p, path=path, kind="folder")
+                # A disk-grafted folder KNOWS where it lives — carry the real
+                # path so a directory-shaped source (a chunked store fetched
+                # into work/<run>-fetched/) resolves and serves LOCALLY.
+                # Without it the node is an address-less shadow: it wins the
+                # basename match in _resolve_files_node yet gives the launcher
+                # neither a run key nor bytes, starving BOTH launch arms
+                # (found live: a stale fetched mirror 404'd an
+                # otherwise-streamable store).
+                child["artifact_path"] = str(disk)
                 if ephemeral:
                     child["ephemeral"] = True
                 node["children"].append(child)

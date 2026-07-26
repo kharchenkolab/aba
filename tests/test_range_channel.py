@@ -695,6 +695,138 @@ def test_register_remote_stream_registers_and_returns_key(monkeypatch):
     assert e["base_rel"] == "output/foo.store"
 
 
+# ── stale-mirror shadow: bare grafted folders must not starve the launch ─────
+# The live case: a store fetched into work/<run>-fetched/ grafts into the files
+# tree; its FOLDER node used to carry neither run_id nor artifact_path, yet won
+# the basename match in _resolve_files_node — starving BOTH launcher arms
+# (streaming got no run, materialize got no path → terminal 404). Two fixes,
+# both guarded: disk-grafted folders carry their real path (source honesty);
+# an address-less node is NON-TERMINAL in _resolve_files_node.
+
+def _root(*nodes):
+    return {"kind": "root", "name": "", "path": "", "children": list(nodes)}
+
+
+def _mk_fetched_store(tmp_path):
+    """A generic fetched-mirror layout: work/run_x1-fetched/data.store/{...}."""
+    store = tmp_path / "work" / "run_x1-fetched" / "data.store"
+    (store / "c").mkdir(parents=True)
+    (store / "meta.json").write_text("{}")
+    (store / "c" / "0.0").write_bytes(b"chunk-bytes")
+    return store
+
+
+def test_graft_dir_folders_carry_their_disk_path(tmp_path):
+    # Source honesty: every folder _graft_dir creates knows its real on-disk
+    # location (nested levels each carry their OWN path, not the base's).
+    from content.bio.files.tree import _graft_dir, _folder
+    store = _mk_fetched_store(tmp_path)
+    parent = _folder("scratch", path="working/scratch", kind="folder")
+    n = _graft_dir(parent, tmp_path / "work", ephemeral=True)
+    assert n == 2                                   # meta.json + c/0.0
+    by_path = {}
+
+    def walk(node):
+        by_path[node["path"]] = node
+        for c in node.get("children", []):
+            walk(c)
+    walk(parent)
+    f1 = by_path["working/scratch/run_x1-fetched/data.store"]
+    f2 = by_path["working/scratch/run_x1-fetched/data.store/c"]
+    assert f1["kind"] == "folder" and f1["artifact_path"] == str(store)
+    assert f2["kind"] == "folder" and f2["artifact_path"] == str(store / "c")
+
+
+def test_shadow_mirror_resolves_local_serve(monkeypatch, tmp_path):
+    # (a) THE live shape: fetched bytes exist → the launch node carries the
+    # mirror's real path and the launcher resolves it LOCALLY — terminal, no
+    # detour (armed: the run-output resolver must NOT be consulted).
+    from content.bio.files.tree import _graft_dir, _folder
+    import content.bio.web.routes.viewers as vr
+    import content.bio.viewers.launchers.pagoda3 as p3
+    store = _mk_fetched_store(tmp_path)
+    parent = _folder("scratch", path="working/scratch", kind="folder")
+    _graft_dir(parent, tmp_path / "work", ephemeral=True)
+    monkeypatch.setattr("content.bio.data_location.entity_for_path", lambda p: None)
+    monkeypatch.setattr("content.bio.files.tree.build_files_tree",
+                        lambda **k: _root(parent))
+    seen = {"resolver": 0}
+
+    def _sentinel(path, **k):
+        seen["resolver"] += 1
+        return None
+    monkeypatch.setattr("content.bio.lifecycle.runs.resolve_project_run_output",
+                        _sentinel)
+    node = vr._resolve_files_node(None, "data.store")
+    assert node.get("artifact_path") == str(store), node
+    assert seen["resolver"] == 0, "a local mirror must be terminal (LOCAL-FIRST)"
+    src = p3._resolve_source(node, "shadow1")
+    assert src == store                              # real local bytes serve
+
+
+def test_shadow_no_mirror_falls_through_to_streaming(monkeypatch, tmp_path):
+    # (b) No fetched bytes: a bare folder node (address-less — the shadow
+    # shape) is NON-TERMINAL; resolution continues to the run-output marker and
+    # the launch's streaming arm engages on it (armed: sentinels count both).
+    import content.bio.web.routes.viewers as vr
+    import content.bio.viewers.launchers.pagoda3 as p3
+    bare = {"kind": "folder", "name": "data.store", "children": [],
+            "path": "working/scratch/run_x1-fetched/data.store",
+            "entity_id": None, "entity_type": None, "title": None}
+    monkeypatch.setattr("content.bio.data_location.entity_for_path", lambda p: None)
+    monkeypatch.setattr("content.bio.files.tree.build_files_tree",
+                        lambda **k: _root(bare))
+    calls = {"resolver": 0}
+
+    def _resolver(path, **k):
+        calls["resolver"] += 1
+        return ("run_9", "data.store")               # remote marker
+    monkeypatch.setattr("content.bio.lifecycle.runs.resolve_project_run_output",
+                        _resolver)
+    node = vr._resolve_files_node(None, "data.store")
+    assert calls["resolver"] == 1, "a bare graft node must be NON-TERMINAL"
+    assert node.get("run_id") == "run_9"
+    # ...and the streaming arm receives THAT node (the graft no longer blocks it)
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("x")
+    monkeypatch.setattr(p3, "pagoda3_dist_path", lambda: dist)
+    reg = {"node": None}
+
+    def _register(n, pid):
+        reg["node"] = n
+        return "data-k1.store"
+    monkeypatch.setattr(p3, "_register_remote_stream", _register)
+    res = p3.launch(node, {"project_id": "shadow2"})
+    assert "data-k1.store" in res.url
+    assert reg["node"] is not None and reg["node"].get("run_id") == "run_9"
+
+
+def test_unrelated_tree_nodes_unchanged(monkeypatch):
+    # (c) Ceiling: entity-backed and disk-addressed nodes stay TERMINAL —
+    # returned as-is, resolver never consulted.
+    import content.bio.web.routes.viewers as vr
+    fnode = {"kind": "file", "name": "table.csv", "size": 3,
+             "path": "working/scratch/table.csv", "artifact_path": "/abs/table.csv"}
+    enode = {"kind": "folder", "name": "data.store", "children": [],
+             "path": "datasets/ds1", "entity_id": None, "title": None}
+    enode2 = dict(enode, path="datasets/ds2", name="other.store", entity_id="ds_2",
+                  entity_type="dataset")
+    monkeypatch.setattr("content.bio.data_location.entity_for_path", lambda p: None)
+    monkeypatch.setattr("content.bio.files.tree.build_files_tree",
+                        lambda **k: _root(fnode, enode2))
+    seen = {"resolver": 0}
+
+    def _sentinel(path, **k):
+        seen["resolver"] += 1
+        return None
+    monkeypatch.setattr("content.bio.lifecycle.runs.resolve_project_run_output",
+                        _sentinel)
+    assert vr._resolve_files_node(None, "table.csv") is fnode
+    assert vr._resolve_files_node(None, "other.store") is enode2
+    assert seen["resolver"] == 0
+
+
 # ── terminal-error honesty bridge (entity-remote facts → remote wording) ─────
 # The launch page's mirror lever keys on THIS regex over the error text plus an
 # entity id (core/viewers/launch_page.py). The bridge's whole point is matching
@@ -842,6 +974,10 @@ _TESTS = [
     test_note_helpers_called_only_from_shared_decision,
     test_register_remote_stream_degrades_when_verb_absent,
     test_register_remote_stream_registers_and_returns_key,
+    test_graft_dir_folders_carry_their_disk_path,
+    test_shadow_mirror_resolves_local_serve,
+    test_shadow_no_mirror_falls_through_to_streaming,
+    test_unrelated_tree_nodes_unchanged,
     test_launch_terminal_error_names_home_site_for_by_ref_remote,
     test_launch_terminal_error_generic_shape_ceilings,
     test_by_ref_remote_with_local_mirror_resolves_locally,
