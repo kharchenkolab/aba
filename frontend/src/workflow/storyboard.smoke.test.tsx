@@ -98,6 +98,9 @@ describe('workflow storyboard', () => {
     getByText(/looking at:/)                              // deixis doc → chat
     getByText('show T1 on the page →')                    // deixis chat → doc
     getByText('file a note → Q2')                         // cross-boundary proposal
+    // later is a place: the flag can also land as a planned item under Q2
+    fireEvent.click(getByText('plan it for later'))
+    getByText(/planned under Q2/)
     expect(container.querySelector('.toc__delta--condition')).toBeTruthy()
     expect(container.querySelector('.toc__delta--accretion')).toBeTruthy()
     unmount()
@@ -111,6 +114,10 @@ describe('workflow storyboard', () => {
     fireEvent.click(getByText(/file all routine/))
     getByText(/3 need you/)                                       // batch-file drops the count
     getByText('✓ filed')                                          // …and flips the in-place badge
+    // "later" converts the claim nudge into a planned item — aimed, not piled
+    fireEvent.click(getByText('→ plan'))
+    getByText(/2 need you/)
+    getByText(/planned 1 — filed as a planned item/)
     expect(container.querySelectorAll('.nsec--dormant').length).toBe(6)
     expect(container.querySelectorAll('.trail--folded').length).toBe(2)
     getByText(/214 runs · complete · automatic/)

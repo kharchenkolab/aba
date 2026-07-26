@@ -228,6 +228,22 @@ second:
   the same episode; past it, as a new sitting with a chain edge
   (`continues ←`). The user's only verb is "work here now"; every
   boundary falls out of where attention actually went.
+- **Ceremony scales with residue — the busy-scientist floor.** A
+  realistic sitting is often ninety seconds between meetings: a
+  question, a launched run, gone. A sitting that leaves nothing to
+  route **files silently** — no routing table, no review debt; a
+  two-turn burst earns two turns of bookkeeping, which is none.
+  Micro-bursts on the same anchor within a day **coalesce** into one
+  episode (the boundary inference merges as well as splits), so the
+  work record reads "Tuesday on Q1 — 3 exchanges · 2 runs", never
+  confetti. Work can be fired with **no sitting at all**: the omnibox
+  and every composer are launchers ("rerun batch 8 on the new
+  calibration") — the run lands in the sediment with its turn
+  provenance, and a sitting materializes only if an exchange develops
+  around it. And auto-filed routing dissolves into the ordinary
+  pending pool, settled in the tray **by place, not by episode** —
+  per-sitting review debt never accumulates. Parking preserves the
+  half-typed message.
 - **Sessions are first-class, because the redux is a map and sessions
   are the territory.** Curation is lossy by design, so the episode must
   stay reachable: the work record's **by-session grain** shows each
@@ -374,9 +390,31 @@ visit is a first-class use case:
   batchable ("file all routine (N)") and undoable. Decisions (addenda,
   claim drafts) stay one-by-one. The scientist's ratification attention
   is spent where it matters.
+- **Later is a place, not a pile.** The busy scientist's most-used
+  triage verb is neither Ratify nor Dismiss — it is *later*. In the
+  Record, later has an **address**: any invitation (a claim nudge, a
+  cross-boundary flag, a briefing implication) converts with one click
+  into a **planned item in the section it belongs to** — no ceremony
+  (it is the user's plan, §14.5) — where it waits with its own `▷ work`
+  launcher instead of nagging from a queue. Deferral is aimed, not
+  piled; the later-queue is the plan, distributed in place.
+- **Drafts fade; decisions wait.** If drafts persisted forever, a
+  month of busy weeks would build an amber wall and the record would
+  end up scolding its owner. So unattended *routine* drafts (notes,
+  fragments) follow the same file-or-fade sweep as loose notes: past
+  the sweep window they fade — still findable in their strata,
+  honestly counted ("2 drafts faded last week"), no longer badged.
+  Fade ≠ accept: content is never auto-ratified and nothing enters the
+  story — only the claim on attention is released. Decisions (addenda,
+  claim drafts) never fade, but they consolidate into the digest line
+  rather than accreting badge weight. Either way the honest-neglect
+  line tells the truth.
 - **⌘K omnibox** — ask or find from anywhere; hits span narrative,
   notes, sediment, epitaphs, and transcripts. The day-0 lesson ("the
-  composer is the whole interface") made permanent.
+  composer is the whole interface") made permanent — and the omnibox
+  is also a **launcher** and a **capture point**: "rerun batch 8" fires
+  a run; "plan: check the estuary pair against 2026" lands a planned
+  item under its question, from anywhere, in five seconds.
 - **"This week ▸" digest** — auto-rendered, emailable: conditions ·
   needs-you · new events · figure of the week. The consumption format
   for the projects a PI doesn't open daily.

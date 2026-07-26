@@ -69,7 +69,7 @@ export default function WorkPanel({ panel, onClose, onAdvance, onExpand, continu
 }) {
   const [extra, setExtra] = useState<PanelMsg[]>([])
   const [draft, setDraft] = useState('')
-  const [flagged, setFlagged] = useState(false)
+  const [flagged, setFlagged] = useState<false | 'note' | 'plan'>(false)
   // like any chat: open at the latest exchange (and keep up as it grows).
   // Re-pin after a beat — figure images load async and grow the scroll
   // height after the first pass.
@@ -149,9 +149,17 @@ export default function WorkPanel({ panel, onClose, onAdvance, onExpand, continu
         {panel.crossFlag && (
           <div className="wpanel__cross" title="cross-boundary relevance stays a proposal — the agent never writes outside the anchor silently">
             ✦ {panel.crossFlag.text}
-            {flagged
-              ? <span className="wpanel__crossdone">✓ noted → Q2 (draft)</span>
-              : <button className="btn" onClick={() => setFlagged(true)}>{panel.crossFlag.accept}</button>}
+            {flagged === 'note' && <span className="wpanel__crossdone">✓ noted → Q2 (draft)</span>}
+            {flagged === 'plan' && <span className="wpanel__crossdone">✓ planned under Q2 — waits there with its own ▷ work</span>}
+            {!flagged && (
+              <>
+                <button className="btn" onClick={() => setFlagged('note')}>{panel.crossFlag.accept}</button>
+                <button className="btn" onClick={() => setFlagged('plan')}
+                        title="later is a place, not a pile — lands as a planned item under Q2, no ceremony; it is your plan">
+                  plan it for later
+                </button>
+              </>
+            )}
           </div>
         )}
 

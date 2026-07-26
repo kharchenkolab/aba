@@ -1412,6 +1412,13 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
                         file ✓
                       </button>
                     )}
+                    {p.kind === 'claim draft' && (
+                      <button className="btn"
+                              title="later is a place, not a pile — this lands as a planned item in the section it belongs to; no ceremony, it is your plan, and it waits there with its own ▷ work launcher"
+                              onClick={() => { setAccepted(s => new Set(s).add(p.key)); setUndoable({ keys: [p.key], label: 'planned 1 — filed as a planned item under its question' }) }}>
+                        → plan
+                      </button>
+                    )}
                     <button className="btn" onClick={() => { setTrayOpen(false); scrollTo(p.elId) }}
                             title="see it in context before deciding">go →</button>
                   </div>
@@ -1430,7 +1437,11 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
                     done — number refreshes land in the briefing and the ledger only; reversible in governance
                   </div>
                 )}
-                <div className="tray__foot">decide here or in place — same state either way · dismissals are remembered</div>
+                <div className="tray__foot"
+                     title="fade ≠ accept: nothing is auto-ratified — faded drafts stay findable in their strata; only the claim on your attention is released. Decisions never fade; they fold into the digest instead of accreting badge weight">
+                  decide here or in place — same state either way · dismissals are remembered ·
+                  unattended routine drafts fade after the sweep (findable, never nagging); decisions wait
+                </div>
               </div>
             )}
           </TriageBand>
