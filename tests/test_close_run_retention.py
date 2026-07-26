@@ -48,6 +48,82 @@ def test_retain_run_outputs_pins_produced_per_target(monkeypatch):
         assert kw["include"] == ["big.h5ad", "samples/A/qc.csv", "umap.png"]
 
 
+def _stub_recheck_world(monkeypatch, datasets, run_sites, states):
+    """Wire _recheck_consumed_inputs' dependencies: a run entity with the
+    given executed sites, a dataset list, and a per-dataset revalidate state.
+    Records every patch_metadata call as (id, fields)."""
+    import core.data.datasets as dmod
+    ent = {"id": "run-1", "metadata": {"run": {"sites": run_sites}}}
+    store = {d["id"]: d for d in datasets}
+    patches = []
+
+    def _get(rid):
+        return store.get(rid, ent if rid == "run-1" else None)
+
+    def _list(**kw):
+        return [d for d in datasets if kw.get("type_filter") in (None, "dataset")]
+
+    def _patch(eid, fields):
+        patches.append((eid, fields))
+        tgt = store.get(eid) or ent
+        tgt.setdefault("metadata", {}).update(
+            {k: v for k, v in fields.items() if k != "run"})
+        if "run" in fields:
+            tgt.setdefault("metadata", {})["run"] = fields["run"]
+    monkeypatch.setattr(runsmod, "get_entity", _get)
+    monkeypatch.setattr("core.graph.entities.list_entities", _list)
+    monkeypatch.setattr("core.graph.entities.patch_metadata", _patch)
+    monkeypatch.setattr(dmod, "revalidate",
+                        lambda md: {"state": states.get(md.get("_k"), "unchanged")})
+    return patches
+
+
+def _ds(k, site, path="/home/data", **extra):
+    return {"id": f"ds_{k}", "metadata": {"_k": k, "home": {"site": site,
+            "path": path}, **extra}}
+
+
+def test_input_mutation_on_run_site_is_flagged(monkeypatch):
+    # a source homed on a machine the run executed on, drifted mid-run
+    patches = _stub_recheck_world(
+        monkeypatch,
+        datasets=[_ds("a", "siteX")],
+        run_sites=["siteX"],
+        states={"a": "drifted"})
+    runsmod._recheck_consumed_inputs("run-1")
+    ds_patch = [p for p in patches if p[0] == "ds_a"]
+    assert ds_patch and ds_patch[0][1]["source_changed"] is True
+    run_patch = [p for p in patches if p[0] == "run-1"]
+    assert run_patch and run_patch[0][1]["run"]["inputs_modified"] == ["ds_a"]
+
+
+def test_recheck_skips_untouched_machines_and_cas_and_already_flagged(monkeypatch):
+    # WIDE: (1) a drifted source on a machine the run NEVER used → skipped;
+    # (2) a CAS-backed source (no home path) → skipped; (3) already-flagged →
+    # not re-stamped. None should produce a patch.
+    patches = _stub_recheck_world(
+        monkeypatch,
+        datasets=[
+            _ds("elsewhere", "siteY"),                       # run never used siteY
+            {"id": "ds_cas", "metadata": {"_k": "cas", "home": {}}},
+            _ds("known", "local", source_changed=True),      # already flagged
+        ],
+        run_sites=["siteX"],
+        states={"elsewhere": "drifted", "cas": "drifted", "known": "drifted"})
+    runsmod._recheck_consumed_inputs("run-1")
+    assert patches == [], f"nothing should be flagged: {patches}"
+
+
+def test_recheck_quiet_when_inputs_unchanged(monkeypatch):
+    patches = _stub_recheck_world(
+        monkeypatch,
+        datasets=[_ds("a", "local"), _ds("b", "siteX")],
+        run_sites=["siteX"],
+        states={"a": "unchanged", "b": "unchanged"})
+    runsmod._recheck_consumed_inputs("run-1")
+    assert patches == []
+
+
 def test_retain_run_outputs_noop_without_targets(monkeypatch):
     import core.compute.retention as retmod
     called = []

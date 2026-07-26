@@ -282,8 +282,51 @@ def close_run(thread_id: str) -> Optional[str]:
             patch_metadata(rid, {"run": run_md})
     except Exception:  # noqa: BLE001 — the stamp must never block a close
         pass
+    # Settlement input re-check (sweep item E): analysis code can WRITE INTO a
+    # registered read-in-place source home mid-run — the identity was validated
+    # at first use, so the mutation stayed invisible until the NEXT run's
+    # check, with this run's provenance claiming the original content. Scope:
+    # only sources homed on machines this run actually executed on (local +
+    # recorded run.sites) — the run cannot have mutated data elsewhere, and
+    # remote fingerprints cost a round trip each. A drift found here flips the
+    # SAME recorded flags the card banner / safety ledger already render, and
+    # stamps the run so its results carry the caveat.
+    _recheck_consumed_inputs(rid)
     patch_metadata(rid, {"run_state": "closed"})   # single-key: no blob race
     return rid
+
+
+def _recheck_consumed_inputs(run_id: str) -> None:
+    """Best-effort, never blocks a close. See close_run's item-E note."""
+    try:
+        import time as _time
+        from core.graph.entities import list_entities, patch_metadata
+        from core.data.datasets import revalidate
+        ent = get_entity(run_id)
+        run_md = dict((ent or {}).get("metadata") or {})
+        run_sites = {"local", *((run_md.get("run") or {}).get("sites") or [])}
+        modified: list = []
+        for d in list_entities(type_filter="dataset", include_archived=False):
+            md = d.get("metadata") or {}
+            home = md.get("home") or {}
+            if not home.get("path"):
+                continue
+            if (home.get("site") or "local") not in run_sites:
+                continue                    # the run never touched that machine
+            if md.get("source_changed") or md.get("source_missing"):
+                continue                    # already flagged — nothing new to say
+            out = revalidate(md)
+            if out.get("state") == "drifted":
+                modified.append(d["id"])
+                patch_metadata(d["id"], {"source_changed": True,
+                                         "source_checked_at": int(_time.time())})
+        if modified:
+            run_block = dict((get_entity(run_id) or {}).get("metadata", {})
+                             .get("run") or {})
+            run_block["inputs_modified"] = modified
+            patch_metadata(run_id, {"run": run_block})
+    except Exception as e:  # noqa: BLE001 — a recheck failure never blocks close
+        _log.debug("close_run input recheck failed for %s: %s", run_id, e)
 
 
 def note_run_site(run_id: Optional[str], site: Optional[str]) -> None:
