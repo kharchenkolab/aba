@@ -60,3 +60,10 @@ jobs:
       # reached main with CI green, found by hand.
       - run: npx vitest run
         working-directory: frontend
+      # Typecheck. package.json defines build as `tsc -b && vite build`, but the
+      # RELEASE build calls `npx vite build` directly (install/sif/build.sh) —
+      # vite strips types without checking them, so a misspelled property
+      # bundles clean and renders undefined at runtime. Nothing on the release
+      # path was catching that; this is the gate.
+      - run: npx tsc -b
+        working-directory: frontend
