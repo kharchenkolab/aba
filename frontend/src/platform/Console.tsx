@@ -77,8 +77,14 @@ function fmtClock(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour12: false })
 }
 
-function durClass(ms: number): string {
-  return ms >= 10_000 ? 'is-slow2' : ms >= 2_000 ? 'is-slow1' : ''
+/** Duration emphasis tier. NEVER an error tier: red is reserved for severity
+ *  (see Console.css). A slow step is not a broken step — kernel starts, env
+ *  realizations and remote reads legitimately take tens of seconds, and colouring
+ *  those with the error red made healthy work read as failure. Thresholds are
+ *  also deliberately high: at 2s virtually every remote step lit up, which trains
+ *  the eye to ignore the signal entirely. */
+export function durClass(ms: number): string {
+  return ms >= 60_000 ? 'is-slow2' : ms >= 10_000 ? 'is-slow1' : ''
 }
 
 function SiteChip({ site }: { site: string }) {

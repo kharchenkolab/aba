@@ -80,6 +80,10 @@ def test_mapping_transfer_done_carries_facts():
 
 def test_mapping_severity_marks():
     assert _map({"kind": "job.failed", "site": "s"})["severity"] == "error"
+    # an UNPLANNED kernel termination, vs the clean stop — these read identically
+    # (both `info`) while a kernel was dying in a loop on a live site
+    assert _map({"kind": "kernel.died", "site": "s"})["severity"] == "error"
+    assert _map({"kind": "kernel.stopped", "site": "s"})["severity"] == "info"
     assert _map({"kind": "site.unreachable", "site": "s"})["severity"] == "error"
     assert _map({"kind": "realize.fallback", "site": "s"})["severity"] == "warn"
     assert _map({"kind": "session.snapshot_unverified"})["severity"] == "warn"

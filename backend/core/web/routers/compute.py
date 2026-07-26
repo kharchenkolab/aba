@@ -61,7 +61,12 @@ _FAMILY_CATEGORY = {
     "site": "compute", "bootstrap": "compute", "poller": "compute",
     "service": "serve",
 }
-_ERROR_MARKS = ("failed", "error", "unreachable", "lost", "integrity", "bad")
+# "died" is an UNPLANNED termination (weft's poller detects it and attaches
+# cause/exit_code/killing_block/suggestion) — distinct from the clean
+# `kernel.stopped`. It was landing as `info`, so a kernel dying in a loop
+# rendered the same as a kernel starting normally.
+_ERROR_MARKS = ("failed", "error", "unreachable", "lost", "integrity", "bad",
+                "died")
 _WARN_MARKS = ("warning", "skipped", "unverified", "unportable", "fallback",
                "missing", "deferred", "cancelled", "interrupted")
 

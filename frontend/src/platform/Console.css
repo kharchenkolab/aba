@@ -55,8 +55,11 @@
 .crow__sum { color: var(--text-3); }
 .crow__facts { color: var(--text-4); }
 .crow__status { color: var(--text-3); font-style: italic; }
+/* Duration emphasis — amber only, NEVER the severity red (#c0392b). "This took
+   real time" and "this failed" must not look the same: red on a 12s kernel start
+   read as an error on perfectly healthy work. */
 .crow__dur.is-slow1 { color: #b9770e; }
-.crow__dur.is-slow2 { color: #c0392b; font-weight: 600; }
+.crow__dur.is-slow2 { color: #a35c00; font-weight: 600; }
 
 /* category tints the glyph; severity overrides the whole line's accents */
 .crow__line--agent  .crow__glyph { color: var(--accent, #c0392b); opacity: .7; }

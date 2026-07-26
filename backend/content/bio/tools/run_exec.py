@@ -104,14 +104,30 @@ def _ensure_kernel_cwd(sess, lang: str, cwd) -> None:
         ("__FRESH__") triggers the same preamble plus an extra header so the
         agent recognizes 'in-memory state is gone, paths persist'.
     """
-    # A weft kernel (WeftKernelSession, exposes `work_dir`) CANNOT chdir — its
-    # file-block protocol reads/writes `blocks/NNNN.*` relative to cwd, so moving
-    # away orphans the protocol and the kernel dies. Its sandbox IS the work dir and
-    # aba harvests from there (see _harvest_dir). Skip the chdir; still fire the
-    # one-shot orientation preamble on a fresh kernel.
-    if getattr(sess, "work_dir", None):
-        if getattr(sess, "_aba_cwd", None) is None:
-            sess._aba_cwd = sess.work_dir
+    # A weft kernel CANNOT chdir — its file-block protocol reads/writes
+    # `blocks/NNNN.*` relative to cwd, so moving away orphans the protocol and the
+    # kernel dies. Its sandbox IS its work dir and aba harvests from there (see
+    # _harvest_dir). Skip the chdir; still fire the one-shot orientation preamble
+    # on a fresh kernel.
+    #
+    # Detect the weft kernel by IDENTITY, not by `work_dir`: WeftKernelSession sets
+    # work_dir ONLY for a local site (weft.py — a remote kernel's sandbox is a
+    # remote path and comes home via retain/collect), so a `work_dir` test read
+    # REMOTE weft kernels as chdir-able. They then got `setwd(<controller path>)`
+    # executed ON the remote machine, which orphaned the block protocol and killed
+    # the kernel on its next write — `writeLines -> file(con, "w") : cannot open
+    # the connection`, exit 1, repeatedly (live regression, caught 2026-07-26 on
+    # mendel; the remote lane had only just started calling this at all).
+    if (getattr(sess, "kernel_id", None) is not None
+            or type(sess).__name__ == "WeftKernelSession"):
+        # Gate the one-shot on its OWN flag, not on `_aba_cwd`: a remote kernel
+        # has no local cwd to record, so an `_aba_cwd is None` test would re-fire
+        # the FRESH banner on every single call.
+        if not getattr(sess, "_aba_oriented", False):
+            sess._aba_oriented = True
+            # work_dir when known (local weft kernel); None for a remote one —
+            # the preamble takes cwd as Optional and simply lists less.
+            sess._aba_cwd = getattr(sess, "work_dir", None)
             sess._aba_cwd_just_switched = "__FRESH__"
         return
     path = str(cwd)

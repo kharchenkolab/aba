@@ -6,7 +6,7 @@
  */
 import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
-import Console from './Console'
+import Console, { durClass } from './Console'
 import { noteNotification, noteTurnEvent, resetConsole } from '../console'
 import type { NotificationEvent, SSEEvent } from '../wire'
 
@@ -104,5 +104,45 @@ describe('Console rendering', () => {
     rerender(<Console />)
     fireEvent.change(screen.getByPlaceholderText('filter…'), { target: { value: 'zzz' } })
     expect(screen.getByText(/Nothing matches/)).toBeTruthy()
+  })
+})
+
+describe('duration emphasis', () => {
+  // Own reset: the feed store is a module singleton, so without this the rows
+  // from the block above leak in and `querySelector('.crow__dur')` picks THEIR
+  // duration instead of this test's (the same cross-test leak class as the
+  // persisted facets — it bit this very test first time out).
+  beforeEach(() => {
+    resetConsole()
+    try { globalThis.localStorage?.clear() } catch { /* no storage here */ }
+  })
+
+  it('never uses an error tier — red is reserved for severity', () => {
+    // A slow step is not a broken step. Duration used the SAME red as
+    // crow--error, so a 12s kernel start (normal work) read as a failure.
+    for (const ms of [0, 999, 5_000, 9_999, 10_000, 59_999, 60_000, 600_000]) {
+      expect(durClass(ms)).not.toMatch(/err|error|fail/)
+    }
+  })
+
+  it('stays quiet under 10s and escalates in two amber tiers', () => {
+    // Thresholds are deliberately high: at 2s virtually every remote step lit
+    // up, which trains the eye to ignore the signal.
+    expect(durClass(1_500)).toBe('')
+    expect(durClass(9_999)).toBe('')
+    expect(durClass(10_000)).toBe('is-slow1')
+    expect(durClass(59_999)).toBe('is-slow1')
+    expect(durClass(60_000)).toBe('is-slow2')
+  })
+
+  it('a slow but SUCCESSFUL row is not styled as an error', () => {
+    noteNotification({ type: 'console', category: 'run', verb: 'kernel.started',
+                       site: 'siteA', severity: 'info', status: 'ok',
+                       dur_ms: 42_000 } as NotificationEvent)
+    const { container } = render(<Console />)
+    expect(container.querySelector('.crow--error')).toBeNull()
+    const dur = container.querySelector('.crow__dur')!
+    expect(dur.className).toContain('is-slow1')
+    expect(dur.textContent).toContain('42.0s')
   })
 })

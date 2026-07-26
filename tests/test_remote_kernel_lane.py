@@ -92,6 +92,21 @@ class FakeWeft:
             return {"kernel_id": "krn_test1"}
         if name == "kernel_exec":
             self.execs.append(a[1])
+            # FIDELITY: a real weft kernel's block protocol reads/writes
+            # `blocks/NNNN.*` RELATIVE to its cwd, so a chdir orphans the
+            # protocol and the process dies on its next write
+            # (`writeLines -> file(con, "w") : cannot open the connection`,
+            # exit 1). The fake used to accept any code and answer "ok", which
+            # BLESSED exactly that bug: a remote kernel was sent
+            # `setwd(<controller path>)` and every assertion still passed while
+            # real kernels died in a loop on mendel. Model the constraint, so
+            # the class of bug cannot pass here again.
+            _code = a[1] or ""
+            if ("setwd(" in _code or "_os.chdir(" in _code
+                    or "os.chdir(" in _code):
+                raise AssertionError(
+                    "a weft kernel was told to chdir — this kills the real "
+                    f"kernel's block protocol; code was: {_code[:120]!r}")
             self._block += 1
             # "run" the code: a marker line as output; a code containing
             # WRITE:<name>:<size> drops a sandbox file
@@ -633,6 +648,14 @@ def test_fresh_remote_kernel_gets_orientation_and_an_honest_note():
           note1[:200])
     check("fresh note does not claim backwards persistence",
           "— variables persist" not in note1, note1[:200])
+    # THE load-bearing assertion, and the one originally missing: the point of
+    # calling _ensure_kernel_cwd here is to fire the banner WITHOUT chdir'ing.
+    # The first version asserted only the banner — which the buggy code produced
+    # too, via the chdir branch — so the test verified the OUTPUT while the
+    # FORBIDDEN ACTION went unchecked, and remote kernels died in production.
+    check("no chdir was ever sent to the remote kernel",
+          not any(("setwd(" in c or "chdir(" in c) for c in FAKE.execs),
+          f"execs={[c[:60] for c in FAKE.execs]}")
     check("orientation preamble rendered on the fresh remote kernel",
           "Fresh kernel" in (r1.get("stdout") or "")
           or "orientation" in (r1.get("stdout") or "").lower(),
