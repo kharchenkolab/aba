@@ -374,6 +374,26 @@ def ref_stream_facts(e: "dict | None", name: str) -> "dict | None":
         loc = dataset_location(e or {})
         if not (loc.get("remote") and loc.get("by_reference")):
             return None                         # local / adopted → materialize path
+        if loc.get("mirrored"):
+            # The bytes are already HERE. launch() registers the stream before
+            # it resolves a local source, so without this the mirror lever
+            # ("Mirror here & retry") could never take effect and a mirrored
+            # store would back-haul every chunk over the WAN with the whole
+            # tree on local disk. Confirmed against the disk (a LOCAL stat on
+            # the controller — not the inventory round-trip this predicate
+            # forbids), because `local_mirror` is never cleared: a mirror the
+            # user deleted must fall back to streaming rather than refusing
+            # both ways, and the pre-flight note that shares this predicate
+            # then stays true in both directions.
+            mpath = (md.get("local_mirror") or {}).get("path")
+            if mpath and Path(mpath).exists():
+                return None
+        if md.get("source_changed") or md.get("source_missing"):
+            # Recorded as drifted/gone at its source. The ref is minted once and
+            # never re-minted, so streaming would keep serving cacheable chunks
+            # under a URL whose bytes have changed. Materialize instead (which
+            # re-validates) until a Re-check clears the flag.
+            return None
         n_files = ((md.get("descriptor") or {}).get("n_files")
                    or (md.get("fingerprint") or {}).get("n_files"))
         if not isinstance(n_files, int) or n_files < 2:
@@ -460,6 +480,34 @@ def _register_ref_arm(node: dict, pid: str) -> "str | None":
     return store_key
 
 
+def _has_local_store_bytes(node: dict) -> bool:
+    """True when this node's store is ALREADY readable on this host.
+
+    `launch()` registers a stream before it resolves a local source, so
+    without this check a store whose bytes are on local disk still back-hauls
+    every chunk over the network — and the launch page's "Mirror here & retry"
+    lever can never take effect, because mirroring records `local_mirror` but
+    leaves the home remote. Validated against the disk, not just the flag: a
+    mirror the user deleted must fall through to streaming rather than
+    dead-ending on a path that is no longer there."""
+    try:
+        ap = node.get("artifact_path") or node.get("path")
+        if ap and Path(ap).is_absolute() and Path(ap).exists():
+            return True
+        eid = node.get("entity_id")
+        if not eid:
+            return False
+        from core.graph.entities import get_entity
+        from content.bio.data_location import dataset_location
+        e = get_entity(eid) or {}
+        if not dataset_location(e).get("mirrored"):
+            return False
+        lm = ((e.get("metadata") or {}).get("local_mirror") or {}).get("path")
+        return bool(lm and Path(lm).exists())
+    except Exception:  # noqa: BLE001 — a locality read must never fail a launch
+        return False
+
+
 def _register_remote_stream(node: dict, pid: str) -> "str | None":
     """If this node resolves to a directory store that lives on a REMOTE site AND
     the substrate exposes a ranged-read verb, register the store's remote home
@@ -475,6 +523,13 @@ def _register_remote_stream(node: dict, pid: str) -> "str | None":
     inventory-backed resolve). Best-effort: any failure returns None → today's
     behavior (graceful degradation)."""
     try:
+        # Bytes already here → stream on NEITHER arm. The ref arm re-states this
+        # inside `ref_stream_facts` (the predicate the pre-flight note shares, so
+        # the note stops promising a stream); this covers the RUN arm too, whose
+        # locality comes from the producing run's outputs rather than the
+        # dataset's own recorded home.
+        if _has_local_store_bytes(node):
+            return None
         key = _register_ref_arm(node, pid)
         if key:
             return key

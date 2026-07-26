@@ -33,6 +33,7 @@ import base64
 import os
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 _RT = tempfile.mkdtemp(prefix="aba_range_")
@@ -530,6 +531,71 @@ def test_miss_serves_target_singular_then_one_inline_prefetch():
         restore()
 
 
+def test_prefetch_threads_are_capped():
+    """Each miss used to spawn an UNBOUNDED daemon thread, and every one of
+    them drives the substrate on its own thread (sync_call runs on the caller,
+    bypassing the adapter's 4-worker pool). A viewer walking a grid faster
+    than batches complete therefore piled up simultaneous site connections and
+    starved the foreground singular reads. Slots are bounded; a miss that
+    cannot get one simply skips its warm-up (a future cache miss, nothing
+    worse)."""
+    assert isinstance(rc._PREFETCH_SLOTS, threading.BoundedSemaphore().__class__)
+    held = []
+    try:
+        while rc._PREFETCH_SLOTS.acquire(blocking=False):
+            held.append(1)
+            assert len(held) <= 64, "prefetch slots must be BOUNDED"
+    finally:
+        for _ in held:
+            rc._PREFETCH_SLOTS.release()
+    assert held, "there must be at least one prefetch slot"
+
+    # With every slot taken, a miss must still serve its target and must NOT
+    # spawn a prefetch (armed: the batch lane would log a call).
+    pid = "s_cap1"
+    _register(pid, "s-cap.store", base_rel="", site="siteC", target=None,
+              ref="dref:cap")
+    calls: list = []
+    restore = _with_batch(_batch_fake({"c/0/0": b"A" * 8, "c/0/1": b"B" * 8}, calls))
+    grabbed = []
+    try:
+        while rc._PREFETCH_SLOTS.acquire(blocking=False):
+            grabbed.append(1)
+        out = rc.serve_remote_chunk(pid, "s-cap.store/c/0/0")
+        assert out.status == "ok", "a saturated prefetch must not break the serve"
+        assert [c[0] for c in calls] == ["singular"], \
+            f"no prefetch may run with every slot held: {calls}"
+    finally:
+        for _ in grabbed:
+            rc._PREFETCH_SLOTS.release()
+        restore()
+
+
+def test_prefetch_batch_is_byte_bounded():
+    """The batch lane asks for WHOLE members and holds the reply resident,
+    while the 16 MiB cap governs only the singular lane — so nothing on the
+    ABA side bounded a 24-member neighborhood of large chunks. The request is
+    sized against a local budget instead of an unstated remote one."""
+    assert rc.PREFETCH_BATCH_MAX_BYTES > 0
+    pid = "s_bb1"
+    big = 4 * 1024 * 1024                       # 4 MiB members
+    _register(pid, "s-bb.store", base_rel="", site="siteD", target=None,
+              ref="dref:bb", size=big)
+    payload = {f"c/0/{i}": b"x" * 16 for i in range(0, 30)}
+    calls: list = []
+    restore = _with_batch(_batch_fake(payload, calls))
+    try:
+        rc.serve_remote_chunk(pid, "s-bb.store/c/0/0")
+        batches = [c[1] for c in calls if c[0] == "batch"]
+        assert batches, "a neighborhood prefetch should still run"
+        allowed = max(1, rc.PREFETCH_BATCH_MAX_BYTES // big)
+        for rels in batches:
+            assert len(rels) <= allowed, \
+                f"batch of {len(rels)} x {big}B exceeds the byte budget"
+    finally:
+        restore()
+
+
 def test_prefetch_abandons_not_read_and_error_entries():
     # Budget-deferred guesses and wrong guesses are ABANDONED silently (future
     # misses) — exactly one batch call, no loop, and the deferred/wrong rels
@@ -716,6 +782,19 @@ def test_route_cache_headers_by_mutability(monkeypatch, tmp_path):
         resp = _pagoda3_store()("prj_h", "nolocal.store/m")
         cc = resp.headers.get("cache-control", "")
         assert want in cc, (immutable, cc)
+        # Project bytes: never license shared/intermediary caches to store them.
+        # ABA adds no auth of its own here — the deployment's proxy fronts it —
+        # so `public` would let that proxy keep another project's chunks.
+        assert "public" not in cc, f"project chunks must not be public: {cc}"
+        if immutable:
+            # The ref is minted ONCE over a home ABA does not own, drift is
+            # flag-only and nothing re-mints, so an in-place regeneration keeps
+            # the same URL. A year-long pin outlives any server-side wipe; keep
+            # the immutable win but bound it to something a regeneration can
+            # outlive.
+            import re as _re
+            age = int((_re.search(r"max-age=(\d+)", cc) or [0, 0])[1])
+            assert 0 < age <= 86400, f"ref-arm max-age too long to correct: {cc}"
 
 
 # ── the store route branch (main.pagoda3_store) ──────────────────────────────
@@ -1564,6 +1643,66 @@ def test_unmintable_shapes_no_mint_attempt(monkeypatch):
              "artifact_path": "/r/data.lstar.zarr"}, "unmint1") is None
     assert port.calls == [], "unmintable shapes must never touch the data plane"
     assert writes == []
+
+
+def test_mirrored_store_resolves_locally_instead_of_streaming(monkeypatch, tmp_path):
+    """A dataset whose bytes were MIRRORED here must not stream them back over
+    the WAN. `launch()` registers the ref arm BEFORE local resolution, so an
+    eligibility predicate blind to `local_mirror` sends every chunk over the
+    network with the whole store sitting on local disk — and the launch page's
+    own "Mirror here & retry" lever can never take effect.
+
+    Drives the REAL launch() (the existing local-mirror ceiling calls
+    _resolve_source directly and so cannot see this ordering)."""
+    import content.bio.viewers.launchers.pagoda3 as p3
+    monkeypatch.setattr(
+        "core.compute.retention.range_read_available", lambda verb=None: True)
+    store = tmp_path / "mirror" / "data.lstar.zarr"
+    store.mkdir(parents=True)
+    (store / ".zmetadata").write_text("{}")
+    ent = _by_ref_remote_entity("ds_m", ref="sha256:x")
+    ent["metadata"]["local_mirror"] = {"path": str(store)}
+    monkeypatch.setattr("core.graph.entities.get_entity", lambda eid: ent)
+
+    def _no_register(*a, **k):
+        raise AssertionError("a mirrored store must not register a remote stream")
+    monkeypatch.setattr("core.viewers.range_cache.register_remote_store",
+                        _no_register)
+    node = {"entity_id": "ds_m", "name": "data.lstar.zarr",
+            "artifact_path": str(store)}
+    assert p3.ref_stream_facts(ent, "data.lstar.zarr") is None, \
+        "mirrored bytes are not a streaming candidate (the note shares this)"
+    # The ordering fix itself, covering BOTH arms: launch() calls this before it
+    # resolves a local source, so it must decline outright. (A local store is
+    # still SERVED through /pagoda3-store/, so the URL prefix cannot tell the
+    # arms apart — the registration is what distinguishes them.)
+    assert p3._register_remote_stream(node, "mir1") is None, \
+        "a locally-mirrored store must not register a remote stream"
+
+    # WIDE / the other side: with the mirror gone from disk, streaming is the
+    # right answer again — a stale flag must not strand the viewer.
+    import shutil
+    shutil.rmtree(store)
+    ent["metadata"]["local_mirror"] = {"path": str(store)}   # flag still set
+    node.pop("artifact_path")
+    assert p3.ref_stream_facts(ent, "data.lstar.zarr") is not None, \
+        "a deleted mirror must fall back to streaming, not dead-end"
+
+
+def test_drift_flagged_dataset_stops_minting_immutable_urls(monkeypatch):
+    """A dataset already recorded as drifted/missing at its source must not
+    keep serving cacheable chunks off a ref that was minted before the change:
+    the ref is never re-minted, so the URL would be identical while the bytes
+    are not."""
+    import content.bio.viewers.launchers.pagoda3 as p3
+    for flag in ("source_changed", "source_missing"):
+        ent = _by_ref_remote_entity("ds_d", ref="sha256:x")
+        ent["metadata"][flag] = True
+        assert p3.ref_stream_facts(ent, "data.lstar.zarr") is None, \
+            f"{flag} must retire the ref arm until the source is re-checked"
+    # WIDE / the other side: the unflagged shape still streams.
+    assert p3.ref_stream_facts(
+        _by_ref_remote_entity("ds_ok", ref="sha256:x"), "data.lstar.zarr")
 
 
 def test_per_verb_matrix_ref_absent_run_present(monkeypatch):

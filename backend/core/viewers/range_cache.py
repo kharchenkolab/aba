@@ -279,6 +279,24 @@ _PREFETCH_INFLIGHT: set = set()
 # it on a daemon thread so it never sits between the browser and its chunk.
 PREFETCH_INLINE = False
 
+# Concurrency ceiling for those daemon threads. The in-flight set above dedupes
+# per SEED, so N distinct missed coordinates still meant N threads — and each
+# one drives the substrate itself (`adapter.sync_call` runs on the CALLING
+# thread, bypassing the adapter's own worker pool), so a browser walking a grid
+# faster than batches complete opened unbounded concurrent sessions to the site
+# and contended with the foreground singular reads this design exists to keep
+# fast. A miss that cannot get a slot just skips its warm-up — the chunk is
+# still served, the neighborhood is simply a future miss.
+_PREFETCH_SLOTS = threading.BoundedSemaphore(2)
+
+# Byte ceiling for ONE batched neighborhood call. The batch asks for WHOLE
+# members and holds the decoded reply resident, while `retention.RANGE_CAP`
+# clamps only the singular offset lane — so nothing on this side bounded a
+# 24-member neighborhood of large chunks, and the only real limit was the
+# substrate's own unstated call budget. Sized from the store's recorded member
+# size when there is one.
+PREFETCH_BATCH_MAX_BYTES = 32 * 1024 * 1024
+
 
 def _spawn_prefetch(pid: str, entry: dict, store_key: str, safe: str,
                     site: str) -> None:
@@ -294,6 +312,12 @@ def _spawn_prefetch(pid: str, entry: dict, store_key: str, safe: str,
         if key in _PREFETCH_INFLIGHT:
             return
         _PREFETCH_INFLIGHT.add(key)
+    # Bounded: with every slot busy we drop this warm-up rather than queue
+    # another substrate-driving thread behind it.
+    if not _PREFETCH_SLOTS.acquire(blocking=False):
+        with _PREFETCH_LOCK:
+            _PREFETCH_INFLIGHT.discard(key)
+        return
 
     def run():
         try:
@@ -303,6 +327,7 @@ def _spawn_prefetch(pid: str, entry: dict, store_key: str, safe: str,
         except Exception:  # noqa: BLE001 — best-effort by contract
             pass
         finally:
+            _PREFETCH_SLOTS.release()
             with _PREFETCH_LOCK:
                 _PREFETCH_INFLIGHT.discard(key)
 
@@ -335,6 +360,14 @@ def _prefetch_siblings(pid: str, entry: dict, store_key: str,
             if _safe_rel(g) == g and not os.path.isfile(os.path.join(croot, g))]
     if not want:
         return
+    # Byte budget: the reply arrives whole and decoded, so the request is sized
+    # against the store's recorded member size rather than the substrate's
+    # unstated call budget. Unknown size → trust the count cap alone. Trimmed
+    # BEFORE the clock starts so the instrumented duration covers the call we
+    # actually make.
+    member = entry.get("size")
+    if isinstance(member, int) and member > 0:
+        want = want[:max(1, PREFETCH_BATCH_MAX_BYTES // member)]
     t0 = time.monotonic()
     try:
         reply = call([to_remote(r) for r in want])
