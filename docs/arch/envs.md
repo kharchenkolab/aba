@@ -195,6 +195,35 @@ the node interpreter and is graded `env_grade: node-system` on its exec record
 ([`provenance.md`](provenance.md)). Nothing is installable into a bare kernel — `ensure_capability`
 targets the project session, not the node's interpreter.
 
+**The system lever is the ONLY path to the node interpreter.** A step that asked for the project's
+environment and cannot resolve one **fails**; it is never relocated onto whatever `python3` sits on
+the node's PATH, because that silently swaps the entire scientific stack for an arbitrary one.
+`core/compute/errors.py:is_env_resolution_failure` is the single policy, consumed by both places
+that resolve env identity — `core/jobs/weft_submitter._detached_env` (the detached/one-shot choke
+point, which the interactive lane also falls through to) and
+`content/bio/tools/run_exec._run_remote_kernel`. It carries weft's diagnosis
+(`solver_message`/`stderr_tail`) into an `env.unresolved` error naming the levers, and an unknown
+named env is refused rather than quietly downgraded. Its `untyped_is_env` flag encodes the caller's
+scope: a `try` around env resolution *alone* treats an untyped failure as an env failure, while one
+around a whole kernel start does not (a kernel that merely cannot start keeps its legitimate
+one-shot fallback). Guarded by `tests/test_env_resolution_honesty.py`.
+
+**Session snapshottability is a first-class health fact.** The default session travels to another
+machine only as a **frozen snapshot**, and a snapshot re-solves the base plus every recorded
+addition — so one addition that contradicts the base's pins makes the project's whole remote lane
+unusable. Two mechanisms keep that from being latent: capability installs pass `solve_at_add=True`
+(weft `fast=False`), pulling the substrate's otherwise-deferred conflict check forward so a
+contradicting leaf raises `env.solve_conflict` **at add time** with nothing installed and nothing
+recorded — where `_is_constraint_conflict` routes it into an isolated env instead; and
+`project_env.snapshot_health()` reports the verdict (surfaced by `inspect_env`, which warns when
+the default session cannot be frozen). When a session is already poisoned,
+`project_env.repair(pid, lang, drop_specs=…|drop_last=True)` prunes the offending addition, stops
+the session, and lets `ensure()` rebuild from the base with the remaining additions replayed — the
+substrate needs no un-install verb because the registry is the record. The overlay's
+`shadows_base` warning (an addition shadowing base-pinned versions) rides the ensure envelope and
+is surfaced to the agent. Guarded by `tests/test_capability_install_conflict.py` and
+`tests/test_env_session_repair.py`.
+
 ## Integrity, verification & disk reclaim
 
 - **Real-import verification** (`verify_python_imports`, `core/exec/verify.py:22`) — a
