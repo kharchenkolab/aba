@@ -39,6 +39,8 @@ def check(label, cond, detail=""):
     print(f"  [{'PASS' if cond else 'FAIL'}] {label}" + (f" — {detail}" if detail else ""))
     if not cond:
         _failures.append(label)
+        raise AssertionError(  # armed: pytest sees check() failures
+            f"{label}" + (f" — {detail}" if detail else ""))
 
 
 def _make_exec(run_id, thread_id, code, started_at):

@@ -650,10 +650,21 @@ def test_fresh_remote_kernel_gets_orientation_and_an_honest_note():
 
 
 def _run():
+    import inspect
     import traceback
     fails = 0
     for name, fn in sorted(globals().items()):
         if not (name.startswith("test_") and callable(fn)):
+            continue
+        # Tests that take a pytest fixture (monkeypatch) cannot run here — this
+        # runner has no fixture machinery, and calling them bare raised a
+        # TypeError that counted as a real failure. They are covered by the
+        # pytest run (the guard suite's execution mode); say so rather than
+        # reporting a fake failure or silently skipping.
+        needs = [p for p in inspect.signature(fn).parameters
+                 if p in ("monkeypatch", "tmp_path", "capsys")]
+        if needs:
+            print(f"  [SKIP] {name} — pytest-only (needs {', '.join(needs)})")
             continue
         try:
             fn()

@@ -31,6 +31,7 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 from core.graph._schema import init_db, _conn   # noqa: E402
 from core.graph import entities, exec_records   # noqa: E402
+from _substrate_gate import skip_without_substrate  # tests/ is on sys.path (pytest prepend + standalone)
 
 _failures: list[str] = []
 
@@ -39,6 +40,8 @@ def check(label, cond, detail=""):
     print(f"  [{'PASS' if cond else 'FAIL'}] {label}" + (f" — {detail}" if detail else ""))
     if not cond:
         _failures.append(label)
+        raise AssertionError(  # armed: pytest sees check() failures
+            f"{label}" + (f" — {detail}" if detail else ""))
 
 
 def test_schema_has_new_columns():
@@ -166,6 +169,8 @@ def test_integration_run_python_to_figure_entity():
     harvest. Materialization is explicit (user pin or auto-pin), so this
     integration test exercises pin_artifact as the entity-creation step.
     """
+    if skip_without_substrate():
+        return
     print("\n[8] integration: run_python → pin_artifact → figure entity carries exec_id")
     from content.bio.tools.run_exec import run_python
     from content.bio.lifecycle.registry import register_artifacts_from_tool_result

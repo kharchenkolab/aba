@@ -28,6 +28,7 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 from core.graph._schema import init_db                          # noqa: E402
 from core.graph import entities                                  # noqa: E402
+from _substrate_gate import skip_without_substrate  # tests/ is on sys.path (pytest prepend + standalone)
 
 _failures: list[str] = []
 
@@ -36,9 +37,13 @@ def check(label, cond, detail=""):
     print(f"  [{'PASS' if cond else 'FAIL'}] {label}" + (f" — {detail}" if detail else ""))
     if not cond:
         _failures.append(label)
+        raise AssertionError(  # armed: pytest sees check() failures
+            f"{label}" + (f" — {detail}" if detail else ""))
 
 
 def test_python_helper_pandas():
+    if skip_without_substrate():
+        return
     print("\n[1] harvest_table(pandas.DataFrame) creates a CSV picked up by the harvester")
     init_db()
     from content.bio.tools.run_exec import run_python
@@ -89,6 +94,8 @@ def test_python_helper_pandas():
 
 
 def test_python_helper_auto_name():
+    if skip_without_substrate():
+        return
     print("\n[2] harvest_table(df) with default name still works (auto-unique)")
     from content.bio.tools.run_exec import run_python
     code = (
@@ -107,6 +114,8 @@ def test_python_helper_auto_name():
 
 
 def test_python_helper_dict_fallback():
+    if skip_without_substrate():
+        return
     print("\n[3] harvest_table(dict) falls back to csv module")
     from content.bio.tools.run_exec import run_python
     code = (
@@ -122,6 +131,8 @@ def test_python_helper_dict_fallback():
 
 
 def test_python_helper_extension_normalization():
+    if skip_without_substrate():
+        return
     print("\n[4] harvest_table normalizes filename extension")
     from content.bio.tools.run_exec import run_python
     code = (
