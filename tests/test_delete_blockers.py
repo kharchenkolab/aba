@@ -52,6 +52,8 @@ from core.graph.entities import (  # noqa: E402
     create_entity, get_entity, update_entity,
 )
 from core.graph.edges import add_edge, edges_from, edges_to  # noqa: E402
+from core.config import project_data_dir  # noqa: E402
+from core.projects import current_project_id  # noqa: E402
 
 init_db()  # startup hook doesn't fire on import — create the schema ourselves
 
@@ -107,20 +109,51 @@ def test_outbound_provenance_stamp_never_blocks():
     assert any(s["id"] == fig and s["rel"] == "wasGeneratedBy" for s in stamps), stamps
 
 
-def test_inbound_consumption_stamp_never_blocks():
-    """run --used--> dataset: consumption bookkeeping on the dataset does
-    not make the run depend on it; the dataset is hard-deletable. (This
-    inbound-non-dep shape is also the regression probe for the local
-    _DEP_RELS shadowing bug — it 500'd, not 409'd.)"""
+def test_inbound_consumption_blocks_and_spares_the_bytes():
+    """run --used--> dataset: a live run CONSUMED this dataset, so deleting
+    it destroys that run's inputs — and the delete route removes the bytes
+    off disk in the same request. Unlike the lineage stamps, the target of a
+    `used` edge is not reconstructible, so it refuses with the informed 409
+    instead of erasing silently. The artifact must still be on disk after."""
     run = _mk("analysis", "Consumer run")
-    ds = _mk("dataset", "Input data")
+    data_root = Path(project_data_dir(current_project_id()))
+    data_root.mkdir(parents=True, exist_ok=True)
+    payload = data_root / "consumed_input"
+    payload.mkdir(exist_ok=True)
+    (payload / "data.parquet").write_text("x")
+    ds = _mk("dataset", "Input data", artifact_path=str(payload))
     add_edge(run, ds, "used")
     assert any(e["rel_type"] == "used" for e in edges_to(ds))  # armed
-    out = _delete(ds)
+    detail = _expect_409(ds)
+    assert any(r["id"] == run for r in detail["references"]), detail
+    assert payload.exists(), "a refused delete must not remove the bytes"
+
+
+def test_inbound_consumption_force_overrides():
+    """The override stays available: ?force deletes despite the consuming
+    run, which survives with the severed stamp (informed, not blocked)."""
+    run = _mk("analysis", "Consumer run 2")
+    ds = _mk("dataset", "Input data 2")
+    add_edge(run, ds, "used")
+    out = _delete(ds, force=True)
     assert out.get("ok") is True
     assert get_entity(ds) is None
     assert get_entity(run) is not None
     assert any(s["id"] == ds and s["rel"] == "used" for s in _severed(run))
+
+
+def test_inbound_generation_stamp_still_never_blocks():
+    """WIDE / the other side: making `used` a blocker must not promote the
+    OTHER bookkeeping stamps. A run's own output pointing back at it
+    (wasGeneratedBy) records history — the run stays deletable."""
+    run = _mk("analysis", "Producing run 2")
+    fig = _mk("figure", "Its output")
+    add_edge(fig, run, "wasGeneratedBy")
+    assert any(e["rel_type"] == "wasGeneratedBy" for e in edges_to(run))  # armed
+    out = _delete(run)
+    assert out.get("ok") is True
+    assert get_entity(run) is None
+    assert get_entity(fig) is not None
 
 
 def test_run_deletable_amid_stamps():
@@ -259,9 +292,32 @@ def test_force_without_blockers_is_noop_flag():
     assert get_entity(note) is None
 
 
+def test_preserved_cascade_member_records_the_severed_edge():
+    """A member kept out of the cascade (it's referenced from outside) has its
+    Result→member edge cut — the ONE case where an edge vanishes and the
+    entity survives. The survivor must carry the same severed_refs stamp every
+    other survivor gets; otherwise the honesty record has a hole exactly where
+    the graph changed under the user."""
+    res = _mk("result", "Result being deleted")
+    other = _mk("result", "Another result")
+    fig = _mk("figure", "Shared figure")
+    # cascade membership comes from metadata.members (the bio service), while
+    # the blocker/keep decision reads the edges — the fixture needs both.
+    update_entity(res, metadata={"members": [{"kind": "figure", "ref": fig}]})
+    add_edge(res, fig, "includes")
+    add_edge(other, fig, "includes")            # the outside reference
+    out = _delete(res, cascade="members", force=True)
+    assert get_entity(fig) is not None, "the shared member must be preserved"
+    assert any(s["id"] == res for s in _severed(fig)), \
+        f"a preserved member must record the cut edge: {_severed(fig)}"
+    assert any(s["id"] == fig for s in out.get("skipped", [])), out
+
+
 _TESTS = [
     test_outbound_provenance_stamp_never_blocks,
-    test_inbound_consumption_stamp_never_blocks,
+    test_inbound_consumption_blocks_and_spares_the_bytes,
+    test_inbound_consumption_force_overrides,
+    test_inbound_generation_stamp_still_never_blocks,
     test_run_deletable_amid_stamps,
     test_synthesis_outbound_refs_never_block,
     test_result_delete_not_blocked_by_parent_run,
@@ -271,6 +327,7 @@ _TESTS = [
     test_archived_dependent_does_not_block_or_get_stamped,
     test_edgeless_entity_deletes_clean,
     test_force_without_blockers_is_noop_flag,
+    test_preserved_cascade_member_records_the_severed_edge,
 ]
 
 

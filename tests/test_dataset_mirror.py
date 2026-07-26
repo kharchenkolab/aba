@@ -116,6 +116,52 @@ def test_mirror_local_dataset_is_a_400(monkeypatch):
     assert r.status_code == 400
 
 
+def test_mirror_transfer_failure_cleans_up_and_answers_typed(monkeypatch):
+    """A ComputeError mid-transfer (link drops at 60%) must NOT escape as a
+    bare 500 leaving a half-copied tree on disk: the partial is removed and
+    the caller gets a typed refusal it can render."""
+    from core.compute.errors import ComputeError
+    seen = {}
+
+    def _fetch(meta, to_path, **kw):
+        seen["dest"] = to_path                      # simulate a partial transfer
+        p = Path(to_path); p.mkdir(parents=True, exist_ok=True)
+        (p / "part.bin").write_bytes(b"half")
+        raise ComputeError("transport.failed", "connection reset by siteA")
+    monkeypatch.setattr(dmod, "fetch", _fetch)
+    did = _remote_ds(layout="directory")
+    r = _client().post(f"/api/datasets/{did}/mirror",
+                       params={"project_id": "default"})
+    assert r.status_code == 409, f"expected a typed refusal, got {r.status_code}"
+    assert not Path(seen["dest"]).exists(), \
+        "the half-copied tree must not survive a failed mirror"
+    ent = get_entity(did)
+    assert not (ent["metadata"] or {}).get("local_mirror"), \
+        "a failed mirror must not claim a local copy"
+    assert ent["artifact_path"] is None
+
+
+def test_mirror_write_preserves_a_concurrent_metadata_stamp(monkeypatch):
+    """The mirror's metadata write must not clobber a single-key stamp that
+    landed DURING the transfer (close_run's drift flags are the live case)."""
+    from core.graph.entities import patch_metadata
+
+    def _fetch(meta, to_path, **kw):
+        patch_metadata(did, {"source_changed": True})   # lands mid-transfer
+        Path(to_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(to_path).write_bytes(b"bytes")
+        return {"ok": True, "ref": "dref:y", "path": to_path}
+    monkeypatch.setattr(dmod, "fetch", _fetch)
+    did = _remote_ds()
+    r = _client().post(f"/api/datasets/{did}/mirror",
+                       params={"project_id": "default"})
+    assert r.status_code == 200, r.text
+    md = get_entity(did)["metadata"]
+    assert md.get("local_mirror"), "the mirror must still be recorded"
+    assert md.get("source_changed") is True, \
+        "a stamp written during the transfer was lost to a whole-blob write"
+
+
 if __name__ == "__main__":
     import subprocess
     raise SystemExit(subprocess.call(

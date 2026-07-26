@@ -120,8 +120,11 @@ def dataset_mirror(did: str, _pid: str = Depends(require_project)):
     the local copy lands in the project data dir and is recorded as
     `artifact_path` + `metadata.local_mirror`, so previews and viewers serve
     without a remote hop."""
+    import shutil
     import time
+    from core.compute.errors import ComputeError
     from core.config import project_data_dir
+    from core.graph.entities import patch_metadata
     from core.projects import current_project_id
     from core.data.datasets import fetch, explain_data_error
 
@@ -139,7 +142,20 @@ def dataset_mirror(did: str, _pid: str = Depends(require_project)):
               or (desc.get("n_files") or 0) > 1)
     dest = (_unique_dir_path if is_dir else _unique_path)(
         Path(str(project_data_dir(current_project_id()))) / base)
-    out = fetch(md, str(dest))
+    # A transfer that dies partway (the substrate RAISES; only the guardrail and
+    # ident states come back as dicts) must not leave a half-copied tree behind:
+    # the files tree grafts on-disk folders with a real artifact_path, so an
+    # orphan would then be served LOCAL-FIRST as if it were the whole dataset,
+    # and each retry would strand another `name (2)` copy.
+    try:
+        out = fetch(md, str(dest))
+    except ComputeError as e:
+        shutil.rmtree(dest, ignore_errors=True)
+        Path(dest).unlink(missing_ok=True)          # file-shaped partial
+        # describe() — NOT f"{e}": the diagnosis weft attaches lives in `hints`,
+        # and a stringly render drops it (core/compute/errors.describe).
+        from core.compute.errors import describe as _describe
+        raise HTTPException(409, f"cannot mirror: {_describe(e)}") from e
     if out.get("error") == "fetch_guardrail":
         raise HTTPException(
             413, f"{(out.get('total_bytes') or 0) / 1e9:.1f} GB exceeds the "
@@ -149,9 +165,12 @@ def dataset_mirror(did: str, _pid: str = Depends(require_project)):
         msg = explain_data_error(out) or out.get("state") or out["error"]
         raise HTTPException(409, f"cannot mirror: {msg}")
     local = out.get("path") or str(dest)
-    md["local_mirror"] = {"path": local, "at": int(time.time()),
-                          "ref": out.get("ref")}
-    update_entity(did, artifact_path=local, metadata=md)
+    # Single-key patch, NOT the `md` blob read before the transfer: a stamp that
+    # landed during a multi-minute fetch (close_run's drift flags) would be lost
+    # to a whole-blob write. The column still goes through update_entity.
+    patch_metadata(did, {"local_mirror": {"path": local, "at": int(time.time()),
+                                          "ref": out.get("ref")}})
+    update_entity(did, artifact_path=local)
     return {"ok": True, "path": local}
 
 

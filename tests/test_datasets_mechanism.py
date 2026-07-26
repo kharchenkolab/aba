@@ -136,6 +136,37 @@ def test_missing_path_records_home_with_exists_false(fake):
     assert out["fingerprint"] == {"exists": False} and out["ref"] is None
 
 
+def test_unreachable_site_is_not_reported_as_absent_data(fake):
+    """A site we cannot REACH is not a source that is GONE. The absent-path
+    branch used to fire on any detail containing "not" — which "cannot
+    connect" and "host not reachable" both satisfy — turning a transient
+    outage into a persisted `source_missing` the user has to clear by hand."""
+    from core.compute.errors import ComputeError
+
+    for detail in ("cannot connect to siteX",
+                   "host not reachable",
+                   "another transport failure"):
+        def _boom(name, *a, **kw):
+            raise ComputeError("transport.failed", detail)
+        fake.sync_call = _boom
+        with pytest.raises(ComputeError):
+            ds.fingerprint_site_path("/groups/lab/x", "vbc")
+        with pytest.raises(ComputeError):
+            ds.content_shape("/groups/lab/x", "vbc")
+
+    # WIDE / the other side: a genuinely absent path still reads as absent,
+    # by code AND by the substrate's not-found wording.
+    def _gone_code(name, *a, **kw):
+        raise ComputeError("data.missing", "gone")
+    fake.sync_call = _gone_code
+    assert ds.fingerprint_site_path("/g/x", "vbc") == {"exists": False}
+
+    def _gone_detail(name, *a, **kw):
+        raise ComputeError("weft.error", "no such file or directory")
+    fake.sync_call = _gone_detail
+    assert ds.fingerprint_site_path("/g/x", "vbc") == {"exists": False}
+
+
 def test_produced_ingests_now(fake):
     out = ds.ingest_produced("/tmp/jobdir/out.parquet")
     assert out["origin_class"] == "run" and out["ref"]
@@ -193,6 +224,44 @@ def test_fetch_guardrail_refuses_big_with_placement_suggestion(fake):
     assert not out["ok"] and "vbc" in out["suggestion"]
     r = ds.fetch(meta, "/tmp/x")
     assert r["error"] == "fetch_guardrail"
+
+
+def test_fetch_guardrail_refuses_an_unknown_or_undercounted_size(fake):
+    """The gate must refuse what it cannot measure. A fingerprint truncated at
+    the entry cap sums only its first slice, so a huge tree presents a small
+    `total_bytes`; an absent size measures nothing at all. Both used to pass."""
+    home = {"site": "vbc", "path": "/g/a"}
+    truncated = {"descriptor": {"total_bytes": 1000, "truncated": True},
+                 "home": home}
+    assert not ds.fetch_check(truncated)["ok"], \
+        "a truncated fingerprint undercounts — it cannot clear the gate"
+    unknown = {"descriptor": {"n_files": 3}, "home": home}      # no total_bytes
+    assert not ds.fetch_check(unknown)["ok"], \
+        "an unknown size must not read as small"
+    # WIDE / the other side: a known, complete, small size still passes.
+    ok = {"descriptor": {"total_bytes": 1000, "truncated": False}, "home": home}
+    assert ds.fetch_check(ok)["ok"]
+
+
+def test_eager_mint_declines_an_undercounted_fingerprint(fake):
+    """Same gate, the registration side: an eager mint is a full on-site read
+    pass inside a synchronous tool call, so a truncated (undercounted) size
+    must not buy its way past the budget."""
+    fake.trees["/groups/lab/huge"] = T1
+    orig_fp = ds.fingerprint_site_path
+
+    def _truncated(path, site):
+        fp = orig_fp(path, site)
+        fp["truncated"] = True          # the >50k-entry shape
+        return fp
+    ds.fingerprint_site_path = _truncated
+    try:
+        out = ds.register_source("/groups/lab/huge", site="vbc",
+                                 eager_ref_max_bytes=10_000)
+    finally:
+        ds.fingerprint_site_path = orig_fp
+    assert out["ref"] is None, "a truncated fingerprint must not mint eagerly"
+    assert out["fingerprint"]["n_files"] == 2      # the record still stands
 
 
 def test_fetch_small_goes_through(fake):

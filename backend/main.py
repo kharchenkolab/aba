@@ -263,7 +263,7 @@ def entities_patch(entity_id: str, req: EntityPatch, _pid: str = Depends(require
 # run, rev2 --wasRevisionOf--> rev1, claim --supports--> result). A DEPENDENCY
 # edge ("X includes / supports / was-derived-from / is-a-revision-of Y") means
 # X would BREAK if Y vanished — inbound ones are the real "live references" a
-# delete guard exists to protect. Everything else (used / wasGeneratedBy /
+# delete guard exists to protect. Everything else (wasGeneratedBy /
 # produced_by lineage stamps) is BOOKKEEPING: it records history, and deleting
 # the recorded thing doesn't break the record's other end. The cascade branch
 # below has always used this set for exactly this reason ("provenance edges …
@@ -274,6 +274,18 @@ def entities_patch(entity_id: str, req: EntityPatch, _pid: str = Depends(require
 # UnboundLocalError every earlier read on the non-cascade path).
 _DEP_RELS = {"includes", "supports", "wasDerivedFrom", "wasRevisionOf"}
 
+# The TOP-LEVEL delete blocker adds one bookkeeping rel to that set: `used`.
+# The reasoning above holds for the lineage stamps — a record's other end
+# survives the recorded thing vanishing — but a `used` edge means a live run
+# CONSUMED this entity, and for a dataset the same request also removes the
+# bytes from disk (below). That target is not reconstructible from the record,
+# so it earns the informed 409 (archive / delete the run / delete anyway)
+# rather than erasing a run's inputs with no prompt. Deliberately NOT added to
+# _DEP_RELS itself: the cascade branch uses that set to decide whether a member
+# has live references outside the cascade, where consumption should stay
+# non-blocking (a Result's figure is still containment even if a run read it).
+_BLOCK_RELS = _DEP_RELS | {"used"}
+
 
 @app.delete("/api/entities/{entity_id}")
 def entities_delete(entity_id: str, hard: bool = False,
@@ -283,9 +295,10 @@ def entities_delete(entity_id: str, hard: bool = False,
 
     With ?hard=true: hard-delete. Refuses — 409 {error, references,
     can_override: true} — only when live DEPENDENTS exist: non-archived
-    entities pointing AT this one via a dependency-forming rel (_DEP_RELS).
-    Bookkeeping stamps (used / wasGeneratedBy / produced_by) and outbound
-    edges (things THIS entity builds on) never block. ?force=true deletes
+    entities pointing AT this one via a dependency-forming rel, or a live
+    run that CONSUMED it (_BLOCK_RELS = _DEP_RELS + used). Lineage stamps
+    (wasGeneratedBy / produced_by) and outbound edges (things THIS entity
+    builds on) never block. ?force=true deletes
     despite dependents (informed override — the UI shows the list first).
     Every surviving, non-archived neighbor of a hard-deleted entity gets a
     metadata `severed_refs` stamp {id, type, title, at, rel, dir} recording
@@ -347,7 +360,7 @@ def entities_delete(entity_id: str, hard: bool = False,
     blockers: list[dict] = []
     for e in edges_to(entity_id):
         oid = e["source_id"]
-        if oid == entity_id or oid in cascade_set or e["rel_type"] not in _DEP_RELS:
+        if oid == entity_id or oid in cascade_set or e["rel_type"] not in _BLOCK_RELS:
             continue
         other = get_entity(oid)
         if other and other.get("status") != "archived":
@@ -450,9 +463,15 @@ def entities_delete(entity_id: str, hard: bool = False,
     import time as _t
     _stamp = {"id": entity_id, "type": ent.get("type"),
               "title": ent.get("title"), "at": int(_t.time())}
+    _kept = {s["id"] for s in skipped}     # preserved members: edge cut, entity lives
     for oid, meta in all_neighbors.items():
-        if oid in cascade_set:
-            continue                          # cascade-deleted or already detached
+        if oid in cascade_set and oid not in _kept:
+            continue                          # cascade-deleted along with us
+        # A PRESERVED member is the one case where an edge vanishes and the
+        # entity survives (its Result→member edges were removed above so the
+        # Result disappears cleanly). It is a survivor like any other, so it
+        # gets the same stamp — otherwise the honesty record is missing exactly
+        # where the graph changed under the user.
         try:
             nb = get_entity(oid)
             if nb and nb.get("status") != "archived":
@@ -1524,12 +1543,21 @@ def pagoda3_store(pid: str, relpath: str):
         if out.status == "ok" and out.path:
             resp = FileResponse(out.path)
             resp.headers["Cross-Origin-Resource-Policy"] = "same-origin"
-            # Content-addressed (ref-arm) chunks never change under their URL —
-            # a byte change mints a new store_key — so the browser may cache
-            # them as immutable (kills the ~10x per-member revalidation churn).
+            # Content-addressed (ref-arm) chunks are stable under their URL — a
+            # byte change mints a new store_key — so the browser may cache them
+            # as immutable (kills the ~10x per-member revalidation churn).
             # Run-arm keys survive re-derives → keep the no-cache revalidation.
+            #
+            # `private`, and a day rather than a year: the ref is minted ONCE
+            # over an external home ABA does not own, drift is flag-only and
+            # nothing ever re-mints it, so an in-place regeneration on the site
+            # changes the bytes while the URL stays identical. A year-long pin
+            # is unreachable by any server-side cache wipe; a day still buys
+            # the revalidation win but stays correctable. `private` because
+            # these are project bytes and ABA adds no auth of its own here —
+            # `public` licenses the fronting proxy to store them.
             resp.headers["Cache-Control"] = (
-                "public, max-age=31536000, immutable" if out.immutable
+                "private, max-age=86400, immutable" if out.immutable
                 else "no-cache")
             return resp
         raise HTTPException(out.http, out.detail)
