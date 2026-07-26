@@ -48,14 +48,33 @@ def test_retain_run_outputs_pins_produced_per_target(monkeypatch):
         assert kw["include"] == ["big.h5ad", "samples/A/qc.csv", "umap.png"]
 
 
-def _stub_recheck_world(monkeypatch, datasets, run_sites, states):
+def _stub_recheck_world(monkeypatch, datasets, run_sites, states,
+                        inputs=None, raises=()):
     """Wire _recheck_consumed_inputs' dependencies: a run entity with the
     given executed sites, a dataset list, and a per-dataset revalidate state.
-    Records every patch_metadata call as (id, fields)."""
+    Records every patch_metadata call as (id, fields).
+
+    `inputs` = the entity ids the run's exec records recorded as consumed
+    (default: every dataset — the recheck is scoped to a run's OWN inputs).
+    `raises` = keys whose revalidate blows up, for the best-effort guards.
+    Exposes `patches.checked` — the datasets revalidate was actually called
+    on, so a guard can assert what the sweep did NOT touch."""
     import core.data.datasets as dmod
+    class _PatchLog(list):
+        """A list that also carries what revalidate was called on."""
+        checked: list
+
     ent = {"id": "run-1", "metadata": {"run": {"sites": run_sites}}}
     store = {d["id"]: d for d in datasets}
-    patches = []
+    patches = _PatchLog()
+    checked: list = []
+    ids = [d["id"] for d in datasets] if inputs is None else list(inputs)
+    monkeypatch.setattr(
+        "core.graph.exec_records.list_by_run",
+        lambda rid, **kw: [{"exec_id": "x1"}])
+    monkeypatch.setattr(
+        "core.graph.exec_records.get",
+        lambda xid: {"inputs": [{"ref": i, "kind": "dataset"} for i in ids]})
 
     def _get(rid):
         return store.get(rid, ent if rid == "run-1" else None)
@@ -73,8 +92,14 @@ def _stub_recheck_world(monkeypatch, datasets, run_sites, states):
     monkeypatch.setattr(runsmod, "get_entity", _get)
     monkeypatch.setattr("core.graph.entities.list_entities", _list)
     monkeypatch.setattr("core.graph.entities.patch_metadata", _patch)
-    monkeypatch.setattr(dmod, "revalidate",
-                        lambda md: {"state": states.get(md.get("_k"), "unchanged")})
+    def _reval(md):
+        k = md.get("_k")
+        checked.append(k)
+        if k in raises:
+            raise RuntimeError(f"site unreachable for {k}")
+        return {"state": states.get(k, "unchanged")}
+    monkeypatch.setattr(dmod, "revalidate", _reval)
+    patches.checked = checked            # type: ignore[attr-defined]
     return patches
 
 
@@ -144,6 +169,41 @@ def test_recheck_quiet_when_inputs_unchanged(monkeypatch):
         states={"a": "unchanged", "b": "unchanged"})
     runsmod._recheck_consumed_inputs("run-1")
     assert patches == []
+
+
+def test_recheck_only_touches_the_runs_own_inputs(monkeypatch):
+    """Scope: the sweep re-validates what THIS run consumed, not every
+    dataset in the project. An unrelated dataset on the same machine costs a
+    full stat walk per close (and plan-Go closes several runs at once), so it
+    must never be fingerprinted — even though it would flag as drifted."""
+    patches = _stub_recheck_world(
+        monkeypatch,
+        datasets=[_ds("mine", "local"), _ds("unrelated", "local")],
+        run_sites=[],
+        states={"mine": "drifted", "unrelated": "drifted"},
+        inputs=["ds_mine"])                      # only this one was consumed
+    runsmod._recheck_consumed_inputs("run-1")
+    assert patches.checked == ["mine"], \
+        f"revalidate must not walk datasets the run never used: {patches.checked}"
+    assert [p[0] for p in patches if p[0] != "run-1"] == ["ds_mine"]
+
+
+def test_recheck_is_per_dataset_best_effort(monkeypatch):
+    """One unreachable site must not abort the rest of the sweep, and must not
+    swallow the run-level roll-up for the inputs that DID check out."""
+    patches = _stub_recheck_world(
+        monkeypatch,
+        datasets=[_ds("boom", "siteX"), _ds("fine", "siteX")],
+        run_sites=["siteX"],
+        states={"fine": "drifted"},
+        raises=("boom",))
+    runsmod._recheck_consumed_inputs("run-1")
+    assert "fine" in patches.checked, \
+        "a raise on one dataset aborted the remaining ones"
+    assert any(p[0] == "ds_fine" for p in patches)
+    run_patch = [p for p in patches if p[0] == "run-1"]
+    assert run_patch and run_patch[0][1]["run.inputs_modified"] == ["ds_fine"], \
+        "the run stamp was lost when an earlier dataset raised"
 
 
 def test_retain_run_outputs_noop_without_targets(monkeypatch):

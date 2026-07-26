@@ -296,6 +296,30 @@ def close_run(thread_id: str) -> Optional[str]:
     return rid
 
 
+def _consumed_input_ids(run_id: str) -> set:
+    """Entity ids this run's steps actually recorded as inputs.
+
+    The recheck exists to catch a source mutated BY THIS RUN, so its scope is
+    the run's own inputs — swept over every dataset in the project it costs a
+    full stat walk each (up to the fingerprint entry cap), on a path where one
+    plan-Go can close several idle runs back to back. `inputs[]` lives in the
+    exec record's hydrated body, not its index row, so this reads the sidecar
+    per step. Empty set on any failure → the caller re-validates nothing,
+    which is the safe direction for a best-effort honesty sweep."""
+    out: set = set()
+    try:
+        from core.graph.exec_records import get as _xget, list_by_run as _lbr
+        for row in _lbr(run_id) or []:
+            rec = _xget(row.get("exec_id")) or {}
+            for i in rec.get("inputs") or []:
+                ref = i.get("ref")
+                if ref:
+                    out.add(ref)
+    except Exception as e:  # noqa: BLE001 — scope failure must not block a close
+        _log.debug("input scope lookup failed for %s: %s", run_id, e)
+    return out
+
+
 def _recheck_consumed_inputs(run_id: str) -> None:
     """Best-effort, never blocks a close. See close_run's item-E note."""
     try:
@@ -305,17 +329,28 @@ def _recheck_consumed_inputs(run_id: str) -> None:
         ent = get_entity(run_id)
         run_md = dict((ent or {}).get("metadata") or {})
         run_sites = {"local", *((run_md.get("run") or {}).get("sites") or [])}
+        consumed = _consumed_input_ids(run_id)
         modified: list = []
         for d in list_entities(type_filter="dataset", include_archived=False):
             md = d.get("metadata") or {}
             home = md.get("home") or {}
+            if d["id"] not in consumed:
+                continue                    # this run never read it — see below
             if not home.get("path"):
                 continue
             if (home.get("site") or "local") not in run_sites:
                 continue                    # the run never touched that machine
             if md.get("source_changed") or md.get("source_missing"):
                 continue                    # already flagged — nothing new to say
-            out = revalidate(md)
+            # PER-DATASET best-effort: one unreachable home must not abort the
+            # remaining inputs (nor drop the roll-up stamp for those that did
+            # check out) — a whole-loop guard turned a single site outage into
+            # a silently half-finished sweep.
+            try:
+                out = revalidate(md)
+            except Exception as e:  # noqa: BLE001
+                _log.debug("input recheck skipped %s: %s", d["id"], e)
+                continue
             state = out.get("state")
             # BOTH bad shapes count (review finding: `missing` was skipped —
             # a run that DELETES/MOVES an input home in place is the other
