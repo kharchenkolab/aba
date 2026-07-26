@@ -135,7 +135,9 @@ def register_source(source: str, *, site: Optional[str] = None,
     * site/local path → durable-home record: fingerprint + descriptor,
       NO ingest, NO ref (content identity mints at first use). Set
       `eager_ref_max_bytes` > 0 to mint the reference-in-place ref
-      immediately for small data (one read pass).
+      immediately for data under that size (one read pass, on-site).
+      The eager mint is BEST-EFFORT: a mint failure leaves `ref` None
+      (the registration record stands; first use mints lazily).
     """
     comp = _comp()
     if is_url(source):
@@ -163,8 +165,15 @@ def register_source(source: str, *, site: Optional[str] = None,
            "descriptor": descriptor_from(fp),
            "ref": None}
     if eager_ref_max_bytes and (fp.get("total_bytes") or 0) <= eager_ref_max_bytes:
-        r = comp.sync_call("data_register", abspath, site=site, ingest=False)
-        out["ref"] = r["ref"]
+        # BEST-EFFORT: identity minting must never fail a REGISTRATION — the
+        # durable record (home + fingerprint + descriptor) already stands; a
+        # ref that failed to mint stays absent and is minted lazily at first
+        # use (e.g. the viewer launch's ref-arm mint). One read pass, on-site.
+        try:
+            r = comp.sync_call("data_register", abspath, site=site, ingest=False)
+            out["ref"] = r["ref"]
+        except Exception:  # noqa: BLE001 — ref stays None; the record stands
+            pass
     return out
 
 

@@ -341,25 +341,35 @@ def ref_stream_facts(e: "dict | None", name: str) -> "dict | None":
 
     Eligible iff: `name` is the directory-store viewer shape (`.lstar.zarr` —
     a FILE would need conversion, which needs local bytes); the entity records
-    a data-plane content `ref`; `dataset_location` says remote + by-reference;
-    AND the recorded payload shape CONFIRMS a directory tree —
-    descriptor/fingerprint `n_files >= 2` (a single FILE fingerprints as
-    n_files=1, `core/data/external_ref.py`; a chunked store always has metadata
-    + chunk members). An absent or inconclusive shape REFUSES to the
-    materialize path: a FILE-shaped ref wearing the store suffix would
-    stream-register and then mute-404 every chunk (the substrate refuses
-    rel-on-FILE), where the whole-fetch path handles both shapes correctly —
-    refusal costs one gated fetch, admission costs a dead viewer.
+    a data-plane content `ref` OR a MINTABLE identity (ref absent but a durable
+    home path — `home.path` / `ref_path` — recorded: the path-lane registration
+    shape, whose ref mints lazily; the launcher mints it at click,
+    `_mint_dataset_ref`, and the answer carries `mintable: True` + `path`);
+    `dataset_location` says remote + by-reference; AND the recorded payload
+    shape CONFIRMS a directory tree — descriptor/fingerprint `n_files >= 2`
+    (a single FILE fingerprints as n_files=1, `core/data/external_ref.py`;
+    a chunked store always has metadata + chunk members). An absent or
+    inconclusive shape REFUSES to the materialize path: a FILE-shaped ref
+    wearing the store suffix would stream-register and then mute-404 every
+    chunk (the substrate refuses rel-on-FILE), where the whole-fetch path
+    handles both shapes correctly — refusal costs one gated fetch, admission
+    costs a dead viewer.
 
-    Returns the registration facts `{ref, site, size, digest}`, or None.
-    Never raises."""
+    The mintable answer is a PROMISE the note may repeat: the one accepted
+    divergence is a mint FAILURE at click, which degrades that launch to the
+    materialize / honesty-bridge path after the note said streaming — the
+    mirror lever is unaffected, so no hedging wording is required.
+
+    Returns the registration facts `{ref, site, size, digest}` (plus
+    `mintable, path` when the ref is to be minted), or None. Never raises."""
     try:
         if not name.endswith(_STORE_SUFFIX):
             return None                         # only a dir store can stream a ref
         md = (e or {}).get("metadata") or {}
         ref = md.get("ref")
-        if not ref:
-            return None                         # ref:None registration — cannot stream
+        mint_path = (md.get("home") or {}).get("path") or md.get("ref_path")
+        if not ref and not mint_path:
+            return None             # no identity and nothing to mint one from
         from content.bio.data_location import dataset_location
         loc = dataset_location(e or {})
         if not (loc.get("remote") and loc.get("by_reference")):
@@ -368,26 +378,59 @@ def ref_stream_facts(e: "dict | None", name: str) -> "dict | None":
                    or (md.get("fingerprint") or {}).get("n_files"))
         if not isinstance(n_files, int) or n_files < 2:
             return None                         # FILE-shaped / unconfirmed → materialize
-        return {"ref": ref, "site": loc.get("site"),
-                "size": loc.get("total_bytes"),
-                "digest": (md.get("fingerprint") or {}).get("digest")}
+        out = {"ref": ref, "site": loc.get("site"),
+               "size": loc.get("total_bytes"),
+               "digest": (md.get("fingerprint") or {}).get("digest")}
+        if not ref:
+            out["mintable"] = True
+            out["path"] = mint_path
+        return out
     except Exception:  # noqa: BLE001 — an eligibility read must never raise
+        return None
+
+
+def _mint_dataset_ref(eid: str, facts: dict) -> "str | None":
+    """Lazy identity mint at LAUNCH for a mintable by-reference dataset
+    (`ref_stream_facts` said `mintable`): register the recorded durable home on
+    the data plane exactly as the eager registration lane does —
+    `data_register(path, site=, ingest=False)` (core/data/datasets.py) — and
+    persist the minted ref onto the entity race-safely (`patch_metadata`, the
+    single key "ref"; never a metadata-blob rewrite). Runs inside the async
+    prepare/launch job: minting fingerprints the tree ON-SITE (one read pass —
+    seconds for a hundreds-of-members store, longer for TB-scale), acceptable
+    HERE and NEVER in the link-mint note path. ONE attempt per launch; ANY
+    failure (mint or persist) → None with NO metadata write, so the launch
+    degrades to exactly today's materialize / honesty-bridge path. Never
+    raises."""
+    try:
+        from core.compute.adapter import get_compute
+        r = get_compute().sync_call("data_register", facts["path"],
+                                    site=facts["site"], ingest=False)
+        ref = r.get("ref") if isinstance(r, dict) else None
+        if not ref:
+            return None
+        from core.graph.entities import patch_metadata
+        patch_metadata(eid, {"ref": ref})
+        return ref
+    except Exception:  # noqa: BLE001 — degrade; a later launch retries the mint
         return None
 
 
 def _register_ref_arm(node: dict, pid: str) -> "str | None":
     """REF arm (misc/range_channel_plan.md): an entity-backed by-reference
     REMOTE directory store whose recorded metadata carries a data-plane content
-    `ref` streams its chunks addressed by that ref — with NO resolvable run
-    required. This is the CHEAP arm: readiness is RECORDED FACTS ONLY plus the
+    `ref` — or a mintable durable home, whose ref this mints NOW
+    (`_mint_dataset_ref`) — streams its chunks addressed by that ref, with NO
+    resolvable run required. Eligibility is RECORDED FACTS ONLY plus the
     per-verb probe — no inventory round-trip, unlike the run arm's
-    `resolve_remote_store_stream`.
+    `resolve_remote_store_stream`; only the mintable shape pays a data-plane
+    call, here in the async launch job.
 
     ALL eligibility gates live in `ref_stream_facts` (the one predicate the
     pre-flight note shares — no gate may be added here instead); this function
     adds only what the note doesn't need: the entity fetch, the per-verb probe,
-    and the registration itself. Returns the `store_key` (stable per ref) or
-    None. Never raises to the caller (the outer try owns that)."""
+    the mint, and the registration itself. Returns the `store_key` (stable per
+    ref) or None. Never raises to the caller (the outer try owns that)."""
     eid = node.get("entity_id")
     if not eid:
         return None
@@ -400,15 +443,19 @@ def _register_ref_arm(node: dict, pid: str) -> "str | None":
     facts = ref_stream_facts(get_entity(eid), name)
     if not facts:
         return None
+    ref = facts.get("ref") or (_mint_dataset_ref(eid, facts)
+                               if facts.get("mintable") else None)
+    if not ref:
+        return None                 # mint failed → exactly today's path
     from core.viewers.range_cache import register_remote_store
     stem = name[:-len(_STORE_SUFFIX)]
     # store_key stable per ref: the content ref IS the store's identity, so the
     # key changes iff the bytes change (a new ref) — the digest-wipe never needs
     # to fire for the ref arm. `digest` is recorded when the metadata carries a
     # fingerprint (belt-and-suspenders; usually absent for a ref-only shape).
-    tag = hashlib.sha1(str(facts["ref"]).encode()).hexdigest()[:8]
+    tag = hashlib.sha1(str(ref).encode()).hexdigest()[:8]
     store_key = f"{stem}-{tag}{_STORE_SUFFIX}"
-    register_remote_store(pid, store_key, site=facts["site"], ref=facts["ref"],
+    register_remote_store(pid, store_key, site=facts["site"], ref=ref,
                           size=facts["size"], digest=facts["digest"])
     return store_key
 

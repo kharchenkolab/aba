@@ -110,6 +110,27 @@ def test_small_data_can_mint_eagerly(fake):
     assert fake.registered[-1]["kw"] == {"site": "vbc", "ingest": False}
 
 
+def test_eager_mint_failure_is_best_effort(fake):
+    # Identity minting must never fail a REGISTRATION: a data_register hiccup
+    # leaves ref None while the durable record (home + fingerprint +
+    # descriptor) STANDS — first use (e.g. the viewer launch's ref-arm mint)
+    # mints lazily.
+    fake.trees["/groups/lab/tree"] = T1
+    orig = fake.sync_call
+
+    def flaky(name, *a, **kw):
+        if name == "data_register":
+            raise RuntimeError("site hiccup")
+        return orig(name, *a, **kw)
+    fake.sync_call = flaky
+    out = ds.register_source("/groups/lab/tree", site="vbc",
+                             eager_ref_max_bytes=10_000)
+    assert out["ref"] is None                     # mint failed → ref absent
+    assert out["home"] == {"site": "vbc", "path": "/groups/lab/tree"}
+    assert out["fingerprint"]["n_files"] == 2     # the record stands
+    assert out["descriptor"]["total_bytes"] == 1500
+
+
 def test_missing_path_records_home_with_exists_false(fake):
     out = ds.register_source("/groups/lab/gone", site="vbc")
     assert out["fingerprint"] == {"exists": False} and out["ref"] is None

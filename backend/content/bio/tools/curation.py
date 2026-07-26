@@ -1021,28 +1021,44 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
         elif exists and not in_data:
             # In place outside aba's trees: a DURABLE-HOME registration
             # (misc/datasets2.md §4C) — fingerprint + descriptor, NO ingest,
-            # NO copy; the content identity (ref) mints lazily at first use.
+            # NO copy. The content identity (ref) is minted EAGERLY when the
+            # tree fits the synchronous byte-work budget (the recorded ref is
+            # what lets the range channel's ref arm stream this dataset later
+            # with no resolvable run; an on-site read pass is strictly cheaper
+            # than the WAN fetch the same guardrail bounds). Best-effort: over
+            # the ceiling or on a mint failure the ref stays absent and the
+            # viewer launch mints it lazily (`_mint_dataset_ref`).
             try:
                 from core.data import datasets as _wds2
-                rec = _wds2.register_source(abspath, site=site)
+                rec = _wds2.register_source(
+                    abspath, site=site,
+                    eager_ref_max_bytes=_wds2.FETCH_GUARDRAIL_BYTES)
                 weft_md = {k: rec[k] for k in
                            ("source_key", "home", "fingerprint", "descriptor",
-                            "origin_class") if rec.get(k) is not None}
+                            "origin_class", "ref") if rec.get(k) is not None}
             except Exception:  # noqa: BLE001 — plain by-reference still works
                 pass
         elif not exists and site and site != "local":
             # A path that lives on a REMOTE site (never visible locally):
             # register the durable home site-side — bytes never touch this
-            # machine (the whole point for TB-scale remote data).
+            # machine (the whole point for TB-scale remote data). The content
+            # identity (ref) is minted EAGERLY under the synchronous byte-work
+            # budget — the recorded ref is what lets the range channel's ref
+            # arm stream this dataset later with no resolvable run (an on-site
+            # read pass, no transfer). Best-effort: over the ceiling or on a
+            # mint failure the ref stays absent and the viewer launch mints it
+            # lazily (`_mint_dataset_ref`).
             try:
                 from core.data import datasets as _wds2
-                rec = _wds2.register_source(str(path), site=site)
+                rec = _wds2.register_source(
+                    str(path), site=site,
+                    eager_ref_max_bytes=_wds2.FETCH_GUARDRAIL_BYTES)
                 if (rec.get("fingerprint") or {}).get("exists"):
                     abspath = os.path.normpath(str(path))
                     exists = True   # exists ON THE SITE — honest enough for the entity
                     weft_md = {k: rec[k] for k in
                                ("source_key", "home", "fingerprint",
-                                "descriptor", "origin_class")
+                                "descriptor", "origin_class", "ref")
                                if rec.get(k) is not None}
                 else:
                     return {"error": (f"nothing found at {path!r} on site "

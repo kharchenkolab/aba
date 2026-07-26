@@ -1081,11 +1081,40 @@ def _by_ref_remote_entity(eid, *, ref, site="siteA",
                           n_files=12):
     """A by-reference REMOTE dataset entity fixture (drives the REAL
     dataset_location + ref_stream_facts: home.site remote, by_reference True,
-    metadata.ref, recorded dir shape via descriptor n_files)."""
+    metadata.ref, recorded dir shape via descriptor n_files). With ref=None
+    this IS the mintable shape (durable home path recorded, ref lazily
+    mintable — the path-lane registration, e.g. a producing-run-deleted
+    remote store)."""
     return {"id": eid, "metadata": {
         "home": {"site": site, "path": path},
         "by_reference": True, "ref": ref,
         "descriptor": {"total_bytes": total_bytes, "n_files": n_files}}}
+
+
+class _MintPort:
+    """Fake data plane for the launch-time ref mint: records every sync_call;
+    `data_register` answers `ref` (or raises when `fail`)."""
+    def __init__(self, ref="sha256:minted", fail=False):
+        self.calls: list = []
+        self.ref, self.fail = ref, fail
+
+    def sync_call(self, name, *a, **kw):
+        self.calls.append((name, a, kw))
+        if self.fail:
+            raise RuntimeError("site unreachable")
+        assert name == "data_register", name
+        return {"ref": self.ref, "bytes": 4096, "files": 12}
+
+
+def _patch_mint(monkeypatch, *, ref="sha256:minted", fail=False):
+    """Wire the mint seam: fake compute port + a patch_metadata sentinel.
+    Returns (port, writes) — `writes` records every patch_metadata call."""
+    port = _MintPort(ref=ref, fail=fail)
+    writes: list = []
+    monkeypatch.setattr("core.compute.adapter.get_compute", lambda: port)
+    monkeypatch.setattr("core.graph.entities.patch_metadata",
+                        lambda eid, updates: writes.append((eid, updates)))
+    return port, writes
 
 
 def test_production_shape_ref_arm_end_to_end(monkeypatch, tmp_path):
@@ -1110,6 +1139,9 @@ def test_production_shape_ref_arm_end_to_end(monkeypatch, tmp_path):
         return {"target": "x", "site": "s", "store_rel": "r"}
     monkeypatch.setattr("content.bio.lifecycle.runs.resolve_remote_store_stream",
                         _run_sentinel)
+    # CEILING (the URL-lane shape): ref already recorded → the mint seam is
+    # NEVER touched (no data_register, no metadata write).
+    port, writes = _patch_mint(monkeypatch)
     pid = "prod_ref"
     node = {"entity_id": "ds_1", "name": "data.lstar.zarr",
             "artifact_path": "/r/data.lstar.zarr"}
@@ -1117,6 +1149,8 @@ def test_production_shape_ref_arm_end_to_end(monkeypatch, tmp_path):
     assert res.store_path is None, "a streamed store has no local store_path"
     assert f"/pagoda3-store/{pid}/" in res.url
     assert seen["run_resolve"] == 0, "ref arm must engage WITHOUT the run resolve"
+    assert port.calls == [] and writes == [], \
+        "a recorded ref must never re-mint or rewrite metadata"
     store_key = res.url.split(f"/pagoda3-store/{pid}/", 1)[1].rstrip("/")
     row = rc.lookup_remote_store(pid, store_key)
     assert row and row.get("ref") == "sha256:store-root" and row.get("site") == "siteA"
@@ -1133,10 +1167,12 @@ def test_production_shape_ref_arm_end_to_end(monkeypatch, tmp_path):
         retention.data_read_range = _orig
 
 
-def test_ref_none_by_ref_entity_falls_to_bridge(monkeypatch, tmp_path):
-    # CEILING for the new arm: a by-ref REMOTE entity with ref:None cannot
-    # stream EVEN with the ref verb live — it falls through to the honesty
-    # bridge (remote wording naming the home site), never a phantom stream.
+def test_mint_failure_degrades_to_bridge_no_metadata_write(monkeypatch, tmp_path):
+    # A MINTABLE by-ref REMOTE entity (ref:None, durable home recorded) whose
+    # launch-time mint FAILS degrades to exactly today's path — the honesty
+    # bridge (remote wording naming the home site) — with NO metadata write
+    # (armed on the patch sentinel) and exactly ONE mint attempt. This is the
+    # documented accepted divergence from the note's streaming promise.
     import content.bio.viewers.launchers.pagoda3 as p3
     dist = tmp_path / "dist"
     dist.mkdir()
@@ -1147,6 +1183,7 @@ def test_ref_none_by_ref_entity_falls_to_bridge(monkeypatch, tmp_path):
         lambda verb=retention._RANGE_VERB: verb == retention.DATA_RANGE_VERB)
     monkeypatch.setattr("core.graph.entities.get_entity",
                         lambda eid: _by_ref_remote_entity(eid, ref=None))
+    port, writes = _patch_mint(monkeypatch, fail=True)
     monkeypatch.setattr(p3, "_resolve_source",
                         lambda node, pid, sp=None: Path("/nonexistent/data.lstar.zarr"))
     try:
@@ -1157,6 +1194,86 @@ def test_ref_none_by_ref_entity_falls_to_bridge(monkeypatch, tmp_path):
         msg = str(ex)
     assert _REMOTEISH.search(msg) and "siteA" in msg, msg
     assert "source not found" not in msg, msg
+    assert len(port.calls) == 1, "exactly ONE mint attempt per launch (armed)"
+    assert port.calls[0][0] == "data_register"
+    assert writes == [], "a failed mint must write NO metadata"
+
+
+def test_mintable_end_to_end(monkeypatch, tmp_path):
+    # THE closed-gap shape end-to-end: by-ref REMOTE store, run dead, ref
+    # ABSENT but durable home recorded (the path-lane registration) → launch()
+    # MINTS the ref (data_register(path, site=, ingest=False)), persists it
+    # via patch_metadata (single key), registers the ref arm, and the store
+    # route streams chunks via the fake ref backhaul.
+    import content.bio.viewers.launchers.pagoda3 as p3
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("x")
+    monkeypatch.setattr(p3, "pagoda3_dist_path", lambda: dist)
+    monkeypatch.setattr(
+        "core.compute.retention.range_read_available",
+        lambda verb=retention._RANGE_VERB: verb == retention.DATA_RANGE_VERB)
+    monkeypatch.setattr("core.graph.entities.get_entity",
+                        lambda eid: _by_ref_remote_entity(eid, ref=None))
+    seen = {"run_resolve": 0}
+
+    def _run_sentinel(rid, name):
+        seen["run_resolve"] += 1
+        return None
+    monkeypatch.setattr("content.bio.lifecycle.runs.resolve_remote_store_stream",
+                        _run_sentinel)
+    port, writes = _patch_mint(monkeypatch, ref="sha256:fresh-mint")
+    pid = "mint_e2e"
+    res = p3.launch({"entity_id": "ds_1", "name": "data.lstar.zarr",
+                     "artifact_path": "/r/data.lstar.zarr"}, {"project_id": pid})
+    # minted exactly as the eager registration lane does
+    assert port.calls == [("data_register", ("/r/data.lstar.zarr",),
+                           {"site": "siteA", "ingest": False})], port.calls
+    # persisted race-safely: the single "ref" key, nothing else
+    assert writes == [("ds_1", {"ref": "sha256:fresh-mint"})], writes
+    assert seen["run_resolve"] == 0, "mintable arm must not consult the run resolver"
+    store_key = res.url.split(f"/pagoda3-store/{pid}/", 1)[1].rstrip("/")
+    row = rc.lookup_remote_store(pid, store_key)
+    assert row and row.get("ref") == "sha256:fresh-mint" and row["site"] == "siteA"
+    calls: list = []
+    _orig = retention.data_read_range
+    retention.data_read_range = _data_reader({"c/0.0": b"MINTED-CHUNK"}, calls)
+    try:
+        out = rc.serve_remote_chunk(pid, f"{store_key}/c/0.0")
+        assert out.status == "ok"
+        assert open(out.path, "rb").read() == b"MINTED-CHUNK"
+        assert calls and calls[0][0] == "sha256:fresh-mint"
+    finally:
+        retention.data_read_range = _orig
+
+
+def test_unmintable_shapes_no_mint_attempt(monkeypatch):
+    # Non-mintable shapes are UNCHANGED: ref None with NO recorded home path /
+    # ref_path (nothing to mint from), and a local by-ref path — neither arm
+    # registers and the data plane is NEVER touched (armed sentinel).
+    import content.bio.viewers.launchers.pagoda3 as p3
+    monkeypatch.setattr(
+        "core.compute.retention.range_read_available",
+        lambda verb=retention._RANGE_VERB: verb == retention.DATA_RANGE_VERB)
+    port, writes = _patch_mint(monkeypatch)
+    # (a) remote by-ref, ref None, home has SITE only — no path anywhere
+    e_nopath = {"id": "ds_1", "metadata": {
+        "home": {"site": "siteA"}, "by_reference": True, "ref": None,
+        "descriptor": {"total_bytes": 4096, "n_files": 12}}}
+    # (b) local by-ref with a recorded path (mint would be pointless — local
+    #     bytes resolve through today's local tiers)
+    e_local = {"id": "ds_2", "metadata": {
+        "by_reference": True, "ref": None, "ref_path": "/l/data.lstar.zarr",
+        "descriptor": {"total_bytes": 4096, "n_files": 12}}}
+    for e in (e_nopath, e_local):
+        assert p3.ref_stream_facts(e, "data.lstar.zarr") is None, e
+        monkeypatch.setattr("core.graph.entities.get_entity",
+                            lambda eid, _e=e: _e)
+        assert p3._register_remote_stream(
+            {"entity_id": e["id"], "name": "data.lstar.zarr",
+             "artifact_path": "/r/data.lstar.zarr"}, "unmint1") is None
+    assert port.calls == [], "unmintable shapes must never touch the data plane"
+    assert writes == []
 
 
 def test_per_verb_matrix_ref_absent_run_present(monkeypatch):
@@ -1335,8 +1452,11 @@ def test_note_launcher_ref_agreement_matrix(monkeypatch):
     # R3: for EVERY entity shape, the NOTE's stream verdict must EQUAL the
     # LAUNCHER's register verdict (both run-arm paths disabled, so only the
     # ref arm answers) — a gate added to one side but not the other fails
-    # here. Armed: the streaming shape must verdict True (a matrix where
-    # everything declines measured nothing), and ONLY that shape (ceiling).
+    # here. The launcher's mint seam is faked SUCCESSFUL, so the comparison is
+    # promise-vs-happy-path (the one accepted divergence — mint FAILURE at
+    # click — is guarded separately). Armed: the two streaming shapes must
+    # verdict True (a matrix where everything declines measured nothing), and
+    # ONLY those (ceiling); the mint fires for exactly the mintable shape.
     import content.bio.viewers.launchers.pagoda3 as p3
     from content.bio.tools import viewers as tv
     monkeypatch.setattr(
@@ -1346,19 +1466,24 @@ def test_note_launcher_ref_agreement_matrix(monkeypatch):
                         lambda rid, name: None)
     monkeypatch.setattr("content.bio.lifecycle.runs.run_id_for_entity",
                         lambda eid: None)
+    port, writes = _patch_mint(monkeypatch, ref="sha256:matrix-mint")
     e_not_by_ref = _by_ref_remote_entity("e3", ref="sha256:c")
     e_not_by_ref["metadata"]["by_reference"] = False
     e_local = {"id": "e5", "metadata": {
         "by_reference": True, "ref": "sha256:e",
         "descriptor": {"total_bytes": 4096, "n_files": 9}}}
+    e_unmintable = {"id": "e7", "metadata": {
+        "home": {"site": "siteA"}, "by_reference": True, "ref": None,
+        "descriptor": {"total_bytes": 4096, "n_files": 9}}}
     shapes = {
         "store_by_ref_remote": (_by_ref_remote_entity("e1", ref="sha256:a"),
                                 "data.lstar.zarr"),
+        "mintable": (_by_ref_remote_entity("e8", ref=None), "data.lstar.zarr"),
         "file_by_ref_remote": (_by_ref_remote_entity("e2", ref="sha256:b",
                                                      path="/r/data.h5ad"),
                                "data.h5ad"),
         "not_by_reference": (e_not_by_ref, "data.lstar.zarr"),
-        "ref_none": (_by_ref_remote_entity("e4", ref=None), "data.lstar.zarr"),
+        "ref_none_unmintable": (e_unmintable, "data.lstar.zarr"),
         "local": (e_local, "data.lstar.zarr"),
         "file_shaped_ref": (_by_ref_remote_entity("e6", ref="sha256:f",
                                                   n_files=1),
@@ -1376,7 +1501,11 @@ def test_note_launcher_ref_agreement_matrix(monkeypatch):
             f"{label}: note says {note_v}, launcher says {launch_v} — DRIFT"
         verdicts[label] = note_v
     assert verdicts["store_by_ref_remote"] is True, "matrix measured nothing"
-    assert sum(verdicts.values()) == 1, verdicts   # ceiling: exactly one streams
+    assert verdicts["mintable"] is True, "the mintable shape must stream"
+    assert sum(verdicts.values()) == 2, verdicts   # ceiling: exactly two stream
+    # the mint fired for exactly the mintable shape, nothing else
+    assert len(port.calls) == 1 and port.calls[0][0] == "data_register"
+    assert writes == [("e8", {"ref": "sha256:matrix-mint"})], writes
 
 
 _TESTS = [
@@ -1429,7 +1558,9 @@ _TESTS = [
     test_register_validation_exactly_one_arm,
     test_ref_arm_typed_errors_map_same,
     test_production_shape_ref_arm_end_to_end,
-    test_ref_none_by_ref_entity_falls_to_bridge,
+    test_mint_failure_degrades_to_bridge_no_metadata_write,
+    test_mintable_end_to_end,
+    test_unmintable_shapes_no_mint_attempt,
     test_per_verb_matrix_ref_absent_run_present,
     test_per_verb_matrix_both_absent_by_ref,
     test_ref_arm_requires_by_reference_remote_and_store_suffix,

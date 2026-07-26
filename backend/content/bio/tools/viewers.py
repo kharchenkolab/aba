@@ -43,14 +43,18 @@ def _remote_stream_ready(run_id, name, *, entity=None) -> bool:
 
     * REF arm — LAUNCHER-PARITY from RECORDED FACTS ONLY, NO remote round-trip:
       the ONE shared eligibility predicate (`ref_stream_facts` — the launcher's
-      own gate set: store-suffix name, recorded data-plane `ref`,
-      remote + by-reference, recorded directory shape) plus the ref verb.
-      Sharing the predicate is the point: a weaker gate here would promise
-      streaming for a source the launcher then materializes into the transfer
-      gate (the over-promising class the shared note exists to kill; the
-      agreement matrix in tests/test_range_channel.py guards it). This is what
-      lets the entity branch promise streaming WITHOUT a producing run — and a
-      by-ref entity never pays the run arm's resolve (the earlier cost concern).
+      own gate set: store-suffix name, recorded data-plane `ref` OR a mintable
+      durable home (the launcher mints the ref at click, in its async job —
+      never here), remote + by-reference, recorded directory shape) plus the
+      ref verb. Sharing the predicate is the point: a weaker gate here would
+      promise streaming for a source the launcher then materializes into the
+      transfer gate (the over-promising class the shared note exists to kill;
+      the agreement matrix in tests/test_range_channel.py guards it). The ONE
+      accepted divergence: a mint FAILURE at click degrades that launch to the
+      fetch/bridge path after this note said streaming — mirror lever
+      unaffected, so no hedging wording. This is what lets the entity branch
+      promise streaming WITHOUT a producing run — and a by-ref entity never
+      pays the run arm's resolve (the earlier cost concern).
     * RUN arm — the output resolves as a remote DIRECTORY store for its producing
       run: verb live AND `resolve_remote_store_stream` confirms it (a
       `locate_run_output` remote-tier pass plus an inventory read — a few ssh
