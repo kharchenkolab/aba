@@ -42,7 +42,7 @@ jobs:
           PYTHON=python bash scripts/run_guard_tests.sh
 
   frontend:
-    name: frontend platform purity
+    name: frontend guards (platform purity + full vitest)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -51,5 +51,12 @@ jobs:
           node-version: '20'
       - run: npm ci
         working-directory: frontend
+      # Platform purity first: it is the cheap structural gate, and a failure
+      # here explains every downstream one.
       - run: npx vitest run src/platform/__platform_imports.test.ts
+        working-directory: frontend
+      # Then the WHOLE suite. Running one file meant the other ~40 files (the
+      # behavioral guards) only ever ran on someone's laptop — a red test file
+      # reached main with CI green, found by hand.
+      - run: npx vitest run
         working-directory: frontend

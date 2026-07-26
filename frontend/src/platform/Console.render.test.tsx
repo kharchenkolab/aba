@@ -17,7 +17,12 @@ const backhaul = (over: Record<string, unknown> = {}): NotificationEvent => ({
 } as NotificationEvent)
 
 describe('Console rendering', () => {
-  beforeEach(() => resetConsole())
+  // resetConsole() clears the feed store, but the facet chips PERSIST to
+  // localStorage (Console.tsx loadFacets/saveFacets) and are read back on
+  // mount — so the errors-only toggle exercised below stayed on for every
+  // later test in this file, filtering their rows away and failing them on
+  // suite order alone. Clear both: the store AND the persisted facets.
+  beforeEach(() => { resetConsole(); localStorage.clear() })
 
   it('renders a dense row: glyph + site chip + verb + facts, no time column', () => {
     noteNotification(backhaul())
