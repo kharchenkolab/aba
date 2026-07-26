@@ -24,7 +24,7 @@ from core import config
 from core.config import ARTIFACTS_DIR, DATA_DIR
 from core.graph._schema import init_db, gen_entity_id, WORKSPACE_ID
 from core.graph.edges import add_edge, remove_edge, edges_from, edges_to
-from core.graph.entities import list_entities, get_entity, create_entity, update_entity, archive_entity, restore_entity, delete_entity_hard
+from core.graph.entities import list_entities, get_entity, create_entity, update_entity, archive_entity, restore_entity, delete_entity_hard, append_metadata_list
 from core.web.deps import require_project
 from core.graph.messages import get_messages, clear_messages
 from guide import stream_response
@@ -257,16 +257,40 @@ def entities_patch(entity_id: str, req: EntityPatch, _pid: str = Depends(require
 
 # _result_cascade_set → content/bio/services.py result_cascade_members service (Item 2A.4).
 
+# The two edge families the delete guard must tell apart. Every rel in this
+# graph points source --rel--> target = "source builds on target" (run
+# --used--> dataset, result --includes--> member, artifact --wasGeneratedBy-->
+# run, rev2 --wasRevisionOf--> rev1, claim --supports--> result). A DEPENDENCY
+# edge ("X includes / supports / was-derived-from / is-a-revision-of Y") means
+# X would BREAK if Y vanished — inbound ones are the real "live references" a
+# delete guard exists to protect. Everything else (used / wasGeneratedBy /
+# produced_by lineage stamps) is BOOKKEEPING: it records history, and deleting
+# the recorded thing doesn't break the record's other end. The cascade branch
+# below has always used this set for exactly this reason ("provenance edges …
+# don't make a Run depend on a figure"); the top-level blocker uses the SAME
+# judgment, so a producer is not held hostage by the outputs it created, nor
+# an output by the run that made it. NB: referenced inside entities_delete —
+# never rebind it locally there (a local assignment would shadow this and
+# UnboundLocalError every earlier read on the non-cascade path).
+_DEP_RELS = {"includes", "supports", "wasDerivedFrom", "wasRevisionOf"}
+
 
 @app.delete("/api/entities/{entity_id}")
 def entities_delete(entity_id: str, hard: bool = False,
-                    cascade: str | None = None,
+                    cascade: str | None = None, force: bool = False,
                     _pid: str = Depends(require_project)):
     """Soft-delete (default): mark status='archived'. Workspace cannot be deleted.
 
-    With ?hard=true: hard-delete after refusing if other (non-archived) entities
-    reference this one via entity_edges. For dataset entities whose artifact is
-    a directory under the project's data dir, the directory is removed too.
+    With ?hard=true: hard-delete. Refuses — 409 {error, references,
+    can_override: true} — only when live DEPENDENTS exist: non-archived
+    entities pointing AT this one via a dependency-forming rel (_DEP_RELS).
+    Bookkeeping stamps (used / wasGeneratedBy / produced_by) and outbound
+    edges (things THIS entity builds on) never block. ?force=true deletes
+    despite dependents (informed override — the UI shows the list first).
+    Every surviving, non-archived neighbor of a hard-deleted entity gets a
+    metadata `severed_refs` stamp {id, type, title, at, rel, dir} recording
+    what vanished. For dataset entities whose artifact is a directory under
+    the project's data dir, the directory is removed too.
 
     With ?hard=true&cascade=members on a RESULT: includes/supports/
     wasDerivedFrom edges from the Result to its figure/table/cell members
@@ -303,27 +327,44 @@ def entities_delete(entity_id: str, hard: bool = False,
         from core.services import call_service
         cascade_set = call_service("result_cascade_members", entity_id, default=set())
 
-    # Hard-delete: refuse if any non-archived, non-cascade-set entity
-    # points at us (inbound), or if we point at any non-archived,
-    # non-cascade-set entity (outbound). Edges to archived entities are
-    # fine — they're already gone from the user's view. Edges into the
-    # cascade set (members + revision chains) are fine — they'll be
-    # deleted by the cascade.
+    # DEPENDENTS block; lineage does not. A blocker is a non-archived,
+    # non-cascade entity that DEPENDS ON us — points AT us (inbound) via a
+    # dependency rel (_DEP_RELS above). Outbound edges (things WE build on)
+    # never block: deleting a dependent can't break its dependency.
+    # Bookkeeping stamps never block: they only record history (this is what
+    # let a producer be held hostage by its own outputs — the confusing
+    # refusal). Edges to archived entities and into the cascade set are
+    # already out of the user's view. Neighbors are snapshotted here, BEFORE
+    # the delete FK-sweeps the edges, for the severed_refs stamps below.
+    all_neighbors: dict[str, dict] = {}     # id → {rel, dir} for the stamp
+    for e in edges_to(entity_id):
+        if e["source_id"] != entity_id:
+            all_neighbors.setdefault(e["source_id"], {"rel": e["rel_type"], "dir": "in"})
+    for e in edges_from(entity_id):
+        if e["target_id"] != entity_id:
+            all_neighbors.setdefault(e["target_id"], {"rel": e["rel_type"], "dir": "out"})
+
     blockers: list[dict] = []
-    for e in edges_to(entity_id) + edges_from(entity_id):
-        other_id = e["source_id"] if e["target_id"] == entity_id else e["target_id"]
-        if other_id == entity_id:
+    for e in edges_to(entity_id):
+        oid = e["source_id"]
+        if oid == entity_id or oid in cascade_set or e["rel_type"] not in _DEP_RELS:
             continue
-        if other_id in cascade_set:
-            continue
-        other = get_entity(other_id)
+        other = get_entity(oid)
         if other and other.get("status") != "archived":
-            blockers.append({"id": other_id, "type": other.get("type"),
+            blockers.append({"id": oid, "type": other.get("type"),
                              "title": other.get("title"), "rel_type": e["rel_type"]})
-    if blockers:
+    if blockers and not force:
+        # Actionable: name the REAL levers. "remove the references first" was
+        # never one — the user has no verb for that. Archive always succeeds;
+        # force is the informed override (the UI shows this list first).
         raise HTTPException(409, {
-            "error": "entity has live references; archive instead, or remove the references first",
+            "error": (f"{len(blockers)} live entit"
+                      f"{'y depends' if len(blockers) == 1 else 'ies depend'} "
+                      f"on this one. Archive it instead (reversible), delete "
+                      f"the dependents first, or delete anyway — dependents "
+                      f"are kept and marked with the severed reference."),
             "references": blockers[:20],
+            "can_override": True,
         })
 
     # Delete the on-disk artifact for dataset-shaped entities. Only remove paths
@@ -356,13 +397,13 @@ def entities_delete(entity_id: str, hard: bool = False,
         # wasRevisionOf edges resolve cleanly. Easiest proxy: delete in
         # any order — delete_entity_hard tolerates missing references
         # since edges are cascade-deleted by FK on the entity rows.
-        # Only INBOUND, dependency-forming edges count as outside
-        # references when deciding whether to preserve a cascade member.
-        # Provenance edges (wasGeneratedBy from analyses/runs) are
-        # bookkeeping — they don't make a Run "depend on" a figure in
-        # the user's sense. Without this filter, every harvested figure
-        # gets kept just because its parent Analysis exists.
-        _DEP_RELS = {"includes", "supports", "wasDerivedFrom", "wasRevisionOf"}
+        # Only INBOUND, dependency-forming edges (module-level _DEP_RELS —
+        # do NOT rebind it here, that would shadow the blocker check's read
+        # above) count as outside references when deciding whether to
+        # preserve a cascade member. Provenance edges (wasGeneratedBy from
+        # analyses/runs) are bookkeeping — they don't make a Run "depend on"
+        # a figure in the user's sense. Without this filter, every harvested
+        # figure gets kept just because its parent Analysis exists.
         for member_id in list(cascade_set):
             m = get_entity(member_id)
             if not m:
@@ -397,6 +438,28 @@ def entities_delete(entity_id: str, hard: bool = False,
 
     if not delete_entity_hard(entity_id):
         raise HTTPException(404, f"Entity {entity_id} not found")
+
+    # Provenance honesty: an edge severed by this delete must not vanish in
+    # silence (silence is a claim — "nothing was here"). Every SURVIVING,
+    # non-archived neighbor gets a small stamp recording what it was joined
+    # to and that the record is gone — so an output whose producing run was
+    # deleted, or a dependent kept via `force`, carries an honest gap instead
+    # of a dangling nothing. `dir` is from the DELETED entity's frame
+    # ("in" = the survivor pointed at it). Best-effort: the delete is
+    # already committed and a stamp must never fail it.
+    import time as _t
+    _stamp = {"id": entity_id, "type": ent.get("type"),
+              "title": ent.get("title"), "at": int(_t.time())}
+    for oid, meta in all_neighbors.items():
+        if oid in cascade_set:
+            continue                          # cascade-deleted or already detached
+        try:
+            nb = get_entity(oid)
+            if nb and nb.get("status") != "archived":
+                append_metadata_list(oid, "severed_refs",
+                                     {**_stamp, "rel": meta["rel"], "dir": meta["dir"]})
+        except Exception:  # noqa: BLE001
+            pass
     # Reclaim any retained outputs weft is holding for this Run (bytes only; the
     # terminal inventory survives — misc/output_durability.md §7). Only a Run
     # (analysis) owns retained bytes labeled by its id. Soft-archive returns above

@@ -62,6 +62,7 @@ FILES=(
   tests/test_remote_kernel_lane.py
   tests/test_data_ledger.py
   tests/test_provenance_evidence.py
+  tests/test_delete_blockers.py
   # regtest oracle + probe evaluators (pure, no live server)
   tests/test_transport_oracle.py
   tests/test_live_surface_probe_eval.py

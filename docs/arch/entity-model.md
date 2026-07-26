@@ -168,6 +168,25 @@ Note a naming collision: `store.promote(entity_id, to_scope)` (`store.py:97`) is
 *different* axis — it elevates an existing entity's **scope** (project → lab/shared), a P0
 scope-tag flip with no byte movement yet. It is not substrate→entity promotion.
 
+## Deletion — dependents block, lineage doesn't
+
+Archive (`archive_entity`) is the default, reversible verb; hard delete
+(`DELETE /api/entities/{id}?hard=true`, `backend/main.py` `entities_delete`) is guarded by
+**edge semantics**, not edge existence. Every rel points source→target = "source builds on
+target", so the guard refuses (409) only for live **inbound dependency** edges — `_DEP_RELS`
+(`includes`/`supports`/`wasDerivedFrom`/`wasRevisionOf`, `main.py`) — the same judgment the
+Result member-cascade uses for its keep decision. Bookkeeping stamps (`used`,
+`wasGeneratedBy`, `produced_by`) and all outbound edges never block: a run is not held
+hostage by its outputs, nor an output by its producing run. The refusal is actionable —
+`{error, references[], can_override: true}` — and `?force=true` is the informed override
+(the UI shows the dependents first, then offers Archive-instead / Delete-anyway,
+`frontend/src/bio/EntityMenu.tsx`). On any hard delete, every surviving non-archived
+neighbor gets a `severed_refs` metadata stamp `{id, type, title, at, rel, dir}` (via
+`append_metadata_list`) — a severed edge leaves an honest gap, not silence.
+`?cascade=members` on a Result additionally sweeps members + revision chains through the
+`result_cascade_members` service seam. Guards: `tests/test_delete_blockers.py` (gated),
+`tests/test_result_delete_cascade.py` (bio).
+
 ## Key implementation references
 
 | Where | What |
