@@ -142,6 +142,30 @@ Cancellation escalates: a Stop registers `interrupt` (SIGINT,
 state-preserving); if the cell ignores it the kernel is stopped so an
 abandoned cell can't corrupt the next one.
 
+**A weft kernel cannot change its working directory, and the platform enforces
+that.** The substrate's driver addresses its own per-block protocol files
+(`blocks/NNNN.{code,out,err,rc}`) RELATIVE to the process cwd, so the first
+block that chdir's orphans the driver: its next write fails and the interpreter
+exits, taking every in-memory object with it. Ordinary analysis code triggers it
+(`dir.create(w); setwd(w)` is a standard idiom), and the surfaced error names the
+driver's own `writeLines`, not the chdir — so it reads as a mysterious I/O
+failure. `core/exec/kernels/cwd_guard.py` owns both halves of the response:
+`is_weft_kernel(sess)` is the ONE predicate for "this session cannot chdir" —
+the union of `kernel_id`, `work_dir` and the class name, because `work_dir` is
+set only for a LOCAL kernel and reading it as *necessary* made every REMOTE weft
+kernel look chdir-able (that mistake shipped a controller-local `setwd` into
+remote kernels; it is now the shared spelling in `_ensure_kernel_cwd`,
+`_with_cwd_probe` and `_reconcile_kernel_cwd`); and `chdir_offense` /
+`chdir_refusal` refuse such a block up front, naming the offending line and the
+absolute-path way out, so the session survives to serve the next one. The
+refusal is a **stopgap in aba's door** — it cannot stop a chdir arriving from
+another weft client — pending the substrate resolving its jobdir once and writing
+absolutely (`weft/misc/from-aba-kernel-cwd-fatal.md`); when that lands, delete
+the refusal and keep the predicate. Guarded by `tests/test_kernel_cwd_guard.py`
+(incl. the false-positive ceilings: comments, strings, `chdir=` kwargs,
+language scoping) and end-to-end in `tests/test_remote_kernel_lane.py`, whose
+fake kernel now REFUSES a chdir so the class cannot pass there again.
+
 ## run_python / run_r — the entry and the router
 
 The agent-facing tools (`content/bio/mcp_servers/aba_core/tools/run_exec.py`)

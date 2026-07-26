@@ -67,6 +67,7 @@ FILES=(
   tests/test_capability_language.py
   tests/test_remote_output_resolution.py
   tests/test_remote_kernel_lane.py
+  tests/test_kernel_cwd_guard.py
   tests/test_range_channel.py
   tests/test_data_ledger.py
   tests/test_provenance_evidence.py

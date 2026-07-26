@@ -672,6 +672,37 @@ def test_fresh_remote_kernel_gets_orientation_and_an_honest_note():
           (r2.get("stdout") or "")[:200])
 
 
+def test_chdir_block_is_refused_and_the_kernel_survives():
+    """A block that would chdir must be REFUSED, not sent: the driver writes its
+    own blocks/NNNN.* relatively, so a chdir kills the kernel and every object in
+    it (live: two kernels in a row on mendel, each reported only as
+    `Error in file(con, "w")`).
+
+    ARMED on the call log: the refusal must mean the code never reached the
+    kernel, and the session must still serve the NEXT block."""
+    ctx = {"thread_id": "thrCWD"}
+    n0 = len(FAKE.execs)
+    bad = ('work_dir <- "/tmp/aba_cwd_probe"\n'
+           'dir.create(work_dir, showWarnings = FALSE, recursive = TRUE)\n'
+           'setwd(work_dir)\n')
+    out = rex._run_remote_kernel({"code": bad}, ctx, _PID, "thrCWD", "mendel",
+                                 lang="r")
+    check("chdir block refused", (out or {}).get("error") == "kernel.chdir_forbidden",
+          str(out)[:200])
+    check("the offending line is named",
+          "setwd(work_dir)" in (out or {}).get("offending_line", ""),
+          str(out)[:160])
+    check("nothing was executed on the kernel",
+          not any("setwd(" in c for c in FAKE.execs[n0:]),
+          f"execs={[c[:40] for c in FAKE.execs[n0:]]}")
+
+    # the kernel is still usable — the whole point of refusing
+    ok = rex._run_remote_kernel({"code": "y <- 2"}, ctx, _PID, "thrCWD", "mendel",
+                                lang="r")
+    check("kernel still serves the next block after a refusal",
+          ok is not None and ok.get("returncode") == 0, str(ok)[:160])
+
+
 def _run():
     import inspect
     import traceback

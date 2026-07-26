@@ -30,8 +30,13 @@ def _with_cwd_probe(sess, code: str, lang: str, cwd) -> str:
     to a dot-sentinel in the HARVEST ROOT (fixed, aba-known — the start dir
     itself is what may have drifted). Weft kernels are excluded twice over:
     they cannot chdir (the block protocol breaks loudly) and probe lines
-    would pollute their recorded transcript."""
-    if getattr(sess, "work_dir", None):
+    would pollute their recorded transcript.
+
+    Exclusion is by kernel IDENTITY (`is_weft_kernel`), not by `work_dir` —
+    that field is set only for a LOCAL weft kernel, so the old spelling would
+    have injected probe lines into every REMOTE weft kernel's transcript."""
+    from core.exec.kernels.cwd_guard import is_weft_kernel
+    if is_weft_kernel(sess):
         return code
     from core.exec.run import cwd_probe_prologue, cwd_probe_epilogue
     return (cwd_probe_prologue(lang) + code
@@ -44,8 +49,13 @@ def _reconcile_kernel_cwd(sess, cwd) -> list:
     warning names the valid levers), and record the REAL dir into the
     session marker so _ensure_kernel_cwd restores the platform cwd on the
     next block (self-heal instead of a permanently lying marker). Returns
-    warning strings; empty when the block died pre-epilogue (no claim)."""
-    if getattr(sess, "work_dir", None):
+    warning strings; empty when the block died pre-epilogue (no claim).
+
+    Weft kernels are excluded by IDENTITY (`is_weft_kernel`): they carry no cwd
+    probe, so there is no sentinel to read — and the `work_dir` spelling missed
+    remote ones, which would then read a sentinel that cannot exist."""
+    from core.exec.kernels.cwd_guard import is_weft_kernel
+    if is_weft_kernel(sess):
         return []
     from core.exec.run import read_cwd_sentinel, cwd_escape_warning
     _start, final = read_cwd_sentinel(cwd)
@@ -118,8 +128,8 @@ def _ensure_kernel_cwd(sess, lang: str, cwd) -> None:
     # the kernel on its next write — `writeLines -> file(con, "w") : cannot open
     # the connection`, exit 1, repeatedly (live regression, caught 2026-07-26 on
     # mendel; the remote lane had only just started calling this at all).
-    if (getattr(sess, "kernel_id", None) is not None
-            or type(sess).__name__ == "WeftKernelSession"):
+    from core.exec.kernels.cwd_guard import is_weft_kernel
+    if is_weft_kernel(sess):
         # Gate the one-shot on its OWN flag, not on `_aba_cwd`: a remote kernel
         # has no local cwd to record, so an `_aba_cwd is None` test would re-fire
         # the FRESH banner on every single call.
@@ -972,6 +982,18 @@ def _run_remote_kernel(input_: dict, ctx: dict | None, project_id: str,
     # the fresh sentinel, which is exactly what we want here.
     _ensure_kernel_cwd(sess, lang,
                        scratch_dir(project_id, f"thread-{thread_id}"))
+    # STOPGAP (see core/exec/kernels/cwd_guard): a block that chdir's kills this
+    # kernel outright — the driver's relative blocks/NNNN.* writes fail and the
+    # interpreter exits, losing every object in memory. Refuse the block instead
+    # of spending the session on it. Checked AFTER the session exists so the
+    # message can be about this kernel, and only for the USER's code — internal
+    # setup/probe snippets never chdir.
+    from core.exec.kernels.cwd_guard import chdir_offense, chdir_refusal
+    _off = chdir_offense(code, lang)
+    if _off:
+        out = chdir_refusal(_off, lang)
+        out["site"] = site
+        return out
     inv0 = _kernel_sandbox_inventory(sess.kernel_id)
     res = sess.execute(code, cancel_token=cancel_token, timeout_s=timeout_s)
     if res.timed_out:
@@ -1356,6 +1378,15 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
             # kernel stops (run_inventory/run_retain/run_forget). No-op for jupyter.
             from content.bio.lifecycle.runs import record_weft_target, active_run_id
             record_weft_target(active_run_id(str(thread_id)), getattr(sess, "kernel_id", None))
+            # Same stopgap as the remote lane: a LOCAL weft kernel runs the
+            # same driver, so a chdir kills it identically. A jupyter session can
+            # chdir safely, hence the identity check inside chdir_offense's caller.
+            from core.exec.kernels.cwd_guard import (chdir_offense, chdir_refusal,
+                                                     is_weft_kernel)
+            if is_weft_kernel(sess):
+                _off = chdir_offense(code, "python")
+                if _off:
+                    return chdir_refusal(_off, "python")
             res = sess.execute(_with_cwd_probe(sess, code, "python", cwd),
                                cancel_token=cancel_token, timeout_s=timeout_s)
             if res.timed_out:
@@ -1610,6 +1641,15 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
         _ensure_kernel_cwd(sess, "r", cwd)
         from content.bio.lifecycle.runs import record_weft_target, active_run_id
         record_weft_target(active_run_id(str(thread_id)), getattr(sess, "kernel_id", None))
+        # Same stopgap as the remote lane: a LOCAL weft kernel runs the
+        # same driver, so a chdir kills it identically. A jupyter session can
+        # chdir safely, hence the identity check inside chdir_offense's caller.
+        from core.exec.kernels.cwd_guard import (chdir_offense, chdir_refusal,
+                                     is_weft_kernel)
+        if is_weft_kernel(sess):
+            _off = chdir_offense(code, "r")
+            if _off:
+                return chdir_refusal(_off, "r")
         res = sess.execute(_with_cwd_probe(sess, code, "r", cwd),
                            cancel_token=cancel_token, timeout_s=timeout_s)
     except Exception as e:  # noqa: BLE001
