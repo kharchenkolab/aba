@@ -1493,18 +1493,38 @@ def pagoda3_store(pid: str, relpath: str):
     try:
         f = resolve_within(base, relpath, extra_roots=tuple(extra))
     except ValueError:
+        # A `..` in the URL is rejected for BOTH branches, before any registry
+        # consult or backhaul — the only legitimate escape is a symlink WE placed.
         raise HTTPException(403, "path escapes store root")
-    if not f.is_file():
-        raise HTTPException(404, f"no store file {relpath!r}")
-    resp = FileResponse(str(f))
-    resp.headers["Cross-Origin-Resource-Policy"] = "same-origin"
-    # A store's URL is stable (source-path hash) but its CONTENT changes when it's
-    # re-derived (version bump / prep). Without revalidation the browser mixes a
-    # stale .zmetadata with fresh chunks → garbage ("stars"). no-cache = keep it
-    # but revalidate every read (FileResponse's etag/mtime → cheap 304s when
-    # unchanged, fresh bytes after a re-derive).
-    resp.headers["Cache-Control"] = "no-cache"
-    return resp
+
+    def _store_headers(resp: Response) -> Response:
+        resp.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+        # A store's URL is stable (source-path hash) but its CONTENT changes when
+        # it's re-derived (version bump / prep). Without revalidation the browser
+        # mixes a stale .zmetadata with fresh chunks → garbage ("stars"). no-cache
+        # = keep it but revalidate every read (FileResponse's etag/mtime → cheap
+        # 304s when unchanged, fresh bytes after a re-derive).
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+    if f.is_file():
+        # LOCAL branch — byte-identical to before (ceiling-guarded).
+        return _store_headers(FileResponse(str(f)))
+
+    # Local miss: a store that lives on a REMOTE site streams its chunks through
+    # the per-chunk cache (misc/range_channel_plan.md Phase 1). No registry hit
+    # (or streaming unavailable) → today's 404. The streaming branch must never
+    # 500 the route.
+    try:
+        from core.viewers.range_cache import serve_remote_chunk
+        out = serve_remote_chunk(pid, relpath)
+    except Exception:  # noqa: BLE001 — degrade to today's 404 on any setup failure
+        out = None
+    if out is not None:
+        if out.status == "ok" and out.path:
+            return _store_headers(FileResponse(out.path))
+        raise HTTPException(out.http, out.detail)
+    raise HTTPException(404, f"no store file {relpath!r}")
 
 
 # ---- pagoda3 copilot proxy: ABA lends its Anthropic credential ----

@@ -178,6 +178,49 @@ def file_read(target: str, rel: str, max_bytes: int = 1 << 20) -> dict:
     return _call("run_file_read", target, rel, max_bytes=max_bytes)
 
 
+# ── ranged read (chunk-streaming backhaul) ───────────────────────────────────
+# weft's per-call ranged-read clamp; a caller loops for the remainder when the
+# reply is `capped`. The doorway mirrors `file_read` (run-keyed addressing).
+RANGE_CAP = 16 * 1024 * 1024
+_RANGE_VERB = "run_file_read_range"
+_range_available: Optional[bool] = None
+
+
+def range_read_available() -> bool:
+    """Whether the DEPLOYED substrate exposes the ranged-read verb
+    (`run_file_read_range`). An older weft simply lacks it — probed once (no
+    round-trip; just whether the adapter would dispatch it) and cached, so every
+    caller degrades to today's whole-fetch path uniformly. False when the
+    substrate is offline. Never raises."""
+    global _range_available
+    if _range_available is None:
+        try:
+            weft = _adapter.get_compute().raw_controller()
+            fn = getattr(type(weft), _RANGE_VERB, None)
+            _range_available = bool(fn is not None and getattr(fn, "_weft_tool", False))
+        except Exception:  # noqa: BLE001 — offline / unwired → degrade
+            _range_available = False
+    return _range_available
+
+
+def file_read_range(target: str, rel: str, *, offset: int = 0,
+                    length: Optional[int] = None) -> dict:
+    """One ranged read from a target's sandbox/keep — the chunk-streaming
+    backhaul doorway (mirrors `file_read`, run-keyed addressing). Returns
+    `{target, path, at, offset, nbytes, size, eof, capped, bytes_b64}` (`at` in
+    {"sandbox","retained"}; `bytes_b64` "" when nbytes==0). An out-of-range
+    offset is NOT an error → nbytes=0, eof=True, size present (derive 416/404
+    from it). An over-cap `length` clamps with capped=True → loop for the
+    remainder (cap default `RANGE_CAP`). Typed errors surface as ComputeError:
+    `data.missing` (missing file / swept sandbox / vanish-race — RETRYABLE; also
+    returned when bytes were expected but the file vanished, so key a streamer on
+    THIS, never on nbytes==0), `task.invalid` (containment escape / bad intake).
+    Raises AttributeError when the verb is ABSENT (older substrate) — probe
+    `range_read_available()` first and degrade. Each call costs ~2 ssh
+    round-trips over a WAN; the per-chunk cache is what makes that fine."""
+    return _call(_RANGE_VERB, target, rel, offset=offset, length=length)
+
+
 def location_path(obj) -> Optional[str]:
     """Read a retained file's on-disk location across weft's two shapes: a `retain()` result
     carries `location: {site, path}` (dict); a `retained()` index row carries `location` as a

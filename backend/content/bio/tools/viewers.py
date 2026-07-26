@@ -28,17 +28,73 @@ def _remote_open_note(site, size_bytes, *, mirror_lever) -> str:
             f"first; if that is refused, {mirror_lever}.")
 
 
+def _remote_stream_note(site, *, mirror_lever) -> str:
+    """Pre-flight for a REMOTE store that will STREAM its chunks on demand
+    (range channel) — no whole-file fetch, so the transfer gate never applies.
+    Keeps the mirror lever. Used only when streaming is actually available."""
+    return (f"source lives on {site} — its chunks STREAM on demand as the viewer "
+            f"reads them (no whole-file fetch, so the transfer gate doesn't apply); "
+            f"{mirror_lever}.")
+
+
+def _remote_stream_ready(run_id, name) -> bool:
+    """True when a remote run output will STREAM: the substrate exposes the
+    ranged-read verb AND the output resolves as a remote DIRECTORY store. The
+    verb-absent probe is cached and short-circuits with no remote round-trip, so
+    on a substrate WITHOUT the verb (today's deployments) this is free and
+    returns False. When the verb IS live, a remote source pays one
+    `resolve_remote_store_stream` resolve — a `locate_run_output` remote-tier
+    pass plus an inventory read, i.e. a few ssh round-trips — inside the
+    link-mint call; the branch's earlier location facts (the located tuple /
+    `dataset_location`) don't carry kind/target, so they can't answer this
+    without that resolve. Never raises — a note must never block the link."""
+    try:
+        if not run_id or not name:
+            return False
+        from core.compute import retention
+        if not retention.range_read_available():
+            return False
+        from content.bio.lifecycle.runs import resolve_remote_store_stream
+        return bool(resolve_remote_store_stream(run_id, name))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _remote_note(site, size_bytes, *, mirror_lever, run_id, name) -> str:
+    """THE one pre-flight decision for a REMOTE-homed source, shared by the
+    entity and run-output branches: when the range channel will actually engage
+    for this source (verb live + a remote directory store confirmed for the
+    producing run), say chunks stream on demand — streaming makes the transfer
+    gate irrelevant, so this wins over the over-gate refuse wording; otherwise
+    the fetch / over-gate wording. Both branches MUST route through here (a
+    branch calling `_remote_open_note` directly is streaming-blind — the class
+    this closes)."""
+    if _remote_stream_ready(run_id, name):
+        return _remote_stream_note(site, mirror_lever=mirror_lever)
+    return _remote_open_note(site, size_bytes, mirror_lever=mirror_lever)
+
+
 def _entity_location_note(e: "dict | None") -> "str | None":
     """The entity-branch pre-flight note (remote source cost + mirror lever), or
-    None for a local/mirrored/unknown source. Never raises — an annotation must
-    never block the link."""
+    None for a local/mirrored/unknown source. The stream-or-fetch decision rides
+    the shared `_remote_note`, with the producing run derived exactly as the
+    launcher's entity resolution does (`run_id_for_entity`) and the name from
+    the recorded path's basename (the same derivation as the dispatch node) —
+    so the note promises what launch will actually do. Never raises — an
+    annotation must never block the link."""
     try:
         from content.bio.data_location import dataset_location
         loc = dataset_location(e or {})
         if not loc["remote"]:
             return None
-        return _remote_open_note(
+        from content.bio.lifecycle.runs import run_id_for_entity
+        md = (e or {}).get("metadata") or {}
+        name_src = ((e or {}).get("artifact_path") or md.get("ref_path")
+                    or (md.get("home") or {}).get("path") or "")
+        return _remote_note(
             loc["site"], loc["total_bytes"],
+            run_id=run_id_for_entity((e or {}).get("id")),
+            name=(os.path.basename(name_src.rstrip("/")) if name_src else ""),
             mirror_lever="mirror the dataset locally (its card has Mirror "
                          "locally), then reopen")
     except Exception:  # noqa: BLE001 — annotation must never block the link
@@ -196,11 +252,13 @@ def open_viewer_impl(params: dict, ctx: dict | None = None) -> dict:
             if _remote:
                 # F2 — same pre-flight on the path branch for a REMOTE run output.
                 # No dataset card exists here, so the lever differs (register it),
-                # but the cost wording matches the entity branch.
-                note = _remote_open_note(
-                    _site, _size,
-                    mirror_lever=f"work with it on {_site}, or register it as a dataset "
-                                 f"entity to enable a local mirror, then reopen")
+                # but the wording — including the stream-or-fetch decision —
+                # rides the same shared `_remote_note` as the entity branch.
+                note = _remote_note(
+                    _site, _size, run_id=_rid, name=node["name"],
+                    mirror_lever=f"work with it on {_site}, or register it as a "
+                                 f"dataset entity to enable a local mirror, "
+                                 f"then reopen")
 
     ext = [v for v in viewers_for(node) if v.mode == "external" and v.open_external]
     if not ext:

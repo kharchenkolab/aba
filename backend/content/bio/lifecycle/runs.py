@@ -1863,6 +1863,66 @@ def _materialize_store(loc: dict, *, force: bool = False, progress=None) -> Opti
     return None
 
 
+def _remote_store_rel(target: str, name: str) -> Optional[str]:
+    """The SANDBOX-relative ROOT of the store addressed by `name` in a target's
+    inventory — derived with the SAME leading-segment rule as `_rel_under_store`
+    (the gate that classified this output as a store), so the registry can never
+    point the backhaul at a directory the gate did not confirm: a member is
+    `<name>/…` or root-level `<basename>/…`. An INTERIOR `<other>/<basename>/…`
+    path is deliberately NOT a match — a colliding interior path must not steal
+    the derivation (its digest/size were never what got registered), and a store
+    nested under a subdir isn't confirmable by the gate either, so it falls back
+    to the materialize path (Known gap: run-outputs.md). Returns the store dir
+    rel, or None when no member pins it down. Never raises."""
+    try:
+        inv = _live_inventory(target)
+    except Exception:  # noqa: BLE001
+        return None
+    base = name.rsplit("/", 1)[-1].rstrip("/")
+    n = name.rstrip("/")
+    for e in (inv.get("entries") or inv.get("files") or []):
+        if not isinstance(e, dict):
+            continue
+        p = e.get("path") or ""
+        if not p:
+            continue
+        if p == n or p.startswith(n + "/"):       # members under the full rel
+            return n
+        if p == base or p.startswith(base + "/"):  # members under the root-level basename
+            return base
+    return None
+
+
+def resolve_remote_store_stream(run_id: str, name: str) -> Optional[dict]:
+    """The authoritative REMOTE home of a directory store for CHUNK STREAMING —
+    `{target, site, store_rel, size, digest}` — resolved through the canonical
+    `locate_run_output` (so run placement / the stamped home is the single
+    source of truth) with the store's sandbox-relative root derived from the
+    inventory members by the SAME rule as the store gate (`_remote_store_rel` —
+    leading segment only, so the registered home is exactly the store whose
+    digest/size the gate measured). None when the output is local, not a
+    directory store, or the remote tier can't confirm it. NEVER moves bytes;
+    never raises. This is the range channel's home-{site,rel} resolver."""
+    try:
+        loc = locate_run_output(run_id, name)
+        if not loc or loc.get("locality") != "remote" or loc.get("kind") != "dir":
+            return None
+        # locality=="remote" already implies a non-local site (the remote tier
+        # only yields sites != local), so target+site presence is the only check.
+        target, site = loc.get("target"), loc.get("site")
+        if not target or not site:
+            return None
+        store_rel = _remote_store_rel(target, name)
+        if not store_rel:
+            return None
+        return {"target": target, "site": site, "store_rel": store_rel,
+                "size": loc.get("size"), "digest": loc.get("digest")}
+    except Exception as e:  # noqa: BLE001 — a resolver must degrade, not raise
+        _log.debug("resolve_remote_store_stream failed for %s/%s: %s",
+                   run_id, name, e)
+        return None
+
+
 def resolve_run_store(run_id: str, name: str, *, force: bool = False,
                       progress=None) -> Optional[str]:
     """Local path to a Run output — FILE or DIRECTORY store — matching `name`,

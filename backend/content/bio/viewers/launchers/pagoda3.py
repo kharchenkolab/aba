@@ -327,6 +327,40 @@ def _run_id_for_node(node: dict) -> "str | None":
     return None
 
 
+def _register_remote_stream(node: dict, pid: str) -> "str | None":
+    """If this node resolves to a directory store that lives on a REMOTE site AND
+    the substrate exposes the ranged-read verb, register the store's remote home
+    in the range registry and return the `store_key` to mint the stream URL from
+    — else None (the caller falls back to today's whole-store materialize path).
+    The store then streams chunk-by-chunk through the store route; NOTHING is
+    fetched here and the 2 GiB whole-fetch guardrail is never engaged. Best-
+    effort: any failure returns None → today's behavior (graceful degradation)."""
+    try:
+        from core.compute import retention
+        if not retention.range_read_available():
+            return None                         # older substrate → materialize path
+        run_id = _run_id_for_node(node)
+        raw = node.get("artifact_path") or node.get("path") or node.get("name") or ""
+        name = Path(raw).name
+        if not run_id or not name:
+            return None
+        from content.bio.lifecycle.runs import resolve_remote_store_stream
+        home = resolve_remote_store_stream(run_id, name)
+        if not home:
+            return None                         # local / not a dir store / unconfirmed
+        from core.viewers.range_cache import register_remote_store
+        stem = (name[:-len(_STORE_SUFFIX)] if name.endswith(_STORE_SUFFIX)
+                else Path(name).stem)
+        tag = hashlib.sha1(f"{home['site']}|{home['store_rel']}".encode()).hexdigest()[:8]
+        store_key = f"{stem}-{tag}{_STORE_SUFFIX}"
+        register_remote_store(pid, store_key, target=home["target"],
+                              base_rel=home["store_rel"], site=home["site"],
+                              size=home.get("size"), digest=home.get("digest"))
+        return store_key
+    except Exception:  # noqa: BLE001 — degradation must never fail the launch
+        return None
+
+
 def _resolve_source(node: dict, pid: str, set_phase=None) -> Path:
     """Resolve the node to an on-disk source. Local candidates first — an absolute
     `artifact_path`, project-relative joins, then a basename scan of the project's
@@ -401,6 +435,25 @@ def launch(node: dict, ctx: dict) -> LaunchResult:
         ok, err = install_and_wait("viewer-pagoda3", on_progress=lambda m: set_phase(m))
         if not ok:
             raise RuntimeError(err or "The pagoda3 viewer failed to install.")
+
+    # Range channel (misc/range_channel_plan.md Phase 1): a directory store whose
+    # bytes live on another site streams its chunks on demand through the store
+    # route — no whole-store materialize, no 2 GiB guardrail — WHEN the substrate
+    # exposes the ranged-read verb. Registration is cheap and moves nothing; on
+    # any miss (local output / verb absent / unconfirmed) we fall through to the
+    # materialize path below, which keeps its guardrail + mirror lever unchanged.
+    streamed_key = _register_remote_stream(node, pid)
+    if streamed_key:
+        return LaunchResult(
+            url=f"/pagoda3/?store=/pagoda3-store/{pid}/{streamed_key}/",
+            label="Explore in pagoda3",
+            # Origin-shared with the pagoda3 window → its copilot proxies through ABA.
+            set_local_storage={"p3-agent-proxy": "/pagoda3-api"},
+            # No local store_path: the store is STREAMED, not materialized, so the
+            # single-file download (which needs the whole tree) is unavailable until
+            # a mirror brings it home (the download endpoint returns a clean 409).
+        )
+
     src = _resolve_source(node, pid, set_phase)
     if not src.exists():
         raise FileNotFoundError(

@@ -1,0 +1,280 @@
+"""Remote store range streaming — the serving-layer registry + per-chunk cache.
+
+When a viewer launcher resolves a directory store whose bytes live on a REMOTE
+site AND the substrate exposes the ranged-read verb, it does NOT materialize the
+whole tree: it registers ``store_key -> {target, base_rel, site, size, digest}``
+here and mints the SAME store URL. The store route, on a relpath that does not
+resolve locally, consults this registry and serves the requested chunk file from
+a per-chunk cache, back-hauling ONLY the touched chunks over the ranged-read
+verb (`core.compute.retention.file_read_range`). A cached chunk file is served
+with Starlette's ``FileResponse`` — HTTP Range/206 for free — so the whole 2 GiB
+whole-fetch guardrail is never engaged (misc/range_channel_plan.md Phase 1).
+
+Domain-neutral: this module knows targets, sites, rels and chunk files — never
+the data format. Persistence is a flat per-project JSON registry under the
+project runtime area, so a mapping survives a server restart without coupling to
+run/entity metadata (the store_key→home map is a serving concern, not
+provenance). The cache is whole-chunk-file granularity, size-capped with an
+mtime sweep.
+"""
+from __future__ import annotations
+
+import base64
+import json
+import os
+import threading
+import uuid
+from dataclasses import dataclass
+from typing import Optional
+
+from core.config import project_root
+
+# Total cache budget across all remote stores in a project. On install we sweep
+# oldest-mtime chunk files until under this (a simple LRU-ish reclaim — chunk
+# files are small and re-fetchable).
+CACHE_CAP_BYTES = 512 * 1024 * 1024
+
+_REG_LOCK = threading.Lock()
+
+
+# ── outcome the store route maps to a response ───────────────────────────────
+
+@dataclass
+class ChunkOutcome:
+    """What the store route should return for a remote-store chunk request.
+    `status=="ok"` → FileResponse(`path`); anything else → HTTPException(`http`,
+    `detail`). `serve_remote_chunk` returns None (not a ChunkOutcome) when there
+    is no registry entry, so the route falls through to today's 404."""
+    status: str                     # "ok" | "missing" | "error" | "reject"
+    path: Optional[str] = None      # cache file for status=="ok"
+    http: int = 200
+    detail: str = ""
+    site: Optional[str] = None
+
+
+# ── confinement (own copy — core must not import the bio safe-join) ──────────
+
+def _safe_rel(rel: str) -> Optional[str]:
+    """A caller-controlled chunk rel, normalized and refused if it escapes: an
+    absolute path or any `..`/empty segment → None. Pure lexical, so it is valid
+    for both a local cache path and a remote sandbox rel."""
+    if not rel:
+        return None
+    raw = str(rel).replace("\\", "/")
+    if raw.startswith("/") or os.path.isabs(raw):
+        return None
+    parts = [seg for seg in raw.split("/") if seg not in ("", ".")]
+    if not parts or any(seg == ".." for seg in parts):
+        return None
+    return "/".join(parts)
+
+
+# ── registry (project-scoped JSON, restart-surviving) ────────────────────────
+
+def _registry_path(pid: str) -> str:
+    # No mkdir here: this is also the LOOKUP path, and a store-route 404 on a
+    # project that never streamed must not litter it with .viewer-range/.
+    return os.path.join(str(project_root(pid)), ".viewer-range", "registry.json")
+
+
+def _cache_root(pid: str, site: str, store_key: str) -> str:
+    return os.path.join(str(project_root(pid)), ".viewer-range", "cache",
+                        site, store_key)
+
+
+def _load_registry(pid: str) -> dict:
+    try:
+        with open(_registry_path(pid)) as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except Exception:  # noqa: BLE001 — absent / unreadable → empty
+        return {}
+
+
+def _save_registry(pid: str, data: dict) -> None:
+    path = _registry_path(pid)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.partial.{os.getpid()}.{uuid.uuid4().hex}"
+    with open(tmp, "w") as fh:
+        json.dump(data, fh)
+    os.replace(tmp, path)                        # atomic: never a half-written registry
+
+
+def register_remote_store(pid: str, store_key: str, *, target: str,
+                          base_rel: str, site: str, size: Optional[int] = None,
+                          digest: Optional[str] = None) -> None:
+    """Record (or refresh) the remote home of a streamable store. Idempotent.
+    When the store's freshness `digest` changed since the last registration
+    (a remote re-derive), the stale per-chunk cache for this key is wiped so a
+    re-derived store can never serve stale chunks. Never raises."""
+    try:
+        with _REG_LOCK:
+            reg = _load_registry(pid)
+            prev = reg.get(store_key)
+            if (prev and digest and prev.get("digest")
+                    and prev["digest"] != digest):
+                # Wipe where the stale chunks actually LIVE — the PREVIOUS
+                # site's cache root (a re-derive can move the store between
+                # sites; wiping the new root would orphan the stale bytes).
+                _wipe_cache(_cache_root(pid, prev.get("site") or site, store_key))
+            reg[store_key] = {"target": target, "base_rel": base_rel,
+                              "site": site, "size": size, "digest": digest}
+            _save_registry(pid, reg)
+    except Exception:  # noqa: BLE001 — registration is best-effort; the launcher degrades
+        pass
+
+
+def lookup_remote_store(pid: str, store_key: str) -> Optional[dict]:
+    """The registered remote home for a store_key, or None. Never raises."""
+    try:
+        entry = _load_registry(pid).get(store_key)
+        return entry if isinstance(entry, dict) and entry.get("target") else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+# ── serving (cache hit → serve; miss → backhaul-assemble → serve) ────────────
+
+def serve_remote_chunk(pid: str, relpath: str) -> Optional[ChunkOutcome]:
+    """Serve one chunk file of a REMOTE store from the per-chunk cache, back-
+    hauling only on a miss. `relpath` is the store-route relpath
+    (`<store_key>/<chunk_rel>`). Returns a ChunkOutcome, or None when there is no
+    registry entry for the store (the route then 404s exactly as today). Never
+    raises into the route."""
+    store_key, _, chunk_rel = relpath.partition("/")
+    if not store_key:
+        return None
+    entry = lookup_remote_store(pid, store_key)
+    if entry is None:
+        return None
+    # Confinement BEFORE any backhaul (defense in depth — the route's
+    # resolve_within already blocks a `..` URL; this also covers direct callers).
+    safe = _safe_rel(chunk_rel)
+    if safe is None:
+        return ChunkOutcome("reject", http=403, detail="chunk path escapes store")
+    site = entry["site"]
+    cache_file = os.path.join(_cache_root(pid, site, store_key), safe)
+    if os.path.isfile(cache_file):
+        return ChunkOutcome("ok", path=cache_file)      # cache hit — no backhaul
+    remote_rel = entry["base_rel"].rstrip("/") + "/" + safe
+    return _fetch_and_cache(entry["target"], remote_rel, cache_file, site)
+
+
+def _fetch_and_cache(target: str, remote_rel: str, cache_file: str,
+                     site: str) -> ChunkOutcome:
+    """Loop the ranged-read verb to assemble the WHOLE chunk file, install it
+    atomically, and return an ok outcome. Typed `data.missing` → 404;
+    `task.invalid` (bad rel / containment) → 404; any other backhaul/adapter
+    failure (incl. the verb being absent on a downgraded substrate) → 502
+    naming the site. A zero-length remote file assembles to an empty cached
+    file (served 200) — the streamer keys `missing` on the TYPED error, never on
+    nbytes==0. Bytes stream INTO the temp file per loop (memory stays bounded by
+    the per-call cap — a store member can be arbitrarily large); an aborted
+    assembly discards the temp, never leaving a partial in the cache. Racing
+    writers are tolerated: each writes its own temp and os.replace is atomic, so
+    a reader never sees a half-written chunk and the content is identical
+    either way."""
+    from core.compute import retention
+    from core.compute.errors import ComputeError
+    os.makedirs(os.path.dirname(cache_file) or ".", exist_ok=True)
+    tmp = f"{cache_file}.partial.{os.getpid()}.{uuid.uuid4().hex}"
+    offset = 0
+    try:
+        with open(tmp, "wb") as fh:
+            while True:
+                r = retention.file_read_range(target, remote_rel, offset=offset)
+                nbytes = int(r.get("nbytes") or 0)
+                if nbytes:
+                    fh.write(base64.b64decode(r.get("bytes_b64") or ""))
+                    offset += nbytes
+                if r.get("eof") or not r.get("capped"):
+                    break
+                if nbytes == 0:                  # defensive: capped-but-empty → stop
+                    break
+        os.replace(tmp, cache_file)
+    except ComputeError as e:
+        _discard(tmp)
+        if e.code == "data.missing":
+            return ChunkOutcome("missing", http=404,
+                                detail="chunk not found on remote store", site=site)
+        if e.code == "task.invalid":
+            return ChunkOutcome("missing", http=404,
+                                detail="invalid chunk path", site=site)
+        return ChunkOutcome("error", http=502, site=site,
+                            detail=f"chunk backhaul failed on {site}: {e.code}")
+    except OSError:
+        # Local cache-tree failure (disk full, permissions): the bytes may be
+        # fine remotely but we cannot serve what we could not install — an
+        # "ok" pointing at a missing path would 500 out of FileResponse.
+        _discard(tmp)
+        return ChunkOutcome("error", http=502, site=site,
+                            detail="chunk cache install failed")
+    except Exception as e:  # noqa: BLE001 — verb absent / adapter down → 502
+        _discard(tmp)
+        return ChunkOutcome("error", http=502, site=site,
+                            detail=f"chunk backhaul unavailable on {site}: {type(e).__name__}")
+    _sweep_to_cap(os.path.dirname(cache_file), keep=cache_file)
+    return ChunkOutcome("ok", path=cache_file)
+
+
+def _discard(tmp: str) -> None:
+    try:
+        os.remove(tmp)
+    except OSError:
+        pass
+
+
+def _sweep_to_cap(start_dir: str, keep: Optional[str] = None) -> None:
+    """Reclaim oldest-mtime chunk files across the project cache tree until the
+    total is under CACHE_CAP_BYTES. Climbs from `start_dir` to the
+    `.viewer-range/cache` root, then sweeps the whole tree. `keep` is never
+    evicted — it is the just-installed file the caller is about to serve (an
+    over-cap single file must survive its own install). Best-effort — a sweep
+    failure never breaks a serve."""
+    try:
+        # Find the cache root: climb to the `.viewer-range/cache` marker.
+        cur = os.path.abspath(start_dir)
+        root = None
+        while cur and cur != os.path.dirname(cur):
+            if os.path.basename(cur) == "cache" and \
+                    os.path.basename(os.path.dirname(cur)) == ".viewer-range":
+                root = cur
+                break
+            cur = os.path.dirname(cur)
+        if not root or not os.path.isdir(root):
+            return
+        files: list[tuple[float, int, str]] = []
+        total = 0
+        for dp, _dirs, fns in os.walk(root):
+            for fn in fns:
+                fp = os.path.join(dp, fn)
+                try:
+                    st = os.stat(fp)
+                except OSError:
+                    continue
+                files.append((st.st_mtime, st.st_size, fp))
+                total += st.st_size
+        if total <= CACHE_CAP_BYTES:
+            return
+        files.sort()                             # oldest mtime first
+        keep_abs = os.path.abspath(keep) if keep else None
+        for _m, sz, fp in files:
+            if total <= CACHE_CAP_BYTES:
+                break
+            if keep_abs and os.path.abspath(fp) == keep_abs:
+                continue
+            try:
+                os.remove(fp)
+                total -= sz
+            except OSError:
+                pass
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _wipe_cache(cache_dir: str) -> None:
+    import shutil
+    try:
+        shutil.rmtree(cache_dir, ignore_errors=True)
+    except Exception:  # noqa: BLE001
+        pass
