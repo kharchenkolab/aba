@@ -214,6 +214,20 @@ second:
   works if sittings actually end, and a desk of eternal "open" sessions
   is how ▶ becomes wallpaper. Filed also says something parked cannot:
   *this line reached a pause point deliberately.*
+- **Moving on IS the close.** In practice the flow is not open → close
+  → open; it is open → open → open — the scientist finishes a thought
+  on Q1 and starts on Q2. So the strongest boundary signal is not idle
+  time but the next summons: `▷ work` anywhere parks the sitting you
+  were in, automatically. One ▶ per scientist — attention is
+  single-threaded, and the scarcity that keeps the glyph readable is
+  now structural, not disciplined. Parking stops *nothing*: launched
+  runs keep running (machine work lives in the sediment and the
+  machine stratum, not in the conversation), drafts stay pending,
+  the routing table waits in the tray. And `▷ work` on an anchor
+  holding a parked sitting picks it up — within the gap threshold as
+  the same episode; past it, as a new sitting with a chain edge
+  (`continues ←`). The user's only verb is "work here now"; every
+  boundary falls out of where attention actually went.
 - **Sessions are first-class, because the redux is a map and sessions
   are the territory.** Curation is lossy by design, so the episode must
   stay reachable: the work record's **by-session grain** shows each
