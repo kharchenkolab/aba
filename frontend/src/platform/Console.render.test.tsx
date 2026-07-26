@@ -22,7 +22,15 @@ describe('Console rendering', () => {
   // mount — so the errors-only toggle exercised below stayed on for every
   // later test in this file, filtering their rows away and failing them on
   // suite order alone. Clear both: the store AND the persisted facets.
-  beforeEach(() => { resetConsole(); localStorage.clear() })
+  // …and guard the clear itself: `localStorage` is NOT present in every test
+  // environment (happy-dom here does not expose it), so an unguarded
+  // localStorage.clear() throws in beforeEach and fails all seven tests before
+  // they run. Console.tsx already treats storage as optional (loadFacets /
+  // saveFacets swallow); the cleanup has to be just as tolerant.
+  beforeEach(() => {
+    resetConsole()
+    try { globalThis.localStorage?.clear() } catch { /* no storage here */ }
+  })
 
   it('renders a dense row: glyph + site chip + verb + facts, no time column', () => {
     noteNotification(backhaul())
