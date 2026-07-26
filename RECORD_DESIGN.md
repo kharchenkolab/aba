@@ -636,7 +636,8 @@ manual re-promotion). Two guards make it trustworthy:
   enthusiasm alone — and the refusal is legible, in evidence terms:
   *"raising your interest weight would not change the outcome; the lead
   position requires cross-checked (◕) or better."* The anti-sycophancy
-  mechanism.
+  mechanism. When the indication is *proactive* — made before the
+  evidence exists — the floor converts instead of refusing (§14.5).
 - **Necessity is computed, not felt.** The boring calibration the main
   result depends on cannot sink below supporting rank — what stops the
   Record becoming a highlight reel.
@@ -660,7 +661,66 @@ deliberately visible and deliberately uncomfortable**: that count
 climbing is the user-facing form of the narrowing pathology (negative
 results and abandoned threads quietly vanishing from every view).
 
-### 14.5 Charges — the scientist's direction, durable
+### 14.5 Intent precedes evidence — the manuscript's future tense
+
+The emphasis signal is often **proactive**: the scientist already knows
+where they intend to dig and declares that a direction — sometimes one
+with no section yet — will be an important piece, long before the body of
+work could carry a full exposition. Treating that declaration as a
+present-tense placement claim would either violate the evidence floor or
+corrupt it; the right reading is that it is a **commitment about the
+future**, and the system's response is a conversion, never a refusal or a
+silent drop:
+
+- **Declaring intent births a stub.** The declaration is ratified into a
+  stub section whose charge is drafted *from the intent* ("this will
+  carry the seasonal-mechanism story"), placed where the scientist points
+  — prominence of a stub is cheap and honest, so intent may order the
+  page even where evidence cannot yet fill it.
+- **At this stage, the plan IS the content.** A stub renders its charge,
+  its open questions, and its **planned-work list** — not empty prose
+  scaffolding. This refines rather than violates first principle 5
+  (structure born from work, never templates): planning is work, and a
+  ratified intent is its record. The gap between declared importance and
+  present evidence renders as an honest state — *"committed direction ·
+  evidence 0 of 4 planned analyses"* — never as thin prose pretending
+  otherwise.
+- **Planned-work items are first-class**, with a lifecycle: proposed →
+  planned (ratified) → taken up (▷ its session) → produced (the run /
+  finding) → absorbed (an evidence chip in the grown section). They live
+  *in the sections they would feed*, so the to-do list is distributed
+  through the manuscript at the points of relevance rather than pooled in
+  a backlog — and each item is both a door and a **launcher**: `work ▸`
+  summons a session scoped by the stub (charge + intent + evidence so far
+  + this item), with a plan-first kickoff available — *"draft the
+  technical plan"* — whose product returns through the ordinary
+  ratification gate before any analysis runs.
+- **Intent is standing pre-consent.** Growth along a declared direction
+  inherits lowered ceremony: as evidence lands, the agent may grow the
+  stub within its charge at Class 2 (§14.1) rather than asking anew each
+  time — the scientist already said where this is going. The scientist's
+  declaration spends its consent once, up front.
+- **The future tense has file-or-fade too.** A committed direction with
+  no motion resurfaces in the digest ("marked important 5 weeks ago;
+  nothing has run toward it — still planned? park it?") and can be parked
+  with its intent preserved. Honest neglect (first principle 6) applies
+  to promises as much as to drafts.
+
+The structural payoff: declared intents **pre-figure the skeleton**.
+§14.2's restructuring proposals can align with where the scientist
+already said the story is going, so scope grows harmoniously — the
+skeleton is drawn by intent and filled by evidence — instead of
+structure arriving as a surprise after the fact.
+
+On the substrate this is nearly free: threads already carry
+`open_questions` with a full add / answer / park / promote API, the
+`plan` entity's present→approve gate is exactly the plan-first kickoff
+shape, and the nudges are ordinary proposals. The storyboard already
+shows the stub face (E4) and session-from-section (`work ▸`, M2); what
+this subsection adds to the prototype's vocabulary is the intent marker,
+the planned-work objects, and the plan-first kickoff.
+
+### 14.6 Charges — the scientist's direction, durable
 
 Each question section (and later each arc) carries a **charge**: two or
 three ratified sentences of editorial intent — *"present the excess as it
@@ -692,7 +752,7 @@ mild excess', 'a fluctuation'"* — with override-plus-note for the
 legitimate exception. It is the mechanism by which a continuously
 maintained document becomes *more* trustworthy than a hand-written one.
 
-### 14.6 Re-entry and absence
+### 14.7 Re-entry and absence
 
 For the returning scientist the delta strip is the wrong grain. Past a
 few days away, orientation is a **briefing**, not a diff: authored prose,
@@ -710,7 +770,7 @@ expiry timers pause**. You return to a document that is factually current
 and structurally exactly as you left it, plus a finite stack of held
 proposals.
 
-### 14.7 Where this lands on the substrate
+### 14.8 Where this lands on the substrate
 
 Nothing here disturbs §13's audit; it arrives with rollout phases 3–4 as:
 additive entity metadata (salience terms, multi-depth renditions, charges
@@ -754,6 +814,6 @@ Open design questions, in rough priority order:
    hysteresis trigger N, and the structural budget are asserted, not
    calibrated; instrument proposal rates and reversal rates from the
    first live phase and tune against the 70–85% accept band.
-8. **Where charges live** (§14.5) — extend `thread` metadata
+8. **Where charges live** (§14.6) — extend `thread` metadata
    (question/conclude_wrap already carry intent) vs. a small `charge`
    entity; leaning to thread metadata, decide at phase 3.
