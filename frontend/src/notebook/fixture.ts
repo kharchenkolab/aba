@@ -50,8 +50,11 @@ export interface Section {
   intent?: { on: string }
   /** the future tense: planned analyses forming the section's draft plan.
    *  Each item is a door and a launcher; the skeleton is ratified as a
-   *  SHAPE, then filled by work at lowered ceremony. */
-  plan?: { text: string; state: 'planned' | 'taken-up' | 'produced' | 'absorbed'; meta?: string }[]
+   *  SHAPE, then filled by work at lowered ceremony. The list itself is
+   *  the scientist's most direct control surface — their own additions,
+   *  edits, and parkings carry NO ceremony (the propose→ratify gate
+   *  exists for the agent's writes, not the user's intent). */
+  plan?: { text: string; state: 'planned' | 'taken-up' | 'produced' | 'absorbed'; meta?: string; mine?: boolean }[]
   /** the skeleton is still a proposal — awaiting "ratify the shape" */
   planDraft?: boolean
   /** the section's governing metadata, edited IN PLACE (the spine is the

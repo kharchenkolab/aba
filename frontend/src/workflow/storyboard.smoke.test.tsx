@@ -190,6 +190,33 @@ describe('workflow storyboard', () => {
     unmount()
   })
 
+  it('E6: the plan is directly workable — add, reword, park (with undo), no ceremony', () => {
+    const { getByText, getAllByPlaceholderText, getByDisplayValue, container, unmount } =
+      render(<Record world={scene('e6').world} />)
+    // add: the composer lives in the plan itself
+    const input = getAllByPlaceholderText(/add a planned analysis/)[0] as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'Night-time subset — does the cluster persist?' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    getByText(/evidence 0 of 5 planned analyses/)
+    getByText('Night-time subset — does the cluster persist?')
+    getByText('yours')
+    // reword: click the item, edit in place
+    fireEvent.click(getByText('Detector-bias check on storm days'))
+    const edit = getByDisplayValue('Detector-bias check on storm days')
+    fireEvent.change(edit, { target: { value: 'Detector-bias check on storm AND service days' } })
+    fireEvent.keyDown(edit, { key: 'Enter' })
+    getByText('Detector-bias check on storm AND service days')
+    // park: ✕ removes, the undo line restores
+    const xs = container.querySelectorAll('.plan__x')
+    fireEvent.click(xs[xs.length - 1])
+    getByText(/evidence 0 of 4 planned analyses/)
+    fireEvent.click(getByText(/— undo/))
+    getByText(/evidence 0 of 5 planned analyses/)
+    // a plan-less stub gets a seed composer: any question can start a plan
+    expect(getAllByPlaceholderText(/plan an analysis for this question/).length).toBeGreaterThan(0)
+    unmount()
+  })
+
   it('M1 re-entry is a briefing, not a diff — consequence-ranked, flags the unresolved, structure held', () => {
     const { getByText, container, unmount } = render(<Record world={scene('m1').world} />)
     getByText(/since you last read this — 8 days/)

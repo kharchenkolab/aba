@@ -877,7 +877,33 @@ input { font: inherit; }
 .plan__item--taken-up .plan__mark { color: var(--teal); }
 .plan__item--absorbed .plan__text { color: var(--ink-3); }
 .plan__meta { font-size: 10.5px; color: var(--ink-3); font-style: italic; }
-.plan__item .nsec__work { margin-left: auto; flex-shrink: 0; }
+.plan__acts { margin-left: auto; flex-shrink: 0; display: flex; gap: 6px; align-items: baseline; }
+
+/* the plan is the scientist's hands-on surface: click to reword, ✕ to
+   park, a composer to add — all ceremony-free (it is YOUR plan) */
+.plan__text--editable { text-align: left; color: var(--ink-2); }
+.plan__text--editable:hover { color: var(--teal); border-bottom: 1px dotted var(--teal); }
+.plan__edit {
+  flex: 1; min-width: 0; font-family: var(--sans); font-size: 12.5px;
+  border: 1px solid var(--teal); border-radius: 5px; padding: 1px 6px;
+  background: #fff; color: var(--ink); outline: none;
+}
+.plan__x { color: var(--ink-3); font-size: 11px; padding: 0 3px; }
+.plan__x:hover { color: var(--terra); }
+.plan__undo {
+  display: block; width: 100%; text-align: left;
+  font-size: 11px; color: var(--teal); font-style: italic; padding: 3px 0 1px 22px;
+}
+.plan__undo:hover { text-decoration: underline; }
+.plan__composer { display: flex; gap: 6px; align-items: center; padding-top: 5px; }
+.plan__composer input {
+  flex: 1; min-width: 0; font-family: var(--sans); font-size: 12px;
+  border: 1px dashed var(--rule-strong); border-radius: 6px; padding: 3px 8px;
+  background: transparent; color: var(--ink); outline: none;
+}
+.plan__composer input:focus { border-color: var(--teal); border-style: solid; background: #fff; }
+.plan__composer input::placeholder { color: var(--ink-3); font-style: italic; }
+.plan--seed { border-style: dotted; background: transparent; padding: 4px 8px; }
 
 .toc__delta.is-seen { opacity: 0.25; animation: none; }
 .drail__tick.is-seen { opacity: 0.15; }

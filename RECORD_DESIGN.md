@@ -707,6 +707,16 @@ silent drop:
   reads as the section's **draft plan**, offered like any proposal.
   Ratifying the skeleton is what turns a suggested shape into committed
   direction, and the pre-consent below then applies to filling it.
+- **The plan is the scientist's most direct control surface — and it is
+  ceremony-free.** Entering a new item, rewording one, parking one:
+  these are the user's own intent, and the propose→ratify gate exists
+  for the *agent's* writes, never the scientist's. The composer sits in
+  the plan itself (any question can start accruing planned work in
+  place); every planned item launches. The agent's role is downstream —
+  fill in technical detail on request, notice staleness, propose
+  coherence — it never owns the list. Working the plan should be the
+  cheapest authoring gesture in the entire Record, because it is the
+  one the design most wants to encourage.
 - **Planned-work items are first-class**, with a lifecycle: proposed →
   planned (ratified) → taken up (▷ its session) → produced (the run /
   finding) → absorbed (an evidence chip in the grown section). They live

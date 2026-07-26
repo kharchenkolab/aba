@@ -403,47 +403,111 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
           </div>
         )
       })}
-      {s.plan && s.plan.length > 0 && (() => {
-        // the manuscript's FUTURE TENSE: structure may run ahead of the
-        // evidence, prose may not — the skeleton wears its tense openly and
-        // collectively reads as the section's draft plan
-        const done = s.plan.filter(p => p.state === 'produced' || p.state === 'absorbed').length
-        const mark = { planned: '○', 'taken-up': '▷', produced: '✓', absorbed: '↑' }
-        const markTitle = {
-          planned: 'planned — not yet taken up',
-          'taken-up': 'taken up — a session is on it',
-          produced: 'produced — the run landed; evidence in hand',
-          absorbed: 'absorbed — its evidence now lives in the prose',
-        }
-        return (
-          <div className="plan" id={`el-plan-${s.id}`}
-               title="planned work lives IN the section it would feed — the to-do list is distributed through the manuscript, not pooled in a backlog">
-            <div className="plan__head">
-              <span>{s.planDraft
-                ? 'draft plan — proposed by Guide · ratify the shape, not prose'
-                : 'the plan — structure ahead of the evidence, honestly future-tense'}</span>
-              <span className="plan__gap"
-                    title="the gap between declared importance and present evidence is an honest, visible state — never thin prose pretending otherwise">
-                evidence {done} of {s.plan.length} planned analyses
-              </span>
-            </div>
-            {s.plan.map((p, i) => (
-              <div key={i} className={`plan__item plan__item--${p.state}`}>
-                <span className="plan__mark" title={markTitle[p.state]}>{mark[p.state]}</span>
-                <span className="plan__text">{p.text}</span>
-                {p.meta && <span className="plan__meta">{p.meta}</span>}
-                {p.state === 'planned' && w.work && (
-                  <button className="nsec__work" onClick={() => onWork?.(s.id)}
-                          title="launch this line — a session opens scoped by the stub: its charge, its intent, the evidence so far, and this item. Ask for a fuller technical plan first if you want one; it returns through the same ratification gate">
-                    work ▸
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-        )
-      })()}
+      <PlanBlock s={s} w={w} onWork={onWork} />
     </section>
+  )
+}
+
+// The manuscript's FUTURE TENSE: structure may run ahead of the evidence,
+// prose may not — the skeleton wears its tense openly and collectively
+// reads as the section's draft plan. The list is the scientist's most
+// DIRECT control surface: adding, rewording, parking an item is the
+// user's own intent and carries no ceremony (the propose→ratify gate
+// exists for the agent's writes); every planned item launches (work ▸).
+type PlanItem = NonNullable<Section['plan']>[number]
+function PlanBlock({ s, w, onWork }: { s: Section; w: World; onWork?: (id: string) => void }) {
+  const [items, setItems] = useState<PlanItem[]>(() => (s.plan ?? []).map(p => ({ ...p })))
+  const [draft, setDraft] = useState('')
+  const [editing, setEditing] = useState<number | null>(null)
+  const [editText, setEditText] = useState('')
+  const [parked, setParked] = useState<{ item: PlanItem; at: number } | null>(null)
+
+  if (items.length === 0 && !w.work) return null
+  const done = items.filter(p => p.state === 'produced' || p.state === 'absorbed').length
+  const mark = { planned: '○', 'taken-up': '▷', produced: '✓', absorbed: '↑' }
+  const markTitle = {
+    planned: 'planned — not yet taken up',
+    'taken-up': 'taken up — a session is on it',
+    produced: 'produced — the run landed; evidence in hand',
+    absorbed: 'absorbed — its evidence now lives in the prose',
+  }
+  const add = () => {
+    const text = draft.trim()
+    if (!text) return
+    setItems(xs => [...xs, { text, state: 'planned', mine: true }])
+    setDraft('')
+  }
+  const commitEdit = (i: number) => {
+    const text = editText.trim()
+    setItems(xs => text ? xs.map((x, k) => k === i ? { ...x, text, mine: true } : x) : xs)
+    setEditing(null)
+  }
+  // the plan block renders even when empty (a quiet seed composer) so any
+  // question can start accruing planned work in place
+  return (
+    <div className={`plan ${items.length === 0 ? 'plan--seed' : ''}`} id={`el-plan-${s.id}`}
+         title="planned work lives IN the section it would feed — the to-do list is distributed through the manuscript, not pooled in a backlog. The list is yours: add, reword, park — no ceremony; the agent proposes, you own the plan">
+      {items.length > 0 && (
+        <div className="plan__head">
+          <span>{s.planDraft
+            ? 'draft plan — proposed by Guide · ratify the shape, not prose'
+            : 'the plan — structure ahead of the evidence, honestly future-tense'}</span>
+          <span className="plan__gap"
+                title="the gap between declared importance and present evidence is an honest, visible state — never thin prose pretending otherwise">
+            evidence {done} of {items.length} planned analyses
+          </span>
+        </div>
+      )}
+      {items.map((p, i) => (
+        <div key={i} className={`plan__item plan__item--${p.state}`}>
+          <span className="plan__mark" title={markTitle[p.state]}>{mark[p.state]}</span>
+          {editing === i ? (
+            <input className="plan__edit" autoFocus value={editText}
+                   onChange={e => setEditText(e.target.value)}
+                   onKeyDown={e => { if (e.key === 'Enter') commitEdit(i); if (e.key === 'Escape') setEditing(null) }}
+                   onBlur={() => commitEdit(i)} />
+          ) : p.state === 'planned' ? (
+            <button className="plan__text plan__text--editable" onClick={() => { setEditing(i); setEditText(p.text) }}
+                    title="your plan — click to reword it, no ceremony">
+              {p.text}
+            </button>
+          ) : (
+            <span className="plan__text">{p.text}</span>
+          )}
+          {p.mine && <span className="plan__meta">yours</span>}
+          {p.meta && <span className="plan__meta">{p.meta}</span>}
+          {p.state === 'planned' && (
+            <span className="plan__acts">
+              {w.work && (
+                <button className="nsec__work" onClick={() => onWork?.(s.id)}
+                        title="launch this line — a session opens scoped by the stub: its charge, its intent, the evidence so far, and this item. Ask for a fuller technical plan first if you want one; it returns through the same ratification gate">
+                  work ▸
+                </button>
+              )}
+              <button className="plan__x" title="park it — off the plan, remembered, one-click undo"
+                      onClick={() => { setParked({ item: p, at: i }); setItems(xs => xs.filter((_, k) => k !== i)) }}>
+                ✕
+              </button>
+            </span>
+          )}
+        </div>
+      ))}
+      {parked && (
+        <button className="plan__undo"
+                onClick={() => { setItems(xs => { const n = [...xs]; n.splice(Math.min(parked.at, n.length), 0, parked.item); return n }); setParked(null) }}>
+          parked “{parked.item.text.slice(0, 44)}…” — undo
+        </button>
+      )}
+      {w.work && (
+        <div className="plan__composer">
+          <input placeholder={items.length === 0 ? '+ plan an analysis for this question…' : '+ add a planned analysis…'}
+                 value={draft} onChange={e => setDraft(e.target.value)}
+                 onKeyDown={e => { if (e.key === 'Enter') add() }}
+                 title="lands as ○ planned, yours immediately — your own plan needs no ratification" />
+          {draft.trim() && <button className="btn" onClick={add}>add</button>}
+        </div>
+      )}
+    </div>
   )
 }
 

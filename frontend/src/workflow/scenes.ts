@@ -329,7 +329,9 @@ const e6: Scene = {
     'CONVERTS, never refuses: a committed-direction stub opens whose content, at this stage, IS ' +
     'the plan. Prose tracks evidence; structure tracks intent — the skeleton wears its future ' +
     'tense openly (a draft shape, ratified once), each planned analysis is a door and a ' +
-    'launcher, and growth along this line is now pre-consented.',
+    'launcher, and growth along this line is now pre-consented. The list itself is YOURS to ' +
+    'work — type to add an item, click one to reword it, ✕ to park it: no ceremony for your ' +
+    'own plan.',
   world: {
     project: { ...P0, lastVisit: '2026-03-02' },
     ...emptyWorld,
