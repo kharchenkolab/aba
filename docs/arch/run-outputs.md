@@ -115,8 +115,8 @@ Guard: `tests/test_harvest_honesty.py` (per-lane, red-proven).
 | Export (zip / materialize) | `/api/files/download`, `materialize_tree(resolve=)` | run-backed nodes resolve through the caller-supplied run resolver; files the tree lists but this machine can't serve are NAMED (`SKIPPED-FILES.txt` / `missing`+warning), never silently omitted |
 | Register (`register_dataset`) | `curation._resolve_dataset_path` | `locate_run_output(active_run, name)` **first** (site- and stopped-kernel-aware); the ranked scratch scan is the fallback and the only tier for no-run registrations; the durable `run_key` is captured via the resolver (`_capture_run_key`), site-agnostically |
 | Search (`find_files`) | `project_locate.locate_project_files` | every tier answers `durability`; a live-sandbox hit says it is swept and must be registered/copied before reuse — silence is a claim |
-| View | `viewers` routes + `get_viewer_url` + external launcher `_resolve_source` | a raw ABSOLUTE path is reverse-looked-up to a registered dataset FIRST (`data_location.entity_for_path`, recorded metadata only — no probe; newest live match wins, relative inputs excluded so a verbatim-recorded relative string can't steal a tree node's resolution), so a byte-identical home resolves entity-backed (the mirror lever works); otherwise lookup (`resolve_project_run_output`) returns a **remote marker**, moving nothing. Both branches carry a location pre-flight note (site, size, the honest lever per source) minted from recorded facts — with ONE shared stream-or-fetch decision (`_remote_note`: on a range-capable substrate it additionally probes streaming readiness, so a store that will stream says so instead of warning about a whole fetch) — and an absolute-path miss names the remote levers rather than reporting a bare "no file matching"; launch calls `resolve_run_store` (guardrail budget, progress, retain-on-view) — EXCEPT a remote directory store on a range-capable substrate, which **streams** (see below) instead of materializing. A launch whose EVERY tier misses still tells the truth: when the entity's recorded facts say the bytes are a by-reference remote home, the terminal error names the site in the same shape as the run-keyed raise (`_source_not_found`, the honesty bridge) so the launch page's mirror lever engages even with the producing run unresolvable — entity facts only, no probe, no new tier; non-by-reference sources keep the exact generic wording |
-| View (remote store, streamed) | store route `main.py` `/pagoda3-store` + `core/viewers/range_cache.py` | the range channel: a directory store whose bytes live on another site serves its chunks on demand — NO whole-store fetch, so the 2 GiB guardrail never engages. The launcher resolves the store's `{target, site, store_rel}` (`resolve_remote_store_stream`, over the canonical `locate_run_output` + inventory-derived sandbox rel), registers `store_key → {target, base_rel, site, size, digest}` in a restart-surviving per-project registry, and mints the SAME store URL without materializing. The store route serves a local file byte-identically (ceiling); on a local miss it consults the registry and serves the requested chunk file from a per-chunk cache, back-hauling only touched chunks over the `run_file_read_range` verb (`retention.file_read_range`; ~2 ssh round-trips per read, so the whole-chunk-file cache is what makes it fine). Cache install is atomic (temp → `os.replace`), size-capped (mtime LRU), wiped when the store's freshness digest changes. Typed `data.missing` → 404; backhaul/adapter failure → 502 naming the site; `..` URL → 403 before any backhaul. The verb ABSENT on an older substrate (`range_read_available()`, cached probe) → every step degrades to the materialize path above, byte-identical to today |
+| View | `viewers` routes + `get_viewer_url` + external launcher `_resolve_source` | a raw ABSOLUTE path is reverse-looked-up to a registered dataset FIRST (`data_location.entity_for_path`, recorded metadata only — no probe; newest live match wins, relative inputs excluded so a verbatim-recorded relative string can't steal a tree node's resolution), so a byte-identical home resolves entity-backed (the mirror lever works); otherwise lookup (`resolve_project_run_output`) returns a **remote marker**, moving nothing. Both branches carry a location pre-flight note (site, size, the honest lever per source) minted from recorded facts — with ONE shared stream-or-fetch decision (`_remote_note`: on a range-capable substrate it additionally probes streaming readiness, so a store that will stream says so instead of warning about a whole fetch) — and an absolute-path miss names the remote levers rather than reporting a bare "no file matching"; launch calls `resolve_run_store` (guardrail budget, progress, retain-on-view) — EXCEPT a remote directory store on a range-capable substrate, which **streams** (see below) instead of materializing. A launch whose EVERY tier misses still tells the truth: when the entity's recorded facts say the bytes are a by-reference remote home with NO data-plane ref recorded, the terminal error names the site in the same shape as the run-keyed raise (`_source_not_found`, the honesty bridge) so the launch page's mirror lever engages even with the producing run unresolvable — entity facts only, no probe, no new tier; non-by-reference sources keep the exact generic wording |
+| View (remote store, streamed) | store route `main.py` `/pagoda3-store` + `core/viewers/range_cache.py` | the range channel: a directory store whose bytes live on another site serves its chunks on demand — NO whole-store fetch, so the 2 GiB guardrail never engages. A registry row addresses the bytes by ONE of two arms. **Run arm** — `{target, base_rel, site, size, digest}`: the launcher resolves the producing run's remote store home (`resolve_remote_store_stream`, over the canonical `locate_run_output` + inventory-derived sandbox rel). **Ref arm** — `{ref, site, size, digest}`: an entity-backed by-reference REMOTE directory store whose recorded `metadata.ref` is a data-plane content ref registers addressed by that ref — RECORDED FACTS ONLY (no inventory round-trip), so it streams with NO resolvable run required (`_register_ref_arm`, tried first; the run arm is the fallback). Eligibility is ONE shared predicate (`ref_stream_facts`, pagoda3.py) consumed by BOTH the launcher and the pre-flight note — store-suffix name, recorded ref, `dataset_location` remote + by-reference, AND recorded directory shape (descriptor/fingerprint `n_files >= 2`; a FILE fingerprints as 1) — so the note can never promise a stream the launcher would decline, and a FILE-shaped ref wearing the store suffix refuses to the materialize path instead of stream-registering into a mute-404 viewer (the substrate refuses rel-on-FILE). Either arm registers `store_key → {arm addressing}` in a restart-surviving per-project registry and mints the SAME store URL without materializing (ref-arm `store_key` is stable per content ref). The store route serves a local file byte-identically (ceiling); on a local miss it consults the registry and serves the requested chunk file from a per-chunk cache, back-hauling only touched chunks over that arm's verb — run arm `retention.file_read_range(target, base_rel + chunk_rel)`, ref arm `retention.data_read_range(ref, rel=chunk_rel, site=)` (the ref IS the tree root, so the chunk rel passes through as the member rel, no base_rel join); ~2 ssh round-trips per read, so the whole-chunk-file cache is what makes it fine. Identical envelope + error mapping across arms. Cache install is atomic (temp → `os.replace`), size-capped (mtime LRU), wiped when the store's freshness digest changes. Typed `data.missing` → 404; backhaul/adapter failure → 502 naming the site; `..` URL → 403 before any backhaul. Each verb is probed independently (`range_read_available(verb)`, cached per verb) — a deployment may expose the run verb but not the ref verb; a verb ABSENT → its arm degrades to the materialize path above, byte-identical to today |
 | Render | cards / `metadata.run.sites` / exec `compute` block | reads recorded placement only; never a live stat |
 
 Site literals in the addressing surface are census-guarded
@@ -138,14 +138,17 @@ not be re-derived at a door (misc/paths.md owns the rationale).
   `core/viewers/launch_page.py` carry the location pre-flight + the path-backed
   remote-failure guidance.
 - `core/compute/retention.py` — the retain verbs (index, inventory, stat, the
-  8 MB preview read, forget) + the ranged-read doorway (`file_read_range`,
-  `range_read_available`) backing the range channel.
+  8 MB preview read, forget) + the two ranged-read doorways backing the range
+  channel: `file_read_range` (run-keyed) and `data_read_range` (ref-addressed —
+  the ref arm), sharing the per-verb probe `range_read_available(verb)`.
 - `core/viewers/range_cache.py` — the range channel's serving layer (domain-
-  neutral): the per-project remote-store registry + whole-chunk-file cache +
-  `serve_remote_chunk`. `content/bio/lifecycle/runs.py` `resolve_remote_store_stream`
-  is its home-`{target, site, store_rel}` resolver;
+  neutral): the per-project remote-store registry (two arms per row, exactly one
+  each) + whole-chunk-file cache + `serve_remote_chunk` (arm-agnostic assembly
+  via `_chunk_reader`). `content/bio/lifecycle/runs.py` `resolve_remote_store_stream`
+  is the run arm's home-`{target, site, store_rel}` resolver;
   `content/bio/viewers/launchers/pagoda3.py` `_register_remote_stream` registers +
-  mints the stream URL; the store route branch lives in `main.py` `pagoda3_store`.
+  mints the stream URL (`_register_ref_arm` is the ref arm, tried first); the
+  store route branch lives in `main.py` `pagoda3_store`.
 - `core/data/datasets.py` — the data-plane mechanism the mover reuses
   (`register_source`/`fetch`, `FETCH_GUARDRAIL_BYTES`, fingerprints).
 - `content/bio/files/tree.py` — `_graft_run_outputs` (the ledger-sourced
@@ -157,9 +160,14 @@ not be re-derived at a door (misc/paths.md owns the rationale).
   `tests/test_run_durable_view.py`, `tests/test_serving_spine.py`,
   `tests/test_output_door_census.py` (every lister/server of run outputs
   reads the ledger — the door census), `tests/test_range_channel.py` (the range
-  channel: cache miss back-hauls / hit short-circuits — armed; typed
+  channel, BOTH arms: cache miss back-hauls / hit short-circuits — armed; typed
   data.missing → 404, backhaul → 502, traversal → reject before any read;
-  verb-absent degradation; local-branch ceiling — all red-proven).
+  per-verb degradation matrix; ref-arm rel pass-through with the run arm's
+  `data_read_range` sentinel un-dispatched; the production shape end-to-end
+  (by-ref remote, run dead, ref recorded → ref arm streams); ref:None → honesty
+  bridge; FILE-shaped / shape-unconfirmed refs refused; a mis-shaped ref in the
+  registry 404s every chunk and caches nothing; the note↔launcher agreement
+  matrix; local-branch ceiling — all red-proven).
 
 ## Known gaps
 
@@ -197,16 +205,24 @@ not be re-derived at a door (misc/paths.md owns the rationale).
   registered for streaming — deliberate: a looser matcher could bind the registry
   to a colliding interior path whose digest/size the gate never measured. The
   pre-flight note's stream-or-fetch decision is shared by both branches
-  (`_remote_note`; the entity branch derives the producing run via
-  `run_id_for_entity`, launcher-parity); when the verb is live that decision
-  costs one remote-tier resolve inside the link-mint call — see the doorway's
-  docstring. A RUN-UNRESOLVABLE by-reference remote source (run entity deleted,
-  target-less exec, keeps forgotten) cannot stream — streaming is
-  run-target-keyed; its launch bridges to the remote-flavored terminal error
-  (mirror lever engages), and serving it in place needs the substrate's
-  registered-data addressing arm (separate work). On a substrate that lacks
-  `run_file_read_range`, the whole path is dormant and behavior is
-  byte-identical to the pre-channel materialize path.
+  (`_remote_note`); the ref arm answers through the SAME eligibility predicate
+  the launcher registers by (`ref_stream_facts` — an agreement-matrix guard
+  keeps note verdict == launcher verdict per entity shape) from recorded entity
+  facts with NO round-trip, while the run arm's decision costs one remote-tier
+  resolve inside the link-mint call when the verb is live — see the doorway's
+  docstring. A run-unresolvable by-reference remote source (run entity deleted,
+  target-less exec, keeps forgotten) now STREAMS through the ref arm when its
+  registration recorded a data-plane content ref — the earlier gap is closed.
+  The residual unstreamable shapes are **ref:None registrations** (a
+  durable-home site-path registration mints no ref, so there is nothing to
+  address — its launch bridges to the remote-flavored terminal error and the
+  mirror lever engages), **shape-unconfirmed refs** (no recorded
+  descriptor/fingerprint `n_files >= 2` — deliberately refused to the
+  materialize path, which handles both file and tree shapes, rather than risk
+  a mute-404 stream), and the **nested-store** case above. Each verb is probed
+  independently; on a substrate that lacks `run_file_read_range` the run arm is
+  dormant, and one that lacks `data_read_range` leaves the ref arm dormant —
+  in both cases behavior is byte-identical to the pre-channel materialize path.
 - **Harvested-store identity is content-derived.** The harvest copy names each
   served file by its truncated sha256 (hardlink when same-device), so identical
   bytes share one store entry across harvests and re-runs, `produced[]` carries

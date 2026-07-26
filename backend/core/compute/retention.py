@@ -180,27 +180,38 @@ def file_read(target: str, rel: str, max_bytes: int = 1 << 20) -> dict:
 
 # ── ranged read (chunk-streaming backhaul) ───────────────────────────────────
 # weft's per-call ranged-read clamp; a caller loops for the remainder when the
-# reply is `capped`. The doorway mirrors `file_read` (run-keyed addressing).
+# reply is `capped`. Two doorways share this clamp and envelope: the run-keyed
+# `file_read_range` (run/kernel jobdir addressing) and the ref-addressed
+# `data_read_range` (data-plane content ref addressing — the ref arm).
 RANGE_CAP = 16 * 1024 * 1024
 _RANGE_VERB = "run_file_read_range"
-_range_available: Optional[bool] = None
+DATA_RANGE_VERB = "data_read_range"
+# Per-verb availability, probed once each and cached. A deployment may expose
+# the run verb but NOT the ref verb (a substrate that shipped run streaming
+# before the ref arm) — so each verb is probed independently, and a caller for
+# the ref arm never assumes the run verb's answer.
+_verb_available: dict = {}
 
 
-def range_read_available() -> bool:
-    """Whether the DEPLOYED substrate exposes the ranged-read verb
-    (`run_file_read_range`). An older weft simply lacks it — probed once (no
-    round-trip; just whether the adapter would dispatch it) and cached, so every
-    caller degrades to today's whole-fetch path uniformly. False when the
+def range_read_available(verb: str = _RANGE_VERB) -> bool:
+    """Whether the DEPLOYED substrate exposes a ranged-read `verb` — the
+    run-keyed `run_file_read_range` (default) or the ref-addressed
+    `data_read_range` (`DATA_RANGE_VERB`). An older weft simply lacks one or
+    both; each is probed once PER VERB (no round-trip; just whether the adapter
+    would dispatch it) and cached, so every caller degrades to today's
+    whole-fetch path uniformly. A substrate with the run verb but not the ref
+    arm answers True for the former and False for the latter. False when the
     substrate is offline. Never raises."""
-    global _range_available
-    if _range_available is None:
+    cached = _verb_available.get(verb)
+    if cached is None:
         try:
             weft = _adapter.get_compute().raw_controller()
-            fn = getattr(type(weft), _RANGE_VERB, None)
-            _range_available = bool(fn is not None and getattr(fn, "_weft_tool", False))
+            fn = getattr(type(weft), verb, None)
+            cached = bool(fn is not None and getattr(fn, "_weft_tool", False))
         except Exception:  # noqa: BLE001 — offline / unwired → degrade
-            _range_available = False
-    return _range_available
+            cached = False
+        _verb_available[verb] = cached
+    return cached
 
 
 def file_read_range(target: str, rel: str, *, offset: int = 0,
@@ -219,6 +230,32 @@ def file_read_range(target: str, rel: str, *, offset: int = 0,
     `range_read_available()` first and degrade. Each call costs ~2 ssh
     round-trips over a WAN; the per-chunk cache is what makes that fine."""
     return _call(_RANGE_VERB, target, rel, offset=offset, length=length)
+
+
+def data_read_range(ref: str, rel: Optional[str] = None, *, offset: int = 0,
+                    length: Optional[int] = None, site: Optional[str] = None) -> dict:
+    """One ranged read addressed by a DATA-PLANE content `ref` — the ref-arm
+    sibling of `file_read_range` over ONE shared weft engine, with the IDENTICAL
+    envelope + semantics. Returns `{ref, at, via, offset, nbytes, size, eof,
+    capped, bytes_b64}` — additionally to `file_read_range`, `at` names where it
+    was read (`"workspace"` or a site name) and `via` how (`"external-home"` or
+    `"site-cas"`). A TREE ref takes `rel` (a member path within the tree — our
+    per-chunk store shape); a FILE ref takes NO `rel` (both misuses refuse
+    loudly). Resolution prefers a local workspace CAS copy (free pread) then
+    registered locations; `site=` scopes where to read.
+
+    Same past-EOF (out-of-range offset → nbytes=0, eof=True, size present),
+    over-cap clamp (`capped=True` → loop for the remainder, cap `RANGE_CAP`),
+    base64 payload (`bytes_b64` "" when nbytes==0), and TYPED errors as
+    `file_read_range`: `data.missing` (ref vanished / GC'd — RETRYABLE; key a
+    streamer on THIS, never on nbytes==0), `task.invalid` (rel-on-FILE,
+    no-rel-on-TREE, containment/intake). Raises AttributeError when the verb is
+    ABSENT — a deployment may have the run verb but NOT this one, so probe
+    `range_read_available(DATA_RANGE_VERB)` (a distinct per-verb cache) first and
+    degrade. Each call costs ~2 ssh round-trips over a WAN; the per-chunk cache
+    is what makes that fine."""
+    return _call(DATA_RANGE_VERB, ref, rel=rel, offset=offset, length=length,
+                 site=site)
 
 
 def location_path(obj) -> Optional[str]:

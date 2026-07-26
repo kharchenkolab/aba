@@ -37,21 +37,42 @@ def _remote_stream_note(site, *, mirror_lever) -> str:
             f"{mirror_lever}.")
 
 
-def _remote_stream_ready(run_id, name) -> bool:
-    """True when a remote run output will STREAM: the substrate exposes the
-    ranged-read verb AND the output resolves as a remote DIRECTORY store. The
-    verb-absent probe is cached and short-circuits with no remote round-trip, so
-    on a substrate WITHOUT the verb (today's deployments) this is free and
-    returns False. When the verb IS live, a remote source pays one
-    `resolve_remote_store_stream` resolve — a `locate_run_output` remote-tier
-    pass plus an inventory read, i.e. a few ssh round-trips — inside the
-    link-mint call; the branch's earlier location facts (the located tuple /
-    `dataset_location`) don't carry kind/target, so they can't answer this
-    without that resolve. Never raises — a note must never block the link."""
+def _remote_stream_ready(run_id, name, *, entity=None) -> bool:
+    """True when a remote source will STREAM its chunks. Two arms, tried
+    cheapest-first:
+
+    * REF arm — LAUNCHER-PARITY from RECORDED FACTS ONLY, NO remote round-trip:
+      the ONE shared eligibility predicate (`ref_stream_facts` — the launcher's
+      own gate set: store-suffix name, recorded data-plane `ref`,
+      remote + by-reference, recorded directory shape) plus the ref verb.
+      Sharing the predicate is the point: a weaker gate here would promise
+      streaming for a source the launcher then materializes into the transfer
+      gate (the over-promising class the shared note exists to kill; the
+      agreement matrix in tests/test_range_channel.py guards it). This is what
+      lets the entity branch promise streaming WITHOUT a producing run — and a
+      by-ref entity never pays the run arm's resolve (the earlier cost concern).
+    * RUN arm — the output resolves as a remote DIRECTORY store for its producing
+      run: verb live AND `resolve_remote_store_stream` confirms it (a
+      `locate_run_output` remote-tier pass plus an inventory read — a few ssh
+      round-trips inside the link-mint call; the branch's earlier location facts
+      don't carry kind/target, so they can't answer this without that resolve).
+
+    Each verb-absent probe is cached and short-circuits with no round-trip, so on
+    a substrate WITHOUT the verbs (today's deployments) this is free and returns
+    False. Never raises — a note must never block the link."""
     try:
+        from core.compute import retention
+        # REF arm — the shared predicate over recorded facts; no round-trip.
+        # (The launcher module is already imported: content.bio.viewers pulls
+        # it in at package import, which open_viewer_impl guarantees.)
+        if entity is not None:
+            from content.bio.viewers.launchers.pagoda3 import ref_stream_facts
+            if (ref_stream_facts(entity, name or "")
+                    and retention.range_read_available(retention.DATA_RANGE_VERB)):
+                return True
+        # RUN arm — one inventory-backed resolve when the run verb is live.
         if not run_id or not name:
             return False
-        from core.compute import retention
         if not retention.range_read_available():
             return False
         from content.bio.lifecycle.runs import resolve_remote_store_stream
@@ -60,16 +81,18 @@ def _remote_stream_ready(run_id, name) -> bool:
         return False
 
 
-def _remote_note(site, size_bytes, *, mirror_lever, run_id, name) -> str:
+def _remote_note(site, size_bytes, *, mirror_lever, run_id, name,
+                 entity=None) -> str:
     """THE one pre-flight decision for a REMOTE-homed source, shared by the
     entity and run-output branches: when the range channel will actually engage
-    for this source (verb live + a remote directory store confirmed for the
-    producing run), say chunks stream on demand — streaming makes the transfer
-    gate irrelevant, so this wins over the over-gate refuse wording; otherwise
-    the fetch / over-gate wording. Both branches MUST route through here (a
-    branch calling `_remote_open_note` directly is streaming-blind — the class
-    this closes)."""
-    if _remote_stream_ready(run_id, name):
+    for this source (the ref arm — the shared `ref_stream_facts` predicate +
+    the ref verb — OR the run arm — verb live + a remote directory store
+    confirmed for the producing run), say chunks stream on demand — streaming
+    makes the transfer gate irrelevant, so this wins over the over-gate refuse
+    wording; otherwise the fetch / over-gate wording. Both branches MUST route
+    through here (a branch calling `_remote_open_note` directly is
+    streaming-blind — the class this closes)."""
+    if _remote_stream_ready(run_id, name, entity=entity):
         return _remote_stream_note(site, mirror_lever=mirror_lever)
     return _remote_open_note(site, size_bytes, mirror_lever=mirror_lever)
 
@@ -80,8 +103,11 @@ def _entity_location_note(e: "dict | None") -> "str | None":
     the shared `_remote_note`, with the producing run derived exactly as the
     launcher's entity resolution does (`run_id_for_entity`) and the name from
     the recorded path's basename (the same derivation as the dispatch node) —
-    so the note promises what launch will actually do. Never raises — an
-    annotation must never block the link."""
+    so the note promises what launch will actually do. The entity itself is
+    passed through so the ref arm's shared predicate can read the SAME recorded
+    facts the launcher will — a by-reference remote store promises streaming
+    from recorded facts alone (no run, no round-trip — the ref arm). Never
+    raises — an annotation must never block the link."""
     try:
         from content.bio.data_location import dataset_location
         loc = dataset_location(e or {})
@@ -95,6 +121,7 @@ def _entity_location_note(e: "dict | None") -> "str | None":
             loc["site"], loc["total_bytes"],
             run_id=run_id_for_entity((e or {}).get("id")),
             name=(os.path.basename(name_src.rstrip("/")) if name_src else ""),
+            entity=e,
             mirror_lever="mirror the dataset locally (its card has Mirror "
                          "locally), then reopen")
     except Exception:  # noqa: BLE001 — annotation must never block the link

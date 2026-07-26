@@ -1,14 +1,23 @@
 """Remote store range streaming — the serving-layer registry + per-chunk cache.
 
 When a viewer launcher resolves a directory store whose bytes live on a REMOTE
-site AND the substrate exposes the ranged-read verb, it does NOT materialize the
-whole tree: it registers ``store_key -> {target, base_rel, site, size, digest}``
-here and mints the SAME store URL. The store route, on a relpath that does not
-resolve locally, consults this registry and serves the requested chunk file from
-a per-chunk cache, back-hauling ONLY the touched chunks over the ranged-read
-verb (`core.compute.retention.file_read_range`). A cached chunk file is served
-with Starlette's ``FileResponse`` — HTTP Range/206 for free — so the whole 2 GiB
-whole-fetch guardrail is never engaged (misc/range_channel_plan.md Phase 1).
+site AND the substrate exposes a ranged-read verb, it does NOT materialize the
+whole tree: it registers the store's remote home here and mints the SAME store
+URL. A row addresses the bytes by ONE of two arms (exactly one per row):
+
+  * RUN arm — ``{target, base_rel, site, size, digest}``: a run/kernel jobdir
+    output, read via ``retention.file_read_range(target, base_rel + chunk_rel)``.
+  * REF arm — ``{ref, site, size, digest}``: a by-reference dataset addressed by
+    its data-plane content ref (no resolvable run required), read via
+    ``retention.data_read_range(ref, rel=chunk_rel, site=site)``. The ref IS the
+    tree root, so the chunk rel passes through as the member rel (no base_rel).
+
+The store route, on a relpath that does not resolve locally, consults this
+registry and serves the requested chunk file from a per-chunk cache, back-
+hauling ONLY the touched chunks over whichever arm's verb the row carries. A
+cached chunk file is served with Starlette's ``FileResponse`` — HTTP Range/206
+for free — so the whole 2 GiB whole-fetch guardrail is never engaged
+(misc/range_channel_plan.md).
 
 Domain-neutral: this module knows targets, sites, rels and chunk files — never
 the data format. Persistence is a flat per-project JSON registry under the
@@ -100,13 +109,30 @@ def _save_registry(pid: str, data: dict) -> None:
     os.replace(tmp, path)                        # atomic: never a half-written registry
 
 
-def register_remote_store(pid: str, store_key: str, *, target: str,
-                          base_rel: str, site: str, size: Optional[int] = None,
+def register_remote_store(pid: str, store_key: str, *, site: str,
+                          target: Optional[str] = None,
+                          base_rel: Optional[str] = None,
+                          ref: Optional[str] = None,
+                          size: Optional[int] = None,
                           digest: Optional[str] = None) -> None:
-    """Record (or refresh) the remote home of a streamable store. Idempotent.
-    When the store's freshness `digest` changed since the last registration
-    (a remote re-derive), the stale per-chunk cache for this key is wiped so a
-    re-derived store can never serve stale chunks. Never raises."""
+    """Record (or refresh) the remote home of a streamable store, as ONE of two
+    arms. RUN arm: pass `target` + `base_rel`. REF arm: pass `ref`. Exactly one
+    arm must be supplied — both or neither is a malformed call and is IGNORED
+    (no row written, so a later lookup misses and the launcher degrades). The
+    row records only that arm's addressing plus `{site, size, digest}`.
+
+    Idempotent. When the store's freshness `digest` changed since the last
+    registration (a remote re-derive), the stale per-chunk cache for this key is
+    wiped so a re-derived store can never serve stale chunks. (For the ref arm
+    the `store_key` already encodes the immutable content ref, so a different ref
+    mints a different key and the wipe is belt-and-suspenders.) Never raises."""
+    run_arm = target is not None and base_rel is not None
+    ref_arm = ref is not None
+    if run_arm == ref_arm:      # both arms, or neither → malformed, ignore
+        return
+    row = ({"target": target, "base_rel": base_rel, "site": site,
+            "size": size, "digest": digest} if run_arm
+           else {"ref": ref, "site": site, "size": size, "digest": digest})
     try:
         with _REG_LOCK:
             reg = _load_registry(pid)
@@ -117,18 +143,20 @@ def register_remote_store(pid: str, store_key: str, *, target: str,
                 # site's cache root (a re-derive can move the store between
                 # sites; wiping the new root would orphan the stale bytes).
                 _wipe_cache(_cache_root(pid, prev.get("site") or site, store_key))
-            reg[store_key] = {"target": target, "base_rel": base_rel,
-                              "site": site, "size": size, "digest": digest}
+            reg[store_key] = row
             _save_registry(pid, reg)
     except Exception:  # noqa: BLE001 — registration is best-effort; the launcher degrades
         pass
 
 
 def lookup_remote_store(pid: str, store_key: str) -> Optional[dict]:
-    """The registered remote home for a store_key, or None. Never raises."""
+    """The registered remote home for a store_key (either arm), or None. Never
+    raises."""
     try:
         entry = _load_registry(pid).get(store_key)
-        return entry if isinstance(entry, dict) and entry.get("target") else None
+        addressed = isinstance(entry, dict) and (entry.get("target")
+                                                 or entry.get("ref"))
+        return entry if addressed else None
     except Exception:  # noqa: BLE001
         return None
 
@@ -156,14 +184,29 @@ def serve_remote_chunk(pid: str, relpath: str) -> Optional[ChunkOutcome]:
     cache_file = os.path.join(_cache_root(pid, site, store_key), safe)
     if os.path.isfile(cache_file):
         return ChunkOutcome("ok", path=cache_file)      # cache hit — no backhaul
+    return _fetch_and_cache(entry, safe, cache_file, site)
+
+
+def _chunk_reader(entry: dict, safe: str):
+    """The per-arm ranged-read closure for one chunk file — `offset -> reply`.
+    RUN arm joins `base_rel + chunk_rel` and reads by target; REF arm passes the
+    chunk rel THROUGH as the tree member rel (the ref IS the store root — no
+    base to join) and reads by ref + site. Both return the SAME envelope, so the
+    assembly loop is arm-agnostic and the error mapping is identical."""
+    from core.compute import retention
+    if entry.get("ref") is not None:
+        ref, site = entry["ref"], entry.get("site")
+        return lambda offset: retention.data_read_range(
+            ref, rel=safe, offset=offset, site=site)
+    target = entry["target"]
     remote_rel = entry["base_rel"].rstrip("/") + "/" + safe
-    return _fetch_and_cache(entry["target"], remote_rel, cache_file, site)
+    return lambda offset: retention.file_read_range(target, remote_rel, offset=offset)
 
 
-def _fetch_and_cache(target: str, remote_rel: str, cache_file: str,
+def _fetch_and_cache(entry: dict, safe: str, cache_file: str,
                      site: str) -> ChunkOutcome:
-    """Loop the ranged-read verb to assemble the WHOLE chunk file, install it
-    atomically, and return an ok outcome. Typed `data.missing` → 404;
+    """Loop the row's ranged-read arm to assemble the WHOLE chunk file, install
+    it atomically, and return an ok outcome. Typed `data.missing` → 404;
     `task.invalid` (bad rel / containment) → 404; any other backhaul/adapter
     failure (incl. the verb being absent on a downgraded substrate) → 502
     naming the site. A zero-length remote file assembles to an empty cached
@@ -174,15 +217,15 @@ def _fetch_and_cache(target: str, remote_rel: str, cache_file: str,
     writers are tolerated: each writes its own temp and os.replace is atomic, so
     a reader never sees a half-written chunk and the content is identical
     either way."""
-    from core.compute import retention
     from core.compute.errors import ComputeError
+    read = _chunk_reader(entry, safe)
     os.makedirs(os.path.dirname(cache_file) or ".", exist_ok=True)
     tmp = f"{cache_file}.partial.{os.getpid()}.{uuid.uuid4().hex}"
     offset = 0
     try:
         with open(tmp, "wb") as fh:
             while True:
-                r = retention.file_read_range(target, remote_rel, offset=offset)
+                r = read(offset)
                 nbytes = int(r.get("nbytes") or 0)
                 if nbytes:
                     fh.write(base64.b64decode(r.get("bytes_b64") or ""))

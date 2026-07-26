@@ -74,6 +74,34 @@ def _register(pid, store_key, *, target="krn_x", base_rel="output/s.store",
                              site=site, size=size, digest=digest)
 
 
+# ── FAKE ref-arm ranged-read verb (data_read_range) ──────────────────────────
+
+def _data_reader(payload_by_rel: dict, calls: list, *, cap: int = 8):
+    """A FAKE `data_read_range`: serves `cap` bytes per call from
+    `payload_by_rel[rel]`, keyed by the TREE MEMBER rel (no base_rel — the ref
+    IS the store root). Records every call as (ref, rel, site, offset). A rel
+    absent from the map raises the typed `data.missing`. The envelope carries
+    the ref-arm-only `at`/`via` fields on top of the shared shape."""
+    def fake(ref, rel=None, *, offset=0, length=None, site=None):
+        calls.append((ref, rel, site, offset))
+        data = payload_by_rel.get(rel)
+        if data is None:
+            raise ComputeError("data.missing", "gone", stage="weft", retryable=True)
+        b = data[offset:offset + cap]
+        return {"ref": ref, "at": site or "workspace", "via": "site-cas",
+                "offset": offset, "nbytes": len(b), "size": len(data),
+                "eof": offset + len(b) >= len(data),
+                "capped": offset + len(b) < len(data),
+                "bytes_b64": base64.b64encode(b).decode()}
+    return fake
+
+
+def _register_ref(pid, store_key, *, ref="sha256:abc", site="siteA",
+                  size=100, digest=None):
+    rc.register_remote_store(pid, store_key, ref=ref, site=site, size=size,
+                             digest=digest)
+
+
 # ── _safe_rel confinement (fully generic) ────────────────────────────────────
 
 def test_safe_rel_accepts_normal_chunk():
@@ -937,6 +965,420 @@ def test_run_resolvable_remote_raise_unchanged(monkeypatch):
     assert "lives on siteB" in msg and "bring it home" in msg, msg
 
 
+# ── ref arm: registry variant + serving dispatch ────────────────────────────
+
+def test_ref_arm_streams_through_data_read_range():
+    # A ref-arm row serves through the FAKE data_read_range with the chunk rel
+    # passed through as the tree MEMBER rel (NO base_rel join). Assembly + cache
+    # hit short-circuit behave exactly as the run arm.
+    pid = "s_ref"
+    _register_ref(pid, "s-ref.store", ref="sha256:aa", site="siteA")
+    payload = b"ref-arm-chunk-bytes"                 # > cap → multi-loop
+    calls: list = []
+    _orig = retention.data_read_range
+    retention.data_read_range = _data_reader({"c/0.0": payload}, calls)
+    try:
+        out = rc.serve_remote_chunk(pid, "s-ref.store/c/0.0")
+        assert out.status == "ok"
+        assert open(out.path, "rb").read() == payload
+        assert len(calls) > 0, "MISS must exercise the ref backhaul (armed)"
+        # rel passes through unchanged (no base_rel prefix), ref+site threaded
+        assert all(c[1] == "c/0.0" for c in calls), calls
+        assert all(c[0] == "sha256:aa" and c[2] == "siteA" for c in calls), calls
+        n = len(calls)
+        out2 = rc.serve_remote_chunk(pid, "s-ref.store/c/0.0")
+        assert out2.status == "ok" and out2.path == out.path
+        assert len(calls) == n, "cache HIT must NOT touch the backhaul"
+    finally:
+        retention.data_read_range = _orig
+
+
+def test_run_arm_never_touches_data_read_range():
+    # CEILING: a RUN-arm row still assembles via file_read_range and NEVER
+    # dispatches data_read_range (the ref-arm sentinel raises if it does).
+    pid = "s_runonly"
+    _register(pid, "s-ro.store", base_rel="out/s.store", site="siteA")
+    calls_run: list = []
+    calls_data: list = []
+
+    def _data_sentinel(*a, **k):
+        calls_data.append((a, k))
+        raise AssertionError("run arm must NOT call data_read_range")
+    _orig_f = retention.file_read_range
+    _orig_d = retention.data_read_range
+    retention.file_read_range = _reader({"out/s.store/c/0.0": b"RUN-ARM"}, calls_run)
+    retention.data_read_range = _data_sentinel
+    try:
+        out = rc.serve_remote_chunk(pid, "s-ro.store/c/0.0")
+        assert out.status == "ok"
+        assert open(out.path, "rb").read() == b"RUN-ARM"
+        assert calls_data == [], "data_read_range untouched by the run arm"
+        assert len(calls_run) > 0
+    finally:
+        retention.file_read_range = _orig_f
+        retention.data_read_range = _orig_d
+
+
+def test_register_validation_exactly_one_arm():
+    # Exactly one arm per row: both or neither is malformed → no row written
+    # (lookup misses). Each single arm registers and looks up.
+    pid = "s_val"
+    rc.register_remote_store(pid, "both.store", site="siteA",
+                             target="krn", base_rel="b", ref="sha256:x")
+    assert rc.lookup_remote_store(pid, "both.store") is None, "both arms → ignored"
+    rc.register_remote_store(pid, "none.store", site="siteA")
+    assert rc.lookup_remote_store(pid, "none.store") is None, "no arm → ignored"
+    rc.register_remote_store(pid, "run.store", site="siteA",
+                             target="krn", base_rel="b")
+    assert (rc.lookup_remote_store(pid, "run.store") or {}).get("target") == "krn"
+    rc.register_remote_store(pid, "ref.store", site="siteA", ref="sha256:y")
+    row = rc.lookup_remote_store(pid, "ref.store") or {}
+    assert row.get("ref") == "sha256:y" and "target" not in row
+
+
+def test_ref_arm_typed_errors_map_same():
+    # data.missing → 404; task.invalid (e.g. rel-on-FILE misuse) → 404; any
+    # other → 502 naming the site — identical mapping to the run arm.
+    pid = "s_reftyped"
+    _orig = retention.data_read_range
+    _register_ref(pid, "rm.store", ref="sha256:m", site="siteQ")
+    retention.data_read_range = _data_reader({}, [])         # any rel → data.missing
+    try:
+        out = rc.serve_remote_chunk(pid, "rm.store/gone")
+        assert out.status == "missing" and out.http == 404
+        cache = os.path.join(rc._cache_root(pid, "siteQ", "rm.store"), "gone")
+        assert not os.path.exists(cache), "a missing ref chunk leaves NO cache file"
+    finally:
+        retention.data_read_range = _orig
+
+    _register_ref(pid, "ti.store", ref="sha256:t", site="siteQ")
+
+    def _ti(ref, rel=None, *, offset=0, length=None, site=None):
+        raise ComputeError("task.invalid", "rel on file ref", stage="weft")
+    retention.data_read_range = _ti
+    try:
+        out = rc.serve_remote_chunk(pid, "ti.store/x")
+        assert out.status == "missing" and out.http == 404
+    finally:
+        retention.data_read_range = _orig
+
+    _register_ref(pid, "er.store", ref="sha256:e", site="edgeX")
+
+    def _er(ref, rel=None, *, offset=0, length=None, site=None):
+        raise ComputeError("internal.error", "down", stage="weft", retryable=True)
+    retention.data_read_range = _er
+    try:
+        out = rc.serve_remote_chunk(pid, "er.store/x")
+        assert out.status == "error" and out.http == 502 and "edgeX" in out.detail
+    finally:
+        retention.data_read_range = _orig
+
+
+# ── ref arm: launcher registration + per-verb degradation ────────────────────
+
+def _by_ref_remote_entity(eid, *, ref, site="siteA",
+                          path="/r/data.lstar.zarr", total_bytes=4096,
+                          n_files=12):
+    """A by-reference REMOTE dataset entity fixture (drives the REAL
+    dataset_location + ref_stream_facts: home.site remote, by_reference True,
+    metadata.ref, recorded dir shape via descriptor n_files)."""
+    return {"id": eid, "metadata": {
+        "home": {"site": site, "path": path},
+        "by_reference": True, "ref": ref,
+        "descriptor": {"total_bytes": total_bytes, "n_files": n_files}}}
+
+
+def test_production_shape_ref_arm_end_to_end(monkeypatch, tmp_path):
+    # THE production shape: entity-backed by-ref REMOTE store, run DEAD (the run
+    # resolver is a sentinel that must NOT be consulted), metadata ref present,
+    # ref verb live → launch() registers the ref arm and streams; the store
+    # route then serves chunks via the FAKE ref backhaul.
+    import content.bio.viewers.launchers.pagoda3 as p3
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("x")
+    monkeypatch.setattr(p3, "pagoda3_dist_path", lambda: dist)
+    monkeypatch.setattr(
+        "core.compute.retention.range_read_available",
+        lambda verb=retention._RANGE_VERB: verb == retention.DATA_RANGE_VERB)
+    monkeypatch.setattr("core.graph.entities.get_entity",
+                        lambda eid: _by_ref_remote_entity(eid, ref="sha256:store-root"))
+    seen = {"run_resolve": 0}
+
+    def _run_sentinel(rid, name):
+        seen["run_resolve"] += 1
+        return {"target": "x", "site": "s", "store_rel": "r"}
+    monkeypatch.setattr("content.bio.lifecycle.runs.resolve_remote_store_stream",
+                        _run_sentinel)
+    pid = "prod_ref"
+    node = {"entity_id": "ds_1", "name": "data.lstar.zarr",
+            "artifact_path": "/r/data.lstar.zarr"}
+    res = p3.launch(node, {"project_id": pid})
+    assert res.store_path is None, "a streamed store has no local store_path"
+    assert f"/pagoda3-store/{pid}/" in res.url
+    assert seen["run_resolve"] == 0, "ref arm must engage WITHOUT the run resolve"
+    store_key = res.url.split(f"/pagoda3-store/{pid}/", 1)[1].rstrip("/")
+    row = rc.lookup_remote_store(pid, store_key)
+    assert row and row.get("ref") == "sha256:store-root" and row.get("site") == "siteA"
+    assert "target" not in row and "base_rel" not in row, row
+    calls: list = []
+    _orig = retention.data_read_range
+    retention.data_read_range = _data_reader({"c/0.0": b"REF-STREAMED-CHUNK"}, calls)
+    try:
+        out = rc.serve_remote_chunk(pid, f"{store_key}/c/0.0")
+        assert out.status == "ok"
+        assert open(out.path, "rb").read() == b"REF-STREAMED-CHUNK"
+        assert calls and calls[0][1] == "c/0.0" and calls[0][2] == "siteA"
+    finally:
+        retention.data_read_range = _orig
+
+
+def test_ref_none_by_ref_entity_falls_to_bridge(monkeypatch, tmp_path):
+    # CEILING for the new arm: a by-ref REMOTE entity with ref:None cannot
+    # stream EVEN with the ref verb live — it falls through to the honesty
+    # bridge (remote wording naming the home site), never a phantom stream.
+    import content.bio.viewers.launchers.pagoda3 as p3
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("x")
+    monkeypatch.setattr(p3, "pagoda3_dist_path", lambda: dist)
+    monkeypatch.setattr(
+        "core.compute.retention.range_read_available",
+        lambda verb=retention._RANGE_VERB: verb == retention.DATA_RANGE_VERB)
+    monkeypatch.setattr("core.graph.entities.get_entity",
+                        lambda eid: _by_ref_remote_entity(eid, ref=None))
+    monkeypatch.setattr(p3, "_resolve_source",
+                        lambda node, pid, sp=None: Path("/nonexistent/data.lstar.zarr"))
+    try:
+        p3.launch({"entity_id": "ds_1", "name": "data.lstar.zarr",
+                   "artifact_path": "/r/data.lstar.zarr"}, {"project_id": "refnone1"})
+        assert False, "expected FileNotFoundError"
+    except FileNotFoundError as ex:
+        msg = str(ex)
+    assert _REMOTEISH.search(msg) and "siteA" in msg, msg
+    assert "source not found" not in msg, msg
+
+
+def test_per_verb_matrix_ref_absent_run_present(monkeypatch):
+    # ref verb ABSENT + run verb PRESENT: a by-ref entity with a ref cannot use
+    # the ref arm (data_read_range must NEVER be dispatched — armed sentinel) and
+    # with no producing run it registers nothing; a RUN-arm store still streams.
+    import content.bio.viewers.launchers.pagoda3 as p3
+    monkeypatch.setattr(
+        "core.compute.retention.range_read_available",
+        lambda verb=retention._RANGE_VERB: verb == retention._RANGE_VERB)
+
+    def _data_sentinel(*a, **k):
+        raise AssertionError("data_read_range dispatched with ref verb absent")
+    monkeypatch.setattr("core.compute.retention.data_read_range", _data_sentinel)
+    monkeypatch.setattr("core.graph.entities.get_entity",
+                        lambda eid: _by_ref_remote_entity(eid, ref="sha256:x"))
+    monkeypatch.setattr("content.bio.lifecycle.runs.run_id_for_entity",
+                        lambda eid: None)               # no producing run
+    key = p3._register_remote_stream(
+        {"entity_id": "ds_1", "name": "data.lstar.zarr",
+         "artifact_path": "/r/data.lstar.zarr"}, "matrix1")
+    assert key is None, "ref verb absent + no run → neither arm registers"
+    # the run arm is unaffected — a run-keyed store still streams
+    monkeypatch.setattr("content.bio.lifecycle.runs.resolve_remote_store_stream",
+                        lambda rid, name: {"target": "krn_z", "site": "siteZ",
+                                           "store_rel": "out/x.store",
+                                           "size": 9, "digest": "d"})
+    key2 = p3._register_remote_stream(
+        {"run_id": "run_9", "name": "x.store", "artifact_path": "work/x.store"},
+        "matrix1")
+    assert key2 and key2.startswith("x-")
+
+
+def test_per_verb_matrix_both_absent_by_ref(monkeypatch):
+    # BOTH verbs absent → today's full degradation: neither arm dispatches, and
+    # the run resolver is not even consulted (armed).
+    import content.bio.viewers.launchers.pagoda3 as p3
+    monkeypatch.setattr("core.compute.retention.range_read_available",
+                        lambda verb=retention._RANGE_VERB: False)
+
+    def _data_sentinel(*a, **k):
+        raise AssertionError("data_read_range dispatched with verbs absent")
+    monkeypatch.setattr("core.compute.retention.data_read_range", _data_sentinel)
+    monkeypatch.setattr("core.graph.entities.get_entity",
+                        lambda eid: _by_ref_remote_entity(eid, ref="sha256:x"))
+    seen = {"run": False}
+
+    def _run_sentinel(rid, name):
+        seen["run"] = True
+        return None
+    monkeypatch.setattr("content.bio.lifecycle.runs.resolve_remote_store_stream",
+                        _run_sentinel)
+    key = p3._register_remote_stream(
+        {"entity_id": "ds_1", "run_id": "run_x", "name": "data.lstar.zarr",
+         "artifact_path": "/r/data.lstar.zarr"}, "matrix2")
+    assert key is None
+    assert seen["run"] is False, "run verb absent must short-circuit before resolving"
+
+
+def test_ref_arm_requires_by_reference_remote_and_store_suffix(monkeypatch):
+    # Ceilings on the ref-arm gate: a LOCAL by-ref dataset (home unset ⇒ local),
+    # and a non-store name (.h5ad — a FILE that would need conversion), both fall
+    # through the ref arm even with a ref + the verb live.
+    import content.bio.viewers.launchers.pagoda3 as p3
+    monkeypatch.setattr(
+        "core.compute.retention.range_read_available",
+        lambda verb=retention._RANGE_VERB: verb == retention.DATA_RANGE_VERB)
+    monkeypatch.setattr("content.bio.lifecycle.runs.resolve_remote_store_stream",
+                        lambda rid, name: None)         # run arm can't help either
+    monkeypatch.setattr("content.bio.lifecycle.runs.run_id_for_entity", lambda eid: None)
+    # LOCAL by-ref (home site unset) — not remote → no ref arm
+    monkeypatch.setattr("core.graph.entities.get_entity", lambda eid: {
+        "id": eid, "metadata": {"by_reference": True, "ref": "sha256:x"}})
+    assert p3._register_remote_stream(
+        {"entity_id": "ds_1", "name": "data.lstar.zarr",
+         "artifact_path": "data.lstar.zarr"}, "gate1") is None
+    # remote by-ref with a ref, but a FILE name (.h5ad) — not a dir store
+    monkeypatch.setattr("core.graph.entities.get_entity",
+                        lambda eid: _by_ref_remote_entity(
+                            eid, ref="sha256:x", path="/r/data.h5ad"))
+    assert p3._register_remote_stream(
+        {"entity_id": "ds_1", "name": "data.h5ad",
+         "artifact_path": "/r/data.h5ad"}, "gate2") is None
+
+
+def test_entity_note_ref_arm_streams_no_round_trip(monkeypatch):
+    # Pre-flight: a by-ref remote store with a ref + the ref verb promises
+    # streaming from RECORDED FACTS ALONE — the run resolver (armed sentinel) is
+    # NEVER consulted, and the over-gate refuse wording does not appear.
+    from content.bio.tools.viewers import _entity_location_note
+    monkeypatch.setattr(
+        "core.compute.retention.range_read_available",
+        lambda verb=retention._RANGE_VERB: verb == retention.DATA_RANGE_VERB)
+    seen = {"resolve": 0}
+
+    def _sentinel(rid, name):
+        seen["resolve"] += 1
+        return {"target": "x", "site": "s", "store_rel": "r"}
+    monkeypatch.setattr("content.bio.lifecycle.runs.resolve_remote_store_stream",
+                        _sentinel)
+    monkeypatch.setattr("content.bio.lifecycle.runs.run_id_for_entity",
+                        lambda eid: "run_x")
+    e = _by_ref_remote_entity("ent_1", ref="sha256:root",
+                              path="/remote/siteA/data.lstar.zarr",
+                              total_bytes=3 * 1024**3)     # over-gate size
+    e["artifact_path"] = "/remote/siteA/data.lstar.zarr"
+    note = _entity_location_note(e)
+    assert note and "stream on demand" in note.lower(), note
+    assert "OVER the transfer gate" not in note and "refuse" not in note, note
+    assert "mirror the dataset locally" in note
+    assert seen["resolve"] == 0, "ref arm must NOT consult the run resolver"
+
+
+def test_ref_arm_refuses_file_shaped_or_unknown_payload(monkeypatch):
+    # R2: the recorded payload shape must CONFIRM a directory tree
+    # (descriptor/fingerprint n_files >= 2 — a single FILE fingerprints as
+    # n_files=1). A FILE-shaped ref wearing the store suffix, and a
+    # descriptor-less registration, both REFUSE to the materialize path:
+    # admission would mean a dead viewer (every chunk a mute 404 — the
+    # substrate refuses rel-on-FILE), refusal costs one gated fetch that
+    # handles both shapes. A fingerprint-only dir shape (no descriptor) still
+    # ADMITS — either recorded source confirms.
+    import content.bio.viewers.launchers.pagoda3 as p3
+    monkeypatch.setattr(
+        "core.compute.retention.range_read_available",
+        lambda verb=retention._RANGE_VERB: verb == retention.DATA_RANGE_VERB)
+    node = {"entity_id": "ds_1", "name": "data.lstar.zarr",
+            "artifact_path": "/r/data.lstar.zarr"}
+    # FILE-shaped: n_files == 1
+    e_file = _by_ref_remote_entity("ds_1", ref="sha256:x", n_files=1)
+    # shape unrecorded: no n_files anywhere
+    e_nodesc = _by_ref_remote_entity("ds_1", ref="sha256:y")
+    e_nodesc["metadata"]["descriptor"] = {"total_bytes": 4096}
+    for e in (e_file, e_nodesc):
+        monkeypatch.setattr("core.graph.entities.get_entity",
+                            lambda eid, _e=e: _e)
+        assert p3._register_remote_stream(node, "shape1") is None, e["metadata"]
+        assert p3.ref_stream_facts(e, "data.lstar.zarr") is None
+    # fingerprint-only dir confirmation (descriptor absent) → admits
+    e_fp = _by_ref_remote_entity("ds_1", ref="sha256:z")
+    e_fp["metadata"]["descriptor"] = {}
+    e_fp["metadata"]["fingerprint"] = {"exists": True, "n_files": 9,
+                                       "digest": "fp1"}
+    facts = p3.ref_stream_facts(e_fp, "data.lstar.zarr")
+    assert facts and facts["ref"] == "sha256:z" and facts["digest"] == "fp1"
+
+
+def test_misshaped_file_ref_every_chunk_404s():
+    # R2 downstream surface: if a FILE-shaped ref ever reaches the registry
+    # anyway (a mis-registration past the recorded-shape gate — e.g. facts
+    # recorded wrong), the substrate refuses rel-on-FILE with typed
+    # task.invalid on EVERY member rel. The route must answer 404 for each
+    # (mute but honest — never a 500/502 storm) and cache NOTHING.
+    pid = "s_fileref"
+    _register_ref(pid, "fr.store", ref="sha256:file-not-tree", site="siteF")
+    calls: list = []
+
+    def _file_ref(ref, rel=None, *, offset=0, length=None, site=None):
+        calls.append(rel)
+        raise ComputeError("task.invalid", "rel on a FILE ref", stage="weft")
+    _orig = retention.data_read_range
+    retention.data_read_range = _file_ref
+    try:
+        for rel in (".zattrs", "c/0.0", "meta.json"):
+            out = rc.serve_remote_chunk(pid, f"fr.store/{rel}")
+            assert out.status == "missing" and out.http == 404, (rel, out)
+        assert len(calls) == 3, "every rel must have hit the backhaul (armed)"
+        root = rc._cache_root(pid, "siteF", "fr.store")
+        leftovers = [fn for _dp, _d, fns in os.walk(root) for fn in fns]
+        assert leftovers == [], f"a refused ref must cache NOTHING: {leftovers}"
+    finally:
+        retention.data_read_range = _orig
+
+
+def test_note_launcher_ref_agreement_matrix(monkeypatch):
+    # R3: for EVERY entity shape, the NOTE's stream verdict must EQUAL the
+    # LAUNCHER's register verdict (both run-arm paths disabled, so only the
+    # ref arm answers) — a gate added to one side but not the other fails
+    # here. Armed: the streaming shape must verdict True (a matrix where
+    # everything declines measured nothing), and ONLY that shape (ceiling).
+    import content.bio.viewers.launchers.pagoda3 as p3
+    from content.bio.tools import viewers as tv
+    monkeypatch.setattr(
+        "core.compute.retention.range_read_available",
+        lambda verb=retention._RANGE_VERB: verb == retention.DATA_RANGE_VERB)
+    monkeypatch.setattr("content.bio.lifecycle.runs.resolve_remote_store_stream",
+                        lambda rid, name: None)
+    monkeypatch.setattr("content.bio.lifecycle.runs.run_id_for_entity",
+                        lambda eid: None)
+    e_not_by_ref = _by_ref_remote_entity("e3", ref="sha256:c")
+    e_not_by_ref["metadata"]["by_reference"] = False
+    e_local = {"id": "e5", "metadata": {
+        "by_reference": True, "ref": "sha256:e",
+        "descriptor": {"total_bytes": 4096, "n_files": 9}}}
+    shapes = {
+        "store_by_ref_remote": (_by_ref_remote_entity("e1", ref="sha256:a"),
+                                "data.lstar.zarr"),
+        "file_by_ref_remote": (_by_ref_remote_entity("e2", ref="sha256:b",
+                                                     path="/r/data.h5ad"),
+                               "data.h5ad"),
+        "not_by_reference": (e_not_by_ref, "data.lstar.zarr"),
+        "ref_none": (_by_ref_remote_entity("e4", ref=None), "data.lstar.zarr"),
+        "local": (e_local, "data.lstar.zarr"),
+        "file_shaped_ref": (_by_ref_remote_entity("e6", ref="sha256:f",
+                                                  n_files=1),
+                            "data.lstar.zarr"),
+    }
+    verdicts = {}
+    for label, (e, name) in shapes.items():
+        monkeypatch.setattr("core.graph.entities.get_entity",
+                            lambda eid, _e=e: _e)
+        note_v = tv._remote_stream_ready(None, name, entity=e)
+        launch_v = p3._register_remote_stream(
+            {"entity_id": e["id"], "name": name,
+             "artifact_path": f"/r/{name}"}, f"agree_{label}") is not None
+        assert note_v == launch_v, \
+            f"{label}: note says {note_v}, launcher says {launch_v} — DRIFT"
+        verdicts[label] = note_v
+    assert verdicts["store_by_ref_remote"] is True, "matrix measured nothing"
+    assert sum(verdicts.values()) == 1, verdicts   # ceiling: exactly one streams
+
+
 _TESTS = [
     test_safe_rel_accepts_normal_chunk,
     test_safe_rel_rejects_traversal_absolute_empty,
@@ -982,6 +1424,19 @@ _TESTS = [
     test_launch_terminal_error_generic_shape_ceilings,
     test_by_ref_remote_with_local_mirror_resolves_locally,
     test_run_resolvable_remote_raise_unchanged,
+    test_ref_arm_streams_through_data_read_range,
+    test_run_arm_never_touches_data_read_range,
+    test_register_validation_exactly_one_arm,
+    test_ref_arm_typed_errors_map_same,
+    test_production_shape_ref_arm_end_to_end,
+    test_ref_none_by_ref_entity_falls_to_bridge,
+    test_per_verb_matrix_ref_absent_run_present,
+    test_per_verb_matrix_both_absent_by_ref,
+    test_ref_arm_requires_by_reference_remote_and_store_suffix,
+    test_entity_note_ref_arm_streams_no_round_trip,
+    test_ref_arm_refuses_file_shaped_or_unknown_payload,
+    test_misshaped_file_ref_every_chunk_404s,
+    test_note_launcher_ref_agreement_matrix,
 ]
 
 

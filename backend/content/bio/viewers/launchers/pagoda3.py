@@ -327,15 +327,110 @@ def _run_id_for_node(node: dict) -> "str | None":
     return None
 
 
+def ref_stream_facts(e: "dict | None", name: str) -> "dict | None":
+    """THE recorded-facts eligibility decision for the REF arm — ONE predicate
+    consumed by BOTH the launcher registration (`_register_ref_arm`) and the
+    pre-flight note (`_remote_stream_ready`, content/bio/tools/viewers.py), so
+    the note can never promise a stream the launcher would decline (a weaker
+    note-side gate once said "chunks stream on demand" for a remote by-ref FILE
+    that launch then materialized straight into the transfer gate — the exact
+    over-promising class the shared-note refactor exists to kill; the agreement
+    matrix in tests/test_range_channel.py guards the parity). RECORDED FACTS
+    ONLY — never probes a verb, a disk, or the substrate; callers own the
+    per-verb probe.
+
+    Eligible iff: `name` is the directory-store viewer shape (`.lstar.zarr` —
+    a FILE would need conversion, which needs local bytes); the entity records
+    a data-plane content `ref`; `dataset_location` says remote + by-reference;
+    AND the recorded payload shape CONFIRMS a directory tree —
+    descriptor/fingerprint `n_files >= 2` (a single FILE fingerprints as
+    n_files=1, `core/data/external_ref.py`; a chunked store always has metadata
+    + chunk members). An absent or inconclusive shape REFUSES to the
+    materialize path: a FILE-shaped ref wearing the store suffix would
+    stream-register and then mute-404 every chunk (the substrate refuses
+    rel-on-FILE), where the whole-fetch path handles both shapes correctly —
+    refusal costs one gated fetch, admission costs a dead viewer.
+
+    Returns the registration facts `{ref, site, size, digest}`, or None.
+    Never raises."""
+    try:
+        if not name.endswith(_STORE_SUFFIX):
+            return None                         # only a dir store can stream a ref
+        md = (e or {}).get("metadata") or {}
+        ref = md.get("ref")
+        if not ref:
+            return None                         # ref:None registration — cannot stream
+        from content.bio.data_location import dataset_location
+        loc = dataset_location(e or {})
+        if not (loc.get("remote") and loc.get("by_reference")):
+            return None                         # local / adopted → materialize path
+        n_files = ((md.get("descriptor") or {}).get("n_files")
+                   or (md.get("fingerprint") or {}).get("n_files"))
+        if not isinstance(n_files, int) or n_files < 2:
+            return None                         # FILE-shaped / unconfirmed → materialize
+        return {"ref": ref, "site": loc.get("site"),
+                "size": loc.get("total_bytes"),
+                "digest": (md.get("fingerprint") or {}).get("digest")}
+    except Exception:  # noqa: BLE001 — an eligibility read must never raise
+        return None
+
+
+def _register_ref_arm(node: dict, pid: str) -> "str | None":
+    """REF arm (misc/range_channel_plan.md): an entity-backed by-reference
+    REMOTE directory store whose recorded metadata carries a data-plane content
+    `ref` streams its chunks addressed by that ref — with NO resolvable run
+    required. This is the CHEAP arm: readiness is RECORDED FACTS ONLY plus the
+    per-verb probe — no inventory round-trip, unlike the run arm's
+    `resolve_remote_store_stream`.
+
+    ALL eligibility gates live in `ref_stream_facts` (the one predicate the
+    pre-flight note shares — no gate may be added here instead); this function
+    adds only what the note doesn't need: the entity fetch, the per-verb probe,
+    and the registration itself. Returns the `store_key` (stable per ref) or
+    None. Never raises to the caller (the outer try owns that)."""
+    eid = node.get("entity_id")
+    if not eid:
+        return None
+    raw = node.get("artifact_path") or node.get("path") or node.get("name") or ""
+    name = Path(raw).name
+    from core.compute import retention
+    if not retention.range_read_available(retention.DATA_RANGE_VERB):
+        return None                             # ref arm absent → run arm / materialize
+    from core.graph.entities import get_entity
+    facts = ref_stream_facts(get_entity(eid), name)
+    if not facts:
+        return None
+    from core.viewers.range_cache import register_remote_store
+    stem = name[:-len(_STORE_SUFFIX)]
+    # store_key stable per ref: the content ref IS the store's identity, so the
+    # key changes iff the bytes change (a new ref) — the digest-wipe never needs
+    # to fire for the ref arm. `digest` is recorded when the metadata carries a
+    # fingerprint (belt-and-suspenders; usually absent for a ref-only shape).
+    tag = hashlib.sha1(str(facts["ref"]).encode()).hexdigest()[:8]
+    store_key = f"{stem}-{tag}{_STORE_SUFFIX}"
+    register_remote_store(pid, store_key, site=facts["site"], ref=facts["ref"],
+                          size=facts["size"], digest=facts["digest"])
+    return store_key
+
+
 def _register_remote_stream(node: dict, pid: str) -> "str | None":
     """If this node resolves to a directory store that lives on a REMOTE site AND
-    the substrate exposes the ranged-read verb, register the store's remote home
+    the substrate exposes a ranged-read verb, register the store's remote home
     in the range registry and return the `store_key` to mint the stream URL from
     — else None (the caller falls back to today's whole-store materialize path).
     The store then streams chunk-by-chunk through the store route; NOTHING is
-    fetched here and the 2 GiB whole-fetch guardrail is never engaged. Best-
-    effort: any failure returns None → today's behavior (graceful degradation)."""
+    fetched here and the 2 GiB whole-fetch guardrail is never engaged.
+
+    Two arms, tried cheapest-first: the REF arm (`_register_ref_arm`) serves a
+    by-reference remote dataset addressed by its recorded data-plane ref with no
+    run and no inventory round-trip; on a miss the RUN arm resolves the
+    producing run's remote store home (`resolve_remote_store_stream`, one
+    inventory-backed resolve). Best-effort: any failure returns None → today's
+    behavior (graceful degradation)."""
     try:
+        key = _register_ref_arm(node, pid)
+        if key:
+            return key
         from core.compute import retention
         if not retention.range_read_available():
             return None                         # older substrate → materialize path
