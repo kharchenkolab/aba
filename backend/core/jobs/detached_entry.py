@@ -78,9 +78,36 @@ def _wrap_script(script: str, interp: str) -> str:
     with open(script) as fh:
         body = fh.read()
     wrapped = "._aba_wrapped" + (".R" if is_r else ".py")
+    if not is_r:
+        # `from __future__` must be the first statement in a Python file, so a
+        # blind prepend turns a valid script into a SyntaxError. Slip the probe
+        # in AFTER any future imports (and the docstring/comments they may
+        # follow) instead of ahead of them.
+        body = _py_insert_after_future(body, pro)
+        with open(wrapped, "w") as fh:
+            fh.write(body + epi)
+        return wrapped
     with open(wrapped, "w") as fh:
         fh.write(pro + body + epi)
     return wrapped
+
+
+def _py_insert_after_future(body: str, pro: str) -> str:
+    """Insert `pro` after the last `from __future__ import …` line, else at the
+    top. Line-based on purpose: the probe must not disturb the payload's own
+    line numbering any more than necessary, and a full parse would fail on the
+    very scripts (syntax errors) whose traceback the user needs."""
+    lines = body.splitlines(keepends=True)
+    last = -1
+    for i, ln in enumerate(lines):
+        s = ln.strip()
+        if s.startswith("from __future__ import"):
+            last = i
+        elif s and not s.startswith("#") and last >= 0:
+            break                      # future block ended
+    if last < 0:
+        return pro + body
+    return "".join(lines[:last + 1]) + pro + "".join(lines[last + 1:])
 
 
 def _read_sentinel() -> tuple:

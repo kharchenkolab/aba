@@ -264,12 +264,15 @@ def files_content(path: str, download: int = 0):
     node = find_node(tree, path)
     if node is None:
         raise HTTPException(404, f"no node at {path!r}")
+    # `.is_file()`, not `.exists()`: disk-grafted FOLDER nodes now carry a real
+    # artifact_path, and a directory satisfies exists() — FileResponse would
+    # then blow up mid-response instead of falling through to the honest 404.
     src = _resolve_artifact_disk_path(node.get("artifact_path"))
-    if src is None or not src.exists():
+    if src is None or not src.is_file():
         src = _run_backed_path(node)               # ledger-sourced run output
-    if src is None or not src.exists():
+    if src is None or not src.is_file():
         src = _entity_disk_fallback(node)          # canonical resolver (remote-aware)
-    if src is None or not src.exists():
+    if src is None or not src.is_file():
         raise HTTPException(404, _node_not_local_detail(node, path))
     media = mimetypes.guess_type(src.name)[0] or "application/octet-stream"
     headers = {"Content-Disposition": f'attachment; filename="{src.name}"'} if download else {}
@@ -310,11 +313,13 @@ def files_raw(path: str, offset: int = 0, max_lines: int = 200):
 
     artifact = node.get("artifact_path")
     src = _resolve_artifact_disk_path(artifact)
-    if src is None or not src.exists():
+    # `.is_file()` for the same reason as the content route above: a grafted
+    # folder node carries a real artifact_path and would otherwise be opened.
+    if src is None or not src.is_file():
         src = _run_backed_path(node)               # ledger-sourced run output
-    if src is None or not src.exists():
+    if src is None or not src.is_file():
         src = _entity_disk_fallback(node)          # canonical resolver (remote-aware)
-    if src is None or not src.exists():
+    if src is None or not src.is_file():
         raise HTTPException(404, _node_not_local_detail(node, path))
 
     # Hard cap: refuse pulls > 256 KB of text. Lines may run long.

@@ -100,6 +100,36 @@ describe('EntityMenu delete flow', () => {
     expect(screen.queryByText('Delete anyway')).toBeNull()
   })
 
+  it('a non-409 failure still offers a retry, not just Archive', async () => {
+    // A transient 500 sets the same error state as a 409 but with no
+    // can_override, so keying the primary button on `error` left the user
+    // with Cancel + Archive and no way to retry the delete they asked for.
+    globalThis.fetch = vi.fn().mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        const method = init?.method ?? 'GET'
+        calls.push(`${method} ${url}`)
+        if (method === 'DELETE' && url.includes('hard=true')) {
+          return Promise.resolve({
+            ok: false, status: 500,
+            json: () => Promise.reject(new Error('not json')),
+            text: () => Promise.resolve('boom'),
+          })
+        }
+        return Promise.resolve({
+          ok: true, status: 200,
+          json: () => Promise.resolve({ ok: true }),
+          text: () => Promise.resolve(''),
+        })
+      }) as unknown as typeof globalThis.fetch
+    await openDeleteAndConfirm(fig, vi.fn())
+    expect(screen.queryByText('Delete anyway')).toBeNull()   // no override offered
+    const retry = screen.getByText('Delete')                 // the retry survives
+    const before = calls.length
+    await act(async () => { fireEvent.click(retry) })
+    expect(calls.length).toBeGreaterThan(before)             // armed: it re-fired
+  })
+
   it('result delete keeps the cascade=members query (traits unchanged)', async () => {
     installFetch(calls)
     await openDeleteAndConfirm(result, vi.fn())

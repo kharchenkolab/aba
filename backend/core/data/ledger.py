@@ -65,7 +65,7 @@ def _dataset_items(durable: dict) -> list[dict]:
     items = []
     for e in list_entities(type_filter=DATASET, include_archived=False):
         md = e.get("metadata") or {}
-        home = md.get("home") or md.get("weft_home") or {}
+        home = md.get("home") or {}
         site = home.get("site")
         bytes_ = ((md.get("descriptor") or {}).get("bytes")
                   or (md.get("fingerprint") or {}).get("bytes"))
@@ -181,7 +181,7 @@ def site_holdings(site: str) -> dict:
     homes = []
     for e in list_entities(type_filter=DATASET, include_archived=False):
         md = e.get("metadata") or {}
-        home = md.get("home") or md.get("weft_home") or {}
+        home = md.get("home") or {}
         if home.get("site") == site:
             homes.append({"entity_id": e["id"], "title": e.get("title"),
                           "path": home.get("path")})

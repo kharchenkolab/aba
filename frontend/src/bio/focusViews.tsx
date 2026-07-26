@@ -325,7 +325,14 @@ export function DatasetHomeRow({ entity, onChange, projectId }: {
   useEffect(() => {
     let dead = false
     setSafety(null)
-    fetch(`/api/projects/${encodeURIComponent(projectId || 'default')}/data-ledger`)
+    // Only REMOTE datasets render a safety row (the early return below), and
+    // the ledger call builds the durability map + keep items for the whole
+    // project — so firing it for every local dataset card was pure cost for a
+    // component that renders nothing. Guarded here rather than above the hook,
+    // which must stay unconditional.
+    if (!md.home?.site || md.home.site === 'local') return
+    if (!projectId) return          // no project → the row can't match anyway
+    fetch(`/api/projects/${encodeURIComponent(projectId)}/data-ledger`)
       .then(r => (r.ok ? r.json() : null))
       .then(d => {
         if (dead || !d) return

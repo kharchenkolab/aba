@@ -301,6 +301,31 @@ def test_detached_harness_reports_final_cwd(tmp_path):
     assert w and "register_dataset" in w
 
 
+def test_detached_harness_accepts_a_future_import_script(tmp_path):
+    """`from __future__` must be the FIRST statement in a Python file, so
+    prepending the cwd probe turned a valid script into a SyntaxError. The
+    probe goes after the future block instead."""
+    import shutil
+    import json
+    entry = Path(_BACKEND) / "core/jobs/detached_entry.py"
+    work = tmp_path / "job2"; (work / "payload").mkdir(parents=True)
+    shutil.copyfile(entry, work / "payload" / "aba_entry.py")
+    (work / "payload" / "user_code.py").write_text(
+        '"""A module docstring, then the future import."""\n'
+        "from __future__ import annotations\n"
+        "import pathlib\n"
+        "pathlib.Path('out.txt').write_text('done')\n")
+    (work / "payload" / "spec.json").write_text(
+        '{"interpreter": "python3", "script": "user_code.py", '
+        '"job_id": "t2", "timeout_s": 60}')
+    subprocess.run([sys.executable, "payload/aba_entry.py"], cwd=str(work),
+                   check=True, capture_output=True)
+    res = json.loads((work / "result.json").read_text())
+    assert res["status"] == "ok", res
+    assert res.get("start_cwd"), "the probe must still run"
+    assert (work / "out.txt").exists(), "the payload must actually execute"
+
+
 # ── out-of-band env installs (sweep item D): the identity tripwire ──────────
 
 def _env_row_world(monkeypatch, prefix: Path):

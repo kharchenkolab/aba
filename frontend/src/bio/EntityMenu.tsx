@@ -308,26 +308,20 @@ function DeleteConfirm({
       </div>
       <div className="entity-menu__buttons">
         <button onClick={onCancel} disabled={busy}>Cancel</button>
-        {error ? (
-          // The refusal is actionable, not a dead end: Archive always
-          // succeeds (soft, reversible); "Delete anyway" only when the
-          // server advertised the override — the user has now SEEN the
-          // dependents this will detach (each gets a severed-ref mark).
-          <>
-            <button onClick={onArchive} disabled={busy}>Archive instead</button>
-            {error.canOverride && (
-              <button onClick={onForce} disabled={busy}
-                      className="entity-menu__primary entity-menu__danger-btn">
-                {busy ? 'Deleting…' : 'Delete anyway'}
-              </button>
-            )}
-          </>
-        ) : (
-          <button onClick={onConfirm} disabled={busy}
-                  className="entity-menu__primary entity-menu__danger-btn">
-            {busy ? 'Deleting…' : 'Delete'}
-          </button>
-        )}
+        {/* The refusal is actionable, not a dead end: Archive always succeeds
+            (soft, reversible) whenever something went wrong. The primary
+            button is ALWAYS present — it becomes "Delete anyway" only when the
+            server advertised the override (the user has now SEEN the
+            dependents this will detach, each of which gets a severed-ref
+            mark). Gating the primary on `error` alone stranded every NON-409
+            failure — a transient 500 carries no can_override, so the dialog
+            offered Archive as the only way forward for an error that a plain
+            retry would clear. */}
+        {error && <button onClick={onArchive} disabled={busy}>Archive instead</button>}
+        <button onClick={error?.canOverride ? onForce : onConfirm} disabled={busy}
+                className="entity-menu__primary entity-menu__danger-btn">
+          {busy ? 'Deleting…' : error?.canOverride ? 'Delete anyway' : 'Delete'}
+        </button>
       </div>
     </div>
   )

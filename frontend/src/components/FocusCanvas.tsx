@@ -6,6 +6,7 @@ import AnnotatedFigure from '../bio/AnnotatedFigure'
 import ThreadHeader from './ThreadHeader'
 import SplitButton from './SplitButton'
 import EditableTitle from './EditableTitle'
+import SeveredRefs, { type SeveredRef } from './SeveredRefs'
 import { renameEntity } from '../lib/api'
 // Importing the bio side has the side-effect of registering all bio
 // focus-view components against the registry. The shell below dispatches
@@ -111,6 +112,9 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus, onSel
 
   return (
     <div className={`focus ${compact ? 'focus--compact' : ''}`}>
+      {/* Above the per-type body so it reaches EVERY entity type, including the
+          three that supply their own header below. */}
+      <SeveredRefs refs={(entity.metadata as { severed_refs?: SeveredRef[] } | undefined)?.severed_refs} />
       {/* Runs, Results, and Claims render their own body header; skip the
           generic one. Claims have no separate title (the statement IS the
           content, edited in the card), so a generic title here would only
