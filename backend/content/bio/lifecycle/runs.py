@@ -1536,6 +1536,24 @@ def _locate_project_run_output(name: str, *, max_runs: int = 12) -> Optional[tup
     return None                               # no match, or ambiguous across runs
 
 
+def resolve_project_run_output_located(name: str, *, max_runs: int = 12) -> Optional[tuple]:
+    """`(run_id, abs_path, site, total_bytes, is_remote)` for a project Run
+    output matching `name`, else None — resolve_project_run_output plus the
+    located facts (site, size, locality) it already computes internally, so a
+    caller can annotate a link with the source's location cost WITHOUT a second
+    inventory probe. `abs_path` is the real on-disk path for a local output, or
+    the logical NAME (a remote marker the launch path fetches under the size
+    gate) for a remote one."""
+    loc = _locate_project_run_output(name, max_runs=max_runs)
+    if not loc:
+        return None
+    run_id, site, size, is_remote = loc
+    if not is_remote:
+        hit = resolve_run_output_path(run_id, name)
+        return (run_id, hit, site, size, False) if hit else None
+    return (run_id, name, site, size, True)    # remote marker — launch fetches, not the lookup
+
+
 def resolve_project_run_output(name: str, *, max_runs: int = 12) -> Optional[tuple]:
     """`(run_id, abs_path)` for a project Run output matching `name` — a LOOKUP
     that NEVER moves bytes (it backs the viewer menu GET `/api/viewers/for`,
@@ -1547,14 +1565,8 @@ def resolve_project_run_output(name: str, *, max_runs: int = 12) -> Optional[tup
     marker forces the launch to revalidate, so a stale cache of a still-growing
     output can't be handed out as the real thing.) None when no Run confidently
     has the output."""
-    loc = _locate_project_run_output(name, max_runs=max_runs)
-    if not loc:
-        return None
-    run_id, _site, _size, is_remote = loc
-    if not is_remote:
-        hit = resolve_run_output_path(run_id, name)
-        return (run_id, hit) if hit else None
-    return (run_id, name)                      # remote marker — launch fetches, not the lookup
+    located = resolve_project_run_output_located(name, max_runs=max_runs)
+    return (located[0], located[1]) if located else None
 
 
 def run_id_for_entity(entity_id: str) -> Optional[str]:

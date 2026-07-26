@@ -88,6 +88,14 @@ _HTML = r"""<!doctype html>
         <div><div class="vl-title">Couldn't open the viewer</div>
              <div class="vl-sub" id="vl-errsub">Preparing the dataset failed.</div></div></div>
       <div class="vl-err-detail" id="vl-errdetail"></div>
+      <!-- Revealed for a PATH-backed (no entity) remote failure: a raw path can't
+           be mirrored, so retry would fail identically. Point at the fix that
+           does exist — open the file via its registered dataset entity. -->
+      <div class="vl-sub vl-hidden" id="vl-remote-guidance">
+        This file lives on a remote site. A raw-path link can't mirror it — open it
+        through its registered dataset entity in ABA to enable the one-click mirror,
+        or mirror the dataset from its card, then reopen.
+      </div>
       <div class="vl-actions">
         <button class="vl-btn vl-btn--primary" id="vl-retry">Try again</button>
         <!-- Revealed only for entity-backed sources whose error says the
@@ -128,11 +136,13 @@ _HTML = r"""<!doctype html>
       if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
       $("vl-loading").classList.add("vl-hidden");
       $("vl-errdetail").textContent = msg || "Unknown error.";
-      // A "the bytes live elsewhere" failure on an entity-backed source has a
-      // one-click fix: mirror the dataset home (size-gated, verified), then
-      // relaunch. Retry alone would fail identically.
-      var remoteish = /lives on|bring it home|not on this machine/i.test(msg || "");
+      // A "the bytes live elsewhere" failure has a one-click fix WHEN the source
+      // is entity-backed: mirror the dataset home (size-gated, verified), then
+      // relaunch — retry alone would fail identically. Without an entity there is
+      // no lever to offer, so name the honest path forward instead of only Retry.
+      var remoteish = /lives on|bring it home|not on this machine|remote site/i.test(msg || "");
       $("vl-mirror").classList.toggle("vl-hidden", !(remoteish && params.entity_id));
+      $("vl-remote-guidance").classList.toggle("vl-hidden", !(remoteish && !params.entity_id));
       $("vl-error").classList.remove("vl-hidden");
     }
 
@@ -212,6 +222,10 @@ _HTML = r"""<!doctype html>
         .then(function (res) {
           if (!res.ok) { showError(res.d && res.d.detail || "Launch failed."); return; }
           if (res.d.label) { label = res.d.label; $("vl-title").textContent = verb + " " + label + "…"; }
+          // The launch route may have reverse-looked-up a raw path to a dataset
+          // entity — adopt it so a later remote-gate failure can offer the
+          // working mirror lever instead of the path-only dead end (F4).
+          if (res.d.entity_id && !params.entity_id) { params.entity_id = res.d.entity_id; }
           poll(res.d.job_id);
         })
         .catch(function (e) { showError(String(e && e.message || e)); });

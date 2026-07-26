@@ -264,6 +264,25 @@ def test_launch_page_offers_mirror_and_retry(tmp_path):
     assert "remoteish && params.entity_id" in html   # both gates, together
 
 
+def test_launch_page_guides_path_backed_remote_failure(tmp_path):
+    """A PATH-backed (no entity) remote failure has no mirror lever — retry
+    would fail identically. The page must still GUIDE (open via the registered
+    dataset entity) instead of dead-ending on Retry. String-level: the page
+    ships inline JS served without a browser, so asserting the guidance branch
+    and its gate exist is the available guard (a rendered-DOM test would need a
+    headless browser this suite doesn't run)."""
+    from core.viewers.launch_page import render
+    html = render(tmp_path)
+    assert 'id="vl-remote-guidance"' in html              # the affordance exists
+    assert "registered dataset entity" in html            # names the actual fix
+    # gated on the remote signature AND the ABSENCE of an entity — the mirror
+    # button (entity present) and this guidance (entity absent) are exclusive
+    assert "remoteish && !params.entity_id" in html
+    # the launch route hands back entity_id and the page adopts it, so a
+    # reverse-lookup hit gets the working mirror lever, not this guidance
+    assert "res.d.entity_id" in html
+
+
 if __name__ == "__main__":
     import subprocess
     raise SystemExit(subprocess.call(

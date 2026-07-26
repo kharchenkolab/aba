@@ -13,6 +13,73 @@ import os
 from urllib.parse import urlencode
 
 
+def _remote_open_note(site, size_bytes, *, mirror_lever) -> str:
+    """One location pre-flight line for a REMOTE-homed source: what opening
+    will cost, and the actionable lever. Wording is uniform across the entity
+    and run-output branches; only `mirror_lever` (which lever actually exists
+    for that source) differs. Facts come from recorded metadata only."""
+    from core.data.datasets import FETCH_GUARDRAIL_BYTES
+    if size_bytes and size_bytes > FETCH_GUARDRAIL_BYTES:
+        return (f"source lives on {site} and is {size_bytes / 1e9:.1f} GB — OVER "
+                f"the transfer gate, so opening from here will refuse. Work with "
+                f"it on {site}, or reduce it there first.")
+    mb = f" (~{size_bytes / 1e6:.0f} MB)" if size_bytes else ""
+    return (f"source lives on {site}{mb} — opening fetches it to this machine "
+            f"first; if that is refused, {mirror_lever}.")
+
+
+def _entity_location_note(e: "dict | None") -> "str | None":
+    """The entity-branch pre-flight note (remote source cost + mirror lever), or
+    None for a local/mirrored/unknown source. Never raises — an annotation must
+    never block the link."""
+    try:
+        from content.bio.data_location import dataset_location
+        loc = dataset_location(e or {})
+        if not loc["remote"]:
+            return None
+        return _remote_open_note(
+            loc["site"], loc["total_bytes"],
+            mirror_lever="mirror the dataset locally (its card has Mirror "
+                         "locally), then reopen")
+    except Exception:  # noqa: BLE001 — annotation must never block the link
+        return None
+
+
+def _shared_prefix_len(a: str, b: str) -> int:
+    n = 0
+    for x, y in zip(a, b):
+        if x != y:
+            break
+        n += 1
+    return n
+
+
+def _near_entity_hint(entity_id) -> list:
+    """Up to 3 same-project entities whose id or title is a NEAR match for a
+    missed id, each as {id, type, title} — cheap substring/shared-prefix, no new
+    deps. (Titles are for the runtime message only.) Never raises."""
+    try:
+        from core.graph.entities import list_entities
+        needle = (entity_id or "").strip().lower()
+        if not needle:
+            return []
+        out = []
+        for e in list_entities(include_archived=False):
+            eid = (e.get("id") or "")
+            el = eid.lower()
+            title = (e.get("title") or "")
+            near = (needle in el or (el and el in needle)
+                    or _shared_prefix_len(el, needle) >= min(6, len(needle))
+                    or (len(needle) >= 3 and needle in title.lower()))
+            if near:
+                out.append({"id": eid, "type": e.get("type"), "title": title})
+            if len(out) >= 3:
+                break
+        return out
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def open_viewer_impl(params: dict, ctx: dict | None = None) -> dict:
     import content.bio  # noqa: F401 — ensure viewer + launcher registrations
     from core.viewers.registry import viewers_for
@@ -29,23 +96,52 @@ def open_viewer_impl(params: dict, ctx: dict | None = None) -> dict:
     if not entity_id and not file_path:
         return {"ok": False, "error": "Provide entity_id or file_path (or focus an entity first)."}
 
+    # F1 — REVERSE LOOKUP, before any remote probe: an absolute path that is
+    # byte-identical to a registered dataset's recorded home resolves instantly
+    # and entity-backed (pre-flight note + mirror lever), instead of via a
+    # ~10 s inventory probe that misses and reports the file as absent.
+    prefetched = None       # the matched entity dict — saves re-fetching it
+    matched_path = None     # echoed as resolved_path on a reverse-lookup hit
+    if not entity_id and file_path:
+        from content.bio.data_location import entity_for_path
+        match = entity_for_path(file_path)
+        if match is not None:
+            entity_id = match["id"]
+            prefetched = match
+            matched_path = os.path.normpath(file_path).rstrip("/")
+
     # Build a dispatch node. Match on the BASENAME (not the entity title) so
     # extension-based external viewers — pagoda3 (.h5ad / .lstar.zarr) — match:
     # viewers_for keys off `name or artifact_path`, and a title like "Processed
     # PBMC" wouldn't end in the file extension.
-    link_path = None    # canonical tree path used in the launch link (file case)
+    link_path = matched_path  # canonical tree path used in the launch link (file case)
+    note = None               # location pre-flight annotation (either branch)
     if entity_id:
-        e = get_entity(entity_id)
+        e = prefetched or get_entity(entity_id)
         if not e:
-            return {"ok": False, "error": f"No entity {entity_id!r} in this project."}
+            near = _near_entity_hint(entity_id)
+            hint = (" Did you mean: "
+                    + "; ".join(f"{n['id']} ({n['type']}: {n['title']})" for n in near)
+                    + "? Or call list_entities." if near
+                    else " Call list_entities to see this project's entities.")
+            return {"ok": False, "error": f"No entity {entity_id!r} in this project.{hint}"}
         artifact = e.get("artifact_path") or ""
+        md = e.get("metadata") or {}
+        # Viewer dispatch keys off a FILENAME extension: a by-reference entity
+        # with no artifact_path (URL-import / home-only shape) still records a
+        # reference path — derive the name from it, since the title lacks the
+        # extension and would read as "no viewer applies".
+        name_src = (artifact or md.get("ref_path")
+                    or (md.get("home") or {}).get("path") or "")
         node = {
             "entity_id": e["id"],
             "entity_type": e.get("type"),
-            "name": os.path.basename(artifact) if artifact else (e.get("title") or ""),
+            "name": (os.path.basename(name_src.rstrip("/")) if name_src
+                     else (e.get("title") or "")),
             "artifact_path": artifact,
             "size": None,
         }
+        note = _entity_location_note(e)
     else:
         # Resolve file_path to a REAL files-tree node (a bare basename like
         # 'processed.h5ad' is fine — resolved by suffix/basename). Validate NOW so
@@ -68,17 +164,27 @@ def open_viewer_impl(params: dict, ctx: dict | None = None) -> dict:
             # in the live kernel jobdir) that isn't a registered entity yet. Resolve it directly
             # from the Run's outputs so the user needn't data_register it first. The link carries
             # the same basename; the launch route re-resolves it the same way.
-            from content.bio.lifecycle.runs import resolve_project_run_output
-            hit = resolve_project_run_output(file_path)
-            if hit is None:
+            from content.bio.lifecycle.runs import resolve_project_run_output_located
+            located = resolve_project_run_output_located(file_path)
+            if located is None:
+                # F3 — informative miss. Keep the near-match candidate listing;
+                # for an absolute path (no local resolve, no reverse-lookup hit,
+                # probe miss) name the remote levers explicitly.
                 cands = list_file_matches(tree, file_path)
-                hint = (" Matching files in this project: " + ", ".join(cands) + "."
-                        if cands else
-                        " No file with that name exists here — check the Files tab / your recent"
-                        " outputs, then pass its path or register it as a dataset and pass entity_id.")
+                parts = []
+                if cands:
+                    parts.append("Matching files in this project: " + ", ".join(cands) + ".")
+                if os.path.isabs(file_path):
+                    parts.append("That looks like an absolute path — possibly a file on a "
+                                 "remote site. Pass the dataset/artifact entity id instead "
+                                 "(list_entities shows them), or register the file as an entity.")
+                if not parts:
+                    parts.append("No file with that name exists here — check the Files tab / your "
+                                 "recent outputs, then pass its path or register it as a dataset "
+                                 "and pass entity_id.")
                 return {"ok": False,
-                        "error": f"No file matching {file_path!r} in this project.{hint}"}
-            _rid, abs_path = hit
+                        "error": f"No file matching {file_path!r} in this project. " + " ".join(parts)}
+            _rid, abs_path, _site, _size, _remote = located
             link_path = file_path
             node = {
                 "entity_id": None,
@@ -87,6 +193,14 @@ def open_viewer_impl(params: dict, ctx: dict | None = None) -> dict:
                 "artifact_path": abs_path,
                 "size": None,
             }
+            if _remote:
+                # F2 — same pre-flight on the path branch for a REMOTE run output.
+                # No dataset card exists here, so the lever differs (register it),
+                # but the cost wording matches the entity branch.
+                note = _remote_open_note(
+                    _site, _size,
+                    mirror_lever=f"work with it on {_site}, or register it as a dataset "
+                                 f"entity to enable a local mirror, then reopen")
 
     ext = [v for v in viewers_for(node) if v.mode == "external" and v.open_external]
     if not ext:
@@ -114,33 +228,11 @@ def open_viewer_impl(params: dict, ctx: dict | None = None) -> dict:
 
     # LOCATION PRE-FLIGHT (surfacing census 2026-07-26): a link minted for a
     # REMOTE-homed source used to look identical to a local one and died at
-    # click time ("lives on <site>" as a raw error card). The link stays
-    # valid — the launcher fetches home under the transfer gate — but the
-    # result now SAYS what opening will cost, and names the mirror lever
-    # when the gate would refuse. Facts from recorded metadata only.
-    note = None
-    if entity_id:
-        try:
-            from content.bio.data_location import dataset_location
-            from core.data.datasets import FETCH_GUARDRAIL_BYTES
-            ent = get_entity(entity_id)
-            loc = dataset_location(ent or {})
-            if loc["remote"]:
-                size = loc["total_bytes"]
-                if size and size > FETCH_GUARDRAIL_BYTES:
-                    note = (f"source lives on {loc['site']} and is "
-                            f"{size / 1e9:.1f} GB — OVER the transfer gate, so "
-                            f"opening from here will refuse. Work with it on "
-                            f"{loc['site']}, or reduce it there first.")
-                else:
-                    mb = f" (~{size / 1e6:.0f} MB)" if size else ""
-                    note = (f"source lives on {loc['site']}{mb} — opening "
-                            f"fetches it to this machine first; if that is "
-                            f"refused, mirror the dataset locally (its card "
-                            f"has Mirror locally), then reopen.")
-        except Exception:  # noqa: BLE001 — annotation must never block the link
-            pass
-
+    # click time ("lives on <site>" as a raw error card). The link stays valid —
+    # the launcher fetches home under the transfer gate — but the result now SAYS
+    # what opening will cost, and names the mirror lever when the gate would
+    # refuse. `note` is set above by whichever branch resolved the source (entity
+    # pre-flight or remote run-output), from recorded metadata only.
     label = v.label or v.id
     out_note = {"note": note} if note else {}
     return {

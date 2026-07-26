@@ -48,19 +48,33 @@ def _resolve_files_node(entity_id: str | None, path: str | None) -> dict:
         e = get_entity(entity_id)
         if not e:
             raise HTTPException(404, f"no entity {entity_id}")
+        md = e.get("metadata") or {}
+        # Match on the FILENAME (basename of artifact_path — or, for a
+        # by-reference entity with no artifact_path, its recorded reference /
+        # home path), not the entity title — viewers_for keys off
+        # `name or artifact_path`, and external viewers (pagoda3:
+        # .h5ad/.lstar.zarr) match by extension, which a title like "GSM…
+        # processed AnnData" lacks. Mirrors the get_viewer_url tool; without
+        # this, the launch link 404s ("no external viewer applies").
+        name_src = (e.get("artifact_path") or md.get("ref_path")
+                    or (md.get("home") or {}).get("path") or "")
         return {
             "entity_id": e["id"],
             "entity_type": e["type"],
-            # Match on the FILENAME (basename of artifact_path), not the entity
-            # title — viewers_for keys off `name or artifact_path`, and external
-            # viewers (pagoda3: .h5ad/.lstar.zarr) match by extension, which a
-            # title like "GSM… processed AnnData" lacks. Mirrors the get_viewer_url
-            # tool; without this, the launch link 404s ("no external viewer applies").
-            "name": Path(e.get("artifact_path") or "").name or e.get("title") or "",
+            "name": Path(name_src.rstrip("/")).name or e.get("title") or "",
             "artifact_path": e.get("artifact_path"),
             "size": None,
         }
     if path:
+        # F4 (server-side) — reverse-lookup a raw path to a registered dataset
+        # BEFORE the tree/probe work (mirrors get_viewer_url): a byte-identical
+        # registered home resolves entity-backed, so the launch page can offer
+        # the (working) mirror lever instead of a path-only dead end. No remote
+        # inventory probe.
+        from content.bio.data_location import entity_for_path
+        match = entity_for_path(path)
+        if match is not None:
+            return _resolve_files_node(match["id"], None)
         # Tolerant resolve: exact tree path, else a basename / path-suffix match
         # (callers — incl. the agent via open_viewer — rarely know the full path).
         from content.bio.files.tree import build_files_tree, find_file_node, list_file_matches
@@ -180,7 +194,11 @@ def viewers_launch(body: ViewerLaunchIn, _pid: str = Depends(require_project)):
             "project_id": pid, "set_phase": set_phase,
         })
     job_id = prepare.start(runner, label=v.label or v.id)
-    return {"job_id": job_id, "label": v.label or v.id}
+    # Hand back the resolved entity_id (path→entity reverse-lookup may have found
+    # one even when the caller passed only a path). The launch page adopts it so
+    # a later remote-gate failure can offer the working mirror lever instead of a
+    # path-only dead end (F4).
+    return {"job_id": job_id, "label": v.label or v.id, "entity_id": node.get("entity_id")}
 
 
 @router.get("/api/viewers/launch/status")

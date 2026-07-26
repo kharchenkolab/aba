@@ -115,7 +115,7 @@ Guard: `tests/test_harvest_honesty.py` (per-lane, red-proven).
 | Export (zip / materialize) | `/api/files/download`, `materialize_tree(resolve=)` | run-backed nodes resolve through the caller-supplied run resolver; files the tree lists but this machine can't serve are NAMED (`SKIPPED-FILES.txt` / `missing`+warning), never silently omitted |
 | Register (`register_dataset`) | `curation._resolve_dataset_path` | `locate_run_output(active_run, name)` **first** (site- and stopped-kernel-aware); the ranked scratch scan is the fallback and the only tier for no-run registrations; the durable `run_key` is captured via the resolver (`_capture_run_key`), site-agnostically |
 | Search (`find_files`) | `project_locate.locate_project_files` | every tier answers `durability`; a live-sandbox hit says it is swept and must be registered/copied before reuse — silence is a claim |
-| View | `viewers` routes + external launcher `_resolve_source` | lookup (`resolve_project_run_output`) returns a **remote marker**, moves nothing; launch calls `resolve_run_store` (guardrail budget, progress, retain-on-view) |
+| View | `viewers` routes + `get_viewer_url` + external launcher `_resolve_source` | a raw ABSOLUTE path is reverse-looked-up to a registered dataset FIRST (`data_location.entity_for_path`, recorded metadata only — no probe; newest live match wins, relative inputs excluded so a verbatim-recorded relative string can't steal a tree node's resolution), so a byte-identical home resolves entity-backed (the mirror lever works); otherwise lookup (`resolve_project_run_output`) returns a **remote marker**, moving nothing. Both branches carry a location pre-flight note (site, size, the honest lever per source) minted from recorded facts, and an absolute-path miss names the remote levers rather than reporting a bare "no file matching"; launch calls `resolve_run_store` (guardrail budget, progress, retain-on-view) |
 | Render | cards / `metadata.run.sites` / exec `compute` block | reads recorded placement only; never a live stat |
 
 Site literals in the addressing surface are census-guarded
@@ -128,8 +128,14 @@ not be re-derived at a door (misc/paths.md owns the rationale).
 - `content/bio/lifecycle/runs.py` — `locate_run_output`, `materialize_run_output`
   (+ `_materialize_file` / `_materialize_store`, `_store_members`, stamps), the
   policy shims (`resolve_run_file`, `resolve_output`, `resolve_run_output_path`,
-  `resolve_run_store`, `resolve_project_run_output`, `resolve_entity_output`,
-  `run_output_site`), `run_durable_view`.
+  `resolve_run_store`, `resolve_project_run_output` / `…_located` (the latter
+  also returns site/size/locality for the viewer pre-flight note, no second
+  probe), `resolve_entity_output`, `run_output_site`), `run_durable_view`.
+- `content/bio/data_location.py` — `entity_for_path` (path→dataset reverse
+  lookup, recorded metadata only) backs the viewer link's instant entity-backed
+  resolution of a raw registered home; `content/bio/tools/viewers.py` +
+  `core/viewers/launch_page.py` carry the location pre-flight + the path-backed
+  remote-failure guidance.
 - `core/compute/retention.py` — the retain verbs (index, inventory, stat, the
   8 MB preview read, forget).
 - `core/data/datasets.py` — the data-plane mechanism the mover reuses

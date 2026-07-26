@@ -241,6 +241,7 @@ FILES=(
   tests/test_update_member_caption.py
   tests/test_verify.py
   tests/test_viewer_launchers.py
+  tests/test_viewer_link_resolution.py
   tests/test_viewer_prepare.py
   tests/test_viewer_weft_resolution.py
   tests/test_weft_kernel_session.py

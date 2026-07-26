@@ -44,6 +44,58 @@ def dataset_location(e: dict) -> dict:
     }
 
 
+def _norm_fs_path(p: "str | None") -> str:
+    """Compare-normalize a filesystem path: collapse redundant separators and
+    trailing slashes so a recorded home and a raw input that differ only by a
+    trailing '/' read as the SAME file. Pure string work — never stats a disk,
+    so it is safe for a remote path that doesn't exist on this machine."""
+    import os
+    if not p:
+        return ""
+    return os.path.normpath(str(p)).rstrip("/")
+
+
+def _recorded_paths(e: dict) -> list:
+    """Every filesystem path a dataset entity records its bytes under: the
+    entity's artifact_path plus the by-reference metadata (ref_path and the
+    durable home path). A remote by-reference dataset carries the same absolute
+    path in all three."""
+    md = e.get("metadata") or {}
+    home = md.get("home") or {}
+    return [e.get("artifact_path"), md.get("ref_path"), home.get("path")]
+
+
+def entity_for_path(path: str) -> "dict | None":
+    """Reverse-lookup: the LIVE dataset entity whose recorded home / reference /
+    artifact path equals `path` exactly (trailing slashes normalized), else None.
+
+    Answers a raw absolute path from recorded metadata alone — no remote
+    inventory probe — so a byte-identical registered home (especially a remote
+    by-reference dataset) resolves INSTANTLY and entity-backed, rather than via
+    a ~10 s probe that misses and reports the file as absent. ABSOLUTE inputs
+    only: run-registered datasets can record caller paths verbatim (possibly
+    relative), and a relative input equal to such a string must not steal the
+    resolution from a real files-tree node — the friction this lookup removes
+    is absolute-path inputs anyway (equality with an absolute target implies
+    the recorded path is absolute too, so one check covers both sides).
+    Archived datasets are excluded (they are gone from the user's working view;
+    resolving a raw path to one would silently resurrect it), so a path
+    matching only an archived entity reads as no hit — the caller then falls
+    through to its remote-path guidance."""
+    import os
+    from core.graph.entities import list_entities
+    target = _norm_fs_path(path)
+    if not target or not os.path.isabs(target):
+        return None
+    # Newest live match wins — same tie-break as _locate_project_run_output:
+    # list_entities orders pinned-then-oldest, so without the reversal a stale
+    # duplicate registration of the same path would shadow the current one.
+    for e in reversed(list_entities(type_filter="dataset", include_archived=False)):
+        if any(_norm_fs_path(c) == target for c in _recorded_paths(e)):
+            return e
+    return None
+
+
 def location_suffix(e: dict) -> str:
     """The one-line rendering for naming surfaces: '' for local (zero
     noise), ' · on <site>' for a remote home, with the mirror noted when
