@@ -1,5 +1,29 @@
 # ABA — project notes
 
+## Content isolation protocol (safeguard hygiene) — MANDATORY, from turn one
+ABA is a GENERIC data-analytics framework. Assistant output and context must
+stay domain-neutral: model safeguards flag accumulated life-science content,
+and once the context window is contaminated the flags fire on EVERY turn —
+including no-op turns — degrading the session via model switching. Residue
+cannot be removed after the fact, so prevention is the only control:
+- NEVER print into the main context: live session transcripts, chat/message
+  logs, tool-catalog docstrings (backend/content/bio/mcp_servers/**),
+  recipe/knowhow files, live project entity listings, or run outputs. These
+  carry domain vocabulary even when the task is generic.
+- Anything touching those goes through an ISOLATED SUBAGENT that reports
+  structural facts only: opaque handles (DS-1, PKG-N, SKILL-N, OUT-N),
+  error codes/stages, counts, timestamps, file:line of platform code. Site
+  and entity IDs are fine; names/titles/topics are not.
+- Test fixtures and examples the assistant writes must use generic names
+  (data.parquet, figs/scatter.png, siteA — never domain-flavored ones).
+- Platform code (core/, lifecycle, routes, tests) is generally safe to read
+  directly; content-pack prose is not. When unsure, subagent it.
+- A flag mid-work is a signal to STOP forward edits, park work safely
+  (WIP branch + spec file), and hand off to a fresh session — never to push
+  through with a switched/degraded model on critical code.
+- Long investigations: externalize state continuously (git commits, WIP
+  docs, misc/ notes) so any session can be abandoned without loss.
+
 ## What ABA is
 ABA is an AI-orchestrated, **entity-oriented** workspace for data analysis: users and an AI agent ("Guide") collaborate through a shared, typed, persistent entity graph to carry out **long-term research projects** across the full cycle — data → analysis → results → conclusions → manuscript. Analysis outputs (datasets, runs, results, findings, claims) are first-class typed entities with provenance, so both humans and agents can focus at any level of abstraction and build on prior work — a research *partner*, not a notebook with a chatbot stapled on.
 
