@@ -40,9 +40,18 @@ _failures: list[str] = []
 
 
 def check(label, cond, detail=""):
+    """Assert, loudly, on BOTH runners.
+
+    This used to only append to `_failures` — a list read exclusively by the
+    standalone `_run()` at the bottom of this file. Under pytest (how the guard
+    script actually executes this file) a failing check printed "FAIL" and the
+    test still PASSED, so every guard here was vacuous: a deliberately false
+    check was verified to report `1 passed`. Raising satisfies both runners —
+    `_run()` already catches per-test exceptions and counts them."""
     print(f"  [{'PASS' if cond else 'FAIL'}] {label}" + (f" — {detail}" if detail and not cond else ""))
     if not cond:
         _failures.append(label)
+        raise AssertionError(f"{label}" + (f" — {detail}" if detail else ""))
 
 
 class FakeWeft:
@@ -601,6 +610,43 @@ def test_run_r_catalog_exposes_and_forwards_fresh():
         bt.run_r = orig
     assert seen.get("fresh") is True, \
         f"run_r did not forward fresh into the impl input: fresh={seen.get('fresh')!r}"
+
+
+def test_fresh_remote_kernel_gets_orientation_and_an_honest_note():
+    """A brand-new REMOTE kernel must render the workspace-orientation preamble
+    and must NOT claim variables persist from before it existed.
+
+    Live friction (2026-07-26): only the two LOCAL lanes called
+    _ensure_kernel_cwd, so a remote kernel born mid-turn produced a bare
+    "object not found" while the note said "variables persist" — the agent hunted
+    a variable that had never existed. ARMED: asserts the FRESH sentinel was
+    actually set (a run where the kernel was already warm proves nothing), and
+    the second call pins the other side — no repeated banner, persistence note
+    restored."""
+    ctx = {"thread_id": "thrFRESH"}
+    r1 = rex._run_remote_kernel({"code": "b = 1"}, ctx, _PID, "thrFRESH", "mendel")
+    check("fresh remote call ok", r1 is not None and r1.get("returncode") == 0,
+          str(r1)[:200])
+    note1 = r1.get("note") or ""
+    check("fresh remote kernel says state started HERE",
+          "NEW persistent session" in note1 and "nothing was in memory" in note1,
+          note1[:200])
+    check("fresh note does not claim backwards persistence",
+          "— variables persist" not in note1, note1[:200])
+    check("orientation preamble rendered on the fresh remote kernel",
+          "Fresh kernel" in (r1.get("stdout") or "")
+          or "orientation" in (r1.get("stdout") or "").lower(),
+          (r1.get("stdout") or "")[:300])
+
+    # second call on the SAME kernel: warm — banner gone, persistence honest
+    r2 = rex._run_remote_kernel({"code": "b + 1"}, ctx, _PID, "thrFRESH", "mendel")
+    note2 = r2.get("note") or ""
+    check("warm remote kernel keeps the persistence note",
+          "variables persist" in note2 and "NEW persistent session" not in note2,
+          note2[:200])
+    check("orientation banner does not repeat on a warm kernel",
+          "Fresh kernel" not in (r2.get("stdout") or ""),
+          (r2.get("stdout") or "")[:200])
 
 
 def _run():

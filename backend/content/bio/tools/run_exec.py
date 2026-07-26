@@ -518,6 +518,27 @@ def _prior_run_files_preamble(project_id: str, thread_id: str,
         return ""
 
 
+def _env_identity(sess) -> dict:
+    """Env-identity facts for an exec record's `compute` block, read from the
+    session that already resolved them at start (no re-resolution, no substrate
+    call). `env_grade` mirrors the job lane's vocabulary: 'node-system' when a
+    REMOTE session runs the node's own interpreter (the `env='system'` lever),
+    else 'env'. A local session has no weft env and is graded 'local'."""
+    env_id = getattr(sess, "env_id", None)
+    site = getattr(sess, "site", "local") or "local"
+    out: dict = {}
+    if env_id:
+        out["env_id"] = env_id
+    name = getattr(sess, "env_name", None)
+    if name:
+        out["env_name"] = name
+    if site == "local":
+        out["env_grade"] = "local"
+    else:
+        out["env_grade"] = "env" if env_id else "node-system"
+    return out
+
+
 def _write_exec_record(*, lang: str, ctx: dict | None, code: str, cwd,
                         sess, started_iso: str, started_ts: float,
                         res, plots: list, tables: list, files: list) -> Optional[str]:
@@ -652,6 +673,16 @@ def _write_exec_record(*, lang: str, ctx: dict | None, code: str, cwd,
                     "site": getattr(sess, "site", "local"),
                     **({"kernel_id": sess.kernel_id}
                        if getattr(sess, "kernel_id", None) else {}),
+                    # ENV IDENTITY — job-lane parity (weft_submitter._compute_block
+                    # records env_id/grade; this lane recorded neither, so 21 of 24
+                    # remote steps in one live session could not answer "which
+                    # interpreter ran this" from the graph at all). The session
+                    # already resolved it at start (WeftKernelSession.env_id): a
+                    # named env's EnvID or the project snapshot's. No env_id on a
+                    # REMOTE session means the node's own interpreter — the
+                    # `env='system'` lever — which is exactly the fact worth
+                    # recording, so grade it rather than leaving a hole.
+                    **_env_identity(sess),
                 },
                 "kind": "script",
                 "language": lang,
@@ -876,7 +907,13 @@ def _run_remote_kernel(input_: dict, ctx: dict | None, project_id: str,
         return {"error": str(cap), "at_capacity": True}
     except Exception as e:  # noqa: BLE001 — classified: env failure vs no session
         from core.compute.errors import describe as _describe, is_env_resolution_failure
-        if is_env_resolution_failure(e):
+        # untyped_is_env=False: this try wraps the WHOLE kernel start (transport,
+        # kernel protocol, capacity), not just env resolution, so only a TYPED
+        # env verdict may cancel the legitimate one-shot fallback. And env='system'
+        # resolves no project env at all — a start failure there is always a
+        # "no kernel here" condition.
+        if env_name != "system" and is_env_resolution_failure(
+                e, untyped_is_env=False):
             # The env could not be resolved — NOT a "no kernel here" condition.
             # Falling through to the one-shot lane used to end with the step
             # running on the node's own interpreter (that lane swallowed the
@@ -910,6 +947,15 @@ def _run_remote_kernel(input_: dict, ctx: dict | None, project_id: str,
     # flipped (live UX finding 2026-07-26). The session's site is the truth
     # of where this step is EXECUTING — stamp it before execute() blocks.
     note_run_site(_rid_now, getattr(sess, "site", None))
+    # Fresh-kernel orientation, on the REMOTE lane too. Only the two LOCAL
+    # lanes called this, so a brand-new remote kernel produced a bare
+    # "object 'x' not found" while the note below cheerfully said variables
+    # persist — the agent then hunted a variable that never existed (live,
+    # 2026-07-26). A weft kernel cannot chdir (its sandbox IS the work dir), and
+    # _ensure_kernel_cwd already knows that: it skips the chdir and only marks
+    # the fresh sentinel, which is exactly what we want here.
+    _ensure_kernel_cwd(sess, lang,
+                       scratch_dir(project_id, f"thread-{thread_id}"))
     inv0 = _kernel_sandbox_inventory(sess.kernel_id)
     res = sess.execute(code, cancel_token=cancel_token, timeout_s=timeout_s)
     if res.timed_out:
@@ -922,8 +968,16 @@ def _run_remote_kernel(input_: dict, ctx: dict | None, project_id: str,
         sess.kernel_id, inv0, project_id, str(thread_id))
     plots, tables, files, warns = (harvest_artifacts(Path(fetch_dir), since_ts=0)
                                    if fetch_dir else ([], [], [], []))
-    note = (f"ran on {site} in a persistent session there — variables persist "
-            f"for your next run_{lang}(site={site!r}) call")
+    _fresh = getattr(sess, "_aba_cwd_just_switched", None) == "__FRESH__"
+    if _fresh:
+        # Do not promise persistence backwards on a kernel that was just born:
+        # the honest statement is that state starts HERE.
+        note = (f"ran on {site} in a NEW persistent session (nothing was in "
+                f"memory before this call — reload objects from disk); "
+                f"variables now persist for your next run_{lang}(site={site!r}) call")
+    else:
+        note = (f"ran on {site} in a persistent session there — variables persist "
+                f"for your next run_{lang}(site={site!r}) call")
     if env_name == "system":
         note += (" (env='system': the node's own interpreter — no environment "
                  "realized, nothing installable)")
@@ -969,6 +1023,21 @@ def _run_remote_kernel(input_: dict, ctx: dict | None, project_id: str,
         ns = _kernel_namespace_preview(sess, lang)
         if ns:
             out["namespace"] = ns
+    # Same orientation block the local lanes render: WORK_DIR, registered
+    # datasets and files already on disk, with the fresh-kernel header when the
+    # session was just created. Also re-fires when the block died on a missing
+    # path — the remote lane is where wrong-path guessing actually costs a
+    # round trip to another machine.
+    _maybe_force_preamble_on_file_error(sess, res.stderr or "", res.stdout or "")
+    if getattr(sess, "_aba_cwd_just_switched", None):
+        _was = sess._aba_cwd_just_switched
+        preamble = _prior_run_files_preamble(
+            str(project_id), str(thread_id), current_run_id=_rid_now,
+            cwd=getattr(sess, "_aba_cwd", None),
+            fresh_kernel=(_was == "__FRESH__"))
+        sess._aba_cwd_just_switched = None
+        if preamble:
+            out["stdout"] = preamble + "\n" + (out["stdout"] or "")
     return out
 
 

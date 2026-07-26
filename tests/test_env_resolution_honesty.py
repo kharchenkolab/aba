@@ -47,6 +47,19 @@ def test_policy_classifies_env_families_and_spares_transport():
     assert is_env_resolution_failure(KeyError("runtime"))
 
 
+def test_untyped_classification_follows_the_callers_scope():
+    """The scope knob, both ways. A try that wraps ONLY env resolution treats an
+    untyped failure as an env failure; a try that wraps a whole kernel start
+    must NOT — otherwise every ordinary "no kernel on this site" becomes a
+    refusal and remote work breaks on sites that cannot host a session (caught
+    live by test_remote_kernel_lane once its checks were armed)."""
+    assert is_env_resolution_failure(RuntimeError("x"), untyped_is_env=True)
+    assert not is_env_resolution_failure(RuntimeError("x"), untyped_is_env=False)
+    # a TYPED env verdict counts under either scope
+    assert is_env_resolution_failure(ComputeError("env.solve_conflict", "x"),
+                                     untyped_is_env=False)
+
+
 # ── the detached/one-shot choke point ────────────────────────────────────────
 
 def _submitter(site="siteA"):
@@ -191,3 +204,53 @@ def test_interactive_non_env_failure_still_falls_back(monkeypatch):
                                 ComputeError("site.unreachable", "down"))
     assert calls, "ARMED: pool consulted"
     assert out is None, "a transport/capacity failure keeps the one-shot fallback"
+
+
+def test_interactive_untyped_start_failure_still_falls_back(monkeypatch):
+    """The regression my own fix caused, pinned: a kernel that simply cannot
+    start raises an UNTYPED error, and this lane's try wraps the whole start —
+    so it must keep the documented one-shot fallback, not refuse."""
+    out, calls = _remote_kernel(monkeypatch, RuntimeError("kernel_start failed"))
+    assert calls, "ARMED: pool consulted"
+    assert out is None, "an untyped kernel-start failure keeps the fallback"
+
+
+def test_interactive_system_lever_never_refuses(monkeypatch):
+    """env='system' resolves NO project env, so a start failure there is always
+    a "no kernel here" condition — it must fall back even on a typed env error."""
+    out, _ = _remote_kernel(monkeypatch,
+                            ComputeError("env.solve_conflict", "x"), env="system")
+    assert out is None, "the system lever must not be blocked by env resolution"
+
+
+# ── env identity on exec records (provenance) ────────────────────────────────
+
+def test_exec_record_env_identity_grades_each_lane():
+    """Provenance parity with the job lane. A remote session's exec record used
+    to carry only {substrate, site, kernel_id} — so 21 of 24 remote steps in one
+    live session could not answer "which interpreter ran this" from the graph.
+
+    WIDE: all three shapes — a resolved env, a remote session with NO env (the
+    `env='system'` lever, the fact most worth recording), and a local session."""
+    from content.bio.tools.run_exec import _env_identity
+
+    class _S:
+        def __init__(self, **kw):
+            self.__dict__.update(kw)
+
+    got = _env_identity(_S(env_id="env:v1:abc", env_name="myenv", site="siteA"))
+    assert got == {"env_id": "env:v1:abc", "env_name": "myenv", "env_grade": "env"}
+
+    # remote + no env == the node's own interpreter: graded, never a hole
+    assert _env_identity(_S(env_id=None, env_name=None, site="siteA")) \
+        == {"env_grade": "node-system"}
+
+    # the default (unnamed) project env still records its frozen identity
+    assert _env_identity(_S(env_id="env:v1:snap", env_name=None, site="siteA")) \
+        == {"env_id": "env:v1:snap", "env_grade": "env"}
+
+    # local sessions have no weft env — say 'local', don't imply node-system
+    assert _env_identity(_S(env_id=None, env_name=None, site="local")) \
+        == {"env_grade": "local"}
+    # a session object that predates these attributes must not explode
+    assert _env_identity(_S())["env_grade"] == "local"

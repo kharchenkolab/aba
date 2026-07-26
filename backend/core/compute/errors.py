@@ -58,19 +58,30 @@ _ENV_FAILURE_CODES = frozenset({"no_base_pack"})
 _ENV_FAILURE_PREFIXES = ("env.", "session.")
 
 
-def is_env_resolution_failure(exc: BaseException) -> bool:
+def is_env_resolution_failure(exc: BaseException, *,
+                              untyped_is_env: bool = True) -> bool:
     """Did this failure mean "the declared environment could not be resolved"
     (as opposed to a transport hiccup, a capacity limit, or a missing kernel)?
 
     True for the substrate's env/session families (`env.solve_conflict`,
     `env.solve_failed`, `env.platform_mismatch`, `session.cold_base`, …) and
-    aba's own `no_base_pack`. Non-ComputeError exceptions count as env failures
-    when they arise on the env-resolution path — the caller decides scope by
-    where it applies this; an unexpected exception there is exactly the shape
-    that used to degrade silently."""
+    aba's own `no_base_pack`.
+
+    `untyped_is_env` is the SCOPE of the caller's try block, and it matters:
+
+    * True (default) — the guarded block does env resolution and nothing else
+      (the detached submitter wraps exactly `base_env.require` +
+      `project_env.snapshot`). An untyped exception there IS an env failure, and
+      is precisely the shape the old `except Exception: return None, None` ate.
+    * False — the guarded block does much more than resolve an env (the
+      interactive lane wraps a whole kernel start: transport, kernel protocol,
+      capacity). An untyped failure there is far more likely "no kernel here",
+      which has a legitimate fallback, so only a TYPED env verdict counts.
+      Getting this wrong turns ordinary kernel-start failures into refusals —
+      caught by tests/test_remote_kernel_lane.py."""
     code = getattr(exc, "code", None)
     if not isinstance(code, str):
-        return True          # untyped failure on the env path: do NOT degrade
+        return untyped_is_env
     return code in _ENV_FAILURE_CODES or code.startswith(_ENV_FAILURE_PREFIXES)
 
 
