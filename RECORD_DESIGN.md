@@ -198,6 +198,22 @@ second:
   the review happens at least once per episode, brackets the sitting,
   and catches in the leftovers shelf what even the drafting pass
   missed. The transcript files under its anchor.
+- **Sessions end by attention, not by duty.** If the record accretes
+  continuously, why close at all? Mostly you don't: the lifecycle is
+  open → **parked** (automatic, on idle — the scientist just walked
+  away) → **filed** (explicit close, or automatic after quiet, with the
+  proposed routing table posting to the tray, the leftovers shelf
+  computing itself, and the episode boundary inferred from the gap).
+  Nothing depends on a diligent close ritual — the drafts already
+  landed, the tray already carries them, the boundary is detectable.
+  What an *explicit* close buys is worth having, not owing: the
+  settlement happens while context is hot (the best routing table the
+  agent will ever propose, decidable in a minute rather than
+  reconstructed cold tomorrow); compute attached to the sitting is
+  released; and ▶ stays scarce and truthful — the liveness grammar only
+  works if sittings actually end, and a desk of eternal "open" sessions
+  is how ▶ becomes wallpaper. Filed also says something parked cannot:
+  *this line reached a pause point deliberately.*
 - **Sessions are first-class, because the redux is a map and sessions
   are the territory.** Curation is lossy by design, so the episode must
   stay reachable: the work record's **by-session grain** shows each

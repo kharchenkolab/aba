@@ -173,7 +173,9 @@ export default function WorkPanel({ panel, onClose, onAdvance, onExpand, continu
             </div>
             <div className="wclose__note">
               what enters the record is exactly what you ratify — the transcript files
-              under its question, out of the way but one click from everything it touched
+              under its question, out of the way but one click from everything it touched.
+              or just walk away: sittings end by attention — an idle session parks itself,
+              its routing table waits in the tray, and nothing is ever lost to a missing goodbye
             </div>
           </div>
         )}
