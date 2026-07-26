@@ -518,7 +518,215 @@ and the end state may well be a recombination of faces rather than a
 winner — which the shared-organ architecture (§11) accommodates by
 construction.
 
-## 14 · Deliberate scope cuts and open questions
+## 14 · Editorial governance — inertia, consent, and the scientist's hand
+
+*Distilled 2026-07 from two external design reviews of the living-manuscript
+problem (multi-year, agent-maintained scientific documents), read against
+this design and the §13 substrate audit. Both reviews independently arrive
+at the Record's architecture — a stable readable surface over an evidence
+graph, structure changes as proposed editorial events. What they add, and
+what this section absorbs, is the machinery AROUND structural change:
+how often, how batched, how bounded the consent load, and what makes a
+restructuring proposal trustworthy. Two worries drive it: the document
+must keep coherently capturing the project as it scales — adding a level
+of structure, splitting sections, relegating material to appendix rank —
+without disorienting its owner; and the scientist must hold the emphasis
+and direction of the presentation, from "this matters" down to the
+sentence.*
+
+The Record's standing answer to disorientation is structural: every face
+is a rendering over the entity graph, so links target entities (nothing
+404s when furniture moves) and attention is derived (the needs-you count
+is identical the day before and after a question descends — §10). That
+makes restructuring *safe*. This section is about making it *felt* as
+safe.
+
+### 14.1 Consent arithmetic — the queue is bounded by construction
+
+The failure mode to design against is not a missing consent dialog; it is
+consent *inflation*. Three structural proposals a week over a three-year
+project is ~470 decisions; a queue that grows without bound trains
+"accept all", which is worse than no consent at all because it launders
+change as approved. The goal is to minimise consent events while keeping
+control genuine. Every change the system can make falls in one of five
+classes:
+
+| class | examples | semantics |
+|---|---|---|
+| **0 · silent** | number/cross-ref/caption refresh from provenance | applied, logged, always revertible |
+| **1 · notified** | in-slot prose where the claim is unchanged; figure re-render from updated data | applied, marked in place, one-click revert, appears in the briefing |
+| **2 · proposed** | face flips, section split/merge within a question, tier moves within the page | batched to the tray; **expires to its default after ~14 days, visibly** — legitimate only because Class 2 is *defined* as local-and-reversible |
+| **3 · consent** | cross-question moves, descend/arc/abstract promotions (§10), anything touching a pinned region or the synthesis | never auto, never expires, waits indefinitely |
+| **X · interrupt** | the closed list: a contradiction between threads; evidence contradicting ratified prose (the addendum grammar, §3 of first principles); claim language exceeding its evidence | breaks the ambient rule; a fourth candidate gets argued down to Class 2, never added |
+
+Class-2 expiry is the load-bearing rule: the tray cannot grow past ~14
+days of routine plus whatever Class 3 the scientist is deliberately
+sitting on. Two companions keep it honest. **Trust ratchets in both
+directions** — after a run of accepted refreshes the system proposes
+lowering its own ceremony; after rejections it raises ceremony *and says
+so* (a system that visibly loses autonomy when wrong is one a scientist
+will let act). And **rejection captures a reason that becomes a durable
+rule** — filed through the proposals store's own discipline (signature
+dedup: a dismissed idea doesn't re-nag until the world changes) and, when
+the reason generalises, appended to the project charter as a standing
+rule.
+
+### 14.2 Structural inertia — hysteresis, disruption cost, budget
+
+Restructure when the preference is **large and persistent**, never
+because the optimiser flipped once:
+
+```
+propose(change)  iff  Δutility − λ·disruption > θ   for N consecutive cycles
+```
+
+- **disruption** is priced in reader-visible units: words moved, anchors
+  and cross-refs rewritten, whether the scientist read or edited the
+  affected region recently, whether human-authored spans are displaced.
+- **λ grows** with project maturity (a month-38 thesis is nearly frozen)
+  and with human edit density in the region — touched text is
+  load-bearing.
+- **N** (2–4 cycles) is a Schmitt trigger: one noisy result cannot flip
+  the structure and the next flip it back.
+- A **structural budget** caps reader-visible reorganisation per cycle
+  regardless of how much the optimiser wants.
+
+Structure proposals batch into one **restructuring proposal** reviewed in
+one sitting, each item carrying the *why in evidence terms* ("F-0441
+supersedes F-0217; local 2.6σ → 1.1σ"), the *reader impact quantified*
+("~2,100 words move; 11 cross-refs rewritten"), the *alternative
+considered and why rejected*, and granular verbs — accept / accept
+partially / not yet / **never** (which writes the rule, §14.1).
+
+**The shadow recompile** decouples exploring better structure from paying
+for it: periodically derive the blank-slate organisation from the current
+graph with zero inertia, never publish it, diff it against the live
+Record — "built from scratch, this project would organise by method
+rather than channel; three sections differ · view · adopt partially ·
+dismiss for 6 months." It is the one component immune to the project's
+own path-dependence, and the anti-anchoring valve for a face that has
+been accreting for years.
+
+### 14.3 Write once at several depths; place freely
+
+The precondition for cheap inertia is that **demotion must not be a
+rewrite**. When prose is ratified, the draft carries its renditions
+together — headline (the spine one-liner), abstract paragraph (the fold /
+holds-line), full exposition — ratified as one act. Every later face
+flip — compaction, descent to a one-liner, appendix relegation, the
+"technical footnote" ending — is then a *selection*, not new writing: it
+needs no fresh wording consent and is losslessly reversible. Figures are
+recipes, `render(finding, tier)`, never files, so a hero panel and a
+thumbnail in a validation grid are parameter values. This is what §10's
+gradualism quietly assumed; stated as a contract: **a tier operation
+never generates prose, it selects among renditions the scientist already
+ratified.**
+
+### 14.4 Emphasis is a signal — salience with evidence floors
+
+Between the charter and the sentence there must be an instrument for
+"this is important — lead with it." Placement is driven by an explicit
+function — terms for **scientist interest** (the human-set emphasis
+signal), evidence strength, **narrative necessity** computed from the
+dependency graph, novelty, and effort-invested (weighted low, shown
+openly, so that argument happens explicitly rather than through repeated
+manual re-promotion). Two guards make it trustworthy:
+
+- **An evidence floor per tier.** Nothing reaches the top of the story on
+  enthusiasm alone — and the refusal is legible, in evidence terms:
+  *"raising your interest weight would not change the outcome; the lead
+  position requires cross-checked (◕) or better."* The anti-sycophancy
+  mechanism.
+- **Necessity is computed, not felt.** The boring calibration the main
+  result depends on cannot sink below supporting rank — what stops the
+  Record becoming a highlight reel.
+
+The arithmetic stays internal. The surface shows **support states and
+sentences, never floats** — the maturity glyphs (○◐◕●◮), roles, and
+one-line explanations on hover ("why this placement: 2 claims, held by
+Q1, last activity 3w"), extending the standing rule that every derived
+thing is explainable in place.
+
+Emphasis is *expressed* through content gestures, not settings: dragging
+a figure to the front of a section is the physicist's native
+prioritisation act. The chain is **gesture → inferred intent →
+consequence → confirm**: "You moved the ROC curve to the lead. I read
+that as promoting the classifier cluster. That would expand its section
+L1→L2, re-render 2 figures, and demote nothing. [yes] [just the figure]
+[show diff]." A **figure board** (tier rows with visible slot scarcity;
+dragging into a full tier forces an explicit eviction) makes the
+prioritisation conversation physical — and its **"not shown" pile is
+deliberately visible and deliberately uncomfortable**: that count
+climbing is the user-facing form of the narrowing pathology (negative
+results and abandoned threads quietly vanishing from every view).
+
+### 14.5 Charges — the scientist's direction, durable
+
+Each question section (and later each arc) carries a **charge**: two or
+three ratified sentences of editorial intent — *"present the excess as it
+appeared, the checks, and its disappearance; frame as methodological
+lesson, not as a result"* — plus a length budget and must-not-duplicate
+edges. Writers draft against the charge; a critic checks compliance;
+boundary smear between sections becomes a lintable defect instead of a
+slow fate. The charge is edited **in place** — click the section head and
+its governing metadata unfolds (charge · tier · budget · authorship split
+· pinned state). There is no separate plan surface: the spine *is* the
+map, and pinning stays the one-click veto.
+
+Around the charges, a **proactivity gradient by region** — automation
+spent where identity isn't:
+
+| region | default |
+|---|---|
+| numbers, cross-refs, captions, bibliography | act silently (Class 0) |
+| in-slot prose, claim unchanged | act + notify (Class 1) |
+| prose where the claim changed | propose |
+| structure, tiering, promotion/demotion | propose, batched (§14.2) |
+| synthesis, abstract, title, framing | **never unbidden** |
+
+And one physics-culture jewel to build early: the **evidence-to-language
+lint**. Prose asserting a rhetorical band stronger than its bound claim's
+maturity permits fails at the ratification gate — *"'evidence for'
+requires ◕ cross-checked; this claim is ◐ supported. Permitted here: 'a
+mild excess', 'a fluctuation'"* — with override-plus-note for the
+legitimate exception. It is the mechanism by which a continuously
+maintained document becomes *more* trustworthy than a hand-written one.
+
+### 14.6 Re-entry and absence
+
+For the returning scientist the delta strip is the wrong grain. Past a
+few days away, orientation is a **briefing**, not a diff: authored prose,
+past tense, ranked by consequence, scaled to time away, leading with what
+changed *in the science* — and flagging what the system could not resolve
+("you wrote that the excess is robust to calibration; F-0441 contradicts
+this; I left your sentence alone"). Never activity volume. Archived
+briefings accumulate into the project's own narrative history — the
+material a good concluding chapter is made of, otherwise always lost.
+
+The **absence policy** is the two-clock discipline applied to attention:
+while the scientist is away the fast clock runs (numbers, figures,
+sediment stay current) but nothing above Class 1 applies, and **Class-2
+expiry timers pause**. You return to a document that is factually current
+and structurally exactly as you left it, plus a finite stack of held
+proposals.
+
+### 14.7 Where this lands on the substrate
+
+Nothing here disturbs §13's audit; it arrives with rollout phases 3–4 as:
+additive entity metadata (salience terms, multi-depth renditions, charges
+on threads), new proposal kinds (restructuring items, rendition
+selections), advisor roles (historian/briefing, shadow-recompile,
+narrowing-watch), charter rules in the existing scoped rules bundles
+(rejection-derived rules included), and one check at the ratification
+gate (the language lint). The health metrics are organ-grade, per §13.4:
+structural accept:reject in the 70–85% collaborator band, proposal
+reversal rate near zero (the thrash detector), consent decisions per
+month *falling* as the ratchet works, time-to-orient after ≥7 days away
+under two minutes, pin count trend (rising pins = the scientist defending
+territory against the salience model), and negative-result coverage (its
+decay to zero is the narrowing pathology arriving).
+
+## 15 · Deliberate scope cuts and open questions
 
 Cut from the prototype (mimed, not wired): real chat; ratification and
 draft state beyond the client; prose editing (the co-writing loop);
@@ -542,3 +750,10 @@ Open design questions, in rough priority order:
    (digests as cards?); out of scope for this worktree.
 6. **Tray keyboard nav** (j/k + enter) and digest email delivery —
    mechanical, deferred.
+7. **Governance constants** (§14) — the Class-2 expiry window, the
+   hysteresis trigger N, and the structural budget are asserted, not
+   calibrated; instrument proposal rates and reversal rates from the
+   first live phase and tune against the 70–85% accept band.
+8. **Where charges live** (§14.5) — extend `thread` metadata
+   (question/conclude_wrap already carry intent) vs. a small `charge`
+   entity; leaning to thread metadata, decide at phase 3.
