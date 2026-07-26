@@ -164,16 +164,55 @@ def test_preserved_mtime_writes_warn_instead_of_vanishing(tmp_path):
 
 def test_prior_block_files_stay_silent(tmp_path):
     """WIDE / the other side: files from an earlier block fail BOTH clocks
-    (old ctime AND old mtime) — the counter must not cry wolf about them."""
+    (old ctime AND old mtime) — the counter must not cry wolf about them.
+
+    The fixture stamps the file a full second back: whole-second filesystems
+    (BeeGFS/NFS) cannot represent a sub-second gap at all, so "belongs to an
+    earlier block" has to be expressed at the coarsest resolution the window
+    compares at — see _window_floor in core/exec/run.py."""
     scratch = tmp_path / "w2"; scratch.mkdir()
     f = scratch / "earlier.csv"
-    f.write_text("a\n1\n")
-    time.sleep(0.05)
+    f.write_text("a\n1\n")                  # both clocks stamped in THIS second
+    # Cross into the next whole second so the file is earlier at the resolution
+    # the window compares at (os.utime would refresh ctime and defeat the point).
+    time.sleep(1.0 - (time.time() % 1.0) + 0.02)
     since = time.time()                    # window opens AFTER the file existed
     plots, tables, files, warns = harvest_artifacts(scratch, since_ts=since)
     assert not tables
     assert not any("OLDER than the step start" in w for w in warns), \
         f"prior-block files must not trigger the stale warning: {warns}"
+
+
+def test_same_second_output_survives_whole_second_filesystem(tmp_path):
+    """The BeeGFS/NFS drop: a 1-second-granularity filesystem truncates an
+    output's mtime DOWN, so a step that started mid-second sorts its own
+    fresh output below the window and harvests nothing — silently.
+
+    Simulated on any filesystem by stamping the file at the whole second the
+    fractional window start falls in (exactly what a coarse FS records)."""
+    scratch = tmp_path / "cs"; scratch.mkdir()
+    since = float(int(time.time())) + 0.45      # step starts mid-second
+    f = scratch / "out.csv"
+    f.write_text("a,b\n1,2\n")
+    whole = float(int(since))                   # what the filesystem stores
+    os.utime(f, (whole, whole))
+    plots, tables, files, warns = harvest_artifacts(scratch, since_ts=since)
+    assert any(t.get("original_name") == "out.csv" for t in tables), \
+        "a same-second output must not be dropped by stamp truncation"
+
+
+def test_previous_second_file_still_excluded(tmp_path):
+    """The ceiling for the fix above: widening the window to whole-second
+    resolution must not swallow a file stamped in an EARLIER second."""
+    scratch = tmp_path / "cs2"; scratch.mkdir()
+    since = float(int(time.time())) + 0.45
+    f = scratch / "before.csv"
+    f.write_text("a\n1\n")
+    prev = float(int(since)) - 1.0              # one whole second earlier
+    os.utime(f, (prev, prev))
+    plots, tables, files, warns = harvest_artifacts(scratch, since_ts=since)
+    assert not any(t.get("original_name") == "before.csv" for t in tables), \
+        "the window must still exclude files stamped in a previous second"
 
 
 # ── the kernel gap window + marker reconcile ─────────────────────────────────

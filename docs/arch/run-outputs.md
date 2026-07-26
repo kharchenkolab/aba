@@ -101,7 +101,21 @@ agent code can do defeat that silently, and both now SAY so instead:
   previous harvest, not the block start, so a background writer's files
   attach to the next block instead of vanishing in the gap.
 
-Guard: `tests/test_harvest_honesty.py` (per-lane, red-proven).
+The window compares at whole-second resolution (`_window_floor`). File
+stamps and `time.time()` do not share a resolution: BeeGFS/NFS record whole
+seconds, so an output written at X.50 stats as X.00 and a step that started
+at X.45 sorted its own fresh output BELOW the window — dropping everything
+written in the remainder of the start second, with no warning (the stale
+counter's ctime is truncated identically, so it could not fire either).
+Flooring the window start is the cost-bounded trade: sub-second ordering is
+not recoverable from a whole-second stamp, so a file written in the same
+second just before the window may be re-caught — tracked beats lost. The
+one-shot lanes were never exposed; they take the window from the wrapper
+script's own mtime, so both sides already carry the same truncation.
+
+Guard: `tests/test_harvest_honesty.py` (per-lane, red-proven; the
+coarse-filesystem drop is simulated by stamping at the whole second, so it
+holds on fine-grained filesystems too).
 
 ## The consumption surfaces (all through the canonical pair)
 

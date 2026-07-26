@@ -447,6 +447,29 @@ _HARVEST_SKIP_DIRS = frozenset((
 ))
 
 
+def _window_floor(ts: float) -> float:
+    """Round a wall-clock window start DOWN to whole-second resolution.
+
+    File stamps and `time.time()` do not share a resolution. BeeGFS/NFS (and
+    older ext3) record whole seconds, so an output written at X.50 stats as
+    X.00 — BELOW a step that started at X.45. Comparing a fractional clock
+    reading against a truncated file stamp therefore drops every output
+    written in the remainder of the start second, silently, and the
+    stale-stamp counter below misses them for the same reason (its ctime is
+    truncated too) — so the drop carries no warning either.
+
+    Flooring compares at the coarsest resolution any supported filesystem can
+    express. The cost is bounded and deliberate: a file written in the SAME
+    second but just BEFORE the window may now be (re-)caught. Sub-second
+    ordering is not recoverable from a whole-second stamp, so this is the
+    harvest's standing tradeoff — tracked beats lost.
+
+    The one-shot lanes are unaffected either way: they take `since_ts` from a
+    file's own mtime (the wrapper script), so both sides of the comparison
+    already carry the same truncation."""
+    return float(int(ts))
+
+
 def _iter_kept(scratch: Path, suffixes: tuple[str, ...], since_ts: float,
                stale: Optional[list] = None):
     """Walk `scratch` recursively for files whose suffix matches `suffixes`
@@ -467,6 +490,7 @@ def _iter_kept(scratch: Path, suffixes: tuple[str, ...], since_ts: float,
     plots into a subdir — those used to be invisible to the chat
     tool-result even though they showed up in the Run view (2026-06-04)."""
     suff = tuple(s.lower() for s in suffixes) if suffixes else None  # None = ANY suffix
+    since = _window_floor(since_ts)   # compare at filesystem stamp resolution
     for f in scratch.rglob("*"):
         # Skip any path under a transient subdir at any depth.
         if any(part in _HARVEST_SKIP_DIRS for part in f.parts):
@@ -487,8 +511,8 @@ def _iter_kept(scratch: Path, suffixes: tuple[str, ...], since_ts: float,
             st = f.stat()
         except OSError:
             continue
-        if st.st_mtime < since_ts:
-            if stale is not None and st.st_ctime >= since_ts:
+        if st.st_mtime < since:
+            if stale is not None and st.st_ctime >= since:
                 stale.append(f)     # appeared now, stamped old — see docstring
             continue
         yield f
@@ -741,7 +765,7 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0,
                 mt = g.stat().st_mtime
             except OSError:
                 continue
-            if not (since_ts <= mt < _harvest_begin):
+            if not (_window_floor(since_ts) <= mt < _harvest_begin):
                 continue
             suf = g.suffix.lower()
             if suf == ".png":
