@@ -9,6 +9,13 @@ Doctrine: a projection of recorded catalog state (retain rows, dataset
 metadata, site declarations). NEVER probes sites or fingerprints on render
 (freshness discipline: revalidation happens on use / on demand).
 
+  One bounded exception: for a dataset registered on THIS machine (no recorded
+  site), a single local `exists()` on its own artifact_path. That is not a site
+  probe and not a fingerprint — no round trip, no hashing, no directory walk —
+  and without it the ledger asserted "safe: bytes live in the workspace data
+  folder" for a file that had been deleted out of band, which is the one claim
+  the ledger exists to make honestly.
+
 States (§1, exhaustive): safe | at_risk | changed | unknown.
 - `at_risk` is a verdict about VALUED items (datasets, keeps) whose only copy
   sits on temporary storage — merely-temporary run files that nothing values
@@ -60,6 +67,35 @@ def _durable_map() -> dict:
     return out
 
 
+def _local_bytes_present(e: dict) -> bool:
+    """Does a LOCAL dataset's artifact_path still exist on this filesystem?
+
+    Only ever called for an entity with NO recorded site — a remote home has no
+    meaningful local path and must never be stat'ed here (that would read as
+    "gone" for every by-reference dataset). Directory stores count as present
+    when the directory exists; we do not descend (cost, and an empty store is a
+    different problem from a missing one). Unreadable/erroring → True: the
+    ledger must not cry "missing" because of a permissions hiccup, since the
+    failure mode we are closing is a FALSE safe, and a false alarm is its own
+    kind of dishonesty."""
+    ap = e.get("artifact_path")
+    if not ap:
+        return True
+    try:
+        import os
+        p = str(ap)
+        if p.startswith("/artifacts/"):
+            # served-URL form: map to disk through the same mapper the viewers use
+            from core.web.artifacts import _artifact_url_to_path
+            d = _artifact_url_to_path(p)
+            return bool(d and d.exists())
+        if not os.path.isabs(p):
+            return True          # relative/registry-relative: not ours to judge
+        return os.path.exists(p)
+    except Exception:  # noqa: BLE001 — never turn a probe error into a verdict
+        return True
+
+
 def _dataset_items(durable: dict) -> list[dict]:
     from core.graph.entities import list_entities
     items = []
@@ -79,6 +115,16 @@ def _dataset_items(durable: dict) -> list[dict]:
         elif md.get("ref") or md.get("content_ref"):
             state = "safe"
             why = "content-addressed; re-obtainable from its origin"
+        elif e.get("artifact_path") and not site and not _local_bytes_present(e):
+            # A LOCAL dataset was called "safe" purely because it had an
+            # artifact_path — the path was never checked. So a dataset whose
+            # backing file had been deleted out of band (a stray rm, a cleaned
+            # scratch dir) kept reporting safe, and the entity stayed active
+            # pointing at nothing. Live 2026-07-26: exactly this, after a file
+            # was removed with raw os.remove in a code block. A local stat is
+            # cheap and it is the only way this claim can be true.
+            state = "changed"
+            why = "registered here, but its file is no longer on disk"
         elif e.get("artifact_path") and not site:
             state = "safe"
             why = "bytes live in the workspace data folder"

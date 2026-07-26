@@ -31,10 +31,17 @@ def _remote_open_note(site, size_bytes, *, mirror_lever) -> str:
 def _remote_stream_note(site, *, mirror_lever) -> str:
     """Pre-flight for a REMOTE store that will STREAM its chunks on demand
     (range channel) — no whole-file fetch, so the transfer gate never applies.
-    Keeps the mirror lever. Used only when streaming is actually available."""
+
+    The mirror lever is kept but SUBORDINATED: streaming is the answer here, and
+    naming a mirror in the same breath read as a contradiction ("no whole-file
+    fetch … mirror the dataset locally, then reopen") — an agent that reads it
+    as an instruction mirrors hundreds of MB it did not need. It stays mentioned
+    because a mirror is genuinely better over a slow link or for repeated
+    passes, so it is framed as the optional alternative it is."""
     return (f"source lives on {site} — its chunks STREAM on demand as the viewer "
-            f"reads them (no whole-file fetch, so the transfer gate doesn't apply); "
-            f"{mirror_lever}.")
+            f"reads them (no whole-file fetch, so the transfer gate doesn't apply). "
+            f"Nothing to do: just open it. Optional, only if the link is slow or "
+            f"you will re-read it many times — {mirror_lever}.")
 
 
 def _remote_stream_ready(run_id, name, *, entity=None) -> bool:
@@ -262,9 +269,31 @@ def open_viewer_impl(params: dict, ctx: dict | None = None) -> dict:
                 if cands:
                     parts.append("Matching files in this project: " + ", ".join(cands) + ".")
                 if os.path.isabs(file_path):
-                    parts.append("That looks like an absolute path — possibly a file on a "
-                                 "remote site. Pass the dataset/artifact entity id instead "
-                                 "(list_entities shows them), or register the file as an entity.")
+                    # Name the CALL, not the concept: this miss is reached only
+                    # after the files tree, the registered-dataset reverse lookup
+                    # and the Run-output resolver have all missed, so the file is
+                    # genuinely unregistered — and the only thing that makes it
+                    # viewable is registering it. The previous wording ("register
+                    # the file as an entity") left the agent to guess the verb and
+                    # its args; it burned a turn doing exactly that.
+                    _sites = ""
+                    try:
+                        from core.jobs.weft_submitter import declared_compute_sites
+                        _names = [s["name"] for s in declared_compute_sites()
+                                  if s.get("name") and s["name"] != "local"]
+                        if _names:
+                            _sites = f" This deployment's remote sites: {', '.join(_names)}."
+                    except Exception:  # noqa: BLE001 — guidance is best-effort
+                        pass
+                    parts.append(
+                        "That is an absolute path and nothing here has it registered "
+                        "(not in the files tree, not a registered dataset's recorded "
+                        "home, not a resolvable Run output) — so it is most likely a "
+                        "file on a remote site. If it lives on a remote site, register "
+                        f"it first — `register_dataset(path=\"{file_path}\", "
+                        f"site=\"<site>\")` — then call get_viewer_url again with the "
+                        f"returned entity_id.{_sites} If it is a file this project "
+                        "already knows, pass its entity_id (list_entities shows them).")
                 if not parts:
                     parts.append("No file with that name exists here — check the Files tab / your "
                                  "recent outputs, then pass its path or register it as a dataset "

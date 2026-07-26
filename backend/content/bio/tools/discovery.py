@@ -271,6 +271,18 @@ def make_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
         return {"status": "error", "name": name, "note": f"could not create env: {e}"}
     out = {"status": "ok", "name": name, "language": lang, "engine": "weft",
            "env_id": res["env_id"], "installed": packages}
+    # `env_id` is the identity AS SOLVED NOW — for the controller's platform. The
+    # first run on a site with a different platform re-locks the env and mints a
+    # DIFFERENT EnvID (env.platform_mismatch → ensure_platform), so an id handed
+    # out here can be obsolete by the time it is used: live 2026-07-26, this
+    # returned env:v1:2e4e9e33… while the env that was recorded and realized was
+    # env:v1:0837c1b2…. Say which handle is stable rather than letting a caller
+    # store the wrong one; inspect_env() reads the registry and is always current.
+    _plats = (named_envs.resolve(pid, name) or {}).get("platforms")
+    if _plats:
+        out["platforms"] = list(_plats)
+    out["env_id_is_platform_scoped"] = True
+    out["stable_handle"] = name
     verify = input_.get("verify_imports")
     if packages and verify:
         ok, err = named_envs.verify_imports(pid, name, list(verify))
@@ -282,7 +294,11 @@ def make_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
     out["note"] = (f"Isolated {label} env {name!r} solved; run code in it with "
                    f"{_run}(env={name!r}, code=…) — the first run materializes it. "
                    f"Calling make_isolated_env again with more packages LAYERS them on. "
-                   f"Listed in inspect_env(); survives across threads.")
+                   f"Listed in inspect_env(); survives across threads. "
+                   f"Refer to this env by NAME ({name!r}) — the returned env_id is "
+                   f"the solve for this controller's platform and CHANGES when the "
+                   f"first run on a different-platform site re-locks it; "
+                   f"inspect_env() always shows the current id.")
     if _restarted:
         out["note"] += (f" NOTE: the env's running session was restarted to pick "
                         f"up the new packages — in-memory objects from earlier "

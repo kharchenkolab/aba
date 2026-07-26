@@ -214,3 +214,83 @@ def _standalone() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(_standalone())
+
+
+# ── dangling local bytes (the "safe" that wasn't) ───────────────────────────
+
+def _ds_at(title, path, **md):
+    """A dataset registered with a concrete artifact_path (no site = local)."""
+    out = create_entity(entity_type="dataset", title=title,
+                        artifact_path=str(path), metadata=md)
+    return out if isinstance(out, str) else out["id"]
+
+
+def test_local_dataset_with_missing_file_is_not_safe(monkeypatch, tmp_path):
+    """A local dataset was called "safe: bytes live in the workspace data
+    folder" purely because it HAD an artifact_path — the path was never
+    checked. So a dataset whose file had been deleted out of band (live
+    2026-07-26: a raw os.remove in a code block) kept reporting safe while the
+    entity stayed active pointing at nothing.
+
+    ARMED: the present-file case in the same test must stay `safe`, so a
+    blanket "always changed" implementation fails this too."""
+    monkeypatch.setattr(scfg, "list_declared_sites", lambda: [])
+    here = tmp_path / "present.parquet"
+    here.write_bytes(b"data")
+    gone = tmp_path / "gone.parquet"          # never created
+
+    ok_id = _ds_at("present", here)
+    bad_id = _ds_at("absent", gone)
+    items = {i["entity_id"]: i for i in lg._dataset_items(lg._durable_map())}
+
+    assert items[ok_id]["state"] == "safe", "a file that IS there stays safe"
+    assert items[bad_id]["state"] == "changed", \
+        "a registered dataset whose file is gone must not read as safe"
+    assert "no longer on disk" in items[bad_id]["why"]
+
+
+def test_remote_dataset_paths_are_never_stat_checked(monkeypatch, tmp_path):
+    """CEILING: a by-reference dataset's home path lives on ANOTHER machine, so
+    stat'ing it locally would report every remote dataset as missing. A site
+    means hands off — its verdict comes from the durable declaration."""
+    monkeypatch.setattr(scfg, "list_declared_sites",
+                        lambda: [{"name": "siteA", "config": {"durable": True}}])
+    rid = _ds_at("remote-home", "/scratch/nonexistent/on/this/box.parquet",
+                 home={"site": "siteA", "path": "/scratch/nonexistent/on/this/box.parquet"})
+    items = {i["entity_id"]: i for i in lg._dataset_items(lg._durable_map())}
+    assert items[rid]["state"] == "safe"
+    assert "durable" in items[rid]["why"]
+
+
+def test_recorded_drift_still_wins_over_the_disk_check(monkeypatch, tmp_path):
+    """Precedence: an explicit source_missing/source_changed stamp is a
+    RECORDED verdict and keeps its own wording — the disk check is only the
+    fallback for the previously-unchecked local case."""
+    monkeypatch.setattr(scfg, "list_declared_sites", lambda: [])
+    gone = tmp_path / "nope.parquet"
+    did = _ds_at("stamped", gone, source_missing=True)
+    items = {i["entity_id"]: i for i in lg._dataset_items(lg._durable_map())}
+    assert items[did]["state"] == "changed"
+    assert "gone or unreachable" in items[did]["why"]
+
+
+def test_probe_error_does_not_manufacture_a_missing_verdict(monkeypatch, tmp_path):
+    """WIDE — the degenerate environment: a permissions/OS error must not turn
+    into "your data is gone". The bug being fixed is a FALSE safe; a false
+    alarm is its own dishonesty."""
+    monkeypatch.setattr(scfg, "list_declared_sites", lambda: [])
+    import os as _os
+    monkeypatch.setattr(_os.path, "exists",
+                        lambda p: (_ for _ in ()).throw(OSError("EPERM")))
+    eid = _ds_at("unreadable", tmp_path / "x.parquet")
+    items = {i["entity_id"]: i for i in lg._dataset_items(lg._durable_map())}
+    assert items[eid]["state"] == "safe", "a probe error must not read as missing"
+
+
+def test_relative_artifact_paths_are_left_alone(monkeypatch):
+    """A non-absolute artifact_path is registry-relative; this check has no
+    business judging it."""
+    monkeypatch.setattr(scfg, "list_declared_sites", lambda: [])
+    eid = _ds_at("relative", "data/table.parquet")
+    items = {i["entity_id"]: i for i in lg._dataset_items(lg._durable_map())}
+    assert items[eid]["state"] == "safe"

@@ -25,6 +25,7 @@ The YAML contract:
 """
 from __future__ import annotations
 
+import os
 from typing import Any, Callable, Optional
 
 from mcp.server.fastmcp import FastMCP
@@ -329,6 +330,53 @@ def _agent_tools_for(entity_type: str) -> list[str]:
     if not spec:
         return []
     return list((spec.creation or {}).get("agent_tools") or [])
+
+
+def _fetch_remote_view_file(path: str):
+    """`(local_Path, note)` for a file that lives on a REMOTE site, or `(None, note)`.
+
+    `view_artifact` needs bytes on THIS filesystem. When local resolution fails,
+    the path may still name a Run output on another machine — the usual case for
+    a figure a remote step just wrote. Resolve it through the Run graph and pull
+    it over the preview channel (`read_run_file` → weft `run_file_read`, base64,
+    8 MB cap), cached under the project's artifacts area so a re-view is free.
+
+    Deliberately the PREVIEW channel, not transport: viewable artifacts are
+    small (figures, tables), and a file too big for it should travel as a
+    dataset (`register_dataset` → mirror), not through a view call. A truncated
+    read is refused rather than rendered — half a PNG is not a figure."""
+    from pathlib import Path as _P
+    if not path:
+        return None, ""
+    try:
+        from content.bio.lifecycle.runs import (read_run_file,
+                                                resolve_project_run_output_located)
+        located = resolve_project_run_output_located(path)
+        if located is None:
+            return None, ""
+        run_id, _abs, site, size, is_remote = located
+        if not is_remote:
+            return None, ""          # local output the disk resolver already missed
+        rel = _P(path).name
+        data, truncated, total = read_run_file(run_id, rel)
+        if data is None:
+            return None, (f"It resolves to a Run output on {site!r}, but its bytes "
+                          f"could not be read from there (the file may have been "
+                          f"swept). Keep the Run's outputs, or register it as a dataset.")
+        if truncated:
+            return None, (f"It is on {site!r} and is too large for the view channel "
+                          f"({total} bytes > 8 MB). Register it as a dataset and "
+                          f"mirror it instead of viewing it inline.")
+        from core.config import project_artifacts_dir
+        from core.projects import current_project_id
+        dest = _P(project_artifacts_dir(current_project_id())) / "_remote_view" / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_suffix(dest.suffix + f".partial.{os.getpid()}")
+        tmp.write_bytes(data)
+        os.replace(tmp, dest)        # atomic: never a half-written cached view
+        return dest, f"fetched from {site}"
+    except Exception as e:  # noqa: BLE001 — a fetch attempt must not break the tool
+        return None, f"(remote lookup failed: {type(e).__name__})"
 
 
 def _resolve_view_path(path: str):
@@ -1105,11 +1153,23 @@ def register_entity_ops_tools(mcp: FastMCP) -> None:
         else:
             disk = _resolve_view_path(path)
             if disk is None:
-                return {"error": f"artifact not found for path {path!r} "
-                                 f"(looked under the active project's "
-                                 f"work/artifacts/data area; pass an "
-                                 f"/artifacts/<pid>/<name> URL or an absolute "
-                                 f"path for files outside it)"}
+                # Not on THIS filesystem. Before refusing, ask the Run graph —
+                # the file may be a run output sitting on a remote site, which
+                # is the common shape for a figure a remote step just wrote.
+                # This tool had no site-aware branch at all (unlike
+                # get_viewer_url), so it refused such paths outright and the
+                # workaround was submitting a WHOLE EXTRA REMOTE JOB whose only
+                # purpose was to copy the image into the harvest path
+                # (live 2026-07-26, for a 249 KB png).
+                disk, remote_note = _fetch_remote_view_file(path)
+                if disk is None:
+                    return {"error": f"artifact not found for path {path!r} "
+                                     f"(looked under the active project's "
+                                     f"work/artifacts/data area, and among this "
+                                     f"project's remote Run outputs; pass an "
+                                     f"/artifacts/<pid>/<name> URL or an absolute "
+                                     f"path for files outside it)"
+                                     + (f" {remote_note}" if remote_note else "")}
 
         if not disk.exists():
             return {"error": f"artifact missing on disk: {disk}"}

@@ -44,6 +44,8 @@ FILES=(
   tests/test_capability_install_conflict.py
   tests/test_env_session_repair.py
   tests/test_entity_search.py
+  tests/test_remote_view_artifact.py
+  tests/test_output_hygiene.py
   tests/test_dataset_mirror.py
   tests/test_location_surfacing.py
   tests/test_dataset_scratch_binding.py
