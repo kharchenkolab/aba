@@ -296,6 +296,8 @@ def test_ensure_capability_miss_returns_candidates_when_search_hits():
     ]
     with patch("core.catalog.resolve_capability",
                return_value=None), \
+         patch("core.compute.env_packs.packs_providing", return_value=[]), \
+         patch("core.compute.env_packs.import_names_for_package", return_value=[]), \
          patch("content.bio.tools.discovery._search_external_for_name",
                return_value=fake_cands):
         out = ensure_capability({"name": "Seurat"})
@@ -312,6 +314,8 @@ def test_ensure_capability_miss_returns_not_found_when_search_empty():
     but with a richer note (mentions the sources searched)."""
     with patch("core.catalog.resolve_capability",
                return_value=None), \
+         patch("core.compute.env_packs.packs_providing", return_value=[]), \
+         patch("core.compute.env_packs.import_names_for_package", return_value=[]), \
          patch("content.bio.tools.discovery._search_external_for_name",
                return_value=[]):
         out = ensure_capability({"name": "definitely-not-real-xyz"})
@@ -373,6 +377,8 @@ def test_nonimportable_uncatalogued_falls_through_to_candidates():
     external search."""
     with patch("core.catalog.resolve_capability", return_value=None), \
          patch("core.exec.verify.verify_python_imports", return_value=(False, {"foo": "no"})), \
+         patch("core.compute.env_packs.packs_providing", return_value=[]), \
+         patch("core.compute.env_packs.import_names_for_package", return_value=[]), \
          patch("content.bio.tools.discovery._search_external_for_name",
                return_value=[{"source": "pypi", "archetype": "library", "package": "foo"}]):
         out = ensure_capability({"name": "foobarbaz"})
@@ -387,6 +393,8 @@ def test_candidates_response_is_reframed_positive_with_collision_caution():
              "summary": "Python implementation of lstar automata learning algorithm."}]
     with patch("core.catalog.resolve_capability", return_value=None), \
          patch("core.exec.verify.verify_python_imports", return_value=(False, {})), \
+         patch("core.compute.env_packs.packs_providing", return_value=[]), \
+         patch("core.compute.env_packs.import_names_for_package", return_value=[]), \
          patch("content.bio.tools.discovery._search_external_for_name", return_value=fake):
         out = ensure_capability({"name": "lstar"})
     assert out["status"] == "candidates"
