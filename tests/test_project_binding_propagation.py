@@ -176,6 +176,71 @@ def test_the_substrate_sync_bridge_keeps_the_binding(globals_point_elsewhere):
         f"the substrate bridge lost the project binding: {seen}"
 
 
+def test_the_background_job_lane_binds_its_project(globals_point_elsewhere, monkeypatch):
+    """The job WORKER is global; the WORK is per-project. Without a binding
+    around the job body every ambient read inside resolves to the process-global.
+
+    Live (2026-07-27): job continuations from a finished sweep kept writing exec
+    records into whatever project the NEXT sweep had just created. The calls that
+    take project_id explicitly were fine; the ambient reads deeper in were not —
+    which is why passing the id to the entry points was not enough.
+    """
+    from core.jobs import runner
+
+    seen: list = []
+
+    async def _inner(job_id, project_id, job):
+        seen.append(_probe())
+
+    monkeypatch.setattr(runner, "_run_one_inner", _inner)
+    monkeypatch.setattr(runner, "get_job",
+                        lambda jid, project_id=None: {"status": "queued",
+                                                      "params": {}, "id": jid})
+
+    asyncio.run(runner._run_one("job_x", BOUND_PID))
+    assert seen and _sees_bound(seen[0]), f"job body ran unbound: {seen}"
+
+
+def test_a_legacy_job_row_takes_its_project_from_params(globals_point_elsewhere,
+                                                        monkeypatch):
+    """WIDE — the shape that has no dequeued project_id: older rows carry it in
+    params, and that path must bind too rather than silently running ambient."""
+    from core.jobs import runner
+
+    seen: list = []
+
+    async def _inner(job_id, project_id, job):
+        seen.append(_probe())
+
+    monkeypatch.setattr(runner, "_run_one_inner", _inner)
+    monkeypatch.setattr(runner, "get_job",
+                        lambda jid, project_id=None: {
+                            "status": "queued", "id": jid,
+                            "params": {"project_id": BOUND_PID}})
+
+    asyncio.run(runner._run_one("job_y"))      # no project_id argument
+    assert seen and _sees_bound(seen[0]), f"legacy row ran unbound: {seen}"
+
+
+def test_a_job_with_no_project_anywhere_still_runs(globals_point_elsewhere,
+                                                   monkeypatch):
+    """CEILING: bind(None) is a documented no-op. A job that names no project
+    must still execute (ambient), not raise or be skipped."""
+    from core.jobs import runner
+
+    ran: list = []
+
+    async def _inner(job_id, project_id, job):
+        ran.append(True)
+
+    monkeypatch.setattr(runner, "_run_one_inner", _inner)
+    monkeypatch.setattr(runner, "get_job",
+                        lambda jid, project_id=None: {"status": "queued",
+                                                      "params": {}, "id": jid})
+    asyncio.run(runner._run_one("job_z"))
+    assert ran == [True]
+
+
 def test_kwargs_and_args_are_passed_through():
     """The helpers wrap the callable twice (partial∘partial); a signature slip
     would only show up at runtime deep in a tool call."""

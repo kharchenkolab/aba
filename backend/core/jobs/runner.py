@@ -525,7 +525,24 @@ async def _finalize_job(job: dict, result_obj: dict, lookup_pid: str | None,
 
 
 async def _run_one(job_id: str, project_id: str | None = None) -> None:
+    """Run one background job. Wrapped in _run_one_bound so the whole body —
+    execution, harvest, provenance, finalize — runs with the job's project BOUND.
+
+    Without the binding every ambient project read inside resolves to the
+    PROCESS-GLOBAL, which any concurrent project switch moves. Live
+    (2026-07-27): job continuations from a finished sweep kept writing exec
+    records into whatever project the NEXT sweep had just created — the calls
+    that take project_id explicitly were fine, the ambient reads deeper in were
+    not. The worker is global; the work is per-project.
+    """
+    from core import projects as _projects_bind
     job = get_job(job_id, project_id=project_id)
+    pid_for_bind = project_id or ((job or {}).get("params") or {}).get("project_id")
+    with _projects_bind.bind(str(pid_for_bind) if pid_for_bind else None):
+        return await _run_one_inner(job_id, project_id, job)
+
+
+async def _run_one_inner(job_id: str, project_id: str | None, job: dict | None) -> None:
     if not job:
         # Job row vanished between enqueue and run (only really possible if a
         # test wiped the DB out from under us). Skip silently — no row to
