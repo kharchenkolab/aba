@@ -374,12 +374,26 @@ eventual routing table (§5), and each teaches the salience model
   → trail · → question · → new trail. Users who know the classic UI's
   pin already know this gesture; the Record adds destinations, not a
   new concept. (Cousin of the section pin, §14.6 — both mean "this
-  stays.")
+  stays.") Two spans, one verb:
+  - *On artifacts* — figures, tables, whole output cells, which the
+    classic pin already covers — **pin implies keep**: the pinned
+    artifact gains an edge, leaves the leftover set, and never lapses.
+    Retention is derived, not a second gesture.
+  - *On an entire answer* the Record makes pin more meaningful than
+    chat ever could: an answer is often the agent's reasoning in
+    miniature — an interpretation, a caveat, a methodological argument
+    — and pinning it says *this reasoning must not evaporate into the
+    transcript*. The agent proposes the right form for what it pinned
+    — a note, a trail fragment, the seed of an addendum or claim —
+    while the pin stamps the turn: provenance for whatever prose it
+    becomes.
 - **→ plan** — "later." A planned item under the relevant question
   (§8's deferral verb, reachable from inside the conversation).
-- **keep** *(artifacts)* — retention decided at the moment of seeing,
-  not at the sweep.
-- **⌖ hold** — onto the desk for two-locus work (unchanged).
+- **⌖ hold** — working memory, *not* a record write: parks the element
+  on the desk for two-locus work and evaporates at session close;
+  nothing enters the record. The one verb that is deliberately not a
+  synonym of pin — pin is permanent and files, hold is transient and
+  vanishes.
 - **draft claim** — "formalize this": invokes the record-writer on the
   statement; the draft goes to the inbox like any claim draft — this
   one IS a decision, so the propose→ratify gate holds.

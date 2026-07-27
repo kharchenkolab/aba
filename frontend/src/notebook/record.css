@@ -910,7 +910,8 @@ input { font: inherit; }
 .gest {
   display: flex; gap: 6px; flex-wrap: wrap;
   padding: 2px 0 0 2px;
-  opacity: 0; transition: opacity 0.12s ease;
+  /* quietly present, loud on hover — discoverable without shouting */
+  opacity: 0.35; transition: opacity 0.12s ease;
 }
 .wmsg:hover .gest { opacity: 1; }
 .gest button {

@@ -251,9 +251,9 @@ describe('workflow storyboard', () => {
     // dispute another statement: the anti-gesture is remembered
     fireEvent.click(getAllByTitle(/anti-gesture/)[0])
     getByText(/will not be cited without the dispute/)
-    // keep a figure at the moment of seeing
-    fireEvent.click(getAllByText('keep ✓')[0])
-    getByText(/kept ✓ durably/)
+    // pin an artifact: implies keep — retention derived, no second verb
+    fireEvent.click(getAllByText('pin')[0])
+    getByText(/implies keep: never lapses/)
     // receipts are undoable — the bar returns, other verbs available again
     fireEvent.click(getAllByText('undo')[0])
     fireEvent.click(getAllByText('mark')[0])

@@ -170,12 +170,10 @@ export default function WorkPanel({ panel, onClose, onAdvance, onExpand, continu
                 )}
                 {m.fig && (
                   <>
-                    <button title="retention, decided at the moment of seeing — kept durably, not left to the sweep"
-                            onClick={() => gesture(i, 'kept ✓ durably')}>keep ✓</button>
-                    <button title="the pin you already know (keep_message) — births a note pointed at this figure, turn-stamped"
-                            onClick={() => gesture(i, 'pinned → note · pointed at this figure')}>pin</button>
-                    <button title="park it on the desk for two-locus work; clears at session close"
-                            onClick={() => gesture(i, '⌖ held on the desk')}>⌖ hold</button>
+                    <button title="the pin you already know — works on figures, tables, whole output cells. Births a note pointed at it, turn-stamped — and implies keep: a pinned artifact gains an edge, leaves the leftover set, never lapses (retention is derived, not a second gesture)"
+                            onClick={() => gesture(i, 'pinned — noted · implies keep: never lapses')}>pin</button>
+                    <button title="working memory, NOT a record write — parks it on the desk for two-locus work and evaporates at session close; nothing enters the record"
+                            onClick={() => gesture(i, '⌖ held on the desk — evaporates at close')}>⌖ hold</button>
                   </>
                 )}
               </div>
