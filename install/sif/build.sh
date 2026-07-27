@@ -267,6 +267,28 @@ DEF="$STAGE/aba-$PROFILE.def"
   echo "        install -m 0755 \"$STAGE/which\" \"\$APPTAINER_ROOTFS/usr/bin/which\""
   echo "        chmod \"\$_m\" \"\$APPTAINER_ROOTFS/usr/bin\""
   echo "    fi"
+  # The conda env(s) are copied HERE rather than via %files, because %files
+  # DEREFERENCES symlinks and this tree is 1332 of them: every
+  # `libfoo.so -> libfoo.so.X.Y`, plus conda-forge python's own
+  # `lib/python3.1 -> python3.12` (a shim for build tools that derive the stdlib
+  # dir as `'python' + sys.version[:3]` — correct through 3.9, "3.1" from 3.10 on).
+  # Dereferenced, those 1332 links materialize 486 MB of duplicate content on top
+  # of an 831 MB env — libopenblas 40M, libicudata 32M, libpython 30M, and
+  # python3.1's entire 321 MB site-packages tree, which is on no sys.path and
+  # referenced by nothing in the image (verified: no pkgconfig, cmake, script or
+  # sysconfigdata hit). squashfs dedups the DATA, so the image barely moved and
+  # this went unnoticed — but the build still writes ~1.3 GB where 831 MB would
+  # do, and every duplicate costs an inode + directory entry.
+  # `cp -a` implies -d, so links stay links, exactly as conda packaged them.
+  # Nothing else staged contains a single symlink, so the rest stays on %files.
+  if [ "$PROFILE" = "fat" ] || [ "$PROFILE" = "weft" ]; then
+    echo "    mkdir -p \"\$APPTAINER_ROOTFS/opt/aba-venv\""
+    echo "    cp -a \"$STAGE/aba-venv/.\" \"\$APPTAINER_ROOTFS/opt/aba-venv/\""
+  fi
+  if [ "$PROFILE" = "fat" ]; then
+    echo "    mkdir -p \"\$APPTAINER_ROOTFS/opt/aba-envs/tools\""
+    echo "    cp -a \"$STAGE/aba-tools/.\" \"\$APPTAINER_ROOTFS/opt/aba-envs/tools/\""
+  fi
   echo ""
   echo "%files"
   echo "    $STAGE/backend /opt/aba/backend"
@@ -279,8 +301,7 @@ DEF="$STAGE/aba-$PROFILE.def"
   [ -d "$STAGE/bin" ] && echo "    $STAGE/bin /opt/aba/bin"
   # %files is an EXPLICIT list — staging a dir above does nothing without a line here.
   [ -d "$STAGE/scripts" ] && echo "    $STAGE/scripts /opt/aba/scripts"
-  { [ "$PROFILE" = "fat" ] || [ "$PROFILE" = "weft" ]; } && echo "    $STAGE/aba-venv /opt/aba-venv"
-  [ "$PROFILE" = "fat" ] && echo "    $STAGE/aba-tools /opt/aba-envs/tools"
+  # (aba-venv / aba-tools are copied in %setup above — see the symlink note there.)
   # weft substrate: pixi binaries + the base env packs (weft is baked INTO the venv
   # above, so no separate copy). resolve_pixi() finds /opt/aba/tools/pixi/bin.
   [ -d "$STAGE/pixi/bin" ] && echo "    $STAGE/pixi/bin /opt/aba/tools/pixi/bin"
