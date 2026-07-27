@@ -81,6 +81,18 @@ FILES=(
   tests/test_transport_oracle.py
   tests/test_live_surface_probe_eval.py
   tests/test_sweep_baseline_honesty.py
+  # backend/tests/ — the env-realization + runtime-shape guards. This whole
+  # DIRECTORY was unrunnable from the repo root (its files import `core.*`,
+  # which needs backend/ on sys.path), so none of it had ever been listed here
+  # and two guards in test_named_envs_ready.py had been red since
+  # _run_realize_task grew a second return value, with nothing to notice.
+  # backend/tests/conftest.py now bootstraps the path for the directory.
+  backend/tests/test_realize_verb.py
+  backend/tests/test_named_envs_ready.py
+  backend/tests/test_named_envs_run_in.py
+  backend/tests/test_config_runtime_dir.py
+  backend/tests/test_nextflow_weft_lane.py
+  backend/tests/test_slurm_entry_activation.py
   # runtime translation
   tests/test_openai_runtime_translation.py
   tests/test_openai_runtime_skeleton.py

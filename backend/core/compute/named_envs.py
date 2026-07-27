@@ -24,6 +24,7 @@ base until the controller-SIF deploy model lands (W3 re-sequencing, agreed
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import shlex
@@ -507,12 +508,63 @@ def _realize_probe(language: str) -> str:
     return "Rscript -e 'invisible()'" if language == "r" else "python -c pass"
 
 
+def _realize_via_verb(env_id: str, ad, timeout_s: int, site: str):
+    """Realize through weft's `env_realize(env_id, site)` — the honest primitive
+    for this. Returns `_run_realize_task`'s `(state, typed_error)` shape, or None
+    when the substrate predates the verb so the caller falls back.
+
+    Everything the task lane below does to make a PLACEBO behave — a command that
+    genuinely exercises the interpreter, `force=True` to dodge the memo — exists
+    only because running a task was once the only public way to force a
+    realization. The verb needs none of it: ready-and-intact is a no-op, and a
+    missing/demoted/evicted realization rebuilds from the stored lock through the
+    same path task staging uses, minus the task.
+
+    Two properties are preserved DELIBERATELY, because dropping either is silent:
+      * the `timeout_s` bound — the task lane polled to a deadline, and the verb
+        blocks, so a realize that never returns would otherwise hang a kernel
+        start forever. Only this caller is released; weft's work continues, the
+        same as when the poll loop gave up.
+      * the TYPED error. `ensure_ready` is what the kernel lane calls before
+        `kernel_start`, and its `env.platform_mismatch` is what triggers the lazy
+        cross-platform re-lock. Handing the code back in the task lane's dict
+        shape keeps that surface byte-identical either way — flatten it and the
+        kernel lane silently loses every cross-platform site (found live once
+        already, on the aarch64 slurm fixture)."""
+    fn = getattr(ad, "env_realize", None)
+    if fn is None:
+        return None                     # substrate predates the verb
+    try:
+        _sync(asyncio.wait_for(fn(env_id, site), timeout_s))
+        return "DONE", None
+    except asyncio.TimeoutError:
+        return "TIMEOUT", None
+    except ComputeError as e:
+        return "FAILED", {"error": e.code, "detail": e.detail, "hints": e.hints}
+
+
 def _run_realize_task(env_id: str, ad, timeout_s: int, language: str,
                       probe: Optional[str] = None, site: str = "local") -> str:
-    """Submit an env-exercising task; return its terminal state. `probe` overrides
-    the language default (e.g. a JVM CLI tool has neither python nor Rscript — it
-    runs `<tool> --version`); the command MUST exercise the env or weft resolves
-    it from the system PATH and skips materialization (the E1 finding).
+    """Realize the env on `site`; return (terminal state, typed error or None).
+
+    Prefers weft's `env_realize` (see `_realize_via_verb`); the placebo task
+    below is the FALLBACK for a substrate without it — aba also runs against an
+    older weft in cluster-personal installs.
+
+    An EXPLICIT `probe` keeps the task lane even when the verb is available. The
+    verb realizes the env, which is all a plain realization needs — but a caller
+    that names a command is asserting that THAT command must run inside THIS env,
+    and at least one relies on the side effect rather than the exit code:
+    `ensure_tool_env` probes the nextflow env with `nextflow -version`, and
+    nextflow fetches its own distribution JARs on first invocation. Realizing
+    without ever running it would move that download to the first real pipeline.
+    Nothing reads the probe's OUTPUT (only the task's terminal state), so this is
+    about the side effect, not verification.
+
+    `probe` overrides the language default (e.g. a JVM CLI tool has neither python
+    nor Rscript — it runs `<tool> --version`); the command MUST exercise the env or
+    weft resolves it from the system PATH and skips materialization (the E1
+    finding).
 
     `force=True` is LOAD-BEARING: weft memoizes task results by (command, env,
     inputs) hash, so a repeated realize probe (same fixed command + EnvID) would
@@ -521,6 +573,10 @@ def _run_realize_task(env_id: str, ad, timeout_s: int, language: str,
     memo so the task always runs, and weft's runner rebuilds a missing prefix
     from the lock as a side effect (found live: the eviction/repair path silently
     no-op'd for exactly this reason)."""
+    if probe is None:
+        via = _realize_via_verb(env_id, ad, timeout_s, site)
+        if via is not None:
+            return via
     sub = _sync(ad.task_submit({"command": probe or _realize_probe(language),
                                 "env": env_id, "site": site,
                                 "label": f"realize {env_id[:16]}"}, force=True))
