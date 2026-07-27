@@ -46,6 +46,9 @@ from pathlib import Path
 BASE = "http://127.0.0.1:8000"
 RUNTIME = Path.home() / ".aba" / "runtime" / "projects"
 RESULTS: list = []
+# (pid, tid) -> captures from each drive(), so friction_sweep can report
+# transport-level findings (a stream that never closed) alongside the rest.
+_LAST_CAPS: dict = {}
 
 
 # ── transport ────────────────────────────────────────────────────────────────
@@ -89,9 +92,32 @@ def drive(pid: str, tid: str, text: str, timeout: int = 2400) -> dict:
                     cap["run_id"] = ev.get("run_id")
                 elif t in ("error", "cancelled"):
                     cap["errors"].append(str(ev.get("text") or ev.get("reason")))
+                elif t == "done":
+                    # Stop at `done` — the turn is over and that is what a
+                    # client should act on. Reading on until the socket closes
+                    # made the harness ABSORB a stream that never terminated:
+                    # three concurrent turns each finished, wrote their
+                    # messages, and left the connection ESTABLISHED for the full
+                    # 40-minute timeout, so a real server bug looked like a slow
+                    # scenario. An instrument must surface a hang, not wait it
+                    # out — so record whether the stream also CLOSED, and keep
+                    # going either way.
+                    cap["done"] = True
+                    try:
+                        r.fp.raw._sock.settimeout(3)   # type: ignore[attr-defined]
+                    except Exception:  # noqa: BLE001 — cannot poke the socket:
+                        break          # record NOTHING rather than a false finding
+                    try:
+                        # b"" == the server closed. Anything else, or a timeout,
+                        # means the connection is still open after `done`.
+                        cap["stream_not_closed"] = bool(r.readline())
+                    except Exception:  # noqa: BLE001 — read timed out: still open
+                        cap["stream_not_closed"] = True
+                    break
     except Exception as e:  # noqa: BLE001 — a dead turn is a FINDING, not a crash
         cap["errors"].append(f"{type(e).__name__}: {e}")
     cap["text"] = "".join(cap["text"]).strip()
+    _LAST_CAPS.setdefault((pid, tid), []).append(cap)
     return cap
 
 
@@ -294,6 +320,12 @@ def friction_sweep(pid: str, tid: str) -> list[dict]:
                 out.append({"kind": meaning, "signature": sig,
                             "excerpt": _excerpt(blob, sig)})
                 break
+    for cap in (_LAST_CAPS.get((pid, tid)) or []):
+        if cap.get("stream_not_closed"):
+            out.append({"kind": "SSE stream did not close after done",
+                        "signature": "stream", "excerpt":
+                        "the turn finished but the connection stayed open — a "
+                        "browser tab would never leave the streaming state"})
     fresh = sum(1 for r in res if "Fresh kernel" in str(r.get("stdout", "")))
     if fresh > 1:
         out.append({"kind": "kernel restarted mid-scenario (state lost)",
