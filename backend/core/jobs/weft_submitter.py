@@ -36,6 +36,39 @@ _RESULT_READ_RETRIES = 5
 _DETACHED_FETCH_BYTES = 50 * 1024 * 1024
 
 
+def _typed_task_error(raw) -> Optional[str]:
+    """Render weft's task-row error payload as an agent-facing message, or None.
+
+    The payload is `{error, detail, hints, stage}` (sometimes a JSON string).
+    Rendering it beats the caller's generic "infra failure?" guess in every case
+    where it exists: the code names the CLASS and the hints usually name the
+    FIX. Returns None for an absent/unparseable payload so the caller keeps its
+    own wording rather than printing an empty verdict."""
+    if not raw:
+        return None
+    payload = raw
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except Exception:  # noqa: BLE001 — a bare string is still better than nothing
+            return payload[:400] or None
+    if not isinstance(payload, dict) or not payload.get("error"):
+        return None
+    code = payload.get("error")
+    detail = (payload.get("detail") or "").strip()
+    msg = f"the job failed on the compute substrate: {code}"
+    if detail:
+        msg += f" — {detail}"
+    hints = payload.get("hints")
+    if isinstance(hints, dict):
+        # surface the fix-shaped hints; weft puts the lever in one of these
+        for key in ("suggestion", "fix", "remedy", "levers"):
+            if hints.get(key):
+                msg += f" Fix: {hints[key]}"
+                break
+    return msg
+
+
 def _mismatch_platform(e) -> Optional[str]:
     """The site's platform out of weft's env.platform_mismatch error
     ('... but site X is linux-aarch64') — drives the lazy re-lock."""
@@ -865,14 +898,31 @@ class WeftSubmitter:
             # data-plane failures get the plain-language translation
             # (misc/datasets2.md S3): staging is async, so a drifted/vanished
             # durable home lands HERE as a failed job, not at submit
+            raw_err = (rows[0] or {}).get("error")
             try:
                 from core.data.datasets import explain_data_error
-                friendly = explain_data_error((rows[0] or {}).get("error"))
+                friendly = explain_data_error(raw_err)
                 if friendly:
                     res["error"] = friendly
-                    res["error_detail"] = (rows[0] or {}).get("error")
+                    res["error_detail"] = raw_err
             except Exception:  # noqa: BLE001 — translation must never mask the failure
                 pass
+            else:
+                # NOT a data error → surface the substrate's OWN TYPED verdict
+                # instead of the generic guess above. The task row carries weft's
+                # error payload {error, detail, hints}; discarding it turned an
+                # actionable `env.platform_mismatch: env is locked for
+                # ['linux-64','osx-arm64'] but site X is linux-aarch64` (fix: use
+                # an isolated env, which re-locks) into "infra failure before the
+                # entry ran?" — so the agent blamed the site and re-submitted the
+                # identical job, which failed identically (live, 2026-07-27 on an
+                # arm64 slurm node). Same class as the env-resolution swallow:
+                # a typed diagnosis replaced by a generic one.
+                if not friendly:
+                    typed = _typed_task_error(raw_err)
+                    if typed:
+                        res["error"] = typed
+                        res["error_detail"] = raw_err
         comp = self._compute_block(wid, state)
         # the entry copies spec env_id into the result — a bare task's weft
         # manifest has none, but the SNAPSHOT identity is real (W3.4)
