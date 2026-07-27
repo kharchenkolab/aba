@@ -332,7 +332,86 @@ def _agent_tools_for(entity_type: str) -> list[str]:
     return list((spec.creation or {}).get("agent_tools") or [])
 
 
-def _fetch_remote_view_file(path: str):
+# Inline-view budget for bytes pulled off a site. A figure or a small table is
+# the point; anything larger is a dataset (register + mirror), not a view.
+_REMOTE_VIEW_CAP = 8 * 1024 * 1024
+
+
+def _cache_remote_view(name: str, data: bytes):
+    """Install fetched remote bytes under the project's artifacts area so a
+    re-view is free. Atomic — never a half-written cached view."""
+    from pathlib import Path as _P
+    from core.config import project_artifacts_dir
+    from core.projects import current_project_id
+    dest = _P(project_artifacts_dir(current_project_id())) / "_remote_view" / name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(dest.suffix + f".partial.{os.getpid()}")
+    tmp.write_bytes(data)
+    os.replace(tmp, dest)
+    return dest
+
+
+def _recent_remote_site(thread_id: str | None) -> str | None:
+    """The site of this thread's most recent REMOTE step, or None.
+
+    An absolute path carries no machine, so a bare `/home/u/w/plot.png` is
+    ambiguous on its face. In practice it is never ambiguous in context: the
+    agent is looking at a file the step it JUST ran produced. Reading the site
+    off the thread's own recent execution records turns "which machine?" into a
+    recorded fact rather than a guess, and a caller who knows better passes
+    `site=` explicitly."""
+    if not thread_id:
+        return None
+    try:
+        from core.graph import exec_records
+        rows = exec_records.list_by_thread(str(thread_id)) or []
+        for row in reversed(rows[-25:]):          # newest first
+            rec = exec_records.get(row.get("exec_id") or "") or {}
+            payload = rec.get("payload") or rec
+            site = ((payload.get("compute") or {}).get("site"))
+            if site and site != "local":
+                return str(site)
+    except Exception:  # noqa: BLE001 — inference is best-effort by definition
+        return None
+    return None
+
+
+def _read_remote_abs_file(path: str, site: str):
+    """`(bytes, note)` for an absolute path on `site`, read over the DATA PLANE.
+
+    `register_dataset(path=…, site=…)` already proves the substrate can reach an
+    arbitrary remote path; this is the same route without minting an entity:
+    `data_register(..., ingest=False)` is an identity/lookup op (no copy), then
+    the bytes come back through the ranged reader. Capped at the view budget —
+    anything bigger belongs to a dataset + mirror, not an inline view."""
+    import base64
+    from core.compute import retention
+    from core.compute.adapter import get_compute
+    reg = get_compute().sync_call("data_register", path, site=site, ingest=False)
+    ref = (reg or {}).get("ref")
+    if not ref:
+        return None, f"could not address {path!r} on {site} (no data-plane ref)"
+    size = int((reg or {}).get("bytes") or 0)
+    if size > _REMOTE_VIEW_CAP:
+        return None, (f"it is {size} bytes on {site} — too large for an inline "
+                      f"view (cap {_REMOTE_VIEW_CAP}). Register it as a dataset "
+                      f"and mirror it instead.")
+    buf, offset = bytearray(), 0
+    while True:
+        r = retention.data_read_range(ref, offset=offset, site=site)
+        n = int(r.get("nbytes") or 0)
+        if n:
+            buf.extend(base64.b64decode(r.get("bytes_b64") or ""))
+            offset += n
+        if r.get("eof") or not r.get("capped") or n == 0:
+            break
+        if offset > _REMOTE_VIEW_CAP:
+            return None, f"exceeded the inline-view cap while reading from {site}"
+    return bytes(buf), f"fetched from {site}"
+
+
+def _fetch_remote_view_file(path: str, thread_id: str | None = None,
+                            site: str | None = None):
     """`(local_Path, note)` for a file that lives on a REMOTE site, or `(None, note)`.
 
     `view_artifact` needs bytes on THIS filesystem. When local resolution fails,
@@ -344,7 +423,19 @@ def _fetch_remote_view_file(path: str):
     Deliberately the PREVIEW channel, not transport: viewable artifacts are
     small (figures, tables), and a file too big for it should travel as a
     dataset (`register_dataset` → mirror), not through a view call. A truncated
-    read is refused rather than rendered — half a PNG is not a figure."""
+    read is refused rather than rendered — half a PNG is not a figure.
+
+    TWO tiers, cheapest first:
+
+      1. RECORDED RUN OUTPUT — the path names a file a Run produced; read it off
+         that run's target with the preview verb. No site guessing: the run
+         knows where it ran.
+      2. ARBITRARY ABSOLUTE PATH on a site — a file the step wrote somewhere of
+         its own choosing, which is common and until now simply un-viewable
+         (live thr_a1f7f687: five figures in a hand-picked directory, all five
+         refused). Addressed over the data plane with the site taken from
+         `site=` if given, else inferred from this thread's most recent remote
+         step. Tier 1 stays first because it needs no inference at all."""
     from pathlib import Path as _P
     if not path:
         return None, ""
@@ -353,8 +444,19 @@ def _fetch_remote_view_file(path: str):
                                                 resolve_project_run_output_located)
         located = resolve_project_run_output_located(path)
         if located is None:
-            return None, ""
-        run_id, _abs, site, size, is_remote = located
+            # ── tier 2: an absolute path on a site we can name ──────────────
+            if not os.path.isabs(path):
+                return None, ""
+            target_site = site or _recent_remote_site(thread_id)
+            if not target_site:
+                return None, ""
+            data, note = _read_remote_abs_file(path, target_site)
+            if data is None:
+                return None, (f"That looks like a path on {target_site}, but "
+                              f"{note}." if note else "")
+            return _cache_remote_view(_P(path).name, data), note
+        run_id, _abs, site_of_run, size, is_remote = located
+        site = site_of_run
         if not is_remote:
             return None, ""          # local output the disk resolver already missed
         rel = _P(path).name
@@ -367,14 +469,7 @@ def _fetch_remote_view_file(path: str):
             return None, (f"It is on {site!r} and is too large for the view channel "
                           f"({total} bytes > 8 MB). Register it as a dataset and "
                           f"mirror it instead of viewing it inline.")
-        from core.config import project_artifacts_dir
-        from core.projects import current_project_id
-        dest = _P(project_artifacts_dir(current_project_id())) / "_remote_view" / rel
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        tmp = dest.with_suffix(dest.suffix + f".partial.{os.getpid()}")
-        tmp.write_bytes(data)
-        os.replace(tmp, dest)        # atomic: never a half-written cached view
-        return dest, f"fetched from {site}"
+        return _cache_remote_view(rel, data), f"fetched from {site}"
     except Exception as e:  # noqa: BLE001 — a fetch attempt must not break the tool
         return None, f"(remote lookup failed: {type(e).__name__})"
 
@@ -1070,6 +1165,7 @@ def register_entity_ops_tools(mcp: FastMCP) -> None:
     def view_artifact(entity_id: str | None = None,
                       path: str | None = None,
                       page: int = 1,
+                      site: str | None = None,
                       aba_ctx_id: str | None = None) -> dict:
         """LOOK at an artifact — image, PDF, table, or short text doc —
         so the agent can VERIFY what's actually in it rather than
@@ -1161,7 +1257,9 @@ def register_entity_ops_tools(mcp: FastMCP) -> None:
                 # workaround was submitting a WHOLE EXTRA REMOTE JOB whose only
                 # purpose was to copy the image into the harvest path
                 # (live 2026-07-26, for a 249 KB png).
-                disk, remote_note = _fetch_remote_view_file(path)
+                disk, remote_note = _fetch_remote_view_file(
+                    path, thread_id=(peek_ctx(aba_ctx_id) or {}).get("thread_id"),
+                    site=site)
                 if disk is None:
                     return {"error": f"artifact not found for path {path!r} "
                                      f"(looked under the active project's "

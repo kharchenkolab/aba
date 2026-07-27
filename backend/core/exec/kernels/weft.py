@@ -53,8 +53,23 @@ _STATUS_INTERVAL_S = 1.0
 _CANCEL_GRACE_S = config.settings.kernel_cancel_grace_s.get()
 
 
-def _reticulate_pin_r() -> str:
-    """Pin reticulate to a REAL interpreter in every R kernel.
+def _reticulate_pin_r(remote: bool = False) -> str:
+    """Pin reticulate to a REAL interpreter in every LOCAL R kernel.
+
+    REMOTE kernels get NOTHING (`remote=True` → ""), because every candidate
+    below is a CONTROLLER path. Pinning one on another machine is worse than not
+    pinning: `/Users/…/.aba/env/bin/python` does not exist on a Linux node, so
+    reticulate is aimed at a missing binary and the failure names a path from a
+    machine the user never touched. Verified live on mendel — the R setup block
+    carried `Sys.setenv(RETICULATE_PYTHON='/Users/peter.kharchenko/.aba/env/bin/
+    python')`. The DATA_DIR/ARTIFACTS_DIR lines beside it were already
+    remote-aware; this pin was added later (2026-07-21) and never audited for
+    the remote case — the same class as the controller-`setwd` incident.
+
+    Leaving it unset on a remote kernel restores the pre-pin behaviour there
+    (reticulate may bootstrap its own interpreter). That is the honest trade: a
+    site's own Python is the site's business, and we have no way to name it from
+    here. A remote R step that needs Python should use `run_python(site=…)`.
 
     Left unset, `library(reticulate); import(...)` finds no configured Python and
     bootstraps its own: it downloads `uv`, then an interpreter, then packages —
@@ -73,6 +88,8 @@ def _reticulate_pin_r() -> str:
     """
     import sys as _sys
     from pathlib import Path
+    if remote:
+        return ""
     py = None
     try:
         from core.compute import base_env, project_env
@@ -123,7 +140,7 @@ def _weft_setup_code(lang: str, remote: bool = False) -> str:
                 f"DATA_DIR <- {str(data)!r}; ARTIFACTS_DIR <- {str(artifacts)!r}\n")
         return (f"{repoline}{dirs}WORK_DIR <- getwd()\n"
                 "Sys.setenv(DATA_DIR=DATA_DIR, ARTIFACTS_DIR=ARTIFACTS_DIR, WORK_DIR=WORK_DIR)\n"
-                + _reticulate_pin_r()
+                + _reticulate_pin_r(remote=remote)
                 + _j._harvest_helpers_r())
     dirs = ("DATA_DIR = ARTIFACTS_DIR = _os.getcwd()\n" if remote else
             f"DATA_DIR = {str(data)!r}\nARTIFACTS_DIR = {str(artifacts)!r}\n")

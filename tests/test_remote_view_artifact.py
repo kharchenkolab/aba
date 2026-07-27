@@ -123,3 +123,109 @@ def test_resolver_failure_never_breaks_the_tool(runs, monkeypatch):
 def test_empty_path_is_a_noop(runs):
     assert EO._fetch_remote_view_file("") == (None, "")
     assert runs["locates"] == []
+
+
+# ── tier 2: an ARBITRARY absolute path on a site ────────────────────────────
+#
+# Tier 1 only resolves RECORDED run outputs. A step that writes to a directory
+# of its own choosing produces files no run knows about — live thr_a1f7f687 wrote
+# five figures to a hand-picked dir and view_artifact refused all five. The path
+# carries no machine, so the site comes from `site=` or is inferred from the
+# thread's own recent remote steps.
+
+@pytest.fixture()
+def dataplane(monkeypatch):
+    """Fake data-plane: register (identity, no copy) + ranged read."""
+    import base64
+    from core.compute import retention
+    state = {"registered": [], "bytes": b"", "size": None, "reads": 0}
+
+    class _Comp:
+        def sync_call(self, verb, *a, **kw):
+            assert verb == "data_register", verb
+            state["registered"].append({"path": a[0], **kw})
+            n = state["size"] if state["size"] is not None else len(state["bytes"])
+            return {"ref": "ref-x", "bytes": n}
+    monkeypatch.setattr("core.compute.adapter.get_compute", lambda: _Comp())
+
+    def _read(ref, rel=None, *, offset=0, length=None, site=None, rels=None):
+        state["reads"] += 1
+        chunk = state["bytes"][offset:offset + 4]
+        return {"nbytes": len(chunk), "size": len(state["bytes"]),
+                "eof": offset + len(chunk) >= len(state["bytes"]),
+                "capped": offset + len(chunk) < len(state["bytes"]),
+                "bytes_b64": base64.b64encode(chunk).decode()}
+    monkeypatch.setattr(retention, "data_read_range", _read)
+    return state
+
+
+def test_explicit_site_reaches_an_arbitrary_remote_path(runs, dataplane):
+    """THE gap: not a run output, but we know the machine."""
+    runs["located"] = None
+    png = b"\x89PNG\r\n\x1a\n" + b"z" * 40
+    dataplane["bytes"] = png
+    got, note = EO._fetch_remote_view_file(
+        "/home/u/hand/picked/umap_ref_celltype_l1.png", site="mendel")
+    assert got is not None and got.read_bytes() == png
+    assert dataplane["registered"][0]["site"] == "mendel"
+    assert dataplane["registered"][0]["ingest"] is False, \
+        "a VIEW must not copy the dataset — identity only"
+    assert "mendel" in note
+    assert dataplane["reads"] > 1, "ARMED: multi-chunk read actually looped"
+
+
+def test_site_is_inferred_from_the_threads_recent_remote_step(runs, dataplane, monkeypatch):
+    """An absolute path names no machine, but the agent is looking at a file the
+    step it just ran produced — so the thread's own records answer it."""
+    runs["located"] = None
+    dataplane["bytes"] = b"data"
+    from core.graph import exec_records
+    monkeypatch.setattr(exec_records, "list_by_thread",
+                        lambda t, **k: [{"exec_id": "e1"}, {"exec_id": "e2"}])
+    monkeypatch.setattr(exec_records, "get", lambda eid: (
+        {"payload": {"compute": {"site": "mendel"}}} if eid == "e2"
+        else {"payload": {"compute": {"site": "local"}}}))
+    got, note = EO._fetch_remote_view_file("/home/u/x.png", thread_id="t1")
+    assert got is not None and "mendel" in note
+    assert dataplane["registered"][0]["site"] == "mendel"
+
+
+def test_no_site_and_no_history_declines_quietly(runs, dataplane, monkeypatch):
+    """CEILING: with nothing to infer from, do NOT guess a site — decline and
+    let the caller's not-found message stand."""
+    runs["located"] = None
+    from core.graph import exec_records
+    monkeypatch.setattr(exec_records, "list_by_thread", lambda t, **k: [])
+    got, note = EO._fetch_remote_view_file("/home/u/x.png", thread_id="t1")
+    assert got is None
+    assert dataplane["registered"] == [], "must not touch the data plane blind"
+
+
+def test_relative_paths_never_enter_the_remote_tier(runs, dataplane):
+    """CEILING: only an ABSOLUTE path can be a remote path. A bare filename is
+    the local resolver's business."""
+    runs["located"] = None
+    got, _ = EO._fetch_remote_view_file("plot.png", site="mendel")
+    assert got is None and dataplane["registered"] == []
+
+
+def test_oversize_remote_file_is_refused_before_transfer(runs, dataplane):
+    """WIDE — the budget: refuse on the REGISTERED size, before pulling bytes."""
+    runs["located"] = None
+    dataplane["bytes"] = b"x" * 32
+    dataplane["size"] = 900 * 1024 * 1024
+    got, note = EO._fetch_remote_view_file("/home/u/huge.bin", site="mendel")
+    assert got is None
+    assert "too large" in note and "mirror" in note
+    assert dataplane["reads"] == 0, "must not stream a file it will refuse"
+
+
+def test_run_output_tier_still_wins_and_needs_no_site(runs, dataplane):
+    """CEILING: a recorded run output must NOT go through the data plane — the
+    run already knows where it ran, so tier 1 stays cheaper and inference-free."""
+    png = b"\x89PNG\r\n\x1a\n"
+    runs["located"] = ("ana_1", "plot.png", "siteA", len(png), True)
+    runs["read"] = (png, False, len(png))
+    got, note = EO._fetch_remote_view_file("/whatever/plot.png", site="mendel")
+    assert got is not None and "siteA" in note
+    assert dataplane["registered"] == [], "tier 1 must not use the data plane"
