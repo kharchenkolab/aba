@@ -244,13 +244,40 @@ def friction_sweep(pid: str, tid: str) -> list[dict]:
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
         from harness.surfaces import surface_parity_failures
 
-        class _C:                      # the oracle wants a .get(url) client
+        class _C:
+            """The oracle's client contract: .get(url) → (.status_code, .content,
+            .text, .json()). RAW BYTES, because most of what it fetches is not
+            JSON — a CSV, a PNG, a range response.
+
+            An earlier shim routed through api(), which json.loads() every body.
+            Every honest 200 serving a CSV then raised JSONDecodeError, the oracle
+            recorded it as `dead_link -> 599`, and a run whose outputs served
+            perfectly reported four surface failures. The shim was LESS capable
+            than a browser, so it manufactured the failures it was built to
+            detect."""
             def get(self, url):
                 import types
-                r = api("GET", url)
+                # X-Project-Id, NOT `POST /api/projects/{pid}/open`: opening
+                # repoints the PROCESS-GLOBAL project, which is exactly the
+                # state whose drift misfiles concurrent turns' writes. An
+                # auditor must not perturb what it audits. Without any project
+                # context the durable-view route answers 404 and every run reads
+                # as a broken surface (it did, on both sites).
+                req = urllib.request.Request(
+                    BASE + url, method="GET", headers={"X-Project-Id": pid})
+                try:
+                    with urllib.request.urlopen(req, timeout=120) as r:
+                        body, code = r.read(), r.status
+                except urllib.error.HTTPError as e:
+                    body, code = e.read(), e.code
+                except Exception as e:  # noqa: BLE001 — transport failure IS a surface failure
+                    body, code = f"{type(e).__name__}: {e}".encode(), 599
+
+                def _json():
+                    return json.loads(body.decode("utf-8", "replace"))
                 return types.SimpleNamespace(
-                    status_code=200 if "_http_error" not in r else r["_http_error"],
-                    json=lambda: r, content=json.dumps(r).encode(), text=json.dumps(r))
+                    status_code=code, content=body,
+                    text=body.decode("utf-8", "replace"), json=_json)
         for f in surface_parity_failures(_C(), pid) or []:
             out.append({"kind": "consumption-surface parity", "signature": "surfaces",
                         "excerpt": str(f)[:200]})
