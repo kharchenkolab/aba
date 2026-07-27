@@ -231,9 +231,10 @@ def _fit_walltime(e) -> str | None:
 
 def for_pool(scope_key: str, lang: str, *, cwd: str, env_name: str | None,
              site: str = _LOCAL_SITE):
-    """Build a WeftKernelSession for the pool, or return None for an unknown
-    named env (the pool raises the clear error — there is no other kernel
-    transport). Three lanes: ISOLATED (a frozen named EnvID, W-K1a),
+    """Build a WeftKernelSession for the pool, or raise a TYPED `env.unknown`
+    for a named env this project does not have (typed so the run tool refuses
+    rather than relocating the step to the node's interpreter — there is no
+    other kernel transport). Three lanes: ISOLATED (a frozen named EnvID, W-K1a),
     DEFAULT (env_name=None → a live project session, W-K1b), and BARE
     (env_name='system' → no env at all, the machine's own interpreter). A
     named env is realized by the caller before the pool lock.
@@ -271,7 +272,24 @@ def for_pool(scope_key: str, lang: str, *, cwd: str, env_name: str | None,
         if env_name:
             row = named_envs.resolve(pid, env_name)
             if row is None:
-                return None            # unknown env — caller surfaces the error
+                # TYPED, so the caller REFUSES instead of relocating the step.
+                # Returning None raised a bare RuntimeError one level up, which
+                # is_env_resolution_failure(untyped_is_env=False) reads as "no
+                # kernel here" — so a step that asked for env=<name> quietly ran
+                # on the node's own interpreter instead. Live (2026-07-27,
+                # mendel): "unknown env 'cap-<pkg>'? … falling back to one-shot".
+                # The env existed; this lookup resolves `pid` from AMBIENT state,
+                # so a drifted binding makes a real env look unknown — the two
+                # defects compounded into a silent environment swap.
+                raise ComputeError(
+                    "env.unknown",
+                    f"no environment named {env_name!r} in project {pid} "
+                    f"(inspect_env() lists this project's envs)",
+                    hints={"suggestion": (
+                        "check the name with inspect_env(), or create it with "
+                        "make_isolated_env(name=..., language=..., packages=[...])"
+                        " — or pass env='system' to use the node's own "
+                        "interpreter on purpose")})
             env_id = row["env_id"]
         else:
             from core.compute import base_env, project_env

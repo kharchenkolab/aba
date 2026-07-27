@@ -658,6 +658,215 @@ def _wait_jobs_settled(pid: str, timeout_s: int = 600) -> None:
 
 # ── runner ──────────────────────────────────────────────────────────────────
 
+# ── concurrency: many threads at once against ONE compute node ──────────────
+#
+# The shape every other scenario here misses. Each of those drives ONE thread to
+# completion, so nothing crosses: a defect that only appears when two turns are
+# in flight is invisible to all of them. Two projects driven concurrently is what
+# actually surfaced the cross-project write leak (2026-07-27) — records, harvest
+# dirs and artifacts filed under a bystander project — and that only happened
+# because two SWEEPS were run at once by hand. This makes it a first-class
+# scenario so it is exercised on purpose rather than by luck.
+#
+# Two axes, because they fail differently:
+#   * CROSS-PROJECT — separate projects, separate DBs. Failure = misfiled rows
+#     (audited by regtest/harness/project_isolation.py).
+#   * SAME-PROJECT, MANY THREADS — one DB, one site, N kernels. Failure = one
+#     thread's state or outputs appearing in another's, or kernel-pool crosstalk.
+
+def _thread_body(pid, tid, site, tag, value):
+    """One thread's work: bind a distinctive value in a persistent kernel, write
+    a file named after itself, then read BOTH back. Distinctive per thread, so
+    any crosstalk is unambiguous rather than plausible."""
+    cap = drive(pid, tid,
+        f"On '{site}': set a Python variable tag = '{tag}' and n = {value}, "
+        f"then write a one-line CSV called {tag}.csv containing that tag and "
+        f"number. Report what you wrote.")
+    cap2 = drive(pid, tid,
+        f"On '{site}': print the value of tag and n from memory, and print the "
+        f"contents of {tag}.csv. Report both exactly.")
+    return cap, cap2
+
+
+def _concurrent(jobs):
+    """Run thunks concurrently and return their results in order. Threads, not
+    tasks: each drive() is a blocking HTTP call to the live server, which is what
+    a browser with several tabs open does."""
+    import threading
+    out: dict = {}
+
+    def _run(i, f):
+        try:
+            out[i] = f()
+        except Exception as e:  # noqa: BLE001 — a dead lane is a FINDING
+            out[i] = e
+
+    ts = [threading.Thread(target=_run, args=(i, f)) for i, f in enumerate(jobs)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    return [out.get(i) for i in range(len(jobs))]
+
+
+def wf_concurrent_threads_one_site(pid, tid, site, n=3):
+    """N threads in ONE project, all hitting the same compute node at once.
+
+    Not registered via @scenario: it needs its own thread fan-out, so run_one's
+    single-thread contract does not fit. Driven by run_concurrent below.
+    """
+    tags = [f"lane{i}" for i in range(n)]
+    tids = [tid] + [api("POST", "/api/threads",
+                        {"project_id": pid, "title": f"concurrent-{t}"}).get("id")
+                    for t in tags[1:]]
+    results = _concurrent([
+        (lambda p=pid, t=tids[i], g=tags[i], v=(1000 + i):
+         _thread_body(p, t, site, g, v))
+        for i in range(n)])
+
+    checks = []
+    live = [r for r in results if not isinstance(r, Exception)]
+    checks.append((f"all {n} concurrent threads completed", len(live) == n))
+
+    for i, r in enumerate(results):
+        tag, val = tags[i], 1000 + i
+        if isinstance(r, Exception):
+            checks.append((f"{tag}: turn survived", False))
+            continue
+        cap1, cap2 = r
+        txt = (cap2.get("text") or "")
+        # The load-bearing assertions: each thread must see ITS OWN state, and
+        # must NOT see any other thread's. A check that only looked for its own
+        # value would pass while the text also carried a sibling's.
+        others = [t for j, t in enumerate(tags) if j != i]
+        checks.append((f"{tag}: recalled its own state ({val})", str(val) in txt))
+        checks.append((f"{tag}: no other lane's tag leaked in",
+                       not any(o in txt for o in others)))
+
+    # Every thread's file must be attributed to ITS OWN thread's records.
+    per_thread = {}
+    for i, t in enumerate(tids):
+        per_thread[tags[i]] = [n for n, _i, _f in _tool_calls(pid, t)]
+    checks.append(("each thread recorded its own tool calls",
+                   all(v for v in per_thread.values())))
+    return {"text": "", "errors": []}, checks
+
+
+def run_concurrent(site, n=3, keep=False):
+    name = f"wf_concurrent_threads_x{n}"
+    proj = api("POST", "/api/projects", {"title": f"wf-{name}-{int(time.time())}"})
+    pid = proj.get("id")
+    tid = api("POST", "/api/threads", {"project_id": pid, "title": name}).get("id")
+    print(f"\n=== {name}  (site={site} project={pid})", flush=True)
+    t0 = time.time()
+    try:
+        caps, checks = wf_concurrent_threads_one_site(pid, tid, site, n=n)
+    except Exception as e:  # noqa: BLE001
+        import traceback
+        traceback.print_exc()
+        checks = [(f"scenario raised: {type(e).__name__}: {e}", False)]
+    dt = time.time() - t0
+    for label, ok in checks:
+        print(f"   [{'PASS' if ok else 'FAIL'}] {label}")
+    frictions = friction_sweep(pid, tid)
+    for f in frictions:
+        print(f"   [friction] {f['kind']}: {f['excerpt'][:120]}")
+    RESULTS.append({"name": name, "pid": pid, "secs": round(dt), "checks": checks,
+                    "frictions": frictions,
+                    "failed": [c for c, ok in checks if not ok]})
+    print(f"   ({dt:.0f}s)")
+    return pid
+
+
+def run_cross_project(site, n=3, keep=False):
+    """N PROJECTS driven at once against one node, then audited for misfiled
+    records. This is the exact condition that produced the 2026-07-27 leak: a
+    project created while another project's remote exec was in flight repointed
+    the process-global, and the in-flight turn's writes followed it.
+
+    Deliberately creates each project AFTER the previous turns are already
+    running — creation is the event that moves the global, so a version that
+    created all projects up front would never reproduce it.
+    """
+    name = f"wf_cross_project_x{n}"
+    print(f"\n=== {name}  (site={site})", flush=True)
+    t0 = time.time()
+    import threading
+    pids: list = []
+    started: list = []
+    lock = threading.Lock()
+
+    def lane(i):
+        # stagger: project i is created while lane i-1's turn is mid-flight
+        time.sleep(i * 12)
+        proj = api("POST", "/api/projects",
+                   {"title": f"wf-xproj-{i}-{int(time.time())}"})
+        p = proj.get("id")
+        t = api("POST", "/api/threads",
+                {"project_id": p, "title": f"xproj-{i}"}).get("id")
+        with lock:
+            pids.append(p)
+            started.append((p, t))
+        # long enough to still be running when the NEXT project is created
+        return _thread_body(p, t, site, f"proj{i}", 2000 + i)
+
+    res = _concurrent([(lambda i=i: lane(i)) for i in range(n)])
+    dt = time.time() - t0
+    checks = [(f"all {n} projects' turns completed",
+               all(not isinstance(r, Exception) for r in res))]
+
+    # Door 1: each project's records belong to its own thread. The audit is the
+    # cross-project oracle — a per-project check cannot see this class at all.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "harness"))
+    from project_isolation import audit, _threads_of, _exec_rows  # noqa: E402
+    scope = {}
+    for p in pids:
+        db = RUNTIME / p / "project.db"
+        scope[p] = {"threads": _threads_of(db), "execs": _exec_rows(db)}
+    n_exec = sum(len(v["execs"]) for v in scope.values())
+    # ARMED: an audit over projects that recorded NO executions proves nothing.
+    checks.append((f"the projects actually recorded executions ({n_exec})", n_exec > 0))
+    bad = audit(scope)
+    checks.append((f"no misfiled execution records across {n} projects",
+                   not bad))
+    for b in bad[:6]:
+        print(f"   [leak] {b}")
+
+    # Door 2: each project's OUTPUT is present in that project, nowhere else.
+    for i, p in enumerate(pids):
+        want = f"proj{i}.csv"
+        mine = _project_has_output(p, want)
+        checks.append((f"{want} is an output of its own project", mine))
+
+    for label, ok in checks:
+        print(f"   [{'PASS' if ok else 'FAIL'}] {label}")
+    fr = []
+    for p, t in started:
+        fr += friction_sweep(p, t)
+    for f in fr:
+        print(f"   [friction] {f['kind']}: {f['excerpt'][:120]}")
+    RESULTS.append({"name": name, "pid": ",".join(pids), "secs": round(dt),
+                    "checks": checks, "frictions": fr,
+                    "failed": [c for c, ok in checks if not ok]})
+    print(f"   ({dt:.0f}s)")
+    return pids
+
+
+def _project_has_output(pid: str, filename: str) -> bool:
+    """Is `filename` recorded as an output entity of THIS project? Reads the
+    graph, never the agent's account of it."""
+    db = RUNTIME / pid / "project.db"
+    if not db.exists():
+        return False
+    try:
+        c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        rows = c.execute("select title, artifact_path from entities").fetchall()
+    except Exception:  # noqa: BLE001
+        return False
+    return any(filename in str(r[0] or "") or filename in str(r[1] or "")
+               for r in rows)
+
+
 def run_one(name, fn, site, keep=False):
     proj = api("POST", "/api/projects", {"title": f"wf-{name}-{int(time.time())}"})
     pid = proj.get("id")
@@ -688,6 +897,11 @@ def main():
     ap.add_argument("--site", default="orbtest")
     ap.add_argument("--only", default="")
     ap.add_argument("--keep", action="store_true")
+    ap.add_argument("--concurrent", type=int, default=0, metavar="N",
+                    help="N threads in ONE project at once against --site")
+    ap.add_argument("--cross-project", type=int, default=0, metavar="N",
+                    help="N projects at once against --site, then audit for "
+                         "misfiled records")
     a = ap.parse_args()
     only = {s for s in a.only.split(",") if s}
     known = {n for n, _ in SCENARIOS}
@@ -704,10 +918,20 @@ def main():
     if a.site not in names:
         sys.exit(f"site {a.site!r} is not registered")
 
-    for name, fn in SCENARIOS:
-        if only and name not in only:
-            continue
-        run_one(name, fn, a.site, keep=a.keep)
+    if a.concurrent or a.cross_project:
+        # Concurrency lanes are opt-in and run ALONE: mixing them with the
+        # sequential scenarios would make any misfiled record ambiguous about
+        # which lane produced it, and diagnosing that was most of the cost the
+        # first time round.
+        if a.concurrent:
+            run_concurrent(a.site, n=a.concurrent, keep=a.keep)
+        if a.cross_project:
+            run_cross_project(a.site, n=a.cross_project, keep=a.keep)
+    else:
+        for name, fn in SCENARIOS:
+            if only and name not in only:
+                continue
+            run_one(name, fn, a.site, keep=a.keep)
 
     print("\n================= SUMMARY =================")
     bad = 0

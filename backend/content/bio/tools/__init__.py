@@ -935,8 +935,13 @@ def _summ_result(result):
     # logged as `DONE view_artifact -> {}` — the same text a success prints, since
     # neither its error key nor any of its success keys were listed here. The feed
     # is the fastest read on a live session; a failure must never be invisible in it.
-    for k in ("error", "status", "returncode", "block_type", "reason_code", "entity_id",
-              "run_id", "result_id", "rid", "recipe_hint", "fetch_warning"):
+    # `loads` rides with error/status because for the env probes it IS the answer:
+    # `inspect_env` returns status='ok' (the probe ran) with loads=false and the
+    # import traceback in `error`, so the feed showed "status='ok'" next to a
+    # traceback and read like a broken tool instead of a working one reporting a
+    # broken package.
+    for k in ("error", "status", "loads", "returncode", "block_type", "reason_code",
+              "entity_id", "run_id", "result_id", "rid", "recipe_hint", "fetch_warning"):
         if k in result:
             v = result[k]
             flags.append(f"{k}={v}" if isinstance(v, (int, bool)) else f"{k}={str(v)[:60]!r}")
