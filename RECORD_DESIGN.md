@@ -363,7 +363,38 @@ on hover, a small vocabulary of one-tap verbs — the user's ground truth
 about salience and placement, injected at the moment of noticing rather
 than reconstructed at settlement. Each gesture pre-fills a row of the
 eventual routing table (§5), and each teaches the salience model
-(§14.4) more than ten accepted drafts:
+(§14.4) more than ten accepted drafts.
+
+*The vocabulary is derived, not invented.* The cognitive literature on
+scientific discovery models it as search in TWO coupled spaces — the
+hypothesis space and the experiment space (Klahr & Dunbar's SDDS;
+Schunn & Klahr later split out a third, the *representation* space) —
+and the sensemaking literature (Pirolli & Card) finds the same split
+between a *foraging loop* (work with data) and a *sensemaking loop*
+(build the schema/story), feeding each other bidirectionally. The
+Record IS the representation space; the analysis is the other two. So
+chat gestures come in exactly **two families**, and keeping them
+distinct is what keeps "advising the Record" from blurring into
+"advising the analysis":
+
+- **Curation gestures** (representation space) act on what already
+  exists — its salience, placement, retention, belief-grade. They act
+  *immediately and silently*; nothing runs.
+- **Investigation gestures** (hypothesis/experiment space) express
+  what the work should do next — but they never execute anything:
+  each **compiles into a typed planned item** in the relevant
+  section's plan (§14.5), with its own `▷ work` launcher. The
+  Record's future tense is the interface between the two spaces:
+  analysis advice becomes plan entries; analysis results come back as
+  sediment and drafts. The chat stays the full-bandwidth instrument —
+  anything a gesture says can be *said* — gestures are the one-tap
+  grammar for the recurring moves, valuable because they leave typed,
+  routable trace instead of prose. (Prior art for tagging discourse
+  with typed moves: Knowledge Forum's epistemic scaffolds — "My
+  theory", "This theory cannot explain" — and the W3C annotation
+  motivation vocabulary.)
+
+**The curation family:**
 
 - **pin** — "this matters; don't lose it." THE universal gesture, and
   the substrate's *existing* `keep_message`, kept at its default aim —
@@ -388,28 +419,6 @@ eventual routing table (§5), and each teaches the salience model
     — a note, a trail fragment, the seed of an addendum or claim —
     while the pin stamps the turn: provenance for whatever prose it
     becomes.
-- **→ plan** — "later." A planned item under the relevant question
-  (§8's deferral verb, reachable from inside the conversation).
-- **⌖ hold** — working memory, *not* a record write: parks the element
-  on the desk for two-locus work and evaporates at session close;
-  nothing enters the record. The one verb that is deliberately not a
-  synonym of pin — pin is permanent and files, hold is transient and
-  vanishes.
-- **draft claim** — "formalize this": invokes the record-writer on the
-  statement; the draft goes to the inbox like any claim draft — this
-  one IS a decision, so the propose→ratify gate holds.
-- **verify** — productive skepticism: "before we build on this,
-  cross-check it." Births a verification item in the relevant
-  section's plan — "cross-check [this]: independent method, hold-out,
-  replication" — aimed at the element and carrying its own `▷ work`
-  launcher like any planned analysis (§14.5; the user's own doubt is
-  ceremony-free). Until the check lands, the element is cited as
-  *provisional*: the agent will not advance claims resting on it up
-  the maturity ladder, and the evidence floor (§14.4) holds anything
-  built on it down. Repeated verify gestures around a theme seed a
-  trail — the beginning of anomaly-finding, born from taps rather
-  than essays. Where fade lowers salience, verify raises scrutiny;
-  both are one tap, and neither is an argument.
 - **fade** — the anti-pin: "don't carry this forward." Pure
   salience-down: the agent won't route it or draft from it, and
   anything already drafted from it lets go — faded, findable in the
@@ -420,6 +429,51 @@ eventual routing table (§5), and each teaches the salience model
   the exchange and, where it invalidates something recorded, the
   ordinary contradiction machinery carries it. fade only lowers
   salience; it never asserts wrongness.
+- **⌖ hold** — working memory, *not* a record write: parks the element
+  on the desk for two-locus work and evaporates at session close;
+  nothing enters the record. The one verb that is deliberately not a
+  synonym of pin — pin is permanent and files, hold is transient and
+  vanishes.
+- **draft claim** — "formalize this": invokes the record-writer on the
+  statement; the draft goes to the inbox like any claim draft — this
+  one IS a decision, so the propose→ratify gate holds. (In sensemaking
+  terms this is the *schematize* move — evidence into schema; in
+  discourse-graph terms, evidence → claim.)
+
+**The investigation family.** "Verify" turned out to be one word
+hiding a ladder. Dunbar's in-vivo studies found that a scientist's
+response to an unexpected result forks — *error to be discarded* or
+*anomaly worth pursuing* — and that the first instinct is to blame the
+method; Munafò & Davey Smith sharpened the next distinction:
+*replication* (does the same design hold?) is not *triangulation*
+(does the phenomenon survive a different design?); and Chamberlin and
+Platt supply the third rung — rival explanations and the test that
+discriminates among them. That decomposition gives four verbs, each a
+typed planned-item constructor, each marking its target *provisional*
+where scrutiny is raised (the agent will not advance claims resting on
+it up the maturity ladder until the item lands):
+
+- **check** — "is this result *sound*?" Error-hunting on the immediate
+  analysis: robustness of this computation, spec sensitivity, leakage,
+  the mundane explanation. Same evidence, harder look — Dunbar's
+  first-instinct move, made cheap.
+- **corroborate** — "is it *real*?" An independent line of evidence:
+  a different method, different data, up to a new experiment —
+  triangulation rather than replication; convergence across designs,
+  the ○→◐→◕ ladder's actual fuel.
+- **alternatives** — "is it rightly *explained*?" Rival hypotheses and
+  the discriminating test — Chamberlin's multiple working hypotheses,
+  Platt's strong inference, invoked on one finding with one tap.
+- **expand** — "this is interesting; *grow the direction*." The
+  abductive verb — Dunbar's anomaly-worth-pursuing fork. Feeds or
+  births an intent-marked stub with its plan (§14.5); this, not pin,
+  is the gesture for "we should do more here."
+
+**→ plan** remains the generic member of the same family — the
+free-text planned item for what the typed four don't cover. And the
+scrutiny rungs mirror the maturity glyphs: check guards ○, corroborate
+earns ◐→◕, alternatives is the road to ● — the gestures are the
+ladder's rungs, requested by hand.
 
 Three disciplines make the vocabulary safe:
 
@@ -428,10 +482,13 @@ Three disciplines make the vocabulary safe:
    a door to where it landed, and the visible pre-filled routing row:
    distillation becomes mostly confirming what you aimed while it was
    hot.
-2. **User gestures are ceremony-free; agent invocations are not.**
-   pin / plan / verify / hold / fade are the user's own intent and
-   file directly (the §14.5 rule); draft-claim passes through the
-   inbox, because it asks the agent to write toward the story.
+2. **Curation acts; investigation plans; nothing executes.** Curation
+   gestures (pin / fade / hold) apply immediately and are
+   ceremony-free — the user's own intent. Investigation gestures
+   (check / corroborate / alternatives / expand / → plan) only write
+   the plan — execution stays in the work loop, behind `▷ work`.
+   draft-claim alone passes through the inbox, because it asks the
+   agent to write toward the story.
 3. **Aim is optional.** Every verb works unaimed (the agent routes,
    visibly); aiming — hold the verb to pick a trail or question, or
    **drag the artifact across onto a document section** (the panel
@@ -1087,3 +1144,8 @@ Open design questions, in rough priority order:
 8. **Where charges live** (§14.6) — extend `thread` metadata
    (question/conclude_wrap already carry intent) vs. a small `charge`
    entity; leaning to thread metadata, decide at phase 3.
+9. **Gesture surfacing** (§6) — the full vocabulary is eight verbs;
+   the hover bar should show a curated subset per element kind (likely
+   pin · expand · check · fade, with the rest behind ⋯ / long-press).
+   Decide from usage; the storyboard mocks currently trail the doc
+   here (they still show the pre-decomposition "verify").
