@@ -1937,7 +1937,178 @@ def test_note_launcher_ref_agreement_matrix(monkeypatch):
     assert writes == [("e8", {"ref": "sha256:matrix-mint"})], writes
 
 
+# ── the live truncation: a member larger than the per-call cap ───────────────
+#
+# Live (2026-07-27, three remote .lstar.zarr stores). `fields/counts/data` and
+# `fields/counts/indices` were cached at EXACTLY 16,777,216 bytes — RANGE_CAP —
+# while the originals on the site were 175,645,168 and 87,822,584 and perfectly
+# intact. The loop ended on the substrate's flags, os.replace installed the short
+# file as COMPLETE, and every later read was served from it: a genuine 416 past
+# 16 MiB, so the origin looked authoritative about a size it had invented. The
+# viewer's WASM reader reported only `Aborted(undefined)`.
+#
+# The fake above could never produce this: it sets eof/capped exactly right on
+# every reply, so it is MORE COOPERATIVE than the substrate and blessed the bug.
+# These readers reproduce the shapes a real one actually returns at a clamp.
+
+def _clamping_reader(payload_by_rel: dict, calls: list, *, cap: int,
+                     flags: str):
+    """A substrate that CLAMPS at `cap` and reports it the way the live one did.
+
+    flags="no_capped" — clamps but omits `capped` (the legacy shape a reader
+                        that trusts the flag reads as "done").
+    flags="eof_at_cap" — sets eof=True at the clamp boundary.
+    Both still report the member's true `size`, which is what makes the read
+    verifiable at all.
+    """
+    def fake(target, rel, *, offset=0, length=None):
+        calls.append((rel, offset))
+        data = payload_by_rel.get(rel)
+        if data is None:
+            raise ComputeError("data.missing", "gone", stage="weft", retryable=True)
+        b = data[offset:offset + cap]
+        env = {"target": target, "path": rel, "at": "sandbox", "offset": offset,
+               "nbytes": len(b), "size": len(data),
+               "bytes_b64": base64.b64encode(b).decode()}
+        done = offset + len(b) >= len(data)
+        if flags == "no_capped":
+            env["eof"] = done                      # `capped` absent entirely
+        else:
+            env["eof"] = True                      # lies at every clamp
+            env["capped"] = not done
+        return env
+    return fake
+
+
+def test_over_cap_member_assembles_whole_when_capped_flag_is_MISSING():
+    """THE regression. A member 5x the cap, from a substrate that clamps without
+    saying so. The recorded size is the authority; the flags are not."""
+    pid = "s_trunc1"
+    _register(pid, "s-t1.store", base_rel="b")
+    payload = bytes((i * 7) % 251 for i in range(40))     # 40 bytes, cap 8
+    calls: list = []
+    _orig = retention.file_read_range
+    retention.file_read_range = _clamping_reader({"b/c/1.0": payload}, calls,
+                                                 cap=8, flags="no_capped")
+    try:
+        out = rc.serve_remote_chunk(pid, "s-t1.store/c/1.0")
+        assert out.status == "ok", f"{out.status}: {out.detail}"
+        got = open(out.path, "rb").read()
+        assert got == payload, f"assembled {len(got)} of {len(payload)} bytes"
+        assert len(calls) >= 5, "must keep reading while size says there is more"
+    finally:
+        retention.file_read_range = _orig
+
+
+def test_over_cap_member_assembles_whole_when_eof_lies_at_the_clamp():
+    """The other live-plausible shape: eof=True on every clamped reply."""
+    pid = "s_trunc2"
+    _register(pid, "s-t2.store", base_rel="b")
+    payload = bytes((i * 3) % 251 for i in range(40))
+    calls: list = []
+    _orig = retention.file_read_range
+    retention.file_read_range = _clamping_reader({"b/c/1.0": payload}, calls,
+                                                 cap=8, flags="eof_at_cap")
+    try:
+        out = rc.serve_remote_chunk(pid, "s-t2.store/c/1.0")
+        # eof is a legitimate stop signal, so the loop may honour it — but a
+        # SHORT result must never be installed as the whole chunk.
+        if out.status == "ok":
+            assert open(out.path, "rb").read() == payload
+        else:
+            assert out.http == 502 and "short read" in (out.detail or "")
+    finally:
+        retention.file_read_range = _orig
+
+
+def test_a_short_read_is_NEVER_installed_in_the_cache():
+    """The load-bearing assertion, stated as the forbidden ACTION rather than the
+    output: whatever the flags say, a partial assembly must leave NO cache file.
+    A short chunk cached as whole is silently wrong, sticky, and indistinguishable
+    downstream from real data — strictly worse than a failed fetch."""
+    pid = "s_trunc3"
+    _register(pid, "s-t3.store", base_rel="b")
+    payload = bytes(64)
+    calls: list = []
+    _orig = retention.file_read_range
+
+    def stops_early(target, rel, *, offset=0, length=None):
+        calls.append((rel, offset))
+        b = payload[offset:offset + 8]
+        return {"target": target, "path": rel, "at": "sandbox", "offset": offset,
+                "nbytes": len(b), "size": len(payload),
+                "eof": True, "capped": False,        # insists it is done at 8/64
+                "bytes_b64": base64.b64encode(b).decode()}
+
+    retention.file_read_range = stops_early
+    try:
+        out = rc.serve_remote_chunk(pid, "s-t3.store/c/1.0")
+        assert out.status == "error", f"a 8-of-64 read reported {out.status}"
+        assert out.http == 502 and "short read" in (out.detail or "")
+        assert out.path is None
+        root = rc._cache_root(pid, "siteA", "s-t3.store")
+        stale = [f for _d, _s, f in
+                 [(0, 0, os.path.join(dp, fn))
+                  for dp, _dn, fns in os.walk(root) for fn in fns]
+                 if not f.endswith(".json")]
+        assert not stale, f"a truncated chunk was installed: {stale}"
+    finally:
+        retention.file_read_range = _orig
+
+
+def test_a_size_less_reply_keeps_the_legacy_flag_contract():
+    """CEILING / WIDE — the degenerate shape: a substrate that reports NO size.
+    Nothing can be verified, so the flags remain the contract; over-applying the
+    check (e.g. treating unknown size as a short read) would 502 every read on an
+    older substrate."""
+    pid = "s_trunc4"
+    _register(pid, "s-t4.store", base_rel="b")
+    payload = bytes(20)
+    _orig = retention.file_read_range
+
+    def no_size(target, rel, *, offset=0, length=None):
+        b = payload[offset:offset + 8]
+        done = offset + len(b) >= len(payload)
+        return {"target": target, "path": rel, "at": "sandbox", "offset": offset,
+                "nbytes": len(b), "eof": done, "capped": not done,
+                "bytes_b64": base64.b64encode(b).decode()}
+
+    retention.file_read_range = no_size
+    try:
+        out = rc.serve_remote_chunk(pid, "s-t4.store/c/1.0")
+        assert out.status == "ok", f"{out.status}: {out.detail}"
+        assert open(out.path, "rb").read() == payload
+    finally:
+        retention.file_read_range = _orig
+
+
+def test_zero_length_member_still_installs():
+    """CEILING: size==0 and offset==0 are EQUAL, so the post-condition must read
+    that as complete, not as a short read. An empty chunk is legitimate."""
+    pid = "s_trunc5"
+    _register(pid, "s-t5.store", base_rel="b")
+    _orig = retention.file_read_range
+
+    def empty(target, rel, *, offset=0, length=None):
+        return {"target": target, "path": rel, "at": "sandbox", "offset": 0,
+                "nbytes": 0, "size": 0, "eof": True, "capped": False,
+                "bytes_b64": ""}
+
+    retention.file_read_range = empty
+    try:
+        out = rc.serve_remote_chunk(pid, "s-t5.store/c/1.0")
+        assert out.status == "ok", f"{out.status}: {out.detail}"
+        assert open(out.path, "rb").read() == b""
+    finally:
+        retention.file_read_range = _orig
+
+
 _TESTS = [
+    test_over_cap_member_assembles_whole_when_capped_flag_is_MISSING,
+    test_over_cap_member_assembles_whole_when_eof_lies_at_the_clamp,
+    test_a_short_read_is_NEVER_installed_in_the_cache,
+    test_a_size_less_reply_keeps_the_legacy_flag_contract,
+    test_zero_length_member_still_installs,
     test_safe_rel_accepts_normal_chunk,
     test_safe_rel_rejects_traversal_absolute_empty,
     test_registry_roundtrip_and_persists_to_disk,

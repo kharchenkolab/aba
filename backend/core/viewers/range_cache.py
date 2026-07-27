@@ -441,17 +441,56 @@ def _fetch_and_cache(entry: dict, safe: str, cache_file: str,
     offset = 0
     t0 = time.monotonic()
     try:
+        member_size: Optional[int] = None
         with open(tmp, "wb") as fh:
             while True:
                 r = _retry_once(lambda: read(offset))  # noqa: B023 — offset rebinds per loop
                 nbytes = int(r.get("nbytes") or 0)
+                # The reply states the MEMBER's own size. That is the only
+                # authority on "am I done" — the flags are the substrate's
+                # opinion and one of them being absent must not end the read.
+                _s = r.get("size")
+                if isinstance(_s, int) and _s >= 0:
+                    member_size = _s
                 if nbytes:
                     fh.write(base64.b64decode(r.get("bytes_b64") or ""))
                     offset += nbytes
-                if r.get("eof") or not r.get("capped"):
+                if nbytes == 0:                  # no progress → stop, whatever the flags say
                     break
-                if nbytes == 0:                  # defensive: capped-but-empty → stop
+                if member_size is not None and offset >= member_size:
+                    break                        # provably complete
+                if r.get("eof"):
                     break
+                if not r.get("capped") and member_size is None:
+                    # Unknowable size and the substrate says "not capped" — the
+                    # legacy contract, kept only when there is nothing better.
+                    break
+        # POST-CONDITION. Live (2026-07-27): counts/data and counts/indices in
+        # three remote .lstar.zarr stores were cached at exactly 16,777,216
+        # bytes — RANGE_CAP — while the originals on the site were 175,645,168
+        # and 87,822,584 and perfectly intact. The loop above ended on the
+        # substrate's flags, os.replace installed the short file as COMPLETE,
+        # and every later read was served from it: a genuine 416 past 16 MiB, so
+        # the origin looked authoritative about a size it had invented. The
+        # viewer's WASM reader surfaced it as `Aborted(undefined)`.
+        #
+        # Only single-chunk members above the cap could hit it — a sharded array
+        # has no object that large — which is exactly the one field a viewer
+        # store writes monolithically so a gene column is one byte range.
+        #
+        # A short chunk installed as whole is worse than a failed fetch: it is
+        # silently wrong, it is sticky (cached), and nothing downstream can tell.
+        # So verify, and refuse to install.
+        if member_size is not None and offset != member_size:
+            _discard(tmp)
+            obs.emit("data", "chunk backhaul", site=site, severity="error",
+                     summary=safe, status="short_read", bytes=offset,
+                     detail=f"assembled {offset} of {member_size} bytes",
+                     dur_ms=int((time.monotonic() - t0) * 1000))
+            return ChunkOutcome(
+                "error", http=502, site=site,
+                detail=(f"short read from {site}: assembled {offset} of "
+                        f"{member_size} bytes for {safe} — not cached"))
         os.replace(tmp, cache_file)
     except ComputeError as e:
         _discard(tmp)
