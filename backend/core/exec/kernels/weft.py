@@ -229,6 +229,25 @@ def _fit_walltime(e) -> str | None:
     return f"{h:02d}:{rem // 60:02d}:{rem % 60:02d}"
 
 
+_TRANSPORT_CODES = ("site.", "infra.")
+_SUBMIT_RETRY_BACKOFF_S = 2.0
+
+
+def _is_transport_error(e) -> bool:
+    """Did this failure happen BETWEEN us and the node, rather than AT the node?
+
+    A transport failure says nothing about the kernel's health; a kernel-side
+    error does. The two must not share a consequence — one is worth a retry and
+    costs a round trip, the other means the session really is gone.
+    """
+    code = str(getattr(e, "code", "") or "")
+    if code.startswith(_TRANSPORT_CODES):
+        return True
+    # weft marks what it considers safe to re-attempt, and a retryable error by
+    # definition did not leave the far side in a decided state.
+    return bool(getattr(e, "retryable", False))
+
+
 def for_pool(scope_key: str, lang: str, *, cwd: str, env_name: str | None,
              site: str = _LOCAL_SITE):
     """Build a WeftKernelSession for the pool, or raise a TYPED `env.unknown`
@@ -448,6 +467,30 @@ class WeftKernelSession:
 
     # -- KernelSession interface ----------------------------------------------
 
+    def _submit_block(self, code: str):
+        """Submit one block, retrying ONCE on a transport failure.
+
+        Retrying is sound HERE and nowhere else in this method: submit is
+        `wait=False`, so a failure means the block never started and re-sending
+        cannot double-execute it. A timeout mid-execution is the opposite case —
+        the block may well be running — which is why that path still surfaces
+        rather than retries.
+
+        Live (2026-07-27): three concurrent threads on one ssh site contended,
+        weft returned `site.unreachable` ("ssh timed out after 30s"), and the
+        blocks were reported as failures although nothing had run yet.
+        """
+        from core.compute.errors import ComputeError
+        try:
+            return self._call("kernel_exec", self.kernel_id, code, wait=False)
+        except ComputeError as e:
+            if not _is_transport_error(e):
+                raise
+            time.sleep(_SUBMIT_RETRY_BACKOFF_S)
+            print(f"[kernel] block submit hit {getattr(e, 'code', '?')} on "
+                  f"{self.site} — retrying once (nothing ran yet)", flush=True)
+            return self._call("kernel_exec", self.kernel_id, code, wait=False)
+
     def touch(self) -> None:
         self.last_used = time.time()
 
@@ -511,10 +554,23 @@ class WeftKernelSession:
         self.busy = True
         self.touch()
         try:
-            sub = self._call("kernel_exec", self.kernel_id, code, wait=False)
+            sub = self._submit_block(code)
         except ComputeError as e:
             self.busy = False
-            self.alive = False
+            # A TRANSPORT failure did not reach the kernel, so the kernel is very
+            # likely still there holding the session. Marking it dead for that
+            # throws away everything the user has in memory — variables, loaded
+            # libraries — and the next call silently starts a fresh one.
+            #
+            # Live (2026-07-27, three concurrent threads on one ssh site): the
+            # contended transport returned `site.unreachable` ("ssh timed out
+            # after 30s"), all three kernels were declared dead, and every lane
+            # lost its state. The site was fine seconds later.
+            #
+            # So: keep the session on a transport error and let the NEXT call
+            # find out (one wasted round trip if the site really is gone, versus
+            # discarding a live session). Kernel-side errors still kill it.
+            self.alive = not _is_transport_error(e)
             from core.compute.errors import describe
             return ExecResult(returncode=1, stdout="",
                               stderr=f"[kernel] block submit failed: {describe(e)}",

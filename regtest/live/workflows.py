@@ -49,6 +49,9 @@ RESULTS: list = []
 # (pid, tid) -> captures from each drive(), so friction_sweep can report
 # transport-level findings (a stream that never closed) alongside the rest.
 _LAST_CAPS: dict = {}
+# How long after the terminal event a stream may take to close before it counts
+# as stuck. A single turn closes in ~0.00s; the slack is for a loaded server.
+_STREAM_CLOSE_BUDGET_S = 30
 
 
 # ── transport ────────────────────────────────────────────────────────────────
@@ -103,15 +106,25 @@ def drive(pid: str, tid: str, text: str, timeout: int = 2400) -> dict:
                     # out — so record whether the stream also CLOSED, and keep
                     # going either way.
                     cap["done"] = True
+                    # Measure the close LATENCY, don't assert a binary. A single
+                    # turn closes in ~0.00s; under three concurrent turns with
+                    # ssh timeouts blocking the executor it can take seconds,
+                    # which is slow, not wedged. A 3s threshold reported those as
+                    # "never closed" — the instrument turning a latency into a
+                    # false bug report, the same mistake as the JSON-parsing shim.
+                    # Only a generous bound means genuinely stuck.
+                    _t = time.time()
                     try:
-                        r.fp.raw._sock.settimeout(3)   # type: ignore[attr-defined]
+                        r.fp.raw._sock.settimeout(_STREAM_CLOSE_BUDGET_S)  # type: ignore[attr-defined]
                     except Exception:  # noqa: BLE001 — cannot poke the socket:
                         break          # record NOTHING rather than a false finding
                     try:
-                        # b"" == the server closed. Anything else, or a timeout,
-                        # means the connection is still open after `done`.
-                        cap["stream_not_closed"] = bool(r.readline())
-                    except Exception:  # noqa: BLE001 — read timed out: still open
+                        # b"" == the server closed the stream.
+                        leftover = bool(r.readline())
+                        cap["close_after_done_s"] = round(time.time() - _t, 2)
+                        cap["stream_not_closed"] = leftover
+                    except Exception:  # noqa: BLE001 — timed out: still open
+                        cap["close_after_done_s"] = _STREAM_CLOSE_BUDGET_S
                         cap["stream_not_closed"] = True
                     break
     except Exception as e:  # noqa: BLE001 — a dead turn is a FINDING, not a crash
@@ -324,8 +337,9 @@ def friction_sweep(pid: str, tid: str) -> list[dict]:
         if cap.get("stream_not_closed"):
             out.append({"kind": "SSE stream did not close after done",
                         "signature": "stream", "excerpt":
-                        "the turn finished but the connection stayed open — a "
-                        "browser tab would never leave the streaming state"})
+                        f"still open {cap.get('close_after_done_s')}s after the "
+                        f"terminal event — a browser tab would never leave the "
+                        f"streaming state"})
     fresh = sum(1 for r in res if "Fresh kernel" in str(r.get("stdout", "")))
     if fresh > 1:
         out.append({"kind": "kernel restarted mid-scenario (state lost)",
