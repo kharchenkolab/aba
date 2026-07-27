@@ -242,3 +242,42 @@ def test_cwd_banner_states_ephemerality_and_the_keep_lane():
     assert "EPHEMERAL" in blk and "keep_outputs" in blk, blk[:200]
     assert "register_dataset is only" in blk, (
         "the dataset boundary must be stated, or keeps mint Datasets again")
+
+
+def test_remote_kernel_banner_says_where_to_write():
+    """The guidance a remote kernel never got.
+
+    Live (thr_a1f7f687): a long analysis wrote every output to a hand-picked
+    absolute dir on the site, so NOTHING was harvested — the Run card recorded
+    zero produced outputs, view_artifact refused all five figures, and every
+    viewer link needed a manual register_dataset. The banner had listed remote
+    dataset paths (which the agent imitated) plus CONTROLLER-local scratch dirs
+    that do not exist on the site, and said nothing about outputs at all:
+    zero occurrences of 'output', 'sandbox' or 'track'."""
+    from content.bio.tools.run_exec import _prior_run_files_preamble
+    out = _prior_run_files_preamble("p1", "t1", current_run_id=None,
+                                    fresh_kernel=True, remote_site="siteA")
+    low = out.lower()
+    assert "bare relative" in low, out
+    assert "sandbox" in low and "harvest" in low
+    assert "not tracked" in low
+    assert "register_dataset" in out and 'site="siteA"' in out
+    # controller-local scratch paths must NOT be advertised to a remote kernel
+    assert "shared-scratch" not in low
+
+
+def test_local_kernel_banner_is_unchanged():
+    """CEILING: a local session's outputs already land where the harvester
+    reads, so it must not get the remote write-guidance."""
+    from content.bio.tools.run_exec import _prior_run_files_preamble
+    out = _prior_run_files_preamble("p1", "t1", current_run_id=None,
+                                    fresh_kernel=True, remote_site=None)
+    assert "bare relative" not in out.lower()
+    assert "register_dataset" not in out
+
+
+def test_remote_site_helper_only_fires_for_remote():
+    from content.bio.tools.run_exec import _remote_site_of
+    assert _remote_site_of(type("S", (), {"site": "mendel"})()) == "mendel"
+    assert _remote_site_of(type("S", (), {"site": "local"})()) is None
+    assert _remote_site_of(type("S", (), {})()) is None

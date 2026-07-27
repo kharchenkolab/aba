@@ -24,6 +24,38 @@ from typing import Optional
 _log = logging.getLogger(__name__)
 
 
+# The kernel jobdir is the substrate's OWN working area, and a weft kernel's
+# sandbox is also where a block's bare relative writes land — so the harvester
+# reads both real outputs and the driver's machinery out of the same directory.
+# These names are that machinery (weft `kernels/driver.*` + `runner.sh`), never
+# a user output. `current_block` in particular is a HEARTBEAT: written when a
+# block starts, removed when it ends — so any block that dies mid-flight leaves
+# one behind with a fresh mtime. Live (thr_a1f7f687): an ssh timeout killed a
+# block and `current_block` (3 bytes) became the Run card's ONLY recorded
+# output. The previous filter covered `blocks/` and `kernel.*` only.
+_KERNEL_MACHINERY = frozenset({
+    "current_block", "activate.sh", "cmd.sh", "runner.sh", "log",
+    "node", "pid", "pid.epoch", "pid.real", "rusage",
+})
+_KERNEL_MACHINERY_PREFIXES = ("blocks/", "kernel.", "driver.")
+
+
+def _remote_site_of(sess) -> str | None:
+    """The session's site when it is a REMOTE one, else None. The orientation
+    banner keys its write-guidance on this: a local session's outputs already
+    land in a controller path the harvester reads."""
+    site = getattr(sess, "site", None)
+    return site if (site and site != "local") else None
+
+
+def _is_kernel_machinery(rel: str) -> bool:
+    """Is this sandbox entry the kernel driver's own bookkeeping rather than
+    something the user's code produced? Coupled to weft's jobdir layout by
+    necessity — the two share a directory."""
+    return (rel in _KERNEL_MACHINERY
+            or rel.startswith(_KERNEL_MACHINERY_PREFIXES))
+
+
 def _with_cwd_probe(sess, code: str, lang: str, cwd) -> str:
     """Wrap a JUPYTER kernel block with the cwd probe (core.exec.run): the
     prologue records where the block STARTED, the epilogue writes start+final
@@ -292,7 +324,8 @@ def _prior_run_files_preamble(project_id: str, thread_id: str,
                               max_runs: int = 4, max_files: int = 12,
                               max_scratch_files: int = 12,
                               cwd: str | None = None,
-                              fresh_kernel: bool = False) -> str:
+                              fresh_kernel: bool = False,
+                              remote_site: str | None = None) -> str:
     """Inject a small, focused orientation block at the moment the cwd shifts
     (a new run opens, the kernel restarts, etc.). Lists what's reachable from
     the new cwd that ISN'T in it, so bare-filename loads recover gracefully.
@@ -535,10 +568,35 @@ def _prior_run_files_preamble(project_id: str, thread_id: str,
                 for name, full in files:
                     lines.append(f"      - {name} → {full}")
             lines.append("")
-        if scratch_mapped:
+        if scratch_mapped and not remote_site:
+            # CONTROLLER-LOCAL paths. Listing them to a REMOTE kernel is worse
+            # than useless: they do not exist on that machine, and offering
+            # absolute paths as the house style is part of what sends a remote
+            # step off to invent its own output directory (below).
             lines.append("Thread shared-scratch (your ad-hoc downloads / intermediates):")
             for name, full in scratch_mapped:
                 lines.append(f"  - {name} → {full}")
+        if remote_site:
+            # WHERE TO WRITE — the guidance this banner never gave a remote
+            # kernel. Live (thr_a1f7f687): every output of a long analysis went
+            # to a hand-picked absolute dir on the site, so NOTHING was
+            # harvested — the Run card recorded zero outputs, `view_artifact`
+            # refused all five figures, and each viewer link needed a manual
+            # register_dataset first. The banner had listed only remote dataset
+            # paths (which the agent imitated) and controller-local scratch dirs
+            # (unreachable there), and said nothing about outputs at all.
+            lines.append("")
+            lines.append(
+                f"WRITING OUTPUTS on {remote_site} — use BARE RELATIVE filenames "
+                f"(e.g. saveRDS(obj, \"integrated.rds\"), ggsave(\"umap.png\")). "
+                f"They land in this kernel's sandbox on {remote_site}, which is "
+                f"the ONLY place aba harvests: those files become this Run's "
+                f"outputs, appear on the Run card, and are viewable/keepable by "
+                f"name. Files written to an absolute path elsewhere on "
+                f"{remote_site} are NOT tracked — no Run card entry, no "
+                f"view_artifact, no viewer link without registering them by hand. "
+                f"If a step must write outside the sandbox, call register_dataset("
+                f"path=..., site=\"{remote_site}\") for each result you want to keep.")
         return "\n".join(lines).rstrip() + "\n"
     except Exception:  # noqa: BLE001
         return ""
@@ -825,7 +883,7 @@ def _fetch_new_kernel_files(kernel_id: str, inv0: dict, project_id: str,
     from content.bio.lifecycle.runs import _STORE_DIR_SUFFIXES
     inv1 = _kernel_sandbox_inventory(kernel_id)
     new = [(rel, mt) for rel, mt in inv1.items()
-           if not (rel.startswith("blocks/") or rel.startswith("kernel."))
+           if not _is_kernel_machinery(rel)
            and (rel not in inv0 or mt > inv0.get(rel, 0))]
     if not new:
         return None, []
@@ -1071,7 +1129,8 @@ def _run_remote_kernel(input_: dict, ctx: dict | None, project_id: str,
         preamble = _prior_run_files_preamble(
             str(project_id), str(thread_id), current_run_id=_rid_now,
             cwd=getattr(sess, "_aba_cwd", None),
-            fresh_kernel=(_was == "__FRESH__"))
+            fresh_kernel=(_was == "__FRESH__"),
+            remote_site=site)
         sess._aba_cwd_just_switched = None
         if preamble:
             out["stdout"] = preamble + "\n" + (out["stdout"] or "")
@@ -1437,7 +1496,8 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
                 preamble = _prior_run_files_preamble(str(project_id), str(thread_id),
                                                     current_run_id=_arid(str(thread_id)),
                                                     cwd=getattr(sess, "_aba_cwd", None),
-                                                    fresh_kernel=(_was == "__FRESH__"))
+                                                    fresh_kernel=(_was == "__FRESH__"),
+                                                    remote_site=_remote_site_of(sess))
                 sess._aba_cwd_just_switched = None
                 if preamble:
                     out["stdout"] = preamble + "\n" + (out["stdout"] or "")
@@ -1723,7 +1783,8 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
         preamble = _prior_run_files_preamble(str(project_id), str(thread_id),
                                              current_run_id=_arid(str(thread_id)),
                                              cwd=getattr(sess, "_aba_cwd", None),
-                                             fresh_kernel=(_was == "__FRESH__"))
+                                             fresh_kernel=(_was == "__FRESH__"),
+                                             remote_site=_remote_site_of(sess))
         sess._aba_cwd_just_switched = None
         if preamble:
             out["stdout"] = preamble + "\n" + (out["stdout"] or "")

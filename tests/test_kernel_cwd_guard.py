@@ -185,3 +185,34 @@ def test_offense_detection_still_used_only_to_sharpen():
     assert chdir_offense("subprocess.run(cmd, chdir=True)", "python") is None
     assert chdir_offense('lbl <- "col#1"; setwd("/tmp")', "r")
     assert chdir_offense("setwd('/tmp')", "python") is None   # language scoping
+
+
+# ── the kernel jobdir is shared with the driver's machinery ──────────────────
+
+def test_driver_machinery_is_never_harvested_as_an_output():
+    """A weft kernel's sandbox holds BOTH the user's bare relative writes and
+    the driver's own bookkeeping, so the harvester sees them together.
+
+    Live (thr_a1f7f687): an ssh timeout killed a block; `current_block` — the
+    driver's 3-byte HEARTBEAT, written at block start and removed at block end —
+    was left behind with a fresh mtime and became the Run card's only recorded
+    output. The filter covered `blocks/` and `kernel.*` only, so ten other
+    jobdir entries were equally eligible."""
+    from content.bio.tools.run_exec import _is_kernel_machinery
+    # the real jobdir listing from the live incident
+    for rel in ("current_block", "activate.sh", "cmd.sh", "runner.sh", "log",
+                "node", "pid", "pid.epoch", "pid.real", "rusage",
+                "driver.R", "driver.py", "blocks/0002.rc", "kernel.json"):
+        assert _is_kernel_machinery(rel), rel
+
+
+def test_real_outputs_are_still_harvested():
+    """CEILING: bare relative writes ARE the documented way to produce a Run's
+    outputs — over-filtering would silently drop them."""
+    from content.bio.tools.run_exec import _is_kernel_machinery
+    for rel in ("umap_by_sample.png", "results.csv", "obj.rds",
+                "figs/scatter.png", "store.zarr/zarr.json",
+                # names that merely resemble machinery must survive
+                "pidgin_counts.csv", "logfile_summary.txt", "nodes.tsv",
+                "driver_metrics.csv", "current_blocks_summary.tsv"):
+        assert not _is_kernel_machinery(rel), rel
