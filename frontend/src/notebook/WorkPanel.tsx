@@ -70,6 +70,12 @@ export default function WorkPanel({ panel, onClose, onAdvance, onExpand, continu
   const [extra, setExtra] = useState<PanelMsg[]>([])
   const [draft, setDraft] = useState('')
   const [flagged, setFlagged] = useState<false | 'note' | 'plan'>(false)
+  // chat gestures: one-tap verbs on hover — the user's ground truth about
+  // salience and placement, injected at the moment of noticing; each leaves
+  // a RECEIPT (the pre-filled routing-table row), undoable
+  const [gest, setGest] = useState<Record<number, string>>({})
+  const gesture = (i: number, receipt: string) => setGest(g => ({ ...g, [i]: receipt }))
+  const ungesture = (i: number) => setGest(g => { const n = { ...g }; delete n[i]; return n })
   // like any chat: open at the latest exchange (and keep up as it grows).
   // Re-pin after a beat — figure images load async and grow the scroll
   // height after the first pass.
@@ -135,8 +141,10 @@ export default function WorkPanel({ panel, onClose, onAdvance, onExpand, continu
         {/* single inner child + column-reverse outer = natively bottom-anchored
             scroll (chat behavior), immune to async image-load growth */}
         <div className="wpanel__msgsinner">
-        {[...panel.msgs, ...extra].map((m, i) => (
-          <div key={i}>
+        {[...panel.msgs, ...extra].map((m, i) => {
+          const gesturable = !archived && !panel.closing && ((m.role === 'guide' && m.text) || m.fig)
+          return (
+          <div key={i} className="wmsg">
             <Msg m={m} />
             {m.ref && (
               <button className="wpanel__showref" onClick={() => onShowRef?.(m.ref!.el)}
@@ -144,8 +152,43 @@ export default function WorkPanel({ panel, onClose, onAdvance, onExpand, continu
                 {m.ref.label}
               </button>
             )}
+            {gesturable && !gest[i] && (
+              <div className="gest">
+                {m.text && (
+                  <>
+                    <button title="this matters — unaimed salience: the agent must route it (a marked element can never fade), destination its problem; one tap teaches the salience model"
+                            onClick={() => gesture(i, 'marked — the agent must route this; it cannot fade')}>mark</button>
+                    <button title="the pin you already know (keep_message) — births a note, filed directly (your own noticing needs no ratification), pointed at its element, turn-stamped. Hold to aim: → trail · → question"
+                            onClick={() => gesture(i, 'pinned → note · turn-stamped — the agent will propose its trail')}>pin</button>
+                    <button title="later, aimed — lands as a planned item under this question (no ceremony; it is your plan)"
+                            onClick={() => gesture(i, '→ planned under this question')}>→ plan</button>
+                    <button title="formalize this — the record-writer drafts a claim from this statement; the draft goes to the inbox (this one IS a decision — the ratify gate holds)"
+                            onClick={() => gesture(i, 'claim draft requested → inbox')}>draft claim</button>
+                    <button title="the anti-gesture: don't build on this. Wears a dissent mark; the agent may not cite it without surfacing the dispute; remembered until the world changes"
+                            onClick={() => gesture(i, '✗ disputed — will not be cited without the dispute')}>✗</button>
+                  </>
+                )}
+                {m.fig && (
+                  <>
+                    <button title="retention, decided at the moment of seeing — kept durably, not left to the sweep"
+                            onClick={() => gesture(i, 'kept ✓ durably')}>keep ✓</button>
+                    <button title="the pin you already know (keep_message) — births a note pointed at this figure, turn-stamped"
+                            onClick={() => gesture(i, 'pinned → note · pointed at this figure')}>pin</button>
+                    <button title="park it on the desk for two-locus work; clears at session close"
+                            onClick={() => gesture(i, '⌖ held on the desk')}>⌖ hold</button>
+                  </>
+                )}
+              </div>
+            )}
+            {gest[i] && (
+              <div className="gest__done">
+                ✓ {gest[i]}
+                <button onClick={() => ungesture(i)}>undo</button>
+              </div>
+            )}
           </div>
-        ))}
+          )
+        })}
         {panel.crossFlag && (
           <div className="wpanel__cross" title="cross-boundary relevance stays a proposal — the agent never writes outside the anchor silently">
             ✦ {panel.crossFlag.text}

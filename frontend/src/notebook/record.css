@@ -905,6 +905,28 @@ input { font: inherit; }
 .plan__composer input::placeholder { color: var(--ink-3); font-style: italic; }
 .plan--seed { border-style: dotted; background: transparent; padding: 4px 8px; }
 
+/* chat gestures — one-tap verbs on hover; receipts stitch the transcript
+   to the record it produced (every stitch a door, at turn grain) */
+.gest {
+  display: flex; gap: 6px; flex-wrap: wrap;
+  padding: 2px 0 0 2px;
+  opacity: 0; transition: opacity 0.12s ease;
+}
+.wmsg:hover .gest { opacity: 1; }
+.gest button {
+  font-family: var(--sans); font-size: 10px; color: var(--ink-3);
+  border: 1px solid var(--rule-strong); border-radius: 6px; padding: 0 7px;
+  white-space: nowrap;
+}
+.gest button:hover { color: var(--teal); border-color: var(--teal); }
+.gest__done {
+  display: flex; gap: 8px; align-items: baseline;
+  font-family: var(--sans); font-size: 10.5px; color: var(--teal);
+  font-style: italic; padding: 2px 0 0 2px;
+}
+.gest__done button { color: var(--ink-3); font-size: 10px; }
+.gest__done button:hover { text-decoration: underline; }
+
 /* checkpoint distillation — close is the floor, not the gate */
 .wpanel__distill {
   font-family: var(--sans); font-size: 10px; color: var(--teal);

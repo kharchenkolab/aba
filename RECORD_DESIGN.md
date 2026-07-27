@@ -356,6 +356,62 @@ document must track the work without wrestling the reader (rule 8):
 - **hold ⌖** parks an excerpt on the desk for two-locus work; clears at
   session close.
 
+**Gestures in the instrument — directing the record from the chat.**
+The chat is where noticing happens, so it is where directing must be
+cheapest. Every agent response and every artifact in the panel carries,
+on hover, a small vocabulary of one-tap verbs — the user's ground truth
+about salience and placement, injected at the moment of noticing rather
+than reconstructed at settlement. Each gesture pre-fills a row of the
+eventual routing table (§5), and each teaches the salience model
+(§14.4) more than ten accepted drafts:
+
+- **mark** — "this matters." Unaimed: the drafting agent must route it
+  (a marked element can never fade), destination its problem.
+- **pin** — "this is noticed." This is the substrate's *existing*
+  `keep_message` gesture, kept as-is at its default aim — pin → note,
+  *filed directly* (the user's own noticing needs no ratification),
+  pointed at its element, turn-stamped — and generalized with aims:
+  → trail · → question · → new trail. Users who know the classic UI's
+  pin already know this gesture; the Record adds destinations, not a
+  new concept. (Cousin of the section pin, §14.6 — both mean "this
+  stays.")
+- **→ plan** — "later." A planned item under the relevant question
+  (§8's deferral verb, reachable from inside the conversation).
+- **keep** *(artifacts)* — retention decided at the moment of seeing,
+  not at the sweep.
+- **⌖ hold** — onto the desk for two-locus work (unchanged).
+- **draft claim** — "formalize this": invokes the record-writer on the
+  statement; the draft goes to the inbox like any claim draft — this
+  one IS a decision, so the propose→ratify gate holds.
+- **✗ dispute** — the anti-gesture: "don't build on this." The element
+  wears a dissent mark, the drafting agent may not cite it without
+  surfacing the dispute, and — like dismissals — the objection is
+  remembered until the world changes.
+
+Three disciplines make the vocabulary safe:
+
+1. **Receipts.** Every gesture leaves a chip on the message — "→ noted
+   · T1", "→ planned · Q2", "kept ✓", "✗ disputed" — a door to where
+   it landed, and the visible pre-filled routing row: distillation
+   becomes mostly confirming what you aimed while it was hot.
+2. **User gestures are ceremony-free; agent invocations are not.**
+   mark / note / plan / keep / hold / dispute are the user's own
+   intent and file directly (the §14.5 rule); draft-claim passes
+   through the inbox, because it asks the agent to write toward the
+   story.
+3. **Aim is optional.** Every verb works unaimed (the agent routes,
+   visibly); aiming — hold the verb to pick a trail or question, or
+   **drag the artifact across onto a document section** (the panel
+   sits beside the page; drop-on-section is deixis in reverse,
+   confirmed with the §14.4 intent card) — is there exactly when the
+   user already knows where it goes.
+
+The symmetry closes the loop: the agent's side of the conversation
+already wears its receipts ("✦ fragment drafted → T1 ↓"); user gestures
+produce the mirror image. Between the two, the transcript becomes
+visibly stitched to the record it produced — every stitch a door, at
+turn grain.
+
 ## 7 · Glyph grammar
 
 Uniform, small, and closed — every mark means one thing everywhere:

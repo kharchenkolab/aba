@@ -243,6 +243,24 @@ describe('workflow storyboard', () => {
     unmount()
   })
 
+  it('chat gestures leave receipts — noticing-time routing, undoable', () => {
+    const { getAllByText, getAllByTitle, getByText, unmount } = render(<Record world={scene('m3').world} />)
+    // pin is the substrate's keep_message, generalized
+    fireEvent.click(getAllByText('pin')[0])
+    getByText(/pinned → note/)
+    // dispute another statement: the anti-gesture is remembered
+    fireEvent.click(getAllByTitle(/anti-gesture/)[0])
+    getByText(/will not be cited without the dispute/)
+    // keep a figure at the moment of seeing
+    fireEvent.click(getAllByText('keep ✓')[0])
+    getByText(/kept ✓ durably/)
+    // receipts are undoable — the bar returns, other verbs available again
+    fireEvent.click(getAllByText('undo')[0])
+    fireEvent.click(getAllByText('mark')[0])
+    getByText(/the agent must route this; it cannot fade/)
+    unmount()
+  })
+
   it('M8 the trust ratchet offers to earn ceremony away, visibly', () => {
     const { getByText, unmount } = render(<Record world={scene('m8').world} />)
     fireEvent.click(getByText(/4 need you/))
