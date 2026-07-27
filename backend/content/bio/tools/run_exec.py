@@ -66,8 +66,7 @@ def _untracked_write_note(sess, lang: str) -> str:
         return ""
     base = getattr(sess, "_aba_sandbox_cwd", None)
     if not base:
-        sess._aba_sandbox_cwd = cwd          # first observation IS the sandbox
-        return ""
+        return ""                            # sandbox unknown → no claim
     import os as _os
     if _os.path.normpath(cwd) == _os.path.normpath(base):
         return ""
@@ -268,6 +267,7 @@ def __aba_ns_probe():
         if len(out) >= 30: out.append('...'); break
     print('__ABA_NS_BEGIN__'); print(*out, sep='\\n'); print('__ABA_NS_END__')
     import os as _o; print('__ABA_CWD__', _o.getcwd())
+    print('__ABA_SANDBOX__', _o.environ.get('WORK_DIR', ''))
 __aba_ns_probe(); del __aba_ns_probe
 """
 
@@ -290,6 +290,7 @@ local({
   }
   cat('__ABA_NS_BEGIN__\n'); for (l in out) cat(l,'\n',sep=''); cat('__ABA_NS_END__\n')
   cat('__ABA_CWD__ ', getwd(), '\n', sep='')
+  cat('__ABA_SANDBOX__ ', Sys.getenv('WORK_DIR'), '\n', sep='')
 })
 """
 
@@ -304,6 +305,19 @@ def _kernel_namespace_preview(sess, lang: str) -> list[str]:
             # still landing in the harvested sandbox
             try:
                 sess._aba_probe_cwd = out.split("__ABA_CWD__", 1)[1].splitlines()[0].strip()
+            except Exception:  # noqa: BLE001
+                pass
+        if "__ABA_SANDBOX__" in out:
+            # The sandbox is KNOWN, not remembered: the setup block binds
+            # WORK_DIR to the kernel's own directory at start and nothing we do
+            # rebinds it. Deriving the baseline from the first probe instead was
+            # wrong for the commonest shape — an agent that chdirs in its FIRST
+            # block made the drifted directory the baseline, so the warning
+            # never fired (caught live on mendel).
+            try:
+                sess._aba_sandbox_cwd = (
+                    out.split("__ABA_SANDBOX__", 1)[1].splitlines()[0].strip()
+                    or getattr(sess, "_aba_sandbox_cwd", None))
             except Exception:  # noqa: BLE001
                 pass
         if "__ABA_NS_BEGIN__" not in out: return []

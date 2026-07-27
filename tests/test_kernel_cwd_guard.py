@@ -235,13 +235,24 @@ class _Sess:
             self._aba_sandbox_cwd = base
 
 
-def test_first_probe_sets_the_baseline_and_says_nothing():
-    """The kernel starts IN its sandbox, so the first observation is the
-    baseline — not a warning."""
+def test_drift_in_the_very_FIRST_block_is_caught():
+    """THE live miss. The baseline used to be "whatever the first probe saw",
+    so an agent that chdirs inside its FIRST block made the drifted directory
+    the baseline and the warning never fired (verified live on mendel: the file
+    landed outside the sandbox and the platform said nothing). The sandbox is
+    KNOWN — the setup block binds WORK_DIR to it — so one block is enough."""
+    from content.bio.tools.run_exec import _untracked_write_note
+    s = _Sess(cwd="/home/u/aba_livetest_out", base="/home/u/.weft/kernels/krn_1")
+    note = _untracked_write_note(s, "r")
+    assert "no longer its sandbox" in note, note
+
+
+def test_unknown_sandbox_makes_no_claim():
+    """CEILING: without WORK_DIR there is nothing to compare against — stay
+    silent rather than inventing a baseline."""
     from content.bio.tools.run_exec import _untracked_write_note
     s = _Sess(cwd="/home/u/.weft/kernels/krn_1")
     assert _untracked_write_note(s, "r") == ""
-    assert s._aba_sandbox_cwd == "/home/u/.weft/kernels/krn_1"
 
 
 def test_drift_is_reported_with_both_paths_and_the_levers():
