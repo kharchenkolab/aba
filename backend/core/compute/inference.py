@@ -125,6 +125,27 @@ def pick_working_root(storage: dict, *, scheduler: bool = False) -> dict:
             "reason": best["note"], "kind": best["kind"], "options": opts}
 
 
+def _same_platform_as_controller(caps: dict) -> bool:
+    """Could the CONTROLLER's own interpreter run on this machine?
+
+    Only then is the shared-fs lane's premise true. Compares OS and normalized
+    architecture; unknown either side answers False, because shared-fs is the
+    lane that fails obscurely when wrong (a wrong-arch binary reached over a
+    mount) while detached is correct everywhere — the safe default is the one
+    that only costs a payload copy."""
+    import platform as _plat
+    site_os = str(caps.get("os") or "").lower()
+    site_arch = str(caps.get("arch") or "").lower()
+    if not site_os or not site_arch:
+        return False
+    host_os = {"darwin": "darwin", "linux": "linux"}.get(_plat.system().lower(), "")
+    _norm = {"x86_64": "x86_64", "amd64": "x86_64",
+             "aarch64": "arm64", "arm64": "arm64"}
+    return (site_os == host_os
+            and _norm.get(site_arch, site_arch) == _norm.get(
+                _plat.machine().lower(), _plat.machine().lower()))
+
+
 def propose(caps: dict, *, dest: str = "",
             shared_paths: Iterable[str] = (),
             accounts: Iterable[str] = (),
@@ -176,7 +197,21 @@ def propose(caps: dict, *, dest: str = "",
     use_for = ["interactive", "background"] + (["gpu"] if has_gpu else [])
 
     shared = [p for p in shared_paths if p]
-    contract = "shared-fs" if shared else "detached"
+    # A VISIBLE PATH IS NOT A SHARED-FS CONTRACT. The canary proves the
+    # deployment's data paths exist on the machine; the shared-fs LANE promises
+    # something stronger — that the controller's own interpreter, named by
+    # absolute path, will EXECUTE there (`{sys.executable} -m core.jobs.
+    # slurm_entry`). A cross-OS mount satisfies the first and breaks the second.
+    #
+    # Live (2026-07-27): an OrbStack Linux VM mounts the mac's filesystem at the
+    # same paths, so the canary found /Users/<me>/.aba present and inferred
+    # shared-fs. Every background job then ran the mac's arm64 python on Linux:
+    # "Error while finding module specification for 'core.jobs.slurm_entry'
+    # (ModuleNotFoundError: No module named 'core')" — exit 1, no traceback the
+    # agent could see. The same shape applies to any heterogeneous cluster whose
+    # shared filesystem spans architectures.
+    same_platform = _same_platform_as_controller(caps)
+    contract = "shared-fs" if (shared and same_platform) else "detached"
 
     part_rows = [{
         "name": p.get("name"),

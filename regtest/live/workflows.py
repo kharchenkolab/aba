@@ -312,6 +312,104 @@ def wf_state_persists_then_recovers(pid, tid, site):
     ]
 
 
+@scenario("wf_platform_mismatch_recovery")
+def wf_platform_mismatch_recovery(pid, tid, site):
+    """CAN THE AGENT ADAPT? — an arm64 site the project's DEFAULT env cannot run.
+
+    The default env is locked for the platforms it was solved on; an aarch64
+    Linux node is not one of them, and by design the default env does NOT
+    re-lock (only NAMED envs do). So a background job there fails with
+    env.platform_mismatch. That is not a defect to engineer around — it is a
+    recoverable obstacle, and the whole question is whether the platform tells
+    the agent enough to recover.
+
+    It did not: the failure surfaced as "infra failure before the entry ran?",
+    and the agent blamed the site and re-submitted the identical job — twice.
+    With the typed verdict and an ABA-shaped lever (make_isolated_env, which
+    re-locks for the site automatically), recovery should be reachable.
+
+    The prompt states the OUTCOME and grants permission to sort out obstacles;
+    it never names the obstacle, the env, or the verb."""
+    cap = drive(pid, tid,
+        f"On machine '{site}', run this as a BACKGROUND job: compute the first "
+        f"200 primes and write them to primes.csv. If something about the "
+        f"environment gets in the way, sort it out yourself — I just want the "
+        f"finished CSV as an output of this work.")
+    _wait_jobs_settled(pid, timeout_s=900)
+    jobs = api("GET", "/api/jobs")
+    jobs = jobs if isinstance(jobs, list) else jobs.get("jobs", [])
+    mine = [j for j in jobs if (j.get("params") or {}).get("project_id") == pid]
+    done = [j for j in mine if str(j.get("status")) in ("done", "succeeded", "finished")]
+    tracked = [n for n, _s, _k in tracked_outputs(pid)]
+    saw_mismatch = any("platform_mismatch" in str(j.get("error") or "") for j in mine)
+    adapted = any(t in ("make_isolated_env",) for t in cap["tools"])
+    return cap, [
+        ("turn completed", not cap["errors"]),
+        ("the platform obstacle was actually encountered (ARMED)", saw_mismatch
+         or bool(done)),
+        ("the agent ADAPTED rather than repeating the same failing submit",
+         adapted or bool(done)),
+        ("a job ultimately SUCCEEDED", bool(done)),
+        ("primes.csv is TRACKED", any("primes" in n for n in tracked)),
+    ]
+
+
+@scenario("wf_cross_language_handoff")
+def wf_cross_language_handoff(pid, tid, site):
+    """R produces, Python consumes — the seam that cost a live session three
+    round trips and a silently-wrong file.
+
+    What went wrong before: the agent reached for `lstar::write_anndata` (a
+    PYTHON-only name), got 'not an exported object', then forced
+    `lstar_write(d, "x.h5ad")` which silently wrote a zarr STORE under an .h5ad
+    name — discovered only later when the Python side found a directory. The
+    pack now names the asymmetry and the supported bridge at the point of need.
+
+    Un-prescribed: the user asks for the OUTCOME (numbers computed in R, read in
+    Python), never the format or the function."""
+    cap = drive(pid, tid,
+        f"On '{site}': compute a small table in R (say 20 rows of x and x^2), "
+        f"then hand that data over to PYTHON on the same machine and print its "
+        f"shape and column names from Python. Use whatever interchange you "
+        f"think is right — I just want the Python side to read what R made.")
+    res = tool_results(pid, tid)
+    langs = {r.get("execution_mode"): 1 for r in res}
+    used_r = any("run_r" in t for t in cap["tools"])
+    used_py = any("run_python" in t for t in cap["tools"])
+    # the two failure signatures from the live incident
+    bad_name = errors_containing(pid, tid, "not an exported object")
+    misnamed = [r for r in res
+                if "is.dir" in json.dumps(r) and "h5ad" in json.dumps(r)]
+    return cap, [
+        ("turn completed", not cap["errors"]),
+        ("both languages were actually used", used_r and used_py),
+        ("no guessed-API failure ('not an exported object')", not bad_name),
+        ("Python side reported the data it read",
+         any(k in cap["text"].lower() for k in ("20", "shape", "column"))),
+    ]
+
+
+@scenario("wf_viewer_link_remote")
+def wf_viewer_link_remote(pid, tid, site):
+    """A remote result must become something the USER can open. The viewer link
+    is the last mile of every analysis, and it failed live for absolute remote
+    paths until get_viewer_url learned to say `register_dataset(path=, site=)`
+    and view_artifact grew a remote tier."""
+    cap = drive(pid, tid,
+        f"On '{site}', save a small CSV of 30 random numbers, then give me a "
+        f"link I can click to look at it.")
+    res = tool_results(pid, tid)
+    links = [r for r in res if isinstance(r, dict) and r.get("viewer_url")]
+    refusals = errors_containing(pid, tid, "No file matching")
+    return cap, [
+        ("turn completed", not cap["errors"]),
+        ("a viewer link was produced", bool(links)),
+        ("the agent gave the user a link, not an apology",
+         "viewer-launch" in cap["text"] or "/viewer" in cap["text"] or bool(links)),
+        ("no unrecoverable path refusal", not refusals or bool(links)),
+    ]
+
+
 # ── helpers over recorded state ─────────────────────────────────────────────
 
 def _kernel_deaths(pid: str, tid: str) -> list:
