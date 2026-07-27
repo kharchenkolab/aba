@@ -1178,7 +1178,11 @@ def _run_remote_kernel(input_: dict, ctx: dict | None, project_id: str,
                         f"({getattr(cancel_token, 'reason', '')}). No further work happened."}
     fetch_dir, remote_only = _fetch_new_kernel_files(
         sess.kernel_id, inv0, project_id, str(thread_id))
-    plots, tables, files, warns = (harvest_artifacts(Path(fetch_dir), since_ts=0)
+    # project_id EXPLICITLY — harvest_artifacts otherwise buckets the copies
+    # under the AMBIENT project, which a concurrent turn moves mid-call (live
+    # 2026-07-27: a table registered at /artifacts/<OTHER project>/…).
+    plots, tables, files, warns = (harvest_artifacts(Path(fetch_dir), since_ts=0,
+                                                     project_id=project_id)
                                    if fetch_dir else ([], [], [], []))
     _fresh = getattr(sess, "_aba_cwd_just_switched", None) == "__FRESH__"
     if _fresh:
@@ -1599,7 +1603,8 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
             _hts = _time.time()
             plots, tables, files, warns = harvest_artifacts(
                 getattr(sess, "work_dir", None) or cwd,
-                since_ts=getattr(sess, "_aba_last_harvest_ts", None) or start_ts)
+                since_ts=getattr(sess, "_aba_last_harvest_ts", None) or start_ts,
+                project_id=project_id)
             sess._aba_last_harvest_ts = _hts
             warns = [*warns, *_reconcile_kernel_cwd(sess, cwd)]
             # Session-derived: reproduction needs this thread's ordered cells,
@@ -1897,7 +1902,8 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
     _hts = _time.time()
     plots, tables, files, warns = harvest_artifacts(
         getattr(sess, "work_dir", None) or cwd,
-        since_ts=getattr(sess, "_aba_last_harvest_ts", None) or start_ts)
+        since_ts=getattr(sess, "_aba_last_harvest_ts", None) or start_ts,
+        project_id=project_id)
     sess._aba_last_harvest_ts = _hts
     warns = [*warns, *_reconcile_kernel_cwd(sess, cwd)]
     from core.exec.output_cap import snip_middle

@@ -185,3 +185,47 @@ def test_no_transfer_site_breaks_on_capped_alone():
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# ── every harvest names its project explicitly ───────────────────────────────
+#
+# `harvest_artifacts` falls back to `current_project_id()` — the AMBIENT project,
+# which a concurrent turn moves mid-call. Live (2026-07-27, --cross-project lane):
+# a thread in prj_A had its table registered at `/artifacts/prj_B/…`, so the
+# producing project showed no output at all while a bystander gained one. The exec
+# records were correct by then; the ARTIFACT COPY was not, because four call sites
+# omitted the argument they already had in scope.
+#
+# Same shape as the transfer sites above: the caller knows, and must say.
+
+_HARVEST_RE = __import__("re").compile(r"harvest_artifacts\s*\(")
+
+
+def _harvest_calls() -> list[tuple[str, int, str]]:
+    out = []
+    for sub in ("backend/core", "backend/content"):
+        for f in sorted((ROOT / sub).rglob("*.py")):
+            if "vendor" in f.parts or "__pycache__" in f.parts:
+                continue
+            lines = f.read_text(encoding="utf-8", errors="ignore").splitlines()
+            for i, line in enumerate(lines):
+                code = line.split("#", 1)[0]
+                if not _HARVEST_RE.search(code) or "def harvest_artifacts" in code:
+                    continue
+                # the call may span lines; look at the whole invocation window
+                window = "\n".join(lines[i:i + 6])
+                out.append((str(f.relative_to(ROOT)), i + 1, window))
+    return out
+
+
+def test_the_harvest_scanner_finds_call_sites():
+    """ARMED: a scanner that matches nothing certifies every site compliant."""
+    calls = _harvest_calls()
+    assert len(calls) >= 6, f"only found {len(calls)} harvest call sites"
+
+
+def test_every_harvest_call_passes_a_project():
+    missing = [f"{p}:{n}" for p, n, w in _harvest_calls() if "project_id" not in w]
+    assert not missing, (
+        "harvest_artifacts without an explicit project_id — the copies land under "
+        "whatever project is ambient at that instant:\n  " + "\n  ".join(missing))
