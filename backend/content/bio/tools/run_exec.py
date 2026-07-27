@@ -385,13 +385,48 @@ def _maybe_force_preamble_on_file_error(sess, stderr: str, stdout: str) -> bool:
     return True
 
 
+def _sibling_language_sandboxes(thread_id: str, site: str, lang: str) -> list[tuple]:
+    """[(lang, absolute sandbox path)] for this thread's OTHER live kernels on
+    the SAME site.
+
+    One kernel = one sandbox, so a language switch changes the directory that
+    bare relative filenames resolve against. The banner promises bare names
+    "land in this kernel's sandbox", which is true and still misleading: an
+    agent handing a table from R to Python on one machine reads the promise as a
+    per-machine working directory.
+
+    Live (2026-07-27, orbtest): R wrote `x_squared.csv` with a bare name, Python
+    read it with a bare name on the same site, FileNotFoundError. The agent
+    recovered in three extra calls (find_files, then a glob under the other
+    kernel's directory) — and the recovery is itself the untracked-write shape,
+    because it reaches across sandboxes by absolute path. The file was never
+    lost; only its location was unsayable.
+    """
+    try:
+        from core.exec.kernels.pool import get_pool
+        out = []
+        for s in get_pool().sessions_for_thread(str(thread_id)):
+            if not getattr(s, "alive", False):
+                continue
+            if (getattr(s, "site", "local") or "local") != site:
+                continue
+            other = (getattr(s, "lang", None) or "").lower()
+            box = getattr(s, "_aba_sandbox_cwd", None)
+            if other and other != lang and box:
+                out.append((other, box))
+        return out
+    except Exception:  # noqa: BLE001 — orientation is best-effort
+        return []
+
+
 def _prior_run_files_preamble(project_id: str, thread_id: str,
                               current_run_id: str | None,
                               max_runs: int = 4, max_files: int = 12,
                               max_scratch_files: int = 12,
                               cwd: str | None = None,
                               fresh_kernel: bool = False,
-                              remote_site: str | None = None) -> str:
+                              remote_site: str | None = None,
+                              lang: str | None = None) -> str:
     """Inject a small, focused orientation block at the moment the cwd shifts
     (a new run opens, the kernel restarts, etc.). Lists what's reachable from
     the new cwd that ISN'T in it, so bare-filename loads recover gracefully.
@@ -663,6 +698,24 @@ def _prior_run_files_preamble(project_id: str, thread_id: str,
                 f"view_artifact, no viewer link without registering them by hand. "
                 f"If a step must write outside the sandbox, call register_dataset("
                 f"path=..., site=\"{remote_site}\") for each result you want to keep.")
+            siblings = (_sibling_language_sandboxes(thread_id, remote_site, lang)
+                        if lang else [])
+            if siblings:
+                # The handoff the bare-name rule cannot express: each language
+                # has its OWN sandbox on this machine, so a file another
+                # language just wrote is not in yours. Name the directory rather
+                # than leaving the agent to discover it by failing first.
+                lines.append("")
+                names = ", ".join(f"{lg.upper()} → {box}" for lg, box in siblings)
+                lines.append(
+                    f"CROSS-LANGUAGE on {remote_site}: each language has its own "
+                    f"sandbox here, so a bare filename does NOT reach the other "
+                    f"one's files. This thread's other live sandbox(es) on "
+                    f"{remote_site}: {names}. To hand data over, read it from "
+                    f"that absolute path (the file is really there), or write it "
+                    f"to the OTHER language's sandbox path so it lands where the "
+                    f"reader looks. Bare names still keep writes harvestable — "
+                    f"use them for the results you want tracked.")
         return "\n".join(lines).rstrip() + "\n"
     except Exception:  # noqa: BLE001
         return ""
@@ -1214,7 +1267,7 @@ def _run_remote_kernel(input_: dict, ctx: dict | None, project_id: str,
             str(project_id), str(thread_id), current_run_id=_rid_now,
             cwd=getattr(sess, "_aba_cwd", None),
             fresh_kernel=(_was == "__FRESH__"),
-            remote_site=site)
+            remote_site=site, lang=lang)
         sess._aba_cwd_just_switched = None
         if preamble:
             out["stdout"] = preamble + "\n" + (out["stdout"] or "")
@@ -1581,7 +1634,8 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
                                                     current_run_id=_arid(str(thread_id)),
                                                     cwd=getattr(sess, "_aba_cwd", None),
                                                     fresh_kernel=(_was == "__FRESH__"),
-                                                    remote_site=_remote_site_of(sess))
+                                                    remote_site=_remote_site_of(sess),
+                                                    lang=getattr(sess, "lang", None))
                 sess._aba_cwd_just_switched = None
                 if preamble:
                     out["stdout"] = preamble + "\n" + (out["stdout"] or "")
@@ -1868,7 +1922,8 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
                                              current_run_id=_arid(str(thread_id)),
                                              cwd=getattr(sess, "_aba_cwd", None),
                                              fresh_kernel=(_was == "__FRESH__"),
-                                             remote_site=_remote_site_of(sess))
+                                             remote_site=_remote_site_of(sess),
+                                             lang=getattr(sess, "lang", None) or "r")
         sess._aba_cwd_just_switched = None
         if preamble:
             out["stdout"] = preamble + "\n" + (out["stdout"] or "")

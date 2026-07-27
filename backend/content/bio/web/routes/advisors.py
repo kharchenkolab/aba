@@ -50,15 +50,16 @@ async def entities_advise(entity_id: str, _pid: str = Depends(require_project)):
     """Fire the appropriate on-focus advisor for an entity (Explorer for
     datasets, Stylist for narratives). Idempotent — advisors that have
     already spoken about the entity won't re-fire. Non-blocking."""
-    import asyncio
+    from core import projects
     e = get_entity(entity_id)
     if not e:
         raise HTTPException(404, f"Entity {entity_id} not found")
-    loop = asyncio.get_event_loop()
+    # projects.spawn, not run_in_executor: the advisor writes notes into THIS
+    # project's graph, and the bare executor hop drops the binding.
     if e["type"] == "dataset":
-        loop.run_in_executor(None, explorer_suggest, entity_id)
+        projects.spawn(explorer_suggest, entity_id)
     elif e["type"] == "narrative":
-        loop.run_in_executor(None, stylist_review, entity_id)
+        projects.spawn(stylist_review, entity_id)
     return {"ok": True}
 
 

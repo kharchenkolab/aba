@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sqlite3
 import sys
 import time
@@ -171,6 +172,28 @@ def notes_containing(pid: str, tid: str, needle: str) -> list[str]:
             if isinstance(r.get("note"), str) and needle in r["note"]]
 
 
+def hrefs_offered(text: str) -> list[str]:
+    """Every in-app link the agent actually handed the user. `/artifacts/...`
+    (a served file) and `/viewer/...` (an external launch) are BOTH honest
+    answers to "give me a link" — which one is right depends on the format, so
+    a check may only require that SOME link was offered, never a specific
+    mechanism."""
+    return re.findall(r"\((/(?:artifacts|viewer)[^\s)]+)\)", text or "")
+
+
+def link_resolves(href: str) -> bool:
+    """The outcome behind a link: does it actually serve? A ranged/oversize
+    honest answer counts; a 404 does not."""
+    req = urllib.request.Request(BASE + href, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return r.status in (200, 206) and bool(r.read(1))
+    except urllib.error.HTTPError as e:
+        return e.code == 413          # honest "too big to inline" still resolves
+    except Exception:                 # noqa: BLE001
+        return False
+
+
 def errors_containing(pid: str, tid: str, needle: str) -> list[str]:
     out = []
     for r in tool_results(pid, tid):
@@ -178,6 +201,145 @@ def errors_containing(pid: str, tid: str, needle: str) -> list[str]:
         if needle in blob:
             out.append(blob[:200])
     return out
+
+
+# ── friction sweep (runs after EVERY scenario) ──────────────────────────────
+#
+# A scenario's checks answer "did the workflow reach the goal". They say nothing
+# about what it COST — the retried tool call, the swallowed error, the kernel
+# that died and took state with it. Every bug this fortnight showed up as
+# friction long before it showed up as a failure, so the sweep records it
+# whether or not the checks passed.
+
+_FRICTION_SIGNATURES = [
+    ("not found",            "a door refused a handle"),
+    ("no such file",         "path resolution missed"),
+    ("not an exported object", "guessed an API name"),
+    ("cannot open the connection", "kernel protocol write failed"),
+    ("Traceback",            "uncaught exception surfaced to the agent"),
+    ("platform_mismatch",    "env not locked for the site's platform"),
+    ("solve_conflict",       "env unsatisfiable as pinned"),
+    ("unreachable",          "site transport failed"),
+    ("nonzero_exit",         "job failed without a reason the agent could use"),
+    ("no result.json",       "job outcome unreadable"),
+    ("substrate_offline",    "substrate not configured"),
+    ("no longer its sandbox", "writes left the harvested sandbox"),
+]
+
+
+def friction_sweep(pid: str, tid: str) -> list[dict]:
+    """Frictions the agent absorbed, whether or not the scenario passed.
+
+    TWO sources, deliberately: the EXISTING consumption-surface oracle
+    (`regtest/harness/surfaces.surface_parity_failures` — "can a person
+    actually open what was computed?", the standing post-condition the sweep
+    already applies to synthetic scenarios) plus signatures that are only
+    visible in the CONVERSATION, which the oracle never sees because it walks
+    HTTP surfaces rather than tool results: a guessed API name, a blind retry,
+    a kernel that restarted and took state with it."""
+    out: list[dict] = []
+
+    # 1. the real oracle, reused rather than re-implemented
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from harness.surfaces import surface_parity_failures
+
+        class _C:                      # the oracle wants a .get(url) client
+            def get(self, url):
+                import types
+                r = api("GET", url)
+                return types.SimpleNamespace(
+                    status_code=200 if "_http_error" not in r else r["_http_error"],
+                    json=lambda: r, content=json.dumps(r).encode(), text=json.dumps(r))
+        for f in surface_parity_failures(_C(), pid) or []:
+            out.append({"kind": "consumption-surface parity", "signature": "surfaces",
+                        "excerpt": str(f)[:200]})
+    except Exception as e:  # noqa: BLE001 — the oracle is a bonus, never the gate
+        out.append({"kind": "surface oracle unavailable", "signature": "surfaces",
+                    "excerpt": f"{type(e).__name__}: {e}"})
+
+    # 2. conversation-only signatures
+    res = tool_results(pid, tid)
+    for r in res:
+        blob = json.dumps(r)[:4000]
+        for sig, meaning in _FRICTION_SIGNATURES:
+            if sig.lower() in blob.lower():
+                out.append({"kind": meaning, "signature": sig,
+                            "excerpt": _excerpt(blob, sig)})
+                break
+    fresh = sum(1 for r in res if "Fresh kernel" in str(r.get("stdout", "")))
+    if fresh > 1:
+        out.append({"kind": "kernel restarted mid-scenario (state lost)",
+                    "signature": "Fresh kernel", "excerpt": f"{fresh} fresh-kernel banners"})
+    # A blind retry is the SAME call made again after the previous one FAILED.
+    # Both halves matter, and both were once wrong here:
+    #   * the key truncated the serialized input to 200 chars, so a job
+    #     resubmitted with env='system' after a platform_mismatch — the adaptive
+    #     recovery this suite exists to reward — keyed identically to the
+    #     original and was reported as a blind retry. Compare the WHOLE call.
+    #   * a repeat of a call that SUCCEEDED is not a retry at all (a probe run
+    #     twice, a deliberate re-check), so pair each call with its outcome.
+    seen: dict = {}
+    for name, inp, failed in _tool_calls(pid, tid):
+        key = (name, inp)
+        prev = seen.get(key) or {"n": 0, "after_failure": False}
+        seen[key] = {"n": prev["n"] + 1,
+                     # the REPEAT counts only if what it repeats had failed
+                     "after_failure": prev["after_failure"] or
+                     (prev["n"] > 0 and prev.get("last_failed", False)),
+                     "last_failed": failed}
+    for (name, inp), st in seen.items():
+        if st["n"] > 1 and st["after_failure"]:
+            out.append({"kind": "identical call repeated (blind retry)",
+                        "signature": name, "excerpt": f"{st['n']}x {name} {inp[:90]}"})
+    return out
+
+
+def _excerpt(blob: str, sig: str) -> str:
+    i = blob.lower().find(sig.lower())
+    return blob[max(0, i - 60):i + 140].replace("\n", " ")
+
+
+def _tool_calls(pid: str, tid: str) -> list:
+    """(tool_name, canonical input, did_it_fail) in call order.
+
+    The input is key-SORTED json so two calls that differ only in dict ordering
+    compare equal, and full-length so two calls that differ anywhere compare
+    unequal. `did_it_fail` is read from the matching tool_result (by
+    tool_use_id), which arrives in a LATER message than the call."""
+    db = RUNTIME / pid / "project.db"
+    if not db.exists():
+        return []
+    c = sqlite3.connect(str(db))
+    try:
+        rows = c.execute("select content from messages where thread_id=? order by id",
+                         (tid,)).fetchall()
+    except Exception:  # noqa: BLE001
+        return []
+    calls: list = []
+    failed_ids: set = set()
+    for (content,) in rows:
+        try:
+            blocks = json.loads(content)
+        except Exception:
+            continue
+        if not isinstance(blocks, list):
+            continue
+        for b in blocks:
+            if not isinstance(b, dict):
+                continue
+            if b.get("type") == "tool_use":
+                calls.append([b.get("name"),
+                              json.dumps(b.get("input", {}), sort_keys=True),
+                              b.get("id")])
+            elif b.get("type") == "tool_result":
+                cc = b.get("content")
+                blob = cc if isinstance(cc, str) else json.dumps(cc)
+                bad = (b.get("is_error") or '"error"' in blob
+                       or '"returncode": 1' in blob or '"ok": false' in blob)
+                if bad and b.get("tool_use_id"):
+                    failed_ids.add(b["tool_use_id"])
+    return [(n, i, cid in failed_ids) for n, i, cid in calls]
 
 
 # ── scenarios ───────────────────────────────────────────────────────────────
@@ -391,22 +553,33 @@ def wf_cross_language_handoff(pid, tid, site):
 
 @scenario("wf_viewer_link_remote")
 def wf_viewer_link_remote(pid, tid, site):
-    """A remote result must become something the USER can open. The viewer link
-    is the last mile of every analysis, and it failed live for absolute remote
-    paths until get_viewer_url learned to say `register_dataset(path=, site=)`
-    and view_artifact grew a remote tier."""
+    """A remote result must become something the USER can open. The last mile of
+    every analysis, and it failed live for absolute remote paths until
+    get_viewer_url learned to say `register_dataset(path=, site=)` and
+    view_artifact grew a remote tier.
+
+    The check asserts the OUTCOME (a link was offered and it serves), never the
+    MECHANISM. An earlier version required a `viewer_url` / `/viewer` href and
+    so failed a session in which the platform was entirely correct: a CSV has no
+    external viewer, `get_viewer_url` said exactly that, and the agent handed
+    over a working `/artifacts/...` link. Prescribing the mechanism made the
+    right answer unrepresentable."""
     cap = drive(pid, tid,
         f"On '{site}', save a small CSV of 30 random numbers, then give me a "
         f"link I can click to look at it.")
-    res = tool_results(pid, tid)
-    links = [r for r in res if isinstance(r, dict) and r.get("viewer_url")]
+    links = hrefs_offered(cap["text"])
+    viewer = [r for r in tool_results(pid, tid)
+              if isinstance(r, dict) and r.get("viewer_url")]
+    dead = [h for h in links if not link_resolves(h)]
     refusals = errors_containing(pid, tid, "No file matching")
     return cap, [
         ("turn completed", not cap["errors"]),
-        ("a viewer link was produced", bool(links)),
-        ("the agent gave the user a link, not an apology",
-         "viewer-launch" in cap["text"] or "/viewer" in cap["text"] or bool(links)),
-        ("no unrecoverable path refusal", not refusals or bool(links)),
+        # ARMED: no link at all is a failure, so "all links resolve" can never
+        # pass vacuously on a turn that offered none.
+        ("the user was handed a clickable link", bool(links) or bool(viewer)),
+        (f"every offered link RESOLVES ({len(links)} checked)",
+         bool(links or viewer) and not dead),
+        ("no unrecoverable path refusal", not refusals or bool(links or viewer)),
     ]
 
 
@@ -473,8 +646,11 @@ def run_one(name, fn, site, keep=False):
     dt = time.time() - t0
     for label, ok in checks:
         print(f"   [{'PASS' if ok else 'FAIL'}] {label}")
+    frictions = friction_sweep(pid, tid)
+    for f in frictions:
+        print(f"   [friction] {f['kind']}: {f['excerpt'][:120]}")
     RESULTS.append({"name": name, "pid": pid, "secs": round(dt),
-                    "checks": checks,
+                    "checks": checks, "frictions": frictions,
                     "failed": [c for c, ok in checks if not ok]})
     print(f"   ({dt:.0f}s)")
     return pid
@@ -514,6 +690,12 @@ def main():
         print(f"  {'FAIL' if n_fail else 'ok  '}  {r['name']:32} {r['secs']:>4}s"
               + (f"  → {r['failed']}" if n_fail else ""))
     print(f"\n{len(RESULTS) - bad}/{len(RESULTS)} scenarios fully green")
+    allf = [(r["name"], f) for r in RESULTS for f in r.get("frictions", [])]
+    if allf:
+        print(f"\n---------------- FRICTIONS ({len(allf)}) ----------------")
+        for nm, f in allf:
+            print(f"  {nm:32} {f['kind']}")
+            print(f"      {f['excerpt'][:150]}")
     return 1 if bad else 0
 
 

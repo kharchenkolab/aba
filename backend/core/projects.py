@@ -331,6 +331,67 @@ def bind(pid: str | None):
         _active_pid.reset(tok_pid)
 
 
+# ── crossing a thread boundary without losing the project ───────────────────
+#
+# bind() binds the project for the CURRENT execution context. A worker thread
+# is a different execution context, and `loop.run_in_executor(None, fn, ...)`
+# does NOT carry contextvars into it — so inside that thread `current()` and
+# `active_db_path()` silently fall back to the PROCESS-GLOBAL project: whatever
+# project some other request most recently touched.
+#
+# Live (2026-07-27, orbtest sweep): the tool-dispatch hop in guide.py used the
+# bare form, so a remote run's exec records, its harvest directory and its
+# registered artifacts were all written into a DIFFERENT project that happened
+# to be the global at that instant — while the messages, written on the loop,
+# went to the right one. The producing project ended up with zero provenance for
+# a run it really performed, and a bystander project gained a file it never
+# produced. Same class as the 2026-06 history corruption bind() was introduced
+# for; the executor hop was the hole left in it.
+#
+# Use these three, never a bare run_in_executor, for anything that touches the
+# graph. The context copy is a SNAPSHOT, so a fire-and-forget task launched
+# inside `with bind(pid)` keeps `pid` after the block exits — which is exactly
+# what the background advisors want.
+
+def _bound(fn, args, kwargs):
+    """`fn(*args, **kwargs)` as a zero-arg callable that restores the CALLER's
+    context (project binding + active DB) inside whatever thread runs it."""
+    import functools as _functools
+    ctx = contextvars.copy_context()
+    return _functools.partial(ctx.run, _functools.partial(fn, *args, **kwargs))
+
+
+async def in_thread(fn, /, *args, **kwargs):
+    """Await a blocking `fn` in a worker thread, project binding intact.
+    (`asyncio.to_thread` copies the context; that is the whole difference.)"""
+    import asyncio as _asyncio
+    return await _asyncio.to_thread(fn, *args, **kwargs)
+
+
+def in_pool(pool, fn, /, *args, **kwargs):
+    """Same guarantee against a CUSTOM executor — to_thread only uses the
+    default one. Returns the run_in_executor future."""
+    import asyncio as _asyncio
+    return _asyncio.get_running_loop().run_in_executor(pool, _bound(fn, args, kwargs))
+
+
+def spawn(fn, /, *args, **kwargs):
+    """Fire-and-forget `fn` in a worker thread, project binding intact.
+
+    With no running loop (a *sync* FastAPI route, which anyio already runs in a
+    context-propagating threadpool) it runs INLINE — correct, and bound, which
+    is why every callsite's bespoke `except RuntimeError: fn()` fallback belongs
+    here instead of at the callsite."""
+    import asyncio as _asyncio
+    call = _bound(fn, args, kwargs)
+    try:
+        loop = _asyncio.get_running_loop()
+    except RuntimeError:
+        call()
+        return None
+    return loop.run_in_executor(None, call)
+
+
 def _touch(pid: str) -> None:
     with _locked_registry() as reg:
         for p in reg:

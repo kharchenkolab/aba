@@ -562,12 +562,16 @@ async def _run_one(job_id: str, project_id: str | None = None) -> None:
     # job-scoped dir the agent then has to re-materialize. Falls back to job_id
     # when the submit had no open Run. stream=True tees output to a live job.log.
     exec_run_id = params.get("run_id") or job_id
+    # projects.in_thread, not a bare run_in_executor: the executor hop drops
+    # the project binding, so anything inside that resolves the project
+    # implicitly would fall through to the process-global. These calls pass
+    # project_id explicitly, but the hop must not be the weak link (see
+    # core.projects — the thread-boundary counterpart of bind()).
+    from core import projects as _projects_ctx
     try:
-        loop = asyncio.get_event_loop()
         if kind == "run_nextflow":
             from core.exec.nextflow import run_nextflow_code
-            result_obj = await loop.run_in_executor(
-                None,
+            result_obj = await _projects_ctx.in_thread(
                 lambda: run_nextflow_code(
                     params.get("pipeline") or "", project_id=str(effective_pid),
                     run_id=exec_run_id, revision=params.get("revision"),
@@ -581,8 +585,7 @@ async def _run_one(job_id: str, project_id: str | None = None) -> None:
             # Scrape an external results dir into the standard result_obj — reuses the whole
             # finalize→register→present chain to import an outside Run (misc/external_import.md).
             from core.exec.import_run import import_run_code
-            result_obj = await loop.run_in_executor(
-                None,
+            result_obj = await _projects_ctx.in_thread(
                 lambda: import_run_code(
                     params.get("source_dir") or "", project_id=str(effective_pid),
                     run_id=exec_run_id, pipeline=params.get("pipeline"),
@@ -590,15 +593,13 @@ async def _run_one(job_id: str, project_id: str | None = None) -> None:
                     timeout_s=timeout_s, cancel_token=token, stream=True),
             )
         elif kind == "run_r":
-            result_obj = await loop.run_in_executor(
-                None,
+            result_obj = await _projects_ctx.in_thread(
                 lambda: run_r_code(code, project_id=str(effective_pid), run_id=exec_run_id,
                                    timeout_s=timeout_s, cancel_token=token,
                                    env=params.get("env"), stream=True),
             )
         else:
-            result_obj = await loop.run_in_executor(
-                None,
+            result_obj = await _projects_ctx.in_thread(
                 lambda: run_python_code(code, project_id=str(effective_pid), run_id=exec_run_id,
                                         timeout_s=timeout_s, cancel_token=token,
                                         env=params.get("env"), stream=True),

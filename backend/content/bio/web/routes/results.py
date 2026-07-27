@@ -158,7 +158,10 @@ async def promote_to_result(figure_id: str, req: PromoteFigureRequest, _pid: str
         raise HTTPException(400, str(e))
     # Fire the Skeptic asynchronously so the user gets the result back
     # promptly. The note shows up when the advisor rail next reloads.
-    asyncio.get_event_loop().run_in_executor(None, skeptic_review, rid)
+    # projects.spawn keeps this project's binding across the thread hop — the
+    # note the Skeptic writes belongs to THIS project's graph.
+    from core import projects
+    projects.spawn(skeptic_review, rid)
     return get_entity(rid)
 
 

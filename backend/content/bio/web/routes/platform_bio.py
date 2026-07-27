@@ -7,7 +7,6 @@ under core/web (where the seam forbids content imports).
 """
 from __future__ import annotations
 
-import asyncio
 
 from fastapi import APIRouter
 from pydantic import BaseModel
@@ -46,7 +45,8 @@ async def trigger_probe():
     endpoint so it can be triggered on demand / tested. Non-blocking work
     runs in a thread.
     """
-    report = await asyncio.get_event_loop().run_in_executor(None, run_probe)
+    from core import projects
+    report = await projects.in_thread(run_probe)
     if report is None:
         return {"ran": False, "reason": "no probeable entities yet"}
     return {"ran": True, **report}

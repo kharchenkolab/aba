@@ -390,6 +390,18 @@ class WeftSubmitter:
         self._record_run_target(params, r["job_id"])
 
     # ── detached transport (misc/detached_compute.md) ─────────────────────
+    def _job_site(self, params: dict) -> str:
+        """The site this JOB targets — not `self.site`, which is the submitter's
+        own default and is 'local' for every remote job routed through it.
+
+        ONE resolution, because a second copy went stale: the platform-mismatch
+        failure message read "this env is not available for LOCAL's platform
+        (linux-aarch64)" for a job that ran on a remote arm64 site. Internally
+        contradictory (local is not aarch64), and it pointed the agent at the
+        wrong machine while the real site name sat one dict key away.
+        """
+        return str(params.get("weft_site") or params.get("site") or self.site)
+
     def _site_kind(self, site: Optional[str] = None) -> Optional[str]:
         name = site or self.site
         for s in declared_compute_sites():
@@ -659,10 +671,8 @@ class WeftSubmitter:
             if not plat and params.get("env") and isinstance(task_err, dict):
                 # F-ENV-2 parity: a cross-platform layer_conflict for an
                 # EXTENDED named env surfaces here at realize too.
-                job_site = params.get("weft_site") or params.get("site") \
-                    or self.site
                 plat = _relock_platform(str(task_err.get("error") or ""),
-                                        params.get("env"), job_site)
+                                        params.get("env"), self._job_site(params))
             if plat and not params.get("platform_relocked") and \
                     (params.get("env") or params.get("env_id")):
                 try:
@@ -679,8 +689,7 @@ class WeftSubmitter:
                         extra["env_note"] = (
                             "re-locked BASE pack for the site platform — "
                             "session-installed extras are not in this env")
-                    job_site = params.get("weft_site") or params.get("site") \
-                        or self.site
+                    job_site = self._job_site(params)
                     task = self._build_detached_task(job, params,
                                                      relock["env_id"],
                                                      site=job_site)
@@ -709,7 +718,8 @@ class WeftSubmitter:
                     res["error_detail"] = str(task_err)
                 elif plat:
                     res["error"] = (
-                        f"this env is not available for {self.site}'s platform "
+                        f"this env is not available for "
+                        f"{self._job_site(params)}'s platform "
                         f"({plat}) — the re-lock failed or wasn't possible; "
                         f"see error_detail")
                     res["error_detail"] = str(task_err)
@@ -873,7 +883,7 @@ class WeftSubmitter:
             # transport is a property of the SITE, not of who asks: a
             # detached-contract site can never satisfy a controller-local
             # result.json check, whatever the row happens to say
-            site = params.get("weft_site") or params.get("site") or self.site
+            site = self._job_site(params)
             try:
                 detached = bool(site) and site != "local" \
                     and site_contract(str(site)) == "detached"

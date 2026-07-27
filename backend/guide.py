@@ -1065,8 +1065,8 @@ async def stream_response(
                     # job's frozen env — W3.4).
                     import functools as _ft
                     try:
-                        job = await asyncio.get_running_loop().run_in_executor(
-                            None, _ft.partial(
+                        job = await _projects.in_thread(
+                            _ft.partial(
                                 submit_python_job,
                                 code=tool_input.get("code", ""),
                                 title=tool_input.get("title") or "Background analysis",
@@ -1110,9 +1110,14 @@ async def stream_response(
                             "cancel_token": cancel_token}
                 import datetime as _dt
                 _t_start = _dt.datetime.now(_dt.timezone.utc)
-                _loop = asyncio.get_running_loop()
-                result_str = await _loop.run_in_executor(
-                    None, _exec_tool, name, tool_input, tool_ctx)
+                # projects.in_thread, NOT run_in_executor: the tool body writes
+                # exec records, harvests outputs and registers entities, and the
+                # bare executor hop drops the project binding — those writes then
+                # land in whatever project is the process-global. See
+                # projects.in_thread for the live incident.
+                from core import projects as _projects_mod
+                result_str = await _projects_mod.in_thread(
+                    _exec_tool, name, tool_input, tool_ctx)
                 _t_end = _dt.datetime.now(_dt.timezone.utc)
                 result_obj = json.loads(result_str)
                 # Telemetry record (best-effort; mirrors legacy path).

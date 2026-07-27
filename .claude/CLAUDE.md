@@ -40,6 +40,7 @@ ABA is an AI-orchestrated, **entity-oriented** workspace for data analysis: user
 - Architecture docs: `docs/arch/` — a succinct, code-cited doc per subsystem (index in `docs/arch/README.md`); `misc/*.md` are the design/evolution logs behind them.
 - Arch docs are **coherent descriptions of the CURRENT system, never a journal**: no dated section headers, no "as built <date>" / "NEW" addenda — integrate changes into the existing narrative as if the doc were written today. History and rationale live in `misc/` and git; an arch doc may *link* there, not accrete.
 - Consult the relevant `docs/arch/` doc before touching a subsystem; keep it true — update it + its **Known gaps** at any change that materially alters that part.
+- **Before building ANY test infrastructure** — a fixture, a site, an oracle, a runner, a "sweep", a live probe — read `docs/arch/testing.md` (the instrument inventory: which layer sees what) and the regtest docs it points at. The estate already has 42 scenarios, ~12 harness modules and 8 live studies; a dockerized slurm fixture, a surface-parity oracle, a live-server auditor and a live-deployment agent probe have each been rebuilt beside a working equivalent. Extend the existing instrument (usually new `expect:` vocabulary in `regtest/SCHEMA.md`) instead of adding a parallel lane.
 
 ## Change discipline for shared agent inputs (tool catalog, prompts, context)
 These are cross-cutting inputs to EVERY agent decision — a change has platform-wide blast radius and erodes quality silently if made structurally. So:

@@ -114,3 +114,49 @@ def test_unmapped_codes_still_use_the_substrate_hint():
     msg = _typed_task_error({"error": "task.walltime_exceeded", "detail": "d",
                              "hints": {"suggestion": "ask for a longer walltime"}})
     assert "ask for a longer walltime" in msg
+
+
+# ── the failure must name the machine the job actually RAN on ────────────────
+#
+# Live (2026-07-27, orbtest sweep): a job submitted to a remote arm64 site failed
+# with "this env is not available for LOCAL's platform (linux-aarch64)". The
+# submitter interpolated `self.site` — its own default, 'local' for every remote
+# job routed through it — instead of the job's target. The sentence is
+# self-contradictory (local is not aarch64) and points the agent at the wrong
+# machine, while the true site name sits one dict key away.
+
+from core.jobs.weft_submitter import WeftSubmitter  # noqa: E402
+
+
+def _sub(site="local"):
+    s = WeftSubmitter.__new__(WeftSubmitter)   # no substrate needed for _job_site
+    s.site = site
+    return s
+
+
+def test_the_job_site_beats_the_submitters_own_default():
+    """THE regression: submitter default 'local', job routed to a remote site."""
+    assert _sub("local")._job_site({"weft_site": "orbtest"}) == "orbtest"
+    assert _sub("local")._job_site({"site": "orbtest"}) == "orbtest"
+
+
+def test_weft_site_wins_over_site():
+    """Both keys can be present; weft_site is the resolved transport target."""
+    assert _sub("local")._job_site({"weft_site": "cbe", "site": "mendel"}) == "cbe"
+
+
+def test_no_site_on_the_job_falls_back_to_the_submitter():
+    """CEILING: a genuinely local job must still say 'local' — over-applying the
+    fix (e.g. returning "" or "unknown") would degrade the common case."""
+    assert _sub("local")._job_site({}) == "local"
+    assert _sub("mendel")._job_site({}) == "mendel"
+
+
+def test_degenerate_site_values_do_not_win():
+    """WIDE — the shapes a params dict really carries: an explicitly null or
+    empty site is ABSENCE, not a site named ''."""
+    for params in ({"weft_site": None}, {"weft_site": ""},
+                   {"site": None}, {"weft_site": None, "site": None}):
+        assert _sub("local")._job_site(params) == "local", params
+    # a non-string site still renders as one rather than crashing the message
+    assert _sub("local")._job_site({"site": 7}) == "7"

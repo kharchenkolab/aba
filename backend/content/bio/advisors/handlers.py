@@ -6,7 +6,6 @@ Importing this module registers:
                  entities were produced by an analysis run.
 """
 from __future__ import annotations
-import asyncio
 from core.hooks.dispatcher import register
 from content.bio.advisors.runner import methodologist_review
 
@@ -23,14 +22,11 @@ def _on_post_tool_methodologist(ctx: dict) -> None:
     parent_run_id = ctx.get("parent_run_id")
     thread_id = ctx.get("thread_id")
 
-    def _run():
-        methodologist_review(aid, parent_run_id=parent_run_id, thread_id=thread_id)
-
-    try:
-        loop = asyncio.get_event_loop()
-        loop.run_in_executor(None, _run)
-    except RuntimeError:
-        _run()
+    # projects.spawn keeps the project binding across the thread hop (the review
+    # writes into this project's graph) and owns the no-loop inline fallback.
+    from core import projects
+    projects.spawn(methodologist_review, aid,
+                   parent_run_id=parent_run_id, thread_id=thread_id)
 
 
 # Priority 20 so artifact-registration (priority 10) runs first; we
