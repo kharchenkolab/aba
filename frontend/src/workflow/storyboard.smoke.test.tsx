@@ -245,19 +245,19 @@ describe('workflow storyboard', () => {
 
   it('chat gestures leave receipts — noticing-time routing, undoable', () => {
     const { getAllByText, getAllByTitle, getByText, unmount } = render(<Record world={scene('m3').world} />)
-    // pin is the substrate's keep_message, generalized
+    // pin: the universal gesture — keep_message, agent proposes form and route
     fireEvent.click(getAllByText('pin')[0])
-    getByText(/pinned → note/)
-    // dispute another statement: the anti-gesture is remembered
-    fireEvent.click(getAllByTitle(/anti-gesture/)[0])
+    getByText(/a pinned element never fades/)
+    // dispute another statement: the anti-gesture (a word, not a close icon)
+    fireEvent.click(getAllByText('dispute')[0])
     getByText(/will not be cited without the dispute/)
     // pin an artifact: implies keep — retention derived, no second verb
     fireEvent.click(getAllByText('pin')[0])
     getByText(/implies keep: never lapses/)
-    // receipts are undoable — the bar returns, other verbs available again
+    // receipts are undoable — the bar returns
     fireEvent.click(getAllByText('undo')[0])
-    fireEvent.click(getAllByText('mark')[0])
-    getByText(/the agent must route this; it cannot fade/)
+    fireEvent.click(getAllByText('pin')[0])
+    getByText(/a pinned element never fades/)
     unmount()
   })
 

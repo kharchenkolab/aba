@@ -365,16 +365,17 @@ than reconstructed at settlement. Each gesture pre-fills a row of the
 eventual routing table (§5), and each teaches the salience model
 (§14.4) more than ten accepted drafts:
 
-- **mark** — "this matters." Unaimed: the drafting agent must route it
-  (a marked element can never fade), destination its problem.
-- **pin** — "this is noticed." This is the substrate's *existing*
-  `keep_message` gesture, kept as-is at its default aim — pin → note,
-  *filed directly* (the user's own noticing needs no ratification),
-  pointed at its element, turn-stamped — and generalized with aims:
-  → trail · → question · → new trail. Users who know the classic UI's
-  pin already know this gesture; the Record adds destinations, not a
-  new concept. (Cousin of the section pin, §14.6 — both mean "this
-  stays.") Two spans, one verb:
+- **pin** — "this matters; don't lose it." THE universal gesture, and
+  the substrate's *existing* `keep_message`, kept at its default aim —
+  pin → note, *filed directly* (the user's own noticing needs no
+  ratification), pointed at its element, turn-stamped. A pinned
+  element can never fade, and the agent must route it — unaimed, the
+  destination is the agent's problem; aims are there on hold
+  (→ trail · → question · → new trail) for when the user already
+  knows. Users who know the classic UI's pin already know this
+  gesture; the Record adds destinations, not a new concept. (Cousin of
+  the section pin, §14.6 — both mean "this stays.") Two spans, one
+  verb:
   - *On artifacts* — figures, tables, whole output cells, which the
     classic pin already covers — **pin implies keep**: the pinned
     artifact gains an edge, leaves the leftover set, and never lapses.
@@ -397,22 +398,23 @@ eventual routing table (§5), and each teaches the salience model
 - **draft claim** — "formalize this": invokes the record-writer on the
   statement; the draft goes to the inbox like any claim draft — this
   one IS a decision, so the propose→ratify gate holds.
-- **✗ dispute** — the anti-gesture: "don't build on this." The element
-  wears a dissent mark, the drafting agent may not cite it without
-  surfacing the dispute, and — like dismissals — the objection is
-  remembered until the world changes.
+- **dispute** — the anti-gesture: "don't build on this." The element
+  wears a dissent mark (✗, the grammar's negative glyph — the button
+  itself is a word like the others, never an icon that reads as
+  "close"), the drafting agent may not cite it without surfacing the
+  dispute, and — like dismissals — the objection is remembered until
+  the world changes.
 
 Three disciplines make the vocabulary safe:
 
-1. **Receipts.** Every gesture leaves a chip on the message — "→ noted
-   · T1", "→ planned · Q2", "kept ✓", "✗ disputed" — a door to where
-   it landed, and the visible pre-filled routing row: distillation
+1. **Receipts.** Every gesture leaves a chip on the message — "pinned
+   → note · T1", "→ planned · Q2", "✗ disputed" — a door to where it
+   landed, and the visible pre-filled routing row: distillation
    becomes mostly confirming what you aimed while it was hot.
 2. **User gestures are ceremony-free; agent invocations are not.**
-   mark / note / plan / keep / hold / dispute are the user's own
-   intent and file directly (the §14.5 rule); draft-claim passes
-   through the inbox, because it asks the agent to write toward the
-   story.
+   pin / plan / hold / dispute are the user's own intent and file
+   directly (the §14.5 rule); draft-claim passes through the inbox,
+   because it asks the agent to write toward the story.
 3. **Aim is optional.** Every verb works unaimed (the agent routes,
    visibly); aiming — hold the verb to pick a trail or question, or
    **drag the artifact across onto a document section** (the panel

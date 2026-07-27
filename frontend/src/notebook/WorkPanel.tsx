@@ -156,16 +156,14 @@ export default function WorkPanel({ panel, onClose, onAdvance, onExpand, continu
               <div className="gest">
                 {m.text && (
                   <>
-                    <button title="this matters — unaimed salience: the agent must route it (a marked element can never fade), destination its problem; one tap teaches the salience model"
-                            onClick={() => gesture(i, 'marked — the agent must route this; it cannot fade')}>mark</button>
-                    <button title="the pin you already know (keep_message) — births a note, filed directly (your own noticing needs no ratification), pointed at its element, turn-stamped. Hold to aim: → trail · → question"
-                            onClick={() => gesture(i, 'pinned → note · turn-stamped — the agent will propose its trail')}>pin</button>
+                    <button title="this matters; don't lose it — the pin you already know (keep_message). Files directly as a note, turn-stamped; the agent proposes its form and route (a pinned element never fades). Hold to aim: → trail · → question"
+                            onClick={() => gesture(i, 'pinned · turn-stamped — the agent proposes its form; a pinned element never fades')}>pin</button>
                     <button title="later, aimed — lands as a planned item under this question (no ceremony; it is your plan)"
                             onClick={() => gesture(i, '→ planned under this question')}>→ plan</button>
                     <button title="formalize this — the record-writer drafts a claim from this statement; the draft goes to the inbox (this one IS a decision — the ratify gate holds)"
                             onClick={() => gesture(i, 'claim draft requested → inbox')}>draft claim</button>
-                    <button title="the anti-gesture: don't build on this. Wears a dissent mark; the agent may not cite it without surfacing the dispute; remembered until the world changes"
-                            onClick={() => gesture(i, '✗ disputed — will not be cited without the dispute')}>✗</button>
+                    <button title="the anti-gesture: don't build on this. Wears a dissent mark (✗); the agent may not cite it without surfacing the dispute; remembered until the world changes"
+                            onClick={() => gesture(i, '✗ disputed — will not be cited without the dispute')}>dispute</button>
                   </>
                 )}
                 {m.fig && (
