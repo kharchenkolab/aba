@@ -36,6 +36,24 @@ _RESULT_READ_RETRIES = 5
 _DETACHED_FETCH_BYTES = 50 * 1024 * 1024
 
 
+# Substrate error code → the lever an ABA AGENT actually has. Keep this small
+# and only for codes whose weft-side hint names a verb the agent cannot reach;
+# everything else falls through to the substrate's own (usually good) hint.
+_ABA_LEVERS = {
+    "env.platform_mismatch":
+        "the project environment is locked for other platforms and cannot be "
+        "used on this site. Build an isolated env for it — "
+        "make_isolated_env(name='<name>', language='python'|'r', packages=[...]) "
+        "— then submit with env='<name>'; an isolated env re-locks for the "
+        "site's platform automatically. (The project's DEFAULT env does not.)",
+    "env.solve_conflict":
+        "the environment could not be solved as pinned. Put the conflicting "
+        "package in an isolated env (make_isolated_env) rather than the "
+        "project's default session, which must stay solvable for every other "
+        "remote step.",
+}
+
+
 def _typed_task_error(raw) -> Optional[str]:
     """Render weft's task-row error payload as an agent-facing message, or None.
 
@@ -59,9 +77,18 @@ def _typed_task_error(raw) -> Optional[str]:
     msg = f"the job failed on the compute substrate: {code}"
     if detail:
         msg += f" — {detail}"
+    # Substrate hints are written for a WEFT caller and name WEFT verbs. Where
+    # aba has its own lever for a known code, prefer it: telling an agent to
+    # "env_ensure again" points at a verb it cannot call, so a correct diagnosis
+    # still dead-ends. Observed live — the agent read the platform_mismatch
+    # correctly and then had no action available to it.
+    aba_lever = _ABA_LEVERS.get(str(code))
+    if aba_lever:
+        return f"{msg} Fix: {aba_lever}"
     hints = payload.get("hints")
     if isinstance(hints, dict):
-        # surface the fix-shaped hints; weft puts the lever in one of these
+        # no aba lever for this code → the substrate's own hint is the best
+        # available, even if it speaks weft's vocabulary
         for key in ("suggestion", "fix", "remedy", "levers"):
             if hints.get(key):
                 msg += f" Fix: {hints[key]}"

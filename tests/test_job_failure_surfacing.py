@@ -53,8 +53,11 @@ def test_a_dict_payload_works_too():
 
 
 def test_hint_key_variants_are_all_surfaced():
+    """weft puts its lever under different keys depending on the path. Uses an
+    UNMAPPED code deliberately — a code with an aba lever overrides the hint by
+    design (see the override tests below)."""
     for key in ("suggestion", "fix", "remedy", "levers"):
-        msg = _typed_task_error({"error": "env.solve_conflict", "detail": "d",
+        msg = _typed_task_error({"error": "task.capacity", "detail": "d",
                                  "hints": {key: "DO THE THING"}})
         assert "DO THE THING" in msg, key
 
@@ -79,3 +82,35 @@ def test_an_unparseable_string_still_beats_nothing():
 def test_no_hints_still_renders_class_and_detail():
     msg = _typed_task_error({"error": "task.invalid", "detail": "walltime unparseable"})
     assert "task.invalid" in msg and "walltime unparseable" in msg
+
+
+# ── the FIX must name a lever the agent can actually pull ───────────────────
+#
+# Surfacing the substrate's verdict is only half the job. weft's hints are
+# written for a WEFT caller ("add the site's platform to the spec's 'platforms'
+# and env_ensure again") — an agent cannot call env_ensure, so a correct
+# diagnosis still dead-ends. Observed live: the agent read the platform_mismatch
+# correctly, explained it well, and then had no action available.
+
+def test_platform_mismatch_names_an_ABA_lever_not_a_weft_verb():
+    msg = _typed_task_error(PLATFORM_MISMATCH)
+    assert "make_isolated_env" in msg
+    assert "env_ensure" not in msg, \
+        "the substrate hint names a verb the agent cannot call"
+    # and it must still carry the diagnosis, not just the lever
+    assert "env.platform_mismatch" in msg and "linux-aarch64" in msg
+
+
+def test_solve_conflict_also_gets_the_aba_lever():
+    msg = _typed_task_error({"error": "env.solve_conflict", "detail": "unsat",
+                             "hints": {"suggestion": "relax pins and env_ensure"}})
+    assert "make_isolated_env" in msg and "env_ensure" not in msg
+
+
+def test_unmapped_codes_still_use_the_substrate_hint():
+    """CEILING: the override table is small on purpose. A code aba has no lever
+    for must keep weft's own hint — which is usually the best available — rather
+    than losing it to an empty mapping."""
+    msg = _typed_task_error({"error": "task.walltime_exceeded", "detail": "d",
+                             "hints": {"suggestion": "ask for a longer walltime"}})
+    assert "ask for a longer walltime" in msg
