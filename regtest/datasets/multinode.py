@@ -303,6 +303,24 @@ def mn_hop_chain(client, pid, tid):
 
 
 @scenario("mn_status_surfaces")
+def _resolves_by_name(client, pid, name):
+    """Does a SECOND door find this output by bare name? Independent evidence
+    from the entity-graph walk that located it: the search tier is what a later
+    step (or the user) would actually use."""
+    try:
+        r = client.get(f"/api/files/search?q={name}&project_id={pid}")
+        if r.status_code == 200 and name in r.text:
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from content.bio.project_locate import locate_project_files
+        hits = locate_project_files(name) or []
+        return any(name in str(h) for h in hits)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def mn_status_surfaces(client, pid, tid):
     """(iii) After a remote run produces a LARGE output that STAYS on the node
     (small outputs auto-come-home by design), the SURFACES the cards render
@@ -361,8 +379,16 @@ def mn_status_surfaces(client, pid, tid):
         # so a miss here means the guidance (fresh-kernel banner, recipes) failed
         # to steer an untracked write into a tracked one.
         ("big output shown SAFE ON HPC (run keep or dataset home)", bool(kind)),
-        ("the result is DISCOVERABLE, not merely on disk somewhere on hpc",
-         bool(kind)),
+        # A SECOND DOOR, not a second reading of the first. `_on_hpc_somewhere`
+        # walks the entity graph, so `bool(kind)` ALREADY means "discoverable"
+        # — asserting it twice inflated the count and, worse, would keep passing
+        # if that helper were ever widened to accept a raw filesystem hit, at
+        # which point the label would be actively lying. Ask a door that was not
+        # used to find the thing: can find_files resolve it by BARE NAME, the
+        # way a user or a later step would? (handle x door, applied to the live
+        # lane — see tests/test_handle_round_trip.py.)
+        ("the result resolves by BARE NAME through a different door",
+         bool(kind) and _resolves_by_name(client, pid, "big.bin")),
         ("ledger sees hpc as a remote site", "hpc" in (led.get("remote_sites") or [])),
     ]
     if kind == "run":

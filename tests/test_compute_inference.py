@@ -105,20 +105,43 @@ def test_working_root_no_candidates_falls_back_to_home():
 
 # ── the full proposal ────────────────────────────────────────────────────────
 
+def _host_caps(**over):
+    """slurm_caps() with the CONTROLLER's own platform. The shared-fs contract
+    now requires platform compatibility (a visible path is not a shared-fs
+    contract — a cross-OS mount runs the controller's binary on a foreign
+    machine), so a fixture with a hardcoded foreign platform would assert
+    different things on different CI boxes."""
+    import platform as _p
+    return {**slurm_caps(), "os": _p.system().lower(),
+            "arch": _p.machine().lower(), **over}
+
+
 def test_slurm_proposal():
-    p = propose(slurm_caps(), dest="me@login1.vbc.ac.at",
+    p = propose(_host_caps(), dest="me@login1.vbc.ac.at",
                 shared_paths=["/groups/lab"], accounts=["lab-alloc"])
     assert p["kind"] == "slurm" and p["machine_type"] == "Slurm cluster"
     assert p["name"] == "vbc"
     assert "Slurm cluster (v23.02)" in p["headline"]
     assert p["use_for"] == ["interactive", "background", "gpu"]  # gpu partition seen
-    assert p["contract"] == "shared-fs"
+    assert p["contract"] == "shared-fs"          # canary + same platform
     assert p["long_term"] == [{"path": "/groups/lab", "stable": True}]
     assert p["account"] == "lab-alloc"           # exactly one → autofilled
     sel = {r["name"]: r["selected"] for r in p["partitions"]}
     assert sel == {"cpu": True, "gpu": True, "down-part": False}
     assert p["durable"] is False                 # scratch-rooted → not durable
     assert p["totals"]["nodes"] == 412 and p["totals"]["gpus"] == 88
+
+
+def test_slurm_proposal_on_a_foreign_platform_is_detached():
+    """The other side of the same rule: identical canary, foreign platform.
+    Live — an arm64 Linux VM mounting a mac's filesystem was proposed shared-fs,
+    and every background job then ran the mac's python on Linux."""
+    foreign = "windows" if __import__("platform").system().lower() != "windows" else "linux"
+    p = propose(_host_caps(os=foreign), dest="me@login1.vbc.ac.at",
+                shared_paths=["/groups/lab"], accounts=["lab-alloc"])
+    assert p["contract"] == "detached"
+    # the shared paths are still REPORTED — only the contract claim changes
+    assert p["long_term"] == [{"path": "/groups/lab", "stable": True}]
 
 
 def test_workstation_proposal():

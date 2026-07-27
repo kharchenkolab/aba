@@ -174,7 +174,13 @@ def test_probe_returns_proposal(client, fake, monkeypatch):
     body = r.json()
     p = body["proposal"]
     assert p["kind"] == "slurm" and p["name"] == "vbc"
-    assert p["contract"] == "shared-fs"
+    # The fake site reports a fixed linux/x86_64; the shared-fs contract now
+    # also requires the CONTROLLER to match it, so assert the rule rather than
+    # a constant (this box may be either).
+    import platform as _p
+    _same = (str((body.get("capabilities") or {}).get("os", "")).lower()
+             == _p.system().lower())
+    assert p["contract"] == ("shared-fs" if _same else "detached")
     assert p["account"] == "lab-alloc"
     assert p["working"]["root"] == "/scratch/me/.weft"
     # probe_only went through the port, nothing was persisted
