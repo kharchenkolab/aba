@@ -153,8 +153,28 @@ def register_remote_store(pid: str, store_key: str, *, site: str,
         with _REG_LOCK:
             reg = _load_registry(pid)
             prev = reg.get(store_key)
-            if (prev and digest and prev.get("digest")
-                    and prev["digest"] != digest):
+            # FRESHNESS: wipe unless the previous registration is PROVABLY the
+            # same store. Proof means matching digests; anything else — a
+            # changed digest, a changed size, or a digest missing on either
+            # side — is unproven and gets wiped.
+            #
+            # This used to require BOTH digests present and different, so a
+            # store whose location record carried no digest re-registered over
+            # itself and kept serving the old chunks. Only the RUN arm can
+            # reach that: its store_key is sha1(site|store_rel), a PATH, so a
+            # re-derive in place lands on the same key. (The REF arm keys on
+            # the content ref itself — new bytes mint a new key and a fresh
+            # cache root, so it is ghost-proof by construction.)
+            #
+            # Asymmetric costs: a needless wipe re-fetches chunks that were
+            # fine; a missed wipe serves stale bytes that look structurally
+            # valid — which is a second, harder version of the incident this
+            # module just had. Cheap insurance wins.
+            same = bool(prev) and (
+                (digest and prev.get("digest") and prev["digest"] == digest)
+                if (digest or prev.get("digest"))
+                else (size is not None and prev.get("size") == size))
+            if prev and not same:
                 # Wipe where the stale chunks actually LIVE — the PREVIOUS
                 # site's cache root (a re-derive can move the store between
                 # sites; wiping the new root would orphan the stale bytes).

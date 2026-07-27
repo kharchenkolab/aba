@@ -2103,7 +2103,105 @@ def test_zero_length_member_still_installs():
         retention.file_read_range = _orig
 
 
+# ── re-derive freshness: an unproven re-registration must not keep the cache ──
+#
+# Raised by pagoda3 before re-prepping three stores: "if the chunk cache keys on
+# path alone, the re-prepped store will serve the old cached chunks and we will
+# chase ghosts a second time — and this time the stale bytes will look
+# structurally valid."
+#
+# REF arm: store_key = sha1(content ref), so new bytes mint a new key and a fresh
+# cache root — ghost-proof by construction. RUN arm: store_key =
+# sha1(site|store_rel), a PATH, so a re-derive in place lands on the SAME key and
+# the digest wipe is the only thing standing between the viewer and stale bytes.
+
+def _cached_chunk(pid, store_key, site="siteA", rel="c/1.0", body=b"old"):
+    root = rc._cache_root(pid, site, store_key)
+    fp = os.path.join(root, rel)
+    os.makedirs(os.path.dirname(fp), exist_ok=True)
+    with open(fp, "wb") as fh:
+        fh.write(body)
+    return fp
+
+
+def test_rederive_with_a_changed_digest_wipes_the_cache():
+    pid = "s_fresh1"
+    rc.register_remote_store(pid, "s.store", target="k", base_rel="b",
+                             site="siteA", size=10, digest="D1")
+    fp = _cached_chunk(pid, "s.store")
+    rc.register_remote_store(pid, "s.store", target="k", base_rel="b",
+                             site="siteA", size=99, digest="D2")
+    assert not os.path.exists(fp), "a re-derived store served its old chunks"
+
+
+def test_rederive_with_NO_digest_also_wipes():
+    """THE hole. A location record without a digest re-registered over itself and
+    kept the old chunks: the wipe required both digests present AND different.
+    Unproven freshness must wipe — a needless re-fetch is cheap, a ghost is not."""
+    pid = "s_fresh2"
+    rc.register_remote_store(pid, "s.store", target="k", base_rel="b",
+                             site="siteA", size=10, digest=None)
+    fp = _cached_chunk(pid, "s.store")
+    rc.register_remote_store(pid, "s.store", target="k", base_rel="b",
+                             site="siteA", size=77, digest=None)
+    assert not os.path.exists(fp), "unproven re-registration kept stale chunks"
+
+
+def test_a_digest_appearing_or_vanishing_wipes():
+    """WIDE — the asymmetric shapes: digest on one side only. Neither direction
+    proves sameness, so both wipe."""
+    for prev_d, new_d in (("D1", None), (None, "D1")):
+        pid = f"s_fresh3_{prev_d}_{new_d}"
+        rc.register_remote_store(pid, "s.store", target="k", base_rel="b",
+                                 site="siteA", size=10, digest=prev_d)
+        fp = _cached_chunk(pid, "s.store")
+        rc.register_remote_store(pid, "s.store", target="k", base_rel="b",
+                                 site="siteA", size=10, digest=new_d)
+        assert not os.path.exists(fp), f"digest {prev_d}->{new_d} kept stale chunks"
+
+
+def test_an_IDENTICAL_re_registration_keeps_the_cache():
+    """CEILING: the launcher re-registers on every viewer open. Wiping there
+    would throw away a warm cache on each launch and make every open re-fetch the
+    whole store — over-applying the fix is its own outage."""
+    pid = "s_fresh4"
+    rc.register_remote_store(pid, "s.store", target="k", base_rel="b",
+                             site="siteA", size=10, digest="D1")
+    fp = _cached_chunk(pid, "s.store")
+    rc.register_remote_store(pid, "s.store", target="k", base_rel="b",
+                             site="siteA", size=10, digest="D1")
+    assert os.path.exists(fp), "a warm cache was discarded on an unchanged re-open"
+
+
+def test_identical_re_registration_with_no_digest_keeps_the_cache():
+    """CEILING for the degenerate shape: no digest anywhere, same size → treat as
+    the same store, or a digest-less deployment re-fetches everything per open."""
+    pid = "s_fresh5"
+    rc.register_remote_store(pid, "s.store", target="k", base_rel="b",
+                             site="siteA", size=10, digest=None)
+    fp = _cached_chunk(pid, "s.store")
+    rc.register_remote_store(pid, "s.store", target="k", base_rel="b",
+                             site="siteA", size=10, digest=None)
+    assert os.path.exists(fp)
+
+
+def test_ref_arm_rederive_mints_a_DIFFERENT_key():
+    """The ref arm's structural guarantee, asserted rather than assumed: two
+    different refs must not share a cache root, so a re-derive cannot reach the
+    old chunks at all."""
+    pid = "s_fresh6"
+    a = rc._cache_root(pid, "siteA", "st-aaaaaaaa.lstar.zarr")
+    b = rc._cache_root(pid, "siteA", "st-bbbbbbbb.lstar.zarr")
+    assert a != b
+
+
 _TESTS = [
+    test_rederive_with_a_changed_digest_wipes_the_cache,
+    test_rederive_with_NO_digest_also_wipes,
+    test_a_digest_appearing_or_vanishing_wipes,
+    test_an_IDENTICAL_re_registration_keeps_the_cache,
+    test_identical_re_registration_with_no_digest_keeps_the_cache,
+    test_ref_arm_rederive_mints_a_DIFFERENT_key,
     test_over_cap_member_assembles_whole_when_capped_flag_is_MISSING,
     test_over_cap_member_assembles_whole_when_eof_lies_at_the_clamp,
     test_a_short_read_is_NEVER_installed_in_the_cache,

@@ -1047,6 +1047,15 @@ def _fetch_new_kernel_files(kernel_id: str, inv0: dict, project_id: str,
                 remote_only.append(rel)
                 continue
             data = base64.b64decode(out.get("bytes_b64") or "")
+            # Verify against the size we JUST stat'd, don't just trust the flag.
+            # Same class as the viewer chunk-cache truncation (2026-07-27): a
+            # substrate that clamps without setting its flag would otherwise get
+            # a short file HARVESTED as this Run's output — silently wrong, and
+            # indistinguishable downstream from the real result.
+            _want = int(st.get("bytes") or 0)
+            if _want and len(data) != _want:
+                remote_only.append(rel)
+                continue
         except Exception:  # noqa: BLE001 — a single unfetchable file stays remote
             remote_only.append(rel)
             continue

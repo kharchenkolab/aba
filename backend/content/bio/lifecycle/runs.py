@@ -1786,9 +1786,17 @@ def _materialize_file(loc: dict, *, force: bool = False, progress=None) -> Optio
         if b64 is None or rd.get("truncated"):
             return None
         import base64
+        _bytes = base64.b64decode(b64)
+        # Verify against the size the locate step recorded rather than trusting
+        # `truncated` alone — same class as the viewer chunk-cache truncation
+        # (2026-07-27). This copy is stamped with the digest and treated as
+        # current from here on, so installing a short one poisons every later
+        # read of that file.
+        if size and len(_bytes) != size:
+            return None
         tmp = f"{dest}.partial.{_os.getpid()}.{_uuid.uuid4().hex}"
         with open(tmp, "wb") as fh:
-            fh.write(base64.b64decode(b64))
+            fh.write(_bytes)
         _os.replace(tmp, dest)                # atomic: never a half-written dest
         _stamp_write(dest, digest)
         return _os.path.realpath(dest)

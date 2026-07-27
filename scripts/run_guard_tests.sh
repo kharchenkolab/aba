@@ -76,6 +76,7 @@ FILES=(
   tests/test_cross_language_sandbox.py
   tests/test_exec_record_project_binding.py
   tests/test_base_pack_completeness.py
+  tests/test_short_transfer_refusal.py
   tests/test_artifact_url_doors.py
   tests/test_range_channel.py
   tests/test_data_ledger.py

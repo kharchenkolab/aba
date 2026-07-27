@@ -1486,7 +1486,31 @@ def pagoda3_app(path: str = ""):
     return _pagoda3_iso(FileResponse(str(target)))
 
 
-@app.get("/pagoda3-store/{pid}/{relpath:path}")
+@app.options("/pagoda3-store/{pid}/{relpath:path}")
+def pagoda3_store_options(pid: str, relpath: str):
+    """Answer the preflight instead of 405.
+
+    Simple byte-range GETs are CORS-safelisted so a browser usually won't
+    preflight, but anything that does used to get a 405 — and an HTTP client
+    probing with OPTIONS learned nothing. No Access-Control-Allow-Origin here:
+    these stores are SAME-ORIGIN by design (the pagoda3 bundle is served by this
+    same server and the store URL is a relative path), and ABA adds no auth of
+    its own on this route, so advertising `*` would let any page the user visits
+    read their project's bytes. Cross-origin access, if it is ever wanted, needs
+    a configured allowlist — not a wildcard bolted on here."""
+    return Response(status_code=204, headers={
+        "Allow": "GET, HEAD, OPTIONS",
+        "Accept-Ranges": "bytes",
+        "Cross-Origin-Resource-Policy": "same-origin",
+    })
+
+
+# HEAD alongside GET: FastAPI does not derive it (Starlette's plain Route does),
+# so a client asking for size/existence without the body got a 405 whose short
+# error page then read as `content-length: 31` — a bogus size for the object.
+# Starlette's FileResponse already suppresses the body on HEAD, so the handler
+# below needs no branch of its own.
+@app.api_route("/pagoda3-store/{pid}/{relpath:path}", methods=["GET", "HEAD"])
 def pagoda3_store(pid: str, relpath: str):
     """Serve one file from a project's pagoda3 data store (a `.lstar.zarr`
     tree) over HTTP Range. The path is containment-checked to the project's

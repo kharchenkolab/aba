@@ -396,17 +396,35 @@ def _read_remote_abs_file(path: str, site: str):
         return None, (f"it is {size} bytes on {site} — too large for an inline "
                       f"view (cap {_REMOTE_VIEW_CAP}). Register it as a dataset "
                       f"and mirror it instead.")
-    buf, offset = bytearray(), 0
+    buf, offset, stated = bytearray(), 0, None
     while True:
         r = retention.data_read_range(ref, offset=offset, site=site)
         n = int(r.get("nbytes") or 0)
+        _s = r.get("size")
+        if isinstance(_s, int) and _s >= 0:
+            stated = _s
         if n:
             buf.extend(base64.b64decode(r.get("bytes_b64") or ""))
             offset += n
-        if r.get("eof") or not r.get("capped") or n == 0:
+        if n == 0:
+            break
+        if stated is not None and offset >= stated:
+            break
+        if r.get("eof"):
+            break
+        if not r.get("capped") and stated is None:
             break
         if offset > _REMOTE_VIEW_CAP:
             return None, f"exceeded the inline-view cap while reading from {site}"
+    # Same class as the viewer chunk-cache truncation (2026-07-27): the loop used
+    # to end on the substrate's eof/capped flags alone, so a clamped reply that
+    # omitted `capped` returned a SHORT buffer — and here that buffer is handed
+    # to the agent AS the artifact. A half-read figure or table that looks like
+    # the whole thing is worse than a refusal: the agent reasons about it.
+    want = stated if stated is not None else (size or None)
+    if want is not None and len(buf) != want:
+        return None, (f"short read from {site}: got {len(buf)} of {want} bytes "
+                      f"— not shown rather than shown truncated")
     return bytes(buf), f"fetched from {site}"
 
 
