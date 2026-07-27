@@ -779,6 +779,35 @@ def _path_recovery_steer(name: str, input_: dict, result: dict, ctx: dict | None
     project_id = (ctx or {}).get("project_id") or ""
     thread_id = str((ctx or {}).get("thread_id") or "")
     if not thread_id: return
+
+    # WHICH MACHINE ran this cell. Every candidate path below is on the
+    # CONTROLLER, and the hint tells the agent to use it "verbatim" — which for a
+    # remote step names a file on the wrong machine.
+    #
+    # Live (2026-07-27, mendel): a cell hit FileNotFoundError on a bare name, the
+    # hint offered
+    #   /Users/<me>/.aba/runtime/projects/<pid>/work/thread-<tid>/remote-kernel-…/proj0.csv
+    # — the harvested LOCAL copy — and the agent obediently opened that path on
+    # mendel, where it does not exist. Same class as the five controller-path
+    # leaks tests/test_remote_setup_purity.py already guards, at a sixth site.
+    site = str(((result.get("compute") or {}) if isinstance(result, dict) else {})
+               .get("site") or "") or None
+    if site and site != "local":
+        result["path_recovery_hint"] = (
+            f"The path '{bad_path}' does not exist on {site} (FileNotFoundError). "
+            f"This cell ran on {site}, so controller-side copies of `{bad_name}` "
+            f"are NOT reachable from it — do not guess a path in the ABA "
+            f"project directory or anywhere else on the controller.\n\n"
+            f"Likely cause: this kernel's sandbox is not the one that wrote the "
+            f"file (a fresh kernel, or the other language's kernel on the same "
+            f"machine — each has its own sandbox). Either re-create `{bad_name}` "
+            f"in THIS kernel with a bare relative name, or use the absolute "
+            f"sandbox path named in the workspace-orientation block above."
+        )
+        result["stdout"] = ((result.get("stdout") or "")
+                            + "\n\n── path-recovery hint ──\n"
+                            + result["path_recovery_hint"] + "\n")
+        return
     # Reuse the same walker as the cwd-shift preamble — it already enumerates
     # prior runs + the thread scratch with absolute paths.
     try:

@@ -119,10 +119,23 @@ def drive(pid: str, tid: str, text: str, timeout: int = 2400) -> dict:
                     except Exception:  # noqa: BLE001 — cannot poke the socket:
                         break          # record NOTHING rather than a false finding
                     try:
-                        # b"" == the server closed the stream.
-                        leftover = bool(r.readline())
+                        # Read past the frame's OWN terminator. An SSE event is
+                        # `data: {...}\n\n`, so the very next line is the blank
+                        # line that ends THIS event — treating it as traffic
+                        # reported every healthy stream as stuck ("still open
+                        # 0.0s"), which is how a detector cries wolf on a fix
+                        # that works. b"" is the only proof of closure; a real
+                        # `data:`/comment line or a timeout means still open.
+                        still = True
+                        for _ in range(3):
+                            ln = r.readline()
+                            if ln == b"":            # EOF — the server closed
+                                still = False
+                                break
+                            if ln.strip():           # actual content after done
+                                break
                         cap["close_after_done_s"] = round(time.time() - _t, 2)
-                        cap["stream_not_closed"] = leftover
+                        cap["stream_not_closed"] = still
                     except Exception:  # noqa: BLE001 — timed out: still open
                         cap["close_after_done_s"] = _STREAM_CLOSE_BUDGET_S
                         cap["stream_not_closed"] = True
