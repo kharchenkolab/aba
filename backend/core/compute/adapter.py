@@ -63,7 +63,15 @@ def run_sync(coro):
         except BaseException as e:  # noqa: BLE001 — re-raised below
             box["e"] = e
 
-    t = threading.Thread(target=_r, name="weft-run-sync", daemon=True)
+    # copy_context: a bare threading.Thread starts with an EMPTY context, so the
+    # project binding (and the active DB it implies) would be lost for everything
+    # this substrate call does — falling back to the process-global project,
+    # which any concurrent project switch moves. See core.projects for the
+    # incident this class of hop produced.
+    import contextvars
+    _ctx = contextvars.copy_context()
+    t = threading.Thread(target=lambda: _ctx.run(_r), name="weft-run-sync",
+                         daemon=True)
     t.start()
     t.join()
     if "e" in box:

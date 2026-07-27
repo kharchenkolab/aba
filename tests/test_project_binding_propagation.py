@@ -143,6 +143,39 @@ def test_spawn_with_no_running_loop_runs_inline_and_bound(globals_point_elsewher
     assert _sees_bound(seen[0])
 
 
+def test_the_substrate_sync_bridge_keeps_the_binding(globals_point_elsewhere):
+    """core.compute.adapter.run_sync's second case spawns a RAW
+    threading.Thread, which starts with an EMPTY context — everything the
+    substrate call does inside it (path resolution, harvest bookkeeping) would
+    resolve the project from the process-global. Exercised through the real
+    entry point, in the shape it hits live: a running loop on a worker thread.
+    """
+    import threading
+    from core.compute import adapter
+
+    seen: list = []
+
+    async def _coro():
+        seen.append(_probe())
+        return "done"
+
+    result: dict = {}
+
+    def worker():
+        # a running loop ON A WORKER THREAD is run_sync's second case
+        async def go():
+            return adapter.run_sync(_coro())
+        with projects.bind(BOUND_PID):
+            result["v"] = asyncio.run(go())
+
+    t = threading.Thread(target=worker)
+    t.start()
+    t.join()
+    assert result.get("v") == "done", "the bridge stopped returning values"
+    assert seen and _sees_bound(seen[0]), \
+        f"the substrate bridge lost the project binding: {seen}"
+
+
 def test_kwargs_and_args_are_passed_through():
     """The helpers wrap the callable twice (partial∘partial); a signature slip
     would only show up at runtime deep in a tool call."""

@@ -73,9 +73,17 @@ def _index_conn(record_path: Path):
     from core.graph._schema import _project_conn
     active = project_of_path(_schema_active_db())
     if active and active != owner:
+        # `bound` distinguishes the two ways this goes wrong, which need
+        # different fixes: None = this execution context never received the
+        # binding (a thread hop dropped it), a different pid = the context is
+        # bound, but to another project.
+        import threading
+        from core.projects import _active_pid
         _log.warning(
             "exec_records: sidecar under %s but the ambient DB is %s — indexing "
-            "into %s (the project that owns the record)", owner, active, owner)
+            "into %s (the project that owns the record) [bound=%s thread=%s]",
+            owner, active, owner, _active_pid.get(),
+            threading.current_thread().name)
     return _project_conn(owner)
 
 
