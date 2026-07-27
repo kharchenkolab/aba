@@ -2335,7 +2335,7 @@ def fetch_url(input_: dict, ctx: dict | None = None) -> dict:
     if not url:
         return {"error": "url is required"}
     filename = input_.get("filename") or url.split("?")[0].rstrip("/").split("/")[-1] or "download"
-    project_id = projects.current() or "default"
+    project_id = (ctx or {}).get("project_id") or projects.current() or "default"
     dest = scratch_dir(str(project_id), "fetch") / filename
     threshold = 5 * 1024 ** 3
     mode = config.settings.capability_approval.get()

@@ -35,6 +35,55 @@ def gen_exec_id() -> str:
     return f"exec_{uuid.uuid4().hex[:12]}"
 
 
+def project_of_path(p: str | Path) -> Optional[str]:
+    """The project id a path lives under, or None if it isn't under PROJECTS_DIR.
+
+    The sidecar path is chosen from an EXPLICIT project (the run's work dir);
+    the index row used to pick its DB from ambient context. Those two must name
+    the same project — see _index_conn.
+    """
+    try:
+        rel = Path(p).resolve().relative_to(Path(config.PROJECTS_DIR).resolve())
+    except Exception:  # noqa: BLE001 — not under PROJECTS_DIR (single mode, tmp)
+        return None
+    return rel.parts[0] if rel.parts else None
+
+
+def _index_conn(record_path: Path):
+    """Connection for the index row of `record_path` — the DB of the project
+    that OWNS the sidecar, not whatever project is ambient at INSERT time.
+
+    Live (2026-07-27, two workflow sweeps interleaved): a remote run's sidecar
+    was written under its own project (the path was resolved early, from an
+    explicit project id) while the row went to a bystander project, because a
+    concurrent `create_project` repointed the process-global between the two —
+    8 seconds apart, the width of one remote exec. The producing project ended
+    with zero provenance for a run it performed; the bystander gained an index
+    row pointing into someone else's directory.
+
+    Deriving the DB from the path makes the pair self-consistent by
+    construction: an index row cannot end up in a project that does not hold the
+    record it indexes, whatever the ambient state does mid-call. Falls back to
+    the ambient connection when the path is outside PROJECTS_DIR (single mode,
+    tests, tmp dirs), which is the pre-existing behaviour.
+    """
+    owner = project_of_path(record_path)
+    if not owner:
+        return _conn()
+    from core.graph._schema import _project_conn
+    active = project_of_path(_schema_active_db())
+    if active and active != owner:
+        _log.warning(
+            "exec_records: sidecar under %s but the ambient DB is %s — indexing "
+            "into %s (the project that owns the record)", owner, active, owner)
+    return _project_conn(owner)
+
+
+def _schema_active_db():
+    from core.graph._schema import active_db_path
+    return active_db_path()
+
+
 def record_path_for(cwd: str | Path, exec_id: str) -> Path:
     """Resolve the JSON sidecar path for an exec_id given the kernel cwd
     (Run output dir, or thread scratch dir). Creates `.exec/` if missing.
@@ -126,7 +175,7 @@ def create(
     rp.write_text(json.dumps(body, indent=2, default=str), encoding="utf-8")
 
     try:
-        with _conn() as c:
+        with _index_conn(rp) as c:
             c.execute(
                 """INSERT INTO execution_records
                    (exec_id, thread_id, run_id, tool_use_id, tool_name,

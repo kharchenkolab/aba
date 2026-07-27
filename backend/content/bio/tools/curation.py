@@ -1540,7 +1540,7 @@ def open_run_tool(input_: dict, ctx: dict | None = None) -> dict:
     # Resolve the new cwd + prior files so the agent has all the absolute paths
     # it might need in its very next code cell.
     from core import projects
-    project_id = projects.current() or "default"
+    project_id = (ctx or {}).get("project_id") or projects.current() or "default"
     cwd_str = ""
     try:
         cwd_str = str(_run_scratch_cwd(str(project_id), str(tid)))

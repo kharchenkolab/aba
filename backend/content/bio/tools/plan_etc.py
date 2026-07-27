@@ -289,7 +289,7 @@ def run_nextflow(input_: dict, ctx: dict | None = None) -> dict:
     cancel_token = (ctx or {}).get("cancel_token")
     from core import projects
     from core.data.workspace import scratch_dir
-    project_id = projects.current() or "default"
+    project_id = (ctx or {}).get("project_id") or projects.current() or "default"
     run_id = (ctx or {}).get("run_id") or uuid.uuid4().hex
     scratch = scratch_dir(str(project_id), f"nf-{run_id}")
     outdir = input_.get("outdir") or str(Path(scratch) / "results")

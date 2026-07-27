@@ -1419,7 +1419,7 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
     code = input_.get("code", "")
     timeout_s = max(5, min(int(input_.get("timeout_s") or 300), 1800))
     cancel_token = (ctx or {}).get("cancel_token")
-    project_id = projects.current() or "default"
+    project_id = (ctx or {}).get("project_id") or projects.current() or "default"
     thread_id = (ctx or {}).get("thread_id") or "default"
 
     # Placement FIRST (misc/detached_compute.md): an explicit site= must never
@@ -1700,7 +1700,7 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
     code = input_.get("code", "")
     timeout_s = max(5, min(int(input_.get("timeout_s") or 600), 1800))
     cancel_token = (ctx or {}).get("cancel_token")
-    project_id = projects.current() or "default"
+    project_id = (ctx or {}).get("project_id") or projects.current() or "default"
     thread_id = (ctx or {}).get("thread_id") or "default"
 
     # §11.2: env=<named isolated R env>; env=None follows the project's active

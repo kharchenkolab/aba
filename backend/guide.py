@@ -620,6 +620,27 @@ async def stream_response(
     # Wave 2 A.3: the content pack is the single seam to bio. Cache the
     # accessors per-turn — calling pack methods is cheap but the dict
     # lookup beats re-fetching.
+    # The turn's PROJECT, captured ONCE here and threaded into every tool ctx
+    # (thread_id already travels that way; project_id did not). Tools that read
+    # projects.current() instead were reading a value that a concurrent
+    # create_project / project switch can move MID-CALL: on 2026-07-27 a remote
+    # exec resolved its output dir under the right project at second 19 and
+    # wrote its index row into a different one at second 27, because another
+    # sweep created a project at second 25. Capturing at the turn boundary —
+    # before any tool runs, and inside the turn's own binding — makes every tool
+    # in the turn agree on one project no matter what the ambient does after.
+    from core import projects as _projects_turn
+    _turn_pid = _projects_turn.current()
+    # An UNBOUND turn is a defect condition, not a style issue: with no binding
+    # in this context every ambient read inside the turn resolves to the
+    # process-global, which any concurrent project switch moves. The turn still
+    # runs (it has _turn_pid), but the ~78 ambient reads deeper in do not, so say
+    # so once per turn rather than letting the drift show up as misfiled rows.
+    if _projects_turn._active_pid.get() is None and not _projects_turn._single():
+        print(f"[turn] WARNING no project binding in this context "
+              f"(project={_turn_pid} resolved from the process-global) — ambient "
+              f"reads inside this turn can drift if another project is touched",
+              flush=True)
     pack = active_pack()
     _prompts = pack.prompts()
     _tools_all = pack.tools()
@@ -1103,6 +1124,7 @@ async def stream_response(
                 tool_ctx = {**ctx,
                             "active_tools": active_tools,
                             "thread_id": store_tid,
+                            "project_id": _turn_pid,
                             "focus_entity_id": focus_entity_id,
                             "session_id": session_id,
                             "recipe_ctx": recipe_ctx,
