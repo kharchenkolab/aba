@@ -398,23 +398,40 @@ eventual routing table (§5), and each teaches the salience model
 - **draft claim** — "formalize this": invokes the record-writer on the
   statement; the draft goes to the inbox like any claim draft — this
   one IS a decision, so the propose→ratify gate holds.
-- **dispute** — the anti-gesture: "don't build on this." The element
-  wears a dissent mark (✗, the grammar's negative glyph — the button
-  itself is a word like the others, never an icon that reads as
-  "close"), the drafting agent may not cite it without surfacing the
-  dispute, and — like dismissals — the objection is remembered until
-  the world changes.
+- **verify** — productive skepticism: "before we build on this,
+  cross-check it." Births a verification item in the relevant
+  section's plan — "cross-check [this]: independent method, hold-out,
+  replication" — aimed at the element and carrying its own `▷ work`
+  launcher like any planned analysis (§14.5; the user's own doubt is
+  ceremony-free). Until the check lands, the element is cited as
+  *provisional*: the agent will not advance claims resting on it up
+  the maturity ladder, and the evidence floor (§14.4) holds anything
+  built on it down. Repeated verify gestures around a theme seed a
+  trail — the beginning of anomaly-finding, born from taps rather
+  than essays. Where fade lowers salience, verify raises scrutiny;
+  both are one tap, and neither is an argument.
+- **fade** — the anti-pin: "don't carry this forward." Pure
+  salience-down: the agent won't route it or draft from it, and
+  anything already drafted from it lets go — faded, findable in the
+  transcript, never nagging (the same fade the sweep applies, invoked
+  by hand and early). Note what this gesture is *not*: disagreement.
+  Disagreement is conversation — the chat is the instrument, and "no,
+  that fit is wrong" is a reply, not a button; the correction enters
+  the exchange and, where it invalidates something recorded, the
+  ordinary contradiction machinery carries it. fade only lowers
+  salience; it never asserts wrongness.
 
 Three disciplines make the vocabulary safe:
 
 1. **Receipts.** Every gesture leaves a chip on the message — "pinned
-   → note · T1", "→ planned · Q2", "✗ disputed" — a door to where it
-   landed, and the visible pre-filled routing row: distillation
-   becomes mostly confirming what you aimed while it was hot.
+   → note · T1", "→ planned · Q2", "fading — findable, not carried" —
+   a door to where it landed, and the visible pre-filled routing row:
+   distillation becomes mostly confirming what you aimed while it was
+   hot.
 2. **User gestures are ceremony-free; agent invocations are not.**
-   pin / plan / hold / dispute are the user's own intent and file
-   directly (the §14.5 rule); draft-claim passes through the inbox,
-   because it asks the agent to write toward the story.
+   pin / plan / verify / hold / fade are the user's own intent and
+   file directly (the §14.5 rule); draft-claim passes through the
+   inbox, because it asks the agent to write toward the story.
 3. **Aim is optional.** Every verb works unaimed (the agent routes,
    visibly); aiming — hold the verb to pick a trail or question, or
    **drag the artifact across onto a document section** (the panel

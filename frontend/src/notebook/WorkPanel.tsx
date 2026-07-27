@@ -162,14 +162,18 @@ export default function WorkPanel({ panel, onClose, onAdvance, onExpand, continu
                             onClick={() => gesture(i, '→ planned under this question')}>→ plan</button>
                     <button title="formalize this — the record-writer drafts a claim from this statement; the draft goes to the inbox (this one IS a decision — the ratify gate holds)"
                             onClick={() => gesture(i, 'claim draft requested → inbox')}>draft claim</button>
-                    <button title="the anti-gesture: don't build on this. Wears a dissent mark (✗); the agent may not cite it without surfacing the dispute; remembered until the world changes"
-                            onClick={() => gesture(i, '✗ disputed — will not be cited without the dispute')}>dispute</button>
+                    <button title="productive skepticism: before we build on this, cross-check it — a verification item lands in the plan (independent method / hold-out), and this is cited as PROVISIONAL until the check lands. Repeated verifies around a theme seed a trail: anomaly-finding, born from taps"
+                            onClick={() => gesture(i, 'verification requested — a cross-check landed in the plan; cited as provisional until it lands')}>verify</button>
+                    <button title="the anti-pin: don't carry this forward — pure salience-down. The agent won't route or draft from it; it stays findable in the transcript. (Disagreement is a REPLY, not a button — the chat is the instrument)"
+                            onClick={() => gesture(i, 'fading — will not be routed or drafted from; stays findable in the transcript')}>fade</button>
                   </>
                 )}
                 {m.fig && (
                   <>
                     <button title="the pin you already know — works on figures, tables, whole output cells. Births a note pointed at it, turn-stamped — and implies keep: a pinned artifact gains an edge, leaves the leftover set, never lapses (retention is derived, not a second gesture)"
                             onClick={() => gesture(i, 'pinned — noted · implies keep: never lapses')}>pin</button>
+                    <button title="productive skepticism: cross-check this result — a verification item lands in the plan; cited as provisional until it lands"
+                            onClick={() => gesture(i, 'verification requested — a cross-check landed in the plan')}>verify</button>
                     <button title="working memory, NOT a record write — parks it on the desk for two-locus work and evaporates at session close; nothing enters the record"
                             onClick={() => gesture(i, '⌖ held on the desk — evaporates at close')}>⌖ hold</button>
                   </>

@@ -248,16 +248,17 @@ describe('workflow storyboard', () => {
     // pin: the universal gesture — keep_message, agent proposes form and route
     fireEvent.click(getAllByText('pin')[0])
     getByText(/a pinned element never fades/)
-    // dispute another statement: the anti-gesture (a word, not a close icon)
-    fireEvent.click(getAllByText('dispute')[0])
-    getByText(/will not be cited without the dispute/)
+    // fade another statement: the anti-pin — salience-down, not disagreement
+    fireEvent.click(getAllByText('fade')[0])
+    getByText(/will not be routed or drafted from/)
     // pin an artifact: implies keep — retention derived, no second verb
     fireEvent.click(getAllByText('pin')[0])
     getByText(/implies keep: never lapses/)
-    // receipts are undoable — the bar returns
+    // receipts are undoable — the bar returns…
     fireEvent.click(getAllByText('undo')[0])
-    fireEvent.click(getAllByText('pin')[0])
-    getByText(/a pinned element never fades/)
+    // …and verify: productive skepticism — a cross-check lands in the plan
+    fireEvent.click(getAllByText('verify')[0])
+    getByText(/cited as provisional until it lands/)
     unmount()
   })
 
