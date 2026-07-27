@@ -1132,25 +1132,36 @@ def _run_remote_kernel(input_: dict, ctx: dict | None, project_id: str,
         note += (" (env='system': the node's own interpreter — no environment "
                  "realized, nothing installable)")
     if res.returncode == 0 and not (res.stdout or "").strip():
-        # A silent successful block. This used to ACCUSE the substrate of a
-        # capture race (misc/bug2_weft_kernel_stdout.md) and advise writing
-        # results to a FILE — but it fires on any silent block, including code
-        # that legitimately prints nothing, and the far more common cause is
-        # plain: the kernel driver does not auto-print the value of a top-level
-        # expression the way an R console or a notebook cell does, so a trailing
-        # bare `files` / `df` / `head(x)` evaluates and is discarded. Live
-        # (thr_a1f7f687) the old wording sent an agent to write a listing to a
-        # file, harvest it, and finally re-run the same work with cat() — three
-        # remote round trips for one directory listing. State the likely cause
-        # and the cheap fix; claim a substrate bug only with evidence of one.
+        # A silent successful block. This note has now been wrong TWICE, in
+        # opposite directions, and both times for the same reason: it restated
+        # the substrate's behaviour from memory instead of relaying it. First
+        # it accused weft of a stdout capture race
+        # (misc/bug2_weft_kernel_stdout.md) and sent the agent to write results
+        # to a FILE — live (thr_a1f7f687) that cost three remote round trips
+        # for one directory listing. The replacement swung the other way, to
+        # "the kernel does not auto-print a bare top-level expression": true
+        # when written, false one weft commit later (01fb968 gave the drivers
+        # native REPL display), so it shipped a stale claim with CI green.
+        #
+        # So this wording deliberately says NOTHING about how the driver
+        # displays values. That is weft's to know and weft's to report — the
+        # rest of aba's substrate-facing text already relays a typed verdict
+        # rather than restating one (see discovery.py). What is left is true of
+        # any driver: the block ran, it printed nothing, and the reasons are
+        # language-level (a side-effecting call, an invisible/None value).
+        # The last sentence is the only part that has been right throughout;
+        # it is what makes a REAL capture fault reportable.
+        # Guarded by test_remote_kernel_lane.py::
+        # test_silent_block_note_makes_no_claim_about_driver_echo.
         note += (". NOTE: this block produced no stdout (exit 0 — it DID run). "
-                 "Most often that means a value was never printed: the kernel "
-                 "does not echo a bare top-level expression the way a console "
-                 "or notebook cell does. Print explicitly — "
+                 "Usually nothing was printed: the code only assigned, or ran "
+                 "for its side effects, or its final value was one the language "
+                 + ("does not show (invisible(), an assignment)"
+                    if lang == "r" else "does not show (None)")
+                 + ". If you expected to see a value, print it explicitly — "
                  + ("cat()/print()" if lang == "r" else "print()")
-                 + " — rather than ending a line with the value alone. If you "
-                 "DID print explicitly and still see nothing, say so: that is a "
-                 "capture fault worth reporting, not normal.")
+                 + ". If you DID print explicitly and still see nothing, say "
+                 "so: that is a capture fault worth reporting, not normal.")
     if remote_only:
         note += (f". {len(remote_only)} larger output(s) remain on {site} — still "
                  f"yours by NAME (find_files finds them; opening fetches on demand): "

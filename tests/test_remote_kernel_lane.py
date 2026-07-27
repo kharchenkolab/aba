@@ -132,8 +132,16 @@ class FakeWeft:
             self.sandbox["current_block"] = str(self._block).encode()
             self.mtimes["current_block"] = self._mtime
             # "run" the code: a marker line as output; a code containing
-            # WRITE:<name>:<size> drops a sandbox file
-            out = f"ok block {self._block}"
+            # WRITE:<name>:<size> drops a sandbox file, and a bare SILENT line
+            # makes the block produce NO stdout at all.
+            # SILENT exists because a real block often prints nothing — it only
+            # assigned, or its last value was invisible/None — and this fake
+            # answered "ok block N" unconditionally, so the empty-stdout lane
+            # was never once reachable here. That is the lane the silent-block
+            # note speaks for, which is how the note's claim about the driver
+            # drifted out of date with CI green.
+            out = "" if any(l.strip() == "SILENT" for l in a[1].splitlines()) \
+                else f"ok block {self._block}"
             for line in a[1].splitlines():
                 if line.startswith("WRITE:"):
                     _, rel, size = line.split(":")
@@ -695,6 +703,53 @@ def test_fresh_remote_kernel_gets_orientation_and_an_honest_note():
     check("orientation banner does not repeat on a warm kernel",
           "Fresh kernel" not in (r2.get("stdout") or ""),
           (r2.get("stdout") or "")[:200])
+
+
+def test_silent_block_note_makes_no_claim_about_driver_echo():
+    """A silent rc=0 block is called out — WITHOUT describing how the driver
+    treats a bare top-level expression.
+
+    This note has been wrong twice, in opposite directions, because it restates
+    substrate behaviour from memory instead of relaying it. First it accused
+    weft of a stdout CAPTURE RACE and told the agent to write results to a file
+    (three remote round trips for one directory listing). The replacement swung
+    to "the kernel does not echo a bare top-level expression the way a console
+    or notebook cell does" — true when written, false one weft commit later:
+    01fb968 compiles the last Expr in `single` mode through sys.displayhook
+    (python) and uses withVisible + print (R), so bare expressions DO echo.
+    Neither wording had a test, so both shipped and the second went stale with
+    CI green.
+
+    The load-bearing assertions are therefore NEGATIVE (failure mode (a): the
+    forbidden ACTION, not the output). What the note may say is what is true of
+    any driver — the block ran, it printed nothing — plus the escape hatch,
+    which is the only part that has been right the whole time. Anything that
+    names the substrate's display semantics belongs in weft, which is the only
+    layer that can know them; ABA's other substrate-facing text already relays
+    rather than restates (discovery.py: "keys SOLELY on the substrate's typed
+    discrimination")."""
+    ctx = {"thread_id": "thrSILENT"}
+    r = rex._run_remote_kernel({"code": "SILENT\nb = 1"}, ctx, _PID,
+                               "thrSILENT", "mendel")
+    check("silent block still succeeded", r is not None and r.get("returncode") == 0,
+          str(r)[:200])
+    note = r.get("note") or ""
+    # ARMED: if the note never fired, every assertion below is vacuous.
+    check("the silent-block note actually fired", "no stdout" in note, note[:300])
+    for stale in ("does not echo", "bare top-level expression",
+                  "capture race", "capture issue", "notebook cell"):
+        check(f"note makes no substrate-display claim: {stale!r}",
+              stale not in note, note[:400])
+    check("escape hatch for a genuine capture fault survives",
+          "capture fault" in note, note[:400])
+    # WIDE — the R lane renders the same note from the same branch.
+    r_r = rex._run_remote_kernel({"code": "SILENT\nb <- 1"}, ctx, _PID,
+                                 "thrSILENT", "mendel", lang="r")
+    note_r = r_r.get("note") or ""
+    check("R lane note fired too", "no stdout" in note_r, note_r[:300])
+    for stale in ("does not echo", "bare top-level expression", "notebook cell"):
+        check(f"R note makes no substrate-display claim: {stale!r}",
+              stale not in note_r, note_r[:400])
 
 
 def test_driver_machinery_never_harvested_from_a_real_jobdir():
