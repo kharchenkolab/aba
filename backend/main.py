@@ -1510,7 +1510,13 @@ def pagoda3_store_options(pid: str, relpath: str):
 # error page then read as `content-length: 31` — a bogus size for the object.
 # Starlette's FileResponse already suppresses the body on HEAD, so the handler
 # below needs no branch of its own.
-@app.api_route("/pagoda3-store/{pid}/{relpath:path}", methods=["GET", "HEAD"])
+#
+# Stacked decorators rather than api_route(methods=[...]): the route-table
+# golden (tests/test_route_table.py) scans for `@app.<verb>` decorators, and an
+# api_route would make this path INVISIBLE to it — trading a 405 fix for a blind
+# spot over a real route.
+@app.head("/pagoda3-store/{pid}/{relpath:path}")
+@app.get("/pagoda3-store/{pid}/{relpath:path}")
 def pagoda3_store(pid: str, relpath: str):
     """Serve one file from a project's pagoda3 data store (a `.lstar.zarr`
     tree) over HTTP Range. The path is containment-checked to the project's

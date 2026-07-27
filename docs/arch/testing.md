@@ -26,6 +26,17 @@ becomes the one people trust, because it is the one that is green.
 - **Assert on RECORDED state, not on the agent's account of it.** An agent reported
   "tracked as outputs" for a run in which nothing was tracked. Only the graph
   distinguishes that from the run where it was true.
+- **A scenario that runs alone cannot see what only happens when turns overlap.**
+  Every scenario here drives one thread to completion, so for a long time nothing
+  crossed. The cross-project write leak (2026-07-27) was found only because two
+  sweeps were run at once *by hand* — records, harvest dirs and artifacts filed
+  under a bystander project, each row individually well-formed and the corruption
+  visible only ACROSS projects. Concurrency is now a lane, not an accident.
+- **The instrument can manufacture the failure it reports.** In the same sweep,
+  ~10 "surface parity" failures per site were a client shim that JSON-parsed
+  every body (so a CSV read as a dead link) and never pinned a project (so every
+  durable view 404'd). A shim less capable than a browser invents breakage;
+  suspect the instrument before the product when a whole class lights up at once.
 - **A guard that cannot fail is worse than no guard** — it converts an untested area into
   a *reassuring* one. Three failure modes keep recurring and are enumerated by name in
   [`.claude/CLAUDE.md`](../../.claude/CLAUDE.md): the test verifies OUTPUT instead of the
@@ -99,6 +110,9 @@ Each is a live-agent study in the same style, differing in what it stresses:
 | `harness/live_audit.py` | the same surface oracle over *every project* on a running server — the "first click after coming back" check |
 | `harness/env_check.py` | the env-promotion chain against a deployed backend, no LLM, no HTTP |
 | `harness/replay.py` | in-process replay of the real turn flow for output-serving/durability work |
+| `harness/project_isolation.py` | **cross-project** audit: every recorded row belongs to a thread of the project holding it. Read-only, no LLM — run after any concurrent or multi-project live run |
+| `live/workflows.py --concurrent N` | N threads in ONE project against one node at once |
+| `live/workflows.py --cross-project N` | N projects at once, project creation staggered to land mid-flight, then the isolation audit |
 
 ### diagnosis
 `harness/forensic.py` reads a failed run's preserved bundle (intent, actions, exact API
@@ -119,6 +133,7 @@ automatically. Findings accumulate in `regtest/FINDINGS.md`.
 | does env promotion/realization work on a deployment? | `harness/env_check.py` |
 | why did this step fail? | `harness/forensic.py` |
 | is the *guidance* (banner, recipe, tool prose) doing its job? | scenario sweep, **un-prescribed** prompt |
+| does anything break when turns overlap? | `--concurrent` / `--cross-project` + `project_isolation.py` |
 
 That last row is the subtle one. A prompt that names the mechanism ("write it in the run's
 working directory") tests obedience and cannot fail for the reason that matters. State the
