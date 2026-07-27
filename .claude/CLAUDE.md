@@ -61,4 +61,29 @@ These are cross-cutting inputs to EVERY agent decision — a change has platform
   bound that holds at default slack and breaks at its floor; **the unreached regime** —
   a 14-generation probe against a 30-generation window measures the wrong side of the
   window and reads as exoneration.
+- **Three failure modes that keep defeating ARMED/PROVEN/WIDE — check for each by name:**
+  (a) **The test verifies the OUTPUT, not the forbidden ACTION.** A fresh-kernel guard
+  asserted the banner appeared; the buggy code produced it too, via the very branch that
+  was killing remote kernels. When a change means "achieve X *without* doing Y", the
+  load-bearing assertion is `not Y` — assert on the call log, not just the result.
+  (b) **The FAKE is more permissive than reality, so it blesses the bug.** A fake kernel
+  accepted a `chdir` the real one dies on; a fake sandbox started EMPTY while every real
+  jobdir carries the driver's machinery, so a harvest filter shipped that scooped
+  `current_block` as a Run's only output. A fake must REFUSE what the real thing refuses
+  and CARRY what it always carries; make it raise, so the class cannot pass again.
+  (c) **The live scenario PRESCRIBES the behaviour it means to verify.** A multinode
+  scenario told the agent to write "in the run's working directory" — so it tested
+  obedience, and stayed green while the guidance it should have been testing said nothing
+  about outputs at all. State the OUTCOME the user wants; never the mechanism under test.
+- **Prefer a PROPERTY guard over an instance fix when a mistake has recurred.** Five
+  separate spots injected a controller-only path into remote-bound code (DATA_DIR, the
+  reticulate pin, `_ensure_kernel_cwd`, the cwd probe, the orientation banner) because
+  remote-awareness was a per-call-site decision. `tests/test_remote_setup_purity.py`
+  asserts the PROPERTY over the assembled artifact instead, so a new contributor that
+  forgets fails without anyone remembering to test it.
+- **A handle one door emits must open at every door that takes one.** Doors were each
+  tested alone and all passed; nothing fed one door's output into another's input, which
+  is where three frictions lived (`run_r` returned an `/artifacts/…` URL `view_file`
+  rejected; `view_artifact` had no site branch). `tests/test_handle_round_trip.py` is the
+  matrix — adding a door or a handle shape is one line.
 - **Every change to a shared agent input ships a BEHAVIORAL guard, not just a byte/structural test:** contract-invariance (`test_tool_presentation.py`, `test_lean_catalog_compression.py`), the lean budget ceiling (`test_lean_summary_budget.py`, lean-scoped), and — for any tier in production use — tool-argument correctness in the regtest sweep (`regtest/placement/` covers `standard`). Structural-only PRs to these inputs are insufficient.

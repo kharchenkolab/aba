@@ -36,8 +36,50 @@ _log = logging.getLogger(__name__)
 _KERNEL_MACHINERY = frozenset({
     "current_block", "activate.sh", "cmd.sh", "runner.sh", "log",
     "node", "pid", "pid.epoch", "pid.real", "rusage",
+    # the block DIRECTORY itself, not just its contents: an inventory lists the
+    # dir entry as bare `blocks`, which the `blocks/` prefix below never matches
+    # (caught the moment the fake grew a realistic jobdir)
+    "blocks",
 })
 _KERNEL_MACHINERY_PREFIXES = ("blocks/", "kernel.", "driver.")
+
+
+def _untracked_write_note(sess, lang: str) -> str:
+    """Warn when the kernel's cwd has LEFT its sandbox, because everything the
+    block writes relatively is then invisible to aba.
+
+    This hazard is NEW, and it arrived with a fix. A weft kernel used to DIE on
+    a chdir (its driver wrote `blocks/NNNN.*` relatively), so the failure was at
+    least loud. The substrate now anchors those paths absolutely — deliberately
+    keeping cwd persistence — so a chdir succeeds and STICKS. The kernel is fine
+    and every subsequent `ggsave("umap.png")` lands outside the one directory the
+    harvester reads. Nothing fails; the outputs simply never exist as far as the
+    Run card, `view_artifact` or the viewer are concerned. That silence is
+    exactly how a long analysis finished with 0 recorded outputs.
+
+    Reported at the END of the step, where the agent can still act on it — the
+    alternative is discovering it later via an empty Run card. Best-effort: the
+    baseline is the cwd observed on the FIRST probe of this session (the kernel
+    starts in its sandbox), and no baseline means no claim."""
+    cwd = getattr(sess, "_aba_probe_cwd", None)
+    if not cwd:
+        return ""
+    base = getattr(sess, "_aba_sandbox_cwd", None)
+    if not base:
+        sess._aba_sandbox_cwd = cwd          # first observation IS the sandbox
+        return ""
+    import os as _os
+    if _os.path.normpath(cwd) == _os.path.normpath(base):
+        return ""
+    call = "setwd()" if lang == "r" else "os.chdir()"
+    return (f" WARNING — this kernel's working directory is now {cwd!r}, no "
+            f"longer its sandbox ({base!r}). Anything this step wrote with a "
+            f"BARE RELATIVE name went to {cwd!r}, which aba does NOT harvest: "
+            f"those files will not appear on the Run card, and view_artifact / "
+            f"get_viewer_url will not find them by name. Either return with "
+            f"{call} to the sandbox and write relatively there, or call "
+            f"register_dataset(path=..., site=...) for each result you want "
+            f"kept.")
 
 
 def _remote_site_of(sess) -> str | None:
@@ -225,6 +267,7 @@ def __aba_ns_probe():
         except Exception: continue
         if len(out) >= 30: out.append('...'); break
     print('__ABA_NS_BEGIN__'); print(*out, sep='\\n'); print('__ABA_NS_END__')
+    import os as _o; print('__ABA_CWD__', _o.getcwd())
 __aba_ns_probe(); del __aba_ns_probe
 """
 
@@ -246,6 +289,7 @@ local({
     if (length(out) >= 30) { out <- c(out, '...'); break }
   }
   cat('__ABA_NS_BEGIN__\n'); for (l in out) cat(l,'\n',sep=''); cat('__ABA_NS_END__\n')
+  cat('__ABA_CWD__ ', getwd(), '\n', sep='')
 })
 """
 
@@ -254,6 +298,14 @@ def _kernel_namespace_preview(sess, lang: str) -> list[str]:
     try:
         res = sess.execute(_NS_PROBE_R if lang == "r" else _NS_PROBE_PY, timeout_s=15)
         out = (res.stdout or "") + "\n" + (res.stderr or "")
+        if "__ABA_CWD__" in out:
+            # free ride on a probe that already runs: knowing WHERE the kernel
+            # ended the block is what tells us whether its relative writes are
+            # still landing in the harvested sandbox
+            try:
+                sess._aba_probe_cwd = out.split("__ABA_CWD__", 1)[1].splitlines()[0].strip()
+            except Exception:  # noqa: BLE001
+                pass
         if "__ABA_NS_BEGIN__" not in out: return []
         chunk = out.split("__ABA_NS_BEGIN__", 1)[1].split("__ABA_NS_END__", 1)[0]
         return [ln.strip() for ln in chunk.splitlines() if ln.strip()]
@@ -1118,6 +1170,13 @@ def _run_remote_kernel(input_: dict, ctx: dict | None, project_id: str,
         ns = _kernel_namespace_preview(sess, lang)
         if ns:
             out["namespace"] = ns
+        # The probe just told us where the kernel ended up. If that is no longer
+        # the sandbox, this step's relative writes are untracked — say so NOW,
+        # while the agent can still register or relocate them.
+        _drift = _untracked_write_note(sess, lang)
+        if _drift:
+            out["note"] = (out.get("note") or "") + _drift
+            out["untracked_writes"] = True
     # Same orientation block the local lanes render: WORK_DIR, registered
     # datasets and files already on disk, with the fresh-kernel header when the
     # session was just created. Also re-fires when the block died on a missing

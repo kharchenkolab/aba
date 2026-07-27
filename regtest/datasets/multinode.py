@@ -315,11 +315,18 @@ def mn_status_surfaces(client, pid, tid):
     an earlier one must not satisfy these checks."""
     pre = ({e["id"] for e in find_entities(type="analysis", not_deleted=True)}
            | {e["id"] for e in find_entities(type="dataset", not_deleted=True)})
+    # STATE THE OUTCOME, NEVER THE MECHANISM. This prompt used to say "writes
+    # … in the run's working directory", which handed the agent the exact
+    # decision the scenario exists to test — so the checks below could not fail
+    # for the reason that matters, and a long live analysis later finished with
+    # ZERO tracked outputs while this stayed green. Where to write, and whether
+    # to register, is the platform's guidance to get right; the user only says
+    # what they want to end up with.
     caps = [drive_turn(client, pid, tid,
         "Open an analysis run titled 'Remote production'. Then run a BACKGROUND "
-        "job on machine 'hpc' that writes a LARGE ~60 MB file called big.bin "
-        "in the run's working directory (e.g. 60*1024*1024 bytes). It's big — "
-        "make sure it's kept SAFE on hpc without copying it here.")]
+        "job on machine 'hpc' that produces a LARGE ~60 MB result file called "
+        "big.bin (e.g. 60*1024*1024 bytes). It's big — don't copy it here, but I "
+        "do want it to show up as an output of this run and be safe on hpc.")]
     wait_jobs_settled(client, pid)
 
     def _on_hpc_somewhere():
@@ -350,7 +357,12 @@ def mn_status_surfaces(client, pid, tid):
         time.sleep(6)
     led = client.get(f"/api/projects/{pid}/data-ledger").json()
     checks = [
+        # This is now a real question: nothing told the agent WHERE to put it,
+        # so a miss here means the guidance (fresh-kernel banner, recipes) failed
+        # to steer an untracked write into a tracked one.
         ("big output shown SAFE ON HPC (run keep or dataset home)", bool(kind)),
+        ("the result is DISCOVERABLE, not merely on disk somewhere on hpc",
+         bool(kind)),
         ("ledger sees hpc as a remote site", "hpc" in (led.get("remote_sites") or [])),
     ]
     if kind == "run":

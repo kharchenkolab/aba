@@ -216,3 +216,64 @@ def test_real_outputs_are_still_harvested():
                 "pidgin_counts.csv", "logfile_summary.txt", "nodes.tsv",
                 "driver_metrics.csv", "current_blocks_summary.tsv"):
         assert not _is_kernel_machinery(rel), rel
+
+
+# ── untracked writes: the hazard the substrate FIX introduced ───────────────
+#
+# A weft kernel used to DIE on a chdir, so the failure was loud. The driver now
+# anchors its protocol paths absolutely and deliberately KEEPS cwd persistence —
+# so a chdir succeeds and sticks, and every later bare-relative write lands
+# outside the one directory aba harvests. Nothing errors; the outputs simply
+# never exist as far as the Run card or view_artifact are concerned.
+
+class _Sess:
+    def __init__(self, cwd=None, base=None):
+        self.kernel_id = "krn_1"
+        if cwd is not None:
+            self._aba_probe_cwd = cwd
+        if base is not None:
+            self._aba_sandbox_cwd = base
+
+
+def test_first_probe_sets_the_baseline_and_says_nothing():
+    """The kernel starts IN its sandbox, so the first observation is the
+    baseline — not a warning."""
+    from content.bio.tools.run_exec import _untracked_write_note
+    s = _Sess(cwd="/home/u/.weft/kernels/krn_1")
+    assert _untracked_write_note(s, "r") == ""
+    assert s._aba_sandbox_cwd == "/home/u/.weft/kernels/krn_1"
+
+
+def test_drift_is_reported_with_both_paths_and_the_levers():
+    from content.bio.tools.run_exec import _untracked_write_note
+    s = _Sess(cwd="/home/u/geo_data/work", base="/home/u/.weft/kernels/krn_1")
+    note = _untracked_write_note(s, "r")
+    assert "no longer its sandbox" in note
+    assert "/home/u/geo_data/work" in note and "/home/u/.weft/kernels/krn_1" in note
+    assert "register_dataset" in note and "setwd()" in note
+    assert "Run card" in note          # names the consequence, not just the fact
+
+
+def test_language_appropriate_lever():
+    from content.bio.tools.run_exec import _untracked_write_note
+    s = _Sess(cwd="/other", base="/sandbox")
+    assert "os.chdir()" in _untracked_write_note(s, "python")
+    assert "setwd()" not in _untracked_write_note(_Sess(cwd="/o", base="/s"), "python")
+
+
+def test_no_warning_when_the_kernel_stayed_put():
+    """CEILING: the overwhelmingly common case must stay silent, or the warning
+    becomes noise and gets ignored."""
+    from content.bio.tools.run_exec import _untracked_write_note
+    s = _Sess(cwd="/sandbox", base="/sandbox")
+    assert _untracked_write_note(s, "r") == ""
+    # trailing-slash / non-normalized spellings are the SAME directory
+    assert _untracked_write_note(_Sess(cwd="/sandbox/", base="/sandbox"), "r") == ""
+
+
+def test_no_probe_means_no_claim():
+    """WIDE — the degenerate shape: a block that errored runs no probe, so there
+    is no cwd to compare. Silence, never a guess."""
+    from content.bio.tools.run_exec import _untracked_write_note
+    assert _untracked_write_note(_Sess(), "r") == ""
+    assert _untracked_write_note(_Sess(base="/sandbox"), "r") == ""

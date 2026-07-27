@@ -61,12 +61,30 @@ class FakeWeft:
         self.kernel_starts: list[dict] = []
         self.execs: list[str] = []
         self.sandbox: dict[str, bytes] = {}     # rel -> content
+        self.mtimes: dict[str, float] = {}      # rel -> its OWN mtime
+        # (a single global mtime made every entry look modified on every
+        #  poll — the harvest diff then had nothing to diff)
         self._mtime = 100.0
         self.fail_start = False
         self.walltime_cap = None      # slurm-style cap, e.g. "1:00:00"
         self.partitions_hint = None   # override the violation's partition list
         self._block = 0
         self._block_out: dict[int, str] = {}
+
+    # A REAL weft kernel jobdir is never empty: the driver's own machinery is
+    # there from the moment it starts, in the SAME directory a block's bare
+    # relative writes land in. The fake used to start with an empty sandbox, so
+    # aba's harvest filter was never once exercised against a real listing —
+    # which is how `current_block` (a 3-byte heartbeat) shipped as a Run's only
+    # recorded output. This is the verbatim listing from the live incident.
+    _MACHINERY = ("activate.sh", "blocks", "cmd.sh", "current_block", "log",
+                  "node", "pid", "pid.epoch", "pid.real", "runner.sh", "rusage")
+
+    def _seed_machinery(self, lang: str) -> None:
+        for rel in (*self._MACHINERY, "driver.R" if lang == "r" else "driver.py",
+                    "blocks/0000.code"):
+            self.sandbox.setdefault(rel, b"x")
+            self.mtimes.setdefault(rel, 100.0)
 
     def sync_call(self, name, *a, **kw):
         if name == "kernel_start":
@@ -89,6 +107,7 @@ class FakeWeft:
                                  "max_walltime": self.walltime_cap},
                                 {"name": "short", "max_walltime": "1:00"}]}})
             self.kernel_starts.append({"site": a[0], "lang": a[1], **kw})
+            self._seed_machinery(a[1])
             return {"kernel_id": "krn_test1"}
         if name == "kernel_exec":
             self.execs.append(a[1])
@@ -108,14 +127,19 @@ class FakeWeft:
                     "a weft kernel was told to chdir — this kills the real "
                     f"kernel's block protocol; code was: {_code[:120]!r}")
             self._block += 1
+            # the driver rewrites its heartbeat on every block (driver.py:112)
+            self._mtime += 1
+            self.sandbox["current_block"] = str(self._block).encode()
+            self.mtimes["current_block"] = self._mtime
             # "run" the code: a marker line as output; a code containing
             # WRITE:<name>:<size> drops a sandbox file
             out = f"ok block {self._block}"
             for line in a[1].splitlines():
                 if line.startswith("WRITE:"):
                     _, rel, size = line.split(":")
-                    self.sandbox[rel] = b"x" * int(size)
                     self._mtime += 1
+                    self.sandbox[rel] = b"x" * int(size)
+                    self.mtimes[rel] = self._mtime
             self._block_out[self._block] = out
             return {"block": self._block}
         if name == "kernel_peek":
@@ -130,7 +154,8 @@ class FakeWeft:
         if name == "kernel_stop":
             return {}
         if name == "run_inventory":
-            return {"entries": [{"path": rel, "bytes": len(b), "mtime": self._mtime}
+            return {"entries": [{"path": rel, "bytes": len(b),
+                                 "mtime": self.mtimes.get(rel, 100.0)}
                                 for rel, b in self.sandbox.items()], "live": True}
         if name == "run_file_stat":
             rel = a[1]
@@ -670,6 +695,34 @@ def test_fresh_remote_kernel_gets_orientation_and_an_honest_note():
     check("orientation banner does not repeat on a warm kernel",
           "Fresh kernel" not in (r2.get("stdout") or ""),
           (r2.get("stdout") or "")[:200])
+
+
+def test_driver_machinery_never_harvested_from_a_real_jobdir():
+    """END TO END over a REALISTIC sandbox: the kernel jobdir carries the
+    driver's own machinery (activate.sh, current_block, pid, log, …) in the same
+    directory a block's bare relative writes land in, and the heartbeat's mtime
+    changes on EVERY block. So the harvest diff sees it as new/changed every
+    time and must filter it.
+
+    ARMED on the heartbeat specifically: `current_block` is rewritten per block
+    (the fake mirrors driver.py:112), so this cannot pass by the file simply not
+    changing. Live consequence of the missing filter: an ssh timeout left one
+    behind and it became a Run card's ONLY recorded output."""
+    ctx = {"thread_id": "thrMACH"}
+    out = rex._run_remote_kernel({"code": "WRITE:real_output.csv:32\nprint(1)"},
+                                 ctx, _PID, "thrMACH", "mendel")
+    check("block ran", out is not None and out.get("returncode") == 0, str(out)[:160])
+    # harvest classifies by kind: png→plots, csv→tables, other→files. Check the
+    # union, or a filter bug can hide behind the wrong bucket.
+    o = out or {}
+    names = [f.get("original_name") or f.get("name")
+             for f in (o.get("files") or []) + (o.get("tables") or [])
+             + (o.get("plots") or [])]
+    check("the REAL output is harvested", "real_output.csv" in names, str(names))
+    for junk in ("current_block", "activate.sh", "pid", "log", "runner.sh",
+                 "rusage", "driver.R", "cmd.sh", "node"):
+        check(f"driver machinery {junk!r} is NOT an output", junk not in names,
+              str(names))
 
 
 def _run():

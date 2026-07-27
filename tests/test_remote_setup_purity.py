@@ -80,3 +80,62 @@ def test_local_setup_still_uses_project_dirs():
     assert str(DATA_DIR) in block or "DATA_DIR" in block
     assert "getcwd()" not in block.split("WORK_DIR")[0], \
         "local DATA_DIR must be the project dir, not the cwd"
+
+
+# ── the same property, one layer out: DETACHED task payloads ────────────────
+#
+# A detached site shares no filesystem with the controller, so a controller path
+# in its task is meaningless there. `_build_detached_task` says so in a comment
+# ("NO controller paths, NO ABA_* env — the node shares nothing") — this makes
+# it enforced instead of aspirational, because a comment is what the reticulate
+# pin and the controller-setwd both walked past.
+#
+# The SHARED-FS lane is deliberately exempt: it bootstraps with `sys.executable`
+# precisely because that absolute path IS valid on every node there. Conflating
+# the two lanes would either break that lane or make this guard meaningless.
+
+def _detached_task(tmp_path, monkeypatch, lang="python"):
+    """Build a real detached task, capturing the payload the node would get."""
+    from core.jobs import weft_submitter as ws
+    captured: dict = {}
+
+    class _Ad:
+        def sync_call(self, verb, *a, **kw):
+            assert verb == "data_register"
+            payload_dir = Path(a[0])
+            captured["files"] = {f.name: f.read_text(errors="replace")
+                                 for f in payload_dir.iterdir() if f.is_file()}
+            return {"ref": "ref-payload"}
+    monkeypatch.setattr(ws, "_adapter", lambda: _Ad())
+    monkeypatch.setattr(ws, "site_contract", lambda site: "detached")
+
+    s = ws.WeftSubmitter.__new__(ws.WeftSubmitter)
+    s.site = "siteA"
+    monkeypatch.setattr(s, "_run_dir", lambda job: tmp_path, raising=False)
+    monkeypatch.setattr(s, "_site_kind", lambda site: "ssh", raising=False)
+    job = {"id": "job_1", "kind": "run_r" if lang == "r" else "run_python",
+           "title": "t", "params": {"code": "print(1)", "project_id": "p1"}}
+    task = s._build_detached_task(job, job["params"], env_id=None, site="siteA")
+    return task, captured.get("files", {})
+
+
+@pytest.mark.parametrize("lang", ["python", "r"])
+def test_detached_task_carries_no_controller_path(tmp_path, monkeypatch, lang):
+    import json as _json
+    task, files = _detached_task(tmp_path, monkeypatch, lang)
+    blob = _json.dumps(task) + "\n" + "\n".join(files.values())
+    for root in _controller_roots():
+        assert root not in blob, (
+            f"detached {lang} task embeds controller path {root!r} — the node "
+            f"shares no filesystem with this machine.\ntask={task}")
+    # ARMED: prove we actually built something, so purity is not vacuous
+    assert task.get("command") and task.get("site") == "siteA"
+    assert "spec.json" in files, files.keys()
+
+
+def test_detached_task_ships_no_aba_env(tmp_path, monkeypatch):
+    """ABA_* vars name controller-side locations; the shared-fs lane forwards
+    them ON PURPOSE, the detached lane must not."""
+    task, _ = _detached_task(tmp_path, monkeypatch)
+    assert not [k for k in (task.get("env_vars") or {}) if k.startswith("ABA_")], \
+        task.get("env_vars")

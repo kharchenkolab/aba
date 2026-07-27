@@ -69,6 +69,7 @@ FILES=(
   tests/test_remote_kernel_lane.py
   tests/test_kernel_cwd_guard.py
   tests/test_remote_setup_purity.py
+  tests/test_handle_round_trip.py
   tests/test_artifact_url_doors.py
   tests/test_range_channel.py
   tests/test_data_ledger.py
