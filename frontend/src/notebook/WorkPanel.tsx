@@ -24,6 +24,70 @@ const SCOPE_CLS: Record<string, string> = {
   project: 'proj', question: 'q', trail: 'trail', figure: 'fig', result: 'fig',
 }
 
+/** The gesture vocabulary (RECORD_DESIGN §6), two families: CURATION acts
+ *  now, silently (pin · fade · ⌖ hold; draft claim goes through the inbox);
+ *  INVESTIGATION compiles typed planned items (expand · check · corroborate
+ *  · alternatives · → plan) — nothing executes, execution stays behind
+ *  ▷ work. The bar shows the four highest-frequency verbs; ⋯ opens the
+ *  rest (§15.9 — surfacing to be tuned from usage). */
+type GestVerb = { label: string; title: string; receipt: string }
+const V = {
+  pin: {
+    label: 'pin',
+    title: 'this matters; don’t lose it — the pin you already know (keep_message). Files directly as a note, turn-stamped; the agent proposes its form and route (a pinned element never fades). Hold to aim: → trail · → question',
+    receipt: 'pinned · turn-stamped — the agent proposes its form; a pinned element never fades',
+  },
+  pinFig: {
+    label: 'pin',
+    title: 'the pin you already know — figures, tables, whole output cells. Births a note pointed at it, turn-stamped — and implies keep: a pinned artifact leaves the leftover set and never lapses (retention is derived, not a second gesture)',
+    receipt: 'pinned — noted · implies keep: never lapses',
+  },
+  expand: {
+    label: 'expand',
+    title: 'this is interesting — GROW the direction (the abductive verb): feeds or births an intent-marked stub and its plan. This, not pin, is “we should do more here”',
+    receipt: 'expanding — marked as a direction; the plan under its question grows',
+  },
+  check: {
+    label: 'check',
+    title: 'is this result SOUND? Error-hunting on the immediate analysis — robustness, spec sensitivity, the mundane explanation. A typed item lands in the plan; cited as provisional until it lands',
+    receipt: 'check requested — a robustness item landed in the plan; cited as provisional until it lands',
+  },
+  fade: {
+    label: 'fade',
+    title: 'the anti-pin: don’t carry this forward — pure salience-down. The agent won’t route or draft from it; it stays findable in the transcript. (Disagreement is a REPLY, not a button — the chat is the instrument)',
+    receipt: 'fading — will not be routed or drafted from; stays findable in the transcript',
+  },
+  corroborate: {
+    label: 'corroborate',
+    title: 'is it REAL? An independent line of evidence — different method, different data, up to a new experiment: triangulation, not replication. Lands in the plan; provisional until it lands',
+    receipt: 'corroboration requested — an independent line of evidence landed in the plan',
+  },
+  alternatives: {
+    label: 'alternatives',
+    title: 'is it rightly EXPLAINED? Rival hypotheses and the discriminating test — multiple working hypotheses, one tap. Lands in the plan',
+    receipt: 'alternatives requested — rival explanations + a discriminating test landed in the plan',
+  },
+  plan: {
+    label: '→ plan',
+    title: 'later, aimed — the generic planned item, free-text, under this question (no ceremony; it is your plan)',
+    receipt: '→ planned under this question',
+  },
+  draftClaim: {
+    label: 'draft claim',
+    title: 'formalize this — the record-writer drafts a claim from this statement; the draft goes to the inbox (this one IS a decision — the ratify gate holds)',
+    receipt: 'claim draft requested → inbox',
+  },
+  hold: {
+    label: '⌖ hold',
+    title: 'working memory, NOT a record write — parks it on the desk for two-locus work and evaporates at session close; nothing enters the record',
+    receipt: '⌖ held on the desk — evaporates at close',
+  },
+} satisfies Record<string, GestVerb>
+const TEXT_BAR = [V.pin, V.expand, V.check, V.fade]
+const TEXT_MORE = [V.corroborate, V.alternatives, V.plan, V.draftClaim]
+const FIG_BAR = [V.pinFig, V.check, V.hold]
+const FIG_MORE = [V.corroborate, V.expand, V.fade]
+
 export function Msg({ m }: { m: PanelMsg }) {
   if (m.note) return <div className="wpanel__sysnote">✦ {m.note}</div>
   if (m.run) {
@@ -74,6 +138,7 @@ export default function WorkPanel({ panel, onClose, onAdvance, onExpand, continu
   // salience and placement, injected at the moment of noticing; each leaves
   // a RECEIPT (the pre-filled routing-table row), undoable
   const [gest, setGest] = useState<Record<number, string>>({})
+  const [moreFor, setMoreFor] = useState<number | null>(null)
   const gesture = (i: number, receipt: string) => setGest(g => ({ ...g, [i]: receipt }))
   const ungesture = (i: number) => setGest(g => { const n = { ...g }; delete n[i]; return n })
   // like any chat: open at the latest exchange (and keep up as it grows).
@@ -154,30 +219,19 @@ export default function WorkPanel({ panel, onClose, onAdvance, onExpand, continu
             )}
             {gesturable && !gest[i] && (
               <div className="gest">
-                {m.text && (
-                  <>
-                    <button title="this matters; don't lose it — the pin you already know (keep_message). Files directly as a note, turn-stamped; the agent proposes its form and route (a pinned element never fades). Hold to aim: → trail · → question"
-                            onClick={() => gesture(i, 'pinned · turn-stamped — the agent proposes its form; a pinned element never fades')}>pin</button>
-                    <button title="later, aimed — lands as a planned item under this question (no ceremony; it is your plan)"
-                            onClick={() => gesture(i, '→ planned under this question')}>→ plan</button>
-                    <button title="formalize this — the record-writer drafts a claim from this statement; the draft goes to the inbox (this one IS a decision — the ratify gate holds)"
-                            onClick={() => gesture(i, 'claim draft requested → inbox')}>draft claim</button>
-                    <button title="productive skepticism: before we build on this, cross-check it — a verification item lands in the plan (independent method / hold-out), and this is cited as PROVISIONAL until the check lands. Repeated verifies around a theme seed a trail: anomaly-finding, born from taps"
-                            onClick={() => gesture(i, 'verification requested — a cross-check landed in the plan; cited as provisional until it lands')}>verify</button>
-                    <button title="the anti-pin: don't carry this forward — pure salience-down. The agent won't route or draft from it; it stays findable in the transcript. (Disagreement is a REPLY, not a button — the chat is the instrument)"
-                            onClick={() => gesture(i, 'fading — will not be routed or drafted from; stays findable in the transcript')}>fade</button>
-                  </>
-                )}
-                {m.fig && (
-                  <>
-                    <button title="the pin you already know — works on figures, tables, whole output cells. Births a note pointed at it, turn-stamped — and implies keep: a pinned artifact gains an edge, leaves the leftover set, never lapses (retention is derived, not a second gesture)"
-                            onClick={() => gesture(i, 'pinned — noted · implies keep: never lapses')}>pin</button>
-                    <button title="productive skepticism: cross-check this result — a verification item lands in the plan; cited as provisional until it lands"
-                            onClick={() => gesture(i, 'verification requested — a cross-check landed in the plan')}>verify</button>
-                    <button title="working memory, NOT a record write — parks it on the desk for two-locus work and evaporates at session close; nothing enters the record"
-                            onClick={() => gesture(i, '⌖ held on the desk — evaporates at close')}>⌖ hold</button>
-                  </>
-                )}
+                {(m.text ? TEXT_BAR : FIG_BAR).map(v => (
+                  <button key={v.label} title={v.title}
+                          onClick={() => { gesture(i, v.receipt); setMoreFor(null) }}>{v.label}</button>
+                ))}
+                {moreFor === i
+                  ? (m.text ? TEXT_MORE : FIG_MORE).map(v => (
+                      <button key={v.label} title={v.title}
+                              onClick={() => { gesture(i, v.receipt); setMoreFor(null) }}>{v.label}</button>
+                    ))
+                  : (
+                    <button className="gest__more" title="the rest of the vocabulary (RECORD_DESIGN §6)"
+                            onClick={() => setMoreFor(i)}>⋯</button>
+                  )}
               </div>
             )}
             {gest[i] && (

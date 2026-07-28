@@ -1145,7 +1145,7 @@ Open design questions, in rough priority order:
    (question/conclude_wrap already carry intent) vs. a small `charge`
    entity; leaning to thread metadata, decide at phase 3.
 9. **Gesture surfacing** (§6) — the full vocabulary is eight verbs;
-   the hover bar should show a curated subset per element kind (likely
-   pin · expand · check · fade, with the rest behind ⋯ / long-press).
-   Decide from usage; the storyboard mocks currently trail the doc
-   here (they still show the pre-decomposition "verify").
+   the hover bar shows a curated subset per element kind (answers:
+   pin · expand · check · fade; artifacts: pin · check · ⌖ hold; the
+   rest behind ⋯ — as mocked). The subset choice is a guess to be
+   revised from usage.

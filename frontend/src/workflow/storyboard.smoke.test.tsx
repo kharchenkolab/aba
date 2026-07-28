@@ -245,20 +245,22 @@ describe('workflow storyboard', () => {
 
   it('chat gestures leave receipts — noticing-time routing, undoable', () => {
     const { getAllByText, getAllByTitle, getByText, unmount } = render(<Record world={scene('m3').world} />)
-    // pin: the universal gesture — keep_message, agent proposes form and route
-    fireEvent.click(getAllByText('pin')[0])
-    getByText(/a pinned element never fades/)
-    // fade another statement: the anti-pin — salience-down, not disagreement
-    fireEvent.click(getAllByText('fade')[0])
-    getByText(/will not be routed or drafted from/)
+    // the bar shows the four highest-frequency verbs; ⋯ opens the rest
+    fireEvent.click(getAllByText('⋯')[0])
+    getByText('corroborate')
+    fireEvent.click(getByText('alternatives'))
+    getByText(/rival explanations \+ a discriminating test/)
     // pin an artifact: implies keep — retention derived, no second verb
     fireEvent.click(getAllByText('pin')[0])
     getByText(/implies keep: never lapses/)
+    // check: is this result sound — typed plan item, provisional until it lands
+    fireEvent.click(getAllByText('check')[0])
+    getByText(/cited as provisional until it lands/)
     // receipts are undoable — the bar returns…
     fireEvent.click(getAllByText('undo')[0])
-    // …and verify: productive skepticism — a cross-check lands in the plan
-    fireEvent.click(getAllByText('verify')[0])
-    getByText(/cited as provisional until it lands/)
+    // …and expand grows the direction (this, not pin, is “do more here”)
+    fireEvent.click(getAllByText('expand')[0])
+    getByText(/marked as a direction/)
     unmount()
   })
 
