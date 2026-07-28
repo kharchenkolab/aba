@@ -149,6 +149,16 @@ OUTCOME the user wants, and let the platform's guidance be what is under test.
   in SCHEMA.md, not as a parallel runner. Prefer the scenario mechanism for anything new.
 - **No CI tier runs the scenario sweep**, by design (cost). Behavioural regressions are
   caught on a schedule, not per-PR.
+- **The concurrency lanes are opt-in and unscheduled.** `--concurrent` /
+  `--cross-project` are the only instruments that can see an overlap defect, and
+  nothing runs them automatically — so that class regresses silently between
+  deliberate runs. They are also the slowest thing here (real turns, staggered),
+  which is why they are not folded into the sweep.
+- **A check can pass for the wrong reason, and passing is not evidence.** In the
+  cross-project lane, run-card *attribution* was correct while the artifact
+  *bytes* were written into a bystander project; two of three doors passed on the
+  broken data. When a lane is meant to catch a class, verify each door RED against
+  a recorded instance of that class, not just green against a fixed one.
 - **The whole-suite pytest mode is unsupported** — per-file is the contract; running
   everything in one process yields ~80 cross-file interference errors. A fixture-isolation
   pass would fix it and has not been done.
