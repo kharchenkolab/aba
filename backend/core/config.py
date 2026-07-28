@@ -973,6 +973,17 @@ setting("runtime_override", env="ABA_RUNTIME_OVERRIDE", type="str", default=None
 setting("disabled_tools", env="ABA_DISABLED_TOOLS", type="csv", default=(),
         category="mode", branches=True, weft_fate="keep",
         doc="Comma-separated global tool kill-switch (layered under agent allowlists).")
+setting("store_allowed_origins", env="ABA_STORE_ALLOWED_ORIGINS", type="csv",
+        default=(), category="deploy", weft_fate="keep",
+        doc="Origins allowed to read viewer stores (/pagoda3-store/*) "
+            "CROSS-ORIGIN, e.g. https://pagoda3.example.org. Empty (the default) "
+            "means same-origin only. These are the project's own bytes and the "
+            "route adds no auth of its own, so same-origin is the access "
+            "boundary — an explicit allowlist widens it deliberately, and '*' is "
+            "never accepted (it would let any page the user visits read their "
+            "data). An allowed origin also gets Access-Control-Expose-Headers "
+            "for Content-Range/Content-Length/Accept-Ranges, without which a "
+            "cross-origin reader cannot verify the size of what it got.")
 setting("version", env="ABA_VERSION", type="str", default="dev", category="mode",
         weft_fate="keep", doc="Deployed ABA version label (provenance stamp).")
 setting("settings_strict", env="ABA_SETTINGS_STRICT", type="bool", default=False,

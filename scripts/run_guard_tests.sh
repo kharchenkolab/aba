@@ -79,6 +79,7 @@ FILES=(
   tests/test_short_transfer_refusal.py
   tests/test_turn_stream_termination.py
   tests/test_kernel_transport_resilience.py
+  tests/test_store_cors.py
   tests/test_artifact_url_doors.py
   tests/test_range_channel.py
   tests/test_data_ledger.py

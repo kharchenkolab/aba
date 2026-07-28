@@ -14,7 +14,7 @@ from pathlib import Path
 from core.exec.cpu import pin_blas_threads as _pin_blas_threads
 _pin_blas_threads()
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, Request
 from fastapi.responses import StreamingResponse, FileResponse, Response, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -1486,23 +1486,54 @@ def pagoda3_app(path: str = ""):
     return _pagoda3_iso(FileResponse(str(target)))
 
 
+def _store_cors(origin: str | None) -> dict:
+    """CORS headers for a viewer-store response, given the request's `Origin`.
+
+    Same-origin by default: these are the project's own bytes and the route adds
+    no auth of its own, so the origin check IS the access boundary. A deployment
+    that genuinely serves a pagoda3 on another host widens it deliberately via
+    `ABA_STORE_ALLOWED_ORIGINS`; `*` is never accepted, because it would let any
+    page the user happens to visit read their data.
+
+    Two details that are easy to get wrong and both matter:
+
+    * **Expose-Headers.** Without it a cross-origin reader gets a perfectly good
+      206 whose `Content-Range` it cannot read — so every size/consistency check
+      breaks, including the 3-byte probe that catches a truncated store. That is
+      exactly how the 16 MiB truncation would have stayed invisible from the
+      browser (it was caught same-origin, where headers are readable).
+    * **Vary: Origin.** Ref-arm chunks are served `immutable` for a day. Without
+      Vary, a cache can hand one origin's `Allow-Origin` to a different origin —
+      the header would be as long-lived as the bytes.
+    """
+    allowed = {o.strip().rstrip("/") for o in
+               (config.settings.store_allowed_origins.get() or ()) if o.strip()}
+    allowed.discard("*")                       # never honoured, however configured
+    if origin and origin.rstrip("/") in allowed:
+        return {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Expose-Headers":
+                "Content-Range, Content-Length, Accept-Ranges",
+            "Vary": "Origin",
+            "Cross-Origin-Resource-Policy": "cross-origin",
+        }
+    return {"Vary": "Origin", "Cross-Origin-Resource-Policy": "same-origin"}
+
+
 @app.options("/pagoda3-store/{pid}/{relpath:path}")
-def pagoda3_store_options(pid: str, relpath: str):
+def pagoda3_store_options(pid: str, relpath: str, request: Request):
     """Answer the preflight instead of 405.
 
     Simple byte-range GETs are CORS-safelisted so a browser usually won't
     preflight, but anything that does used to get a 405 — and an HTTP client
-    probing with OPTIONS learned nothing. No Access-Control-Allow-Origin here:
-    these stores are SAME-ORIGIN by design (the pagoda3 bundle is served by this
-    same server and the store URL is a relative path), and ABA adds no auth of
-    its own on this route, so advertising `*` would let any page the user visits
-    read their project's bytes. Cross-origin access, if it is ever wanted, needs
-    a configured allowlist — not a wildcard bolted on here."""
-    return Response(status_code=204, headers={
-        "Allow": "GET, HEAD, OPTIONS",
-        "Accept-Ranges": "bytes",
-        "Cross-Origin-Resource-Policy": "same-origin",
-    })
+    probing with OPTIONS learned nothing."""
+    headers = {"Allow": "GET, HEAD, OPTIONS", "Accept-Ranges": "bytes",
+               **_store_cors(request.headers.get("origin"))}
+    if "Access-Control-Allow-Origin" in headers:
+        headers["Access-Control-Allow-Methods"] = "GET, HEAD, OPTIONS"
+        headers["Access-Control-Allow-Headers"] = "Range, If-None-Match, If-Range"
+        headers["Access-Control-Max-Age"] = "600"
+    return Response(status_code=204, headers=headers)
 
 
 # HEAD alongside GET: FastAPI does not derive it (Starlette's plain Route does),
@@ -1517,7 +1548,7 @@ def pagoda3_store_options(pid: str, relpath: str):
 # spot over a real route.
 @app.head("/pagoda3-store/{pid}/{relpath:path}")
 @app.get("/pagoda3-store/{pid}/{relpath:path}")
-def pagoda3_store(pid: str, relpath: str):
+def pagoda3_store(pid: str, relpath: str, request: Request):
     """Serve one file from a project's pagoda3 data store (a `.lstar.zarr`
     tree) over HTTP Range. The path is containment-checked to the project's
     pagoda3/ dir; dotfiles (.zmetadata/.zarray/.zgroup/.zattrs) ARE served —
@@ -1546,8 +1577,11 @@ def pagoda3_store(pid: str, relpath: str):
         # consult or backhaul — the only legitimate escape is a symlink WE placed.
         raise HTTPException(403, "path escapes store root")
 
+    _cors = _store_cors(request.headers.get("origin"))
+
     def _store_headers(resp: Response) -> Response:
-        resp.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+        for k, v in _cors.items():
+            resp.headers[k] = v
         # A store's URL is stable (source-path hash) but its CONTENT changes when
         # it's re-derived (version bump / prep). Without revalidation the browser
         # mixes a stale .zmetadata with fresh chunks → garbage ("stars"). no-cache
@@ -1572,7 +1606,8 @@ def pagoda3_store(pid: str, relpath: str):
     if out is not None:
         if out.status == "ok" and out.path:
             resp = FileResponse(out.path)
-            resp.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+            for _k, _v in _cors.items():
+                resp.headers[_k] = _v
             # Content-addressed (ref-arm) chunks are stable under their URL — a
             # byte change mints a new store_key — so the browser may cache them
             # as immutable (kills the ~10x per-member revalidation churn).

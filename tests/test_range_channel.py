@@ -800,8 +800,18 @@ def test_route_cache_headers_by_mutability(monkeypatch, tmp_path):
 # ── the store route branch (main.pagoda3_store) ──────────────────────────────
 
 def _pagoda3_store():
+    """The route, pre-bound with a REQUEST — FastAPI injects one in production
+    (it drives the same-origin/allowlist CORS decision), so a direct caller has
+    to supply it or it is testing a signature the server never uses. No Origin
+    header == the same-origin case, which is the default these tests assert."""
+    import types
     from main import pagoda3_store
-    return pagoda3_store
+
+    def call(pid, relpath, *, origin=None):
+        hdrs = {"origin": origin} if origin else {}
+        req = types.SimpleNamespace(headers=hdrs)
+        return pagoda3_store(pid, relpath, req)
+    return call
 
 
 def _mk_local_store(pid, store_key, chunk_rel, data=b"local-bytes"):
