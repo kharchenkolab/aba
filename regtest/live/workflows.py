@@ -899,8 +899,12 @@ def run_cross_project(site, n=3, keep=False):
     # committed in the file that already had the right helper.
     owners: dict = {}
     for p in pids:
-        for name, _state, _kind in tracked_outputs(p):
-            owners.setdefault(name, set()).add(p)
+        # `out_name`, not `name`: the enclosing scope's `name` is the SCENARIO's,
+        # and rebinding it here made the summary line report the last filename
+        # ("ok  proj2.csv") instead of the scenario — a report that misattributes
+        # its own subject.
+        for out_name, _state, _kind in tracked_outputs(p):
+            owners.setdefault(out_name, set()).add(p)
     for i, p in enumerate(pids):
         want = f"proj{i}.csv"
         who = owners.get(want) or set()
