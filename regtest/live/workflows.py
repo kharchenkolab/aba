@@ -891,11 +891,37 @@ def run_cross_project(site, n=3, keep=False):
     for b in bad[:6]:
         print(f"   [leak] {b}")
 
-    # Door 2: each project's OUTPUT is present in that project, nowhere else.
+    # Door 2: each project's OUTPUT is tracked by that project, and by NO other.
+    # Via tracked_outputs — the durable view — because a harvested output lives on
+    # the Run card, not in `entities` until it is kept. A hand-rolled entities
+    # scan lived here first and reported False for outputs the platform had
+    # tracked correctly: the reinvention this suite's own arch doc warns about,
+    # committed in the file that already had the right helper.
+    owners: dict = {}
+    for p in pids:
+        for name, _state, _kind in tracked_outputs(p):
+            owners.setdefault(name, set()).add(p)
     for i, p in enumerate(pids):
         want = f"proj{i}.csv"
-        mine = _project_has_output(p, want)
-        checks.append((f"{want} is an output of its own project", mine))
+        who = owners.get(want) or set()
+        checks.append((f"{want} is tracked by its own project", p in who))
+        checks.append((f"{want} is tracked by NO other project",
+                       not (who - {p})))
+
+    # Door 3: the artifact BYTES must live under the producing project too.
+    #
+    # Doors 1-2 both PASS on the recorded pre-fix data: the run card attributed
+    # each file to the project that made it, while the harvested copy was written
+    # into a DIFFERENT project's artifact store — a thread in prj_A serving its
+    # table from /artifacts/prj_B/. Attribution and location are separate claims,
+    # and only this one saw the leak. A door that passes for the wrong reason is
+    # worse than no door, so keep all three.
+    for p in pids:
+        foreign = sorted(_artifact_projects_referenced(p) - {p})
+        checks.append((f"{p} serves its artifacts from its OWN store",
+                       not foreign))
+        if foreign:
+            print(f"   [leak] {p} references artifacts under {foreign}")
 
     for label, ok in checks:
         print(f"   [{'PASS' if ok else 'FAIL'}] {label}")
@@ -911,19 +937,24 @@ def run_cross_project(site, n=3, keep=False):
     return pids
 
 
-def _project_has_output(pid: str, filename: str) -> bool:
-    """Is `filename` recorded as an output entity of THIS project? Reads the
-    graph, never the agent's account of it."""
+
+def _artifact_projects_referenced(pid: str) -> set:
+    """Every project id appearing in an /artifacts/<pid>/ URL this project's tool
+    results handed back. The producing project should only ever reference its
+    own store; anything else is a harvest that wrote into a bystander."""
+    out: set = set()
     db = RUNTIME / pid / "project.db"
     if not db.exists():
-        return False
+        return out
     try:
         c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-        rows = c.execute("select title, artifact_path from entities").fetchall()
+        rows = c.execute("select content from messages").fetchall()
     except Exception:  # noqa: BLE001
-        return False
-    return any(filename in str(r[0] or "") or filename in str(r[1] or "")
-               for r in rows)
+        return out
+    for (content,) in rows:
+        for m in re.finditer(r"/artifacts/(prj_\w+)/", str(content)):
+            out.add(m.group(1))
+    return out
 
 
 def run_one(name, fn, site, keep=False):
