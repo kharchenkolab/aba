@@ -1,0 +1,38 @@
+<!--
+  The launcher-card icon. OnDemand looks for `icon.svg` (then `icon.png`) in the
+  app root and serves it at `apps/icon/<name>/<type>`; with neither it falls back
+  to the manifest's `icon:` and finally to `fas://cog` — the generic gears.
+  So the FILENAME is the whole contract: rename this and the card silently
+  reverts to gears with nothing logged.
+
+  Geometry is the app's own brand mark (frontend/src/lib/railIcons.tsx,
+  `BrandIcon`) on the plate the rail draws behind it (Rail.css
+  `.rail__home-brand`) — hexagon #0f766e on #eef4f8, 1px #cbd8e3 border,
+  10px radius, all at the rail's 46px plate size so the proportions carry over
+  1:1.
+
+  Two things differ from the rail, both forced by how OnDemand renders this:
+  - Colors are LITERAL. The rail strokes `currentColor` and inherits the plate's
+    color; here the file is the src of an <img>, a separate document that
+    inherits nothing, so `currentColor` would resolve to black-on-pale-blue.
+  - The glyph sits tighter in the plate (34 of 46 units, vs 28 in the rail).
+    `.app-icon` is a square box at three sizes — 100px on the card, 24px in the
+    apps table, 14px in the navbar dropdown — and the rail's padding leaves the
+    hairlines too faint to read at the bottom two.
+
+  Carrying its own light plate is deliberate: it reads as an app icon on both
+  the light and dark dashboard themes without a prefers-color-scheme branch.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="46" height="46"
+     viewBox="0 0 46 46" role="img">
+  <title>ABA</title>
+  <rect x="0.5" y="0.5" width="45" height="45" rx="9.5"
+        fill="#eef4f8" stroke="#cbd8e3" stroke-width="1"/>
+  <g transform="translate(6 6) scale(1.0625)"
+     fill="none" stroke="#0f766e" stroke-linecap="round">
+    <path d="M16 3l11 6v14l-11 6L5 23V9l11-6z"
+          stroke-width="1.7" stroke-linejoin="round"/>
+    <path d="M16 3v26M5 9l22 14M27 9L5 23"
+          stroke-width="1.3" opacity="0.6"/>
+  </g>
+</svg>

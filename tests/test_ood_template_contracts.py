@@ -6,9 +6,11 @@ shipped files render clean (no out-of-repo __TOKEN__ placeholders — a bare
 deployment must never show template artifacts on the card), and the
 in-session TMPDIR redirect prefers node-local job scratch with a cleaned-up
 parallel-FS fallback (the ENOSPC fix must not trade a tmpfs overflow for
-PFS quota debris)."""
+PFS quota debris). The card's icon is a third: OnDemand finds it by FILENAME
+and degrades silently to generic gears when it cannot."""
 from __future__ import annotations
 import re
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
@@ -46,6 +48,52 @@ def test_shipped_app_files_carry_no_template_tokens():
     assert not offenders, (
         "shipped OOD app files must render clean (site deploy scripts INSERT, "
         "never replace tokens — install/ood/README.md):\n" + "\n".join(offenders))
+
+
+def test_the_card_ships_an_icon_ood_will_find_and_can_actually_render():
+    """OnDemand resolves the card icon by FILENAME — `OodApp#icon_uri` serves
+    `icon.svg`, else `icon.png`, else the manifest's `icon:`, else `fas://cog`.
+    So a rename drops the card back to generic gears with nothing logged
+    anywhere; the filename is the whole contract and is asserted first.
+
+    The rest guards the ways an icon that IS found still renders wrong. The
+    dashboard puts it in an ``<img src=…>`` (``icon_tag`` → ``image_tag``),
+    which is a SEPARATE document: it inherits no color from the page and
+    fetches no external resource. So `currentColor` — the natural thing to
+    lift from the app's own `BrandIcon`, which is inline SVG and does inherit
+    — silently resolves to black, and an external `href` never loads at all.
+    And `.app-icon` is a SQUARE box at three sizes (100px card, 24px apps
+    table, 14px navbar), so a non-square viewBox is distorted at every one."""
+    svg, png = APP / "icon.svg", APP / "icon.png"
+    assert svg.is_file() or png.is_file(), (
+        "no icon.svg / icon.png in the OOD app root — OodApp#icon_uri falls "
+        "through to fas://cog and the card shows generic gears")
+    if not svg.is_file():
+        pytest.skip("png-only icon: the SVG-specific rendering checks do not apply")
+
+    text = svg.read_text()
+    root = ET.fromstring(text)                   # must parse: OOD serves it as-is
+    # Comments are not rendered, and this file's own comment EXPLAINS the
+    # currentColor trap below — scanning them would fail on the explanation.
+    markup = re.sub(r"<!--.*?-->", "", text, flags=re.S)
+
+    box = root.get("viewBox")
+    assert box, "icon.svg has no viewBox — it cannot scale to the three sizes"
+    w, h = (float(v) for v in box.replace(",", " ").split()[2:4])
+    assert abs(w - h) < 1e-6, (
+        f"viewBox {box!r} is not square; .app-icon is a square box, so this "
+        "renders distorted on the card, in the apps table and in the navbar")
+
+    assert "currentColor" not in markup, (
+        "currentColor in an <img>-embedded SVG resolves to black — it inherits "
+        "nothing from the dashboard. Use literal colors here (the app's inline "
+        "BrandIcon can use currentColor precisely because it is NOT an <img>).")
+
+    external = [el.tag for el in root.iter()
+                if el.get("href") or el.get("{http://www.w3.org/1999/xlink}href")]
+    assert not external, (
+        f"icon.svg references external resources {external} — an <img> document "
+        "loads none of them, so those parts render blank")
 
 
 def test_session_tmpdir_prefers_node_local_and_cleans_fallback():

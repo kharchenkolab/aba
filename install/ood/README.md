@@ -26,9 +26,26 @@ from `aba-env.sh` + the publish-tree catalog, fail-safe.
 ## Card-only changes must not need a SIF rebuild
 
 Anything the user sees on the card / form / connect page (`manifest.yml`,
-`form.yml.erb`, `info.md.erb`, `view.html.erb`) must be resolvable at
-render or deploy time — never baked into the image. If a change to these
-files requires rebuilding the SIF, the change is designed wrong.
+`form.yml.erb`, `info.md.erb`, `view.html.erb`, `icon.svg`) must be
+resolvable at render or deploy time — never baked into the image. If a
+change to these files requires rebuilding the SIF, the change is designed
+wrong.
+
+## The card icon is found by filename
+
+OnDemand resolves the launcher icon positionally, not from the manifest:
+`OodApp#icon_uri` serves `icon.svg` if the app root has one, else
+`icon.png`, else a Font Awesome name from the manifest's `icon:`, else
+`fas://cog` — generic gears. Renaming or dropping the file therefore
+degrades the card silently, with nothing logged; `tests/
+test_ood_template_contracts.py` asserts the filename for that reason.
+
+The dashboard embeds it as `<img src=…>`, a separate document that
+inherits no page color and loads no external resource, sized into a square
+`.app-icon` box at three sizes (100px card, 24px apps table, 14px navbar).
+So the file needs literal colors and a square viewBox — `currentColor`,
+which the app's own inline `BrandIcon` can use freely, resolves to black
+here. Same guard covers those.
 
 ## Deploy ordering: backend before substrate-behavior flips
 
