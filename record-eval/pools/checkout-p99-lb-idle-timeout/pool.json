@@ -1,0 +1,530 @@
+{
+  "id": "checkout-p99-lb-idle-timeout",
+  "title": "Checkout p99 regression traced to an internal load-balancer idle-timeout change (INC-2419)",
+  "domain": "software performance engineering / SRE",
+  "source": { "kind": "authored" },
+  "questions": [
+    { "id": "Q1", "text": "What exactly regressed — which surfaces, by how much, since when, and who is affected?" },
+    { "id": "Q2", "text": "What caused the checkout tail-latency regression?" },
+    { "id": "Q3", "text": "Why did alerting, canaries, and SLO machinery miss the regression for 10 days?" },
+    { "id": "Q4", "text": "Is the fix durable, and what prevents this failure class from recurring?" }
+  ],
+  "findings": [
+    {
+      "id": "F01",
+      "questions": ["Q1"],
+      "claim": "Checkout (POST /v1/checkout) p99 at weekday peak (14:00-19:00 UTC) has regressed 5.2x, from a 4-week baseline of 310 ms to 1,620 ms, while p50 moved only 58 to 64 ms; the pattern reproduces at every weekday peak since at least Jun 16.",
+      "evidence": {
+        "kind": "figure",
+        "caption": "Checkout p50/p95/p99, 5-min buckets: 4-week baseline overlay vs Jun 16-22, peak window shaded",
+        "values": { "p50_baseline_ms": 58, "p95_baseline_ms": 190, "p99_baseline_ms": 310, "p50_regressed_ms": 64, "p95_regressed_ms": 285, "p99_regressed_ms": 1620, "peak_window_utc": "14:00-19:00" }
+      },
+      "strength": "strong",
+      "depends_on": [],
+      "notes": "Anchor finding for the whole pool; p50-flat/p99-blown is the first mechanism constraint."
+    },
+    {
+      "id": "F02",
+      "questions": ["Q1"],
+      "claim": "Checkout edge-timeout errors (504 at the 2,500 ms gateway deadline) run at 0.9% of peak attempts vs 0.05% baseline - an 18x elevation that still sits far below the 5% static error-alert threshold.",
+      "evidence": {
+        "kind": "table",
+        "caption": "Checkout error rate by hour, Jun 9-22, with gateway 504 breakdown and alert threshold line",
+        "values": { "error_baseline_pct": 0.05, "error_peak_pct": 0.9, "gateway_deadline_ms": 2500, "error_alert_threshold_pct": 5 }
+      },
+      "strength": "moderate",
+      "depends_on": ["F01"]
+    },
+    {
+      "id": "F03",
+      "questions": ["Q1"],
+      "claim": "Daily-rollup dashboards place the regression onset on Jun 16 afternoon: daily checkout p99 jumps from 470 ms (Jun 15) to 1,540 ms (Jun 16), with the first visibly bad window at ~15:00 UTC.",
+      "evidence": {
+        "kind": "stat",
+        "caption": "Daily p99 rollup, Jun 8-22, with the Jun 15-to-16 step annotated",
+        "values": { "daily_p99_jun15_ms": 470, "daily_p99_jun16_ms": 1540, "apparent_onset": "2026-06-16 ~15:00 UTC", "rollup_grain": "24h" }
+      },
+      "strength": "weak",
+      "depends_on": ["F01"],
+      "notes": "Deliberately wrong at fine grain: an artifact of the 24h rollup. Overturned by F20; the misread anchors the pricing hypothesis (F05)."
+    },
+    {
+      "id": "F04",
+      "questions": ["Q1", "Q2"],
+      "claim": "The regression is confined to the two ledger-backed endpoints - checkout p99 310 to 1,620 ms and order-status p99 120 to 1,560 ms - while browse (145 ms) and cart (210 ms) p99s are unchanged, implicating the orders-to-ledger path rather than the edge or shared middleware.",
+      "evidence": {
+        "kind": "table",
+        "caption": "Per-endpoint p99, baseline vs Jun 16-22 peak, grouped by backing data store",
+        "values": { "checkout_p99_ms": 1620, "order_status_p99_ms": 1560, "order_status_baseline_ms": 120, "browse_p99_ms": 145, "cart_p99_ms": 210 }
+      },
+      "strength": "moderate",
+      "depends_on": ["F01"]
+    },
+    {
+      "id": "F05",
+      "questions": ["Q2"],
+      "claim": "pricing-svc v341 (deployed Jun 16 14:20 UTC, new rules engine) is the leading suspect: it is the only order-path change in the deploy tracker near the apparent Jun 16 onset, and pricing's own peak p99 rose from 45 to 85 ms the same day.",
+      "evidence": {
+        "kind": "stat",
+        "caption": "Deploy-tracker entries Jun 14-17 vs pricing-svc p99, with v341 deploy marker",
+        "values": { "pricing_deploy": "2026-06-16 14:20 UTC", "pricing_p99_before_ms": 45, "pricing_p99_after_ms": 85, "apparent_onset": "2026-06-16 ~15:00 UTC" }
+      },
+      "strength": "moderate",
+      "depends_on": ["F03"],
+      "notes": "The red herring. The +40 ms is real (rules-engine cost) but benign for checkout (parallel call). Overturned by F16."
+    },
+    {
+      "id": "F06",
+      "questions": ["Q1"],
+      "claim": "The edge-log latency histogram at peak is bimodal: 4.3% of checkout attempts either exceed 1.5 s (3.4%, clustered at 1.56-1.75 s) or return 504 (0.9%); off-peak the combined share is under 0.3%. Impact is peak-concentrated and quantized, not a uniform slowdown.",
+      "evidence": {
+        "kind": "figure",
+        "caption": "Checkout latency histogram from edge logs, peak vs off-peak, log-scale x, 504s as terminal bar",
+        "values": { "share_slow_or_error_peak_pct": 4.3, "share_slow_success_pct": 3.4, "share_504_pct": 0.9, "slow_cluster_ms": "1560-1750", "share_offpeak_pct": 0.3 }
+      },
+      "strength": "moderate",
+      "depends_on": ["F01"],
+      "notes": "The 4.3% here must reconcile with F21's 4.2% exposure (rounding seam is deliberate and documented in DESIGN 5.3)."
+    },
+    {
+      "id": "F07",
+      "questions": ["Q1", "Q2"],
+      "claim": "Distributed-trace aggregation over the Jun 16-22 peaks puts the entire p99 excess in the orders-api ledger-transaction phase (span p99 +1,510 ms vs baseline); pricing (+40 ms) and inventory (+2 ms) span deltas cannot account for the checkout regression.",
+      "evidence": {
+        "kind": "figure",
+        "caption": "Span-level p99 deltas by service phase, checkout traces, baseline vs regressed peaks",
+        "values": { "ledger_span_p99_delta_ms": 1510, "pricing_span_p99_delta_ms": 40, "inventory_span_p99_delta_ms": 2 }
+      },
+      "strength": "moderate",
+      "depends_on": ["F04"],
+      "notes": "Already in tension with F05; the team rationalized it ('v341 changes the write mix') - true-to-life cognitive inertia."
+    },
+    {
+      "id": "F08",
+      "questions": ["Q2"],
+      "claim": "The ledger Postgres primary is healthy throughout the regression: server-side query p99 is 11 ms (unchanged), zero lock waits over 100 ms, CPU 38%, buffer-cache hit 99.2% - the excess latency accrues between orders-api and the database, not inside it.",
+      "evidence": {
+        "kind": "table",
+        "caption": "Ledger primary server metrics, Jun 9-22: query p99, locks, CPU, cache hit ratio",
+        "values": { "db_query_p99_ms": 11, "lock_waits_over_100ms": 0, "cpu_pct": 38, "buffer_hit_pct": 99.2 }
+      },
+      "strength": "moderate",
+      "depends_on": ["F07"]
+    },
+    {
+      "id": "F09",
+      "questions": [],
+      "claim": "The 02:00-03:10 UTC analytics batch evicts 91% of the ledger primary's buffer cache nightly; first-morning queries pay +35 ms for roughly 20 minutes after traffic resumes. Wrong hours and wrong magnitude for the peak regression, but worth a capacity ticket.",
+      "evidence": {
+        "kind": "table",
+        "caption": "Buffer-cache hit ratio and first-query latency around the nightly analytics window",
+        "values": { "cache_evicted_pct": 91, "batch_window_utc": "02:00-03:10", "morning_penalty_ms": 35, "penalty_duration_min": 20 }
+      },
+      "strength": "weak",
+      "depends_on": ["F08"],
+      "notes": "Tangential drive-by found while inspecting DB dashboards; bears on no open question - routing stress."
+    },
+    {
+      "id": "F10",
+      "questions": ["Q2"],
+      "claim": "Rolling pricing back to v340 at Jun 24 11:30 - bundled with a precautionary orders-api rolling restart - dropped checkout p99 from 1,590 to 348 ms within 10 minutes, read at the time as confirmation of the pricing hypothesis.",
+      "evidence": {
+        "kind": "figure",
+        "caption": "Checkout p99 around the Jun 24 11:30 intervention (pricing rollback + orders-api restart)",
+        "values": { "intervention": "pricing v340 rollback + orders-api rolling restart", "p99_before_ms": 1590, "p99_after_ms": 348, "time": "2026-06-24 11:30 UTC" }
+      },
+      "strength": "weak",
+      "depends_on": ["F05"],
+      "notes": "Confounded two-change intervention - the classic false fix. Overturned by F15."
+    },
+    {
+      "id": "F11",
+      "questions": ["Q1", "Q2"],
+      "claim": "The regression returned the same day despite the rollback: the Jun 24 peak reached p99 1,610 ms by 15:05 with pricing still on v340 - so either checkout regressed again independently, or the pricing hypothesis is wrong.",
+      "evidence": {
+        "kind": "figure",
+        "caption": "Checkout p99, Jun 24 full day: 11:30 intervention, ~40-min recovery, relapse into the peak",
+        "values": { "p99_peak_jun24_ms": 1610, "pricing_version_at_relapse": "v340", "relapse_time": "2026-06-24 15:05 UTC" }
+      },
+      "strength": "moderate",
+      "depends_on": ["F10"]
+    },
+    {
+      "id": "F12",
+      "questions": ["Q2"],
+      "claim": "A sweep of the deploy tracker for Jun 12-16 finds no order-path application deploys other than pricing v341; however the tracker does not ingest infrastructure or network changes, so the sweep cannot exclude infra causes.",
+      "evidence": {
+        "kind": "table",
+        "caption": "Deploy-tracker query results, Jun 12-16, order-path services, with coverage caveat",
+        "values": { "app_deploys_found": 1, "window": "2026-06-12..16", "infra_changes_visible": false }
+      },
+      "strength": "weak",
+      "depends_on": ["F03"],
+      "notes": "The coverage caveat is the seed of F32 (change-visibility gap) once Q3 exists."
+    },
+    {
+      "id": "F13",
+      "questions": [],
+      "claim": "orders-api's container image is 1.34 GB, of which a stale 480 MB debug layer (leftover profiler bundle) is never used; it adds ~90 s of pull time per pod and stretched the 12-pod rolling restart to 19 minutes versus ~9 without it.",
+      "evidence": {
+        "kind": "table",
+        "caption": "Image layer inventory for orders-api:current with per-layer pull timings",
+        "values": { "image_gb": 1.34, "debug_layer_mb": 480, "pull_penalty_s": 90, "rolling_restart_min": 19 }
+      },
+      "strength": "weak",
+      "depends_on": ["F10"],
+      "notes": "Tangential drive-by noticed while watching the Jun 24 rolling restart; bears on no question."
+    },
+    {
+      "id": "F14",
+      "questions": ["Q2"],
+      "claim": "With checkout tracing raised to 100% (Jun 25 09:20), every slow exemplar contains exactly one ledger span of 1,500 +/- 8 ms - the configured pgJDBC socketTimeout - followed by a 21 ms retry (12 ms connection setup + 9 ms query). The excess is a single quantized read-timeout, not gradual slowness.",
+      "evidence": {
+        "kind": "run",
+        "caption": "Trace-exemplar extraction over 214 slow checkouts: span duration histogram peaks at socketTimeout",
+        "values": { "slow_span_ms": "1500+/-8", "socket_timeout_ms": 1500, "retry_total_ms": 21, "retry_conn_setup_ms": 12, "retry_query_ms": 9, "exemplars_n": 214 }
+      },
+      "strength": "strong",
+      "depends_on": ["F07"],
+      "notes": "Pivotal mechanism clue: the fixed 1,521 ms penalty every dependent number rests on."
+    },
+    {
+      "id": "F15",
+      "questions": ["Q2"],
+      "claim": "Across all three orders-api restart events (Jun 19 03:10 routine deploy, Jun 24 11:30 rollback bundle, Jun 25 09:45 manual), checkout p99 recovers to ~350 ms and relapses within 38-44 minutes, independent of pricing version - the Jun 24 'fix' was the restart, not the rollback.",
+      "evidence": {
+        "kind": "figure",
+        "caption": "Checkout p99 overlaid and time-aligned on three orders-api restart events, pricing version annotated per event",
+        "values": { "restart_events": 3, "recovery_p99_ms": 350, "relapse_min": "38-44", "pricing_versions": "v341, v340, v340" }
+      },
+      "strength": "strong",
+      "depends_on": ["F10", "F11"],
+      "overturns": ["F10"],
+      "notes": "First overturn (position 15/40): kills the false-fix reading with the Jun 19 event as a natural control."
+    },
+    {
+      "id": "F16",
+      "questions": ["Q2"],
+      "claim": "Re-deploying pricing v341 to a 10% canary cell (Jun 25 16:00) with no orders-api restart leaves checkout p99 unchanged - 1,615 ms in-cell vs 1,625 ms control across the 16:00-19:00 peak - exonerating pricing v341 as the cause of the checkout regression.",
+      "evidence": {
+        "kind": "run",
+        "caption": "Controlled canary: checkout p99, v341 cell vs v340 control, Jun 25 peak window",
+        "values": { "canary_share_pct": 10, "p99_canary_ms": 1615, "p99_control_ms": 1625, "window": "2026-06-25 16:00-19:00 UTC" }
+      },
+      "strength": "strong",
+      "depends_on": ["F05", "F15"],
+      "overturns": ["F05"],
+      "notes": "Second overturn (16/40): the controlled experiment the Jun 24 intervention should have been."
+    },
+    {
+      "id": "F17",
+      "questions": ["Q2"],
+      "claim": "In 9 of 9 hand-dissected slow exemplars, the 1,500 ms span is the first use of its pooled connection after an idle period of at least 60 s (range 61-214 s); no exemplar shows a timeout on a recently-used connection - consistent with idle connections dying silently.",
+      "evidence": {
+        "kind": "stat",
+        "caption": "Per-exemplar connection idle-time-before-failure, joined from pool logs and trace ids",
+        "values": { "exemplars_dissected": 9, "idle_before_failure_s": "61-214", "failures_on_recently_used": 0 }
+      },
+      "strength": "weak",
+      "depends_on": ["F14"],
+      "notes": "Small n, manual join - weak on purpose; F22 later confirms at counter scale."
+    },
+    {
+      "id": "F18",
+      "questions": ["Q1"],
+      "claim": "Business impact corroborates the ops signal: checkout conversion fell 1.8% week-over-week for Jun 16-22, and 'slow checkout' support tickets rose to 212 versus 31 in the baseline week.",
+      "evidence": {
+        "kind": "table",
+        "caption": "Weekly conversion funnel and tagged support-ticket counts, Jun 9-15 vs Jun 16-22",
+        "values": { "conversion_delta_pct": -1.8, "tickets_incident_week": 212, "tickets_baseline_week": 31 }
+      },
+      "strength": "weak",
+      "depends_on": ["F01"],
+      "notes": "Correlational business data; also the path by which the incident was actually noticed (weekly review, partner escalation)."
+    },
+    {
+      "id": "F19",
+      "questions": ["Q2"],
+      "claim": "tcpdump on a production orders-api pod shows connections idle >= 60 s are silently blackholed: the first packet after idle is retransmitted 3 times with exponential backoff and never answered - no RST, no FIN - until the 1,500 ms read deadline; connections idle under 58 s behave normally.",
+      "evidence": {
+        "kind": "run",
+        "caption": "Packet capture, orders-api pod to ledger VIP, Jun 26 14:50-16:10 UTC, annotated retransmit sequences",
+        "values": { "idle_threshold_s": 60, "retransmits_before_deadline": 3, "rst_observed": false, "capture_window": "2026-06-26 14:50-16:10 UTC" }
+      },
+      "strength": "strong",
+      "depends_on": ["F17"],
+      "notes": "Direct mechanism observation; the no-RST detail is what makes the failure silent to the client stack."
+    },
+    {
+      "id": "F20",
+      "questions": ["Q1", "Q2"],
+      "claim": "A 5-min per-AZ percentile reconstruction from edge logs moves the true onset to Jun 12 22:10 UTC in AZ-a alone (AZ-a p99 ~1,600 ms while fleet p99 read 480 ms on Jun 15) with a second, fleet-wide step at Jun 16 11:33 in AZ-b/c - four days before, and three hours before, the pricing deploy respectively. The 'Jun 16 onset' was a rollup artifact.",
+      "evidence": {
+        "kind": "figure",
+        "caption": "Per-AZ checkout p99 at 5-min grain, Jun 11-17, with both steps and the pricing deploy marker",
+        "values": { "az_a_step": "2026-06-12 22:10 UTC", "az_bc_step": "2026-06-16 11:33 UTC", "az_a_p99_jun15_ms": 1600, "fleet_p99_jun15_ms": 480, "pricing_deploy": "2026-06-16 14:20 UTC" }
+      },
+      "strength": "moderate",
+      "depends_on": ["F03", "F06"],
+      "overturns": ["F03"],
+      "notes": "Third overturn (20/40). The 20/40/40 AZ split (May 21 drain) is why stage 1 stayed sub-threshold at fleet grain."
+    },
+    {
+      "id": "F21",
+      "questions": ["Q1", "Q2"],
+      "claim": "The new ledger.pool.dead_on_borrow counter (deployed Jun 26 13:00) reads 19.7/s fleet-wide at peak - 13.0/s on the checkout path and 6.7/s on order-status - i.e. 1.4% of 1,410 borrows/s; at 3 borrows per checkout that is 4.2% of checkouts exposed, matching the 4.3% slow-or-error share in the edge histogram within rounding.",
+      "evidence": {
+        "kind": "stat",
+        "caption": "dead_on_borrow rate by endpoint path, Jun 26 peak, vs borrow volume and per-request exposure arithmetic",
+        "values": { "dead_on_borrow_per_s": 19.7, "checkout_path_per_s": 13.0, "status_path_per_s": 6.7, "borrows_per_s": 1410, "per_borrow_dead_pct": 1.4, "borrows_per_checkout": 3, "checkout_exposure_pct": 4.2 }
+      },
+      "strength": "moderate",
+      "depends_on": ["F14", "F06"],
+      "notes": "Quantifies both impact (Q1) and mechanism (Q2); the arithmetic seam with F06 is documented in DESIGN 5.2-5.3."
+    },
+    {
+      "id": "F22",
+      "questions": ["Q2"],
+      "claim": "Splitting dead borrows by connection idle age: 100% occur on connections idle >= 60 s (median 96 s at death) and zero on connections idle <= 58 s - a hard threshold at ~60 s of idle, pointing at a fixed idle-timeout somewhere on the connection path.",
+      "evidence": {
+        "kind": "figure",
+        "caption": "Dead-borrow probability vs connection idle age, 2-s buckets, Jun 26-27 peaks",
+        "values": { "dead_borrows_idle_ge_60s_pct": 100, "dead_borrows_idle_le_58s": 0, "median_idle_at_death_s": 96 }
+      },
+      "strength": "moderate",
+      "depends_on": ["F21", "F19"],
+      "notes": "The 60 s threshold becomes the search key that finds NETOPS-4112 (F24)."
+    },
+    {
+      "id": "F23",
+      "questions": ["Q1", "Q2"],
+      "claim": "Pool telemetry explains both the peak-only symptom and the ~40-min post-restart relapse: peak bursts swell each pod's pool from 55 to 85 connections and lulls idle them past 60 s - the 60-600 s idle 'landmine' cohort averages 11% of the pool at peak versus under 1% off-peak, and takes about 40 minutes to first form after a restart.",
+      "evidence": {
+        "kind": "figure",
+        "caption": "Per-pod open connections and landmine-cohort share over a peak day, with post-restart formation time",
+        "values": { "pool_conns_per_pod": "55-85", "landmine_cohort_peak_pct": 11, "landmine_cohort_offpeak_pct": 1, "first_formation_min": 40 }
+      },
+      "strength": "moderate",
+      "depends_on": ["F22", "F15"],
+      "notes": "Closes the loop on F15's 38-44 min relapse window and on why off-peak is clean (small hot pools)."
+    },
+    {
+      "id": "F24",
+      "questions": ["Q2"],
+      "claim": "Change record NETOPS-4112 lowered the internal L4 load-balancer idle-flow timeout from 350 s to 60 s (connection-table hardening after the May 30 exhaustion incident; occupancy target 2.1M to 640k entries), staged AZ-a Jun 12 22:04 and AZ-b/c Jun 16 11:30 - matching the 60 s death threshold and both onset steps; the ilb's eviction policy drops non-SYN packets of evicted flows without RST.",
+      "evidence": {
+        "kind": "table",
+        "caption": "NETOPS-4112 change record and ilb config diff, with staged rollout timestamps and eviction-policy excerpt",
+        "values": { "change_id": "NETOPS-4112", "idle_timeout_before_s": 350, "idle_timeout_after_s": 60, "stage1": "AZ-a 2026-06-12 22:04 UTC", "stage2": "AZ-b/c 2026-06-16 11:30 UTC", "rst_on_evicted_flows": false, "conn_table_target": "2.1M -> 640k entries" }
+      },
+      "strength": "strong",
+      "depends_on": ["F20", "F22"],
+      "notes": "Root cause identified. Found only after F22's 60 s key + F20's timing made the netops system worth searching (F32 tells that story for Q3)."
+    },
+    {
+      "id": "F25",
+      "questions": ["Q1", "Q2"],
+      "claim": "Per-AZ latency step times match the staged NETOPS-4112 rollout to within minutes: AZ-a config 22:04 vs step 22:10; AZ-b/c config 11:30 vs step 11:33 - a 3-6 minute lag consistent with the first post-change 60 s idle windows elapsing.",
+      "evidence": {
+        "kind": "stat",
+        "caption": "Config-push timestamps vs first elevated 5-min bucket, per AZ",
+        "values": { "az_a_change": "2026-06-12 22:04 UTC", "az_a_step": "2026-06-12 22:10 UTC", "az_bc_change": "2026-06-16 11:30 UTC", "az_bc_step": "2026-06-16 11:33 UTC", "lag_min": "3-6" }
+      },
+      "strength": "moderate",
+      "depends_on": ["F24", "F20"]
+    },
+    {
+      "id": "F26",
+      "questions": ["Q2"],
+      "claim": "Staging reproduction: behind an ilb configured with a 60 s idle timeout, a pooled connection idled 65 s blackholes on next use - 3 unanswered retransmits, a 1,500 ms read timeout, then a 21 ms reconnect-and-retry - matching the production exemplar signature exactly; with the timeout at 350 s the same procedure is clean.",
+      "evidence": {
+        "kind": "run",
+        "caption": "Staging repro harness output: idle-then-use at 65 s under 60 s vs 350 s ilb idle timeout",
+        "values": { "repro_idle_s": 65, "repro_timeout_ms": 1500, "repro_retry_ms": 21, "retransmits": 3, "clean_at_timeout_s": 350 }
+      },
+      "strength": "strong",
+      "depends_on": ["F24", "F19"],
+      "notes": "Koch-postulate step: cause reproduced and toggled off in isolation."
+    },
+    {
+      "id": "F27",
+      "questions": ["Q1", "Q2"],
+      "claim": "Order-status corroborates the per-borrow arithmetic: with 1 ledger borrow per request (vs checkout's 3), 1.4% of status requests burn (vs 4.2%), and both endpoints' regressed p99s converge just above the fixed penalty - 1,560 ms (baseline 120) and 1,620 ms (baseline 310) - the signature of a single constant 1,521 ms fault rather than load-dependent slowness.",
+      "evidence": {
+        "kind": "table",
+        "caption": "Checkout vs order-status: borrows per request, burn fraction, baseline and regressed p99",
+        "values": { "status_burn_pct": 1.4, "checkout_burn_pct": 4.2, "status_p99_ms": 1560, "checkout_p99_ms": 1620, "fixed_penalty_ms": 1521 }
+      },
+      "strength": "moderate",
+      "depends_on": ["F21", "F04"],
+      "notes": "Cross-endpoint consistency check; the quantile arithmetic is in DESIGN 5.4."
+    },
+    {
+      "id": "F28",
+      "questions": ["Q2", "Q4"],
+      "claim": "Reverting the ilb idle timeout to 350 s in AZ-b only (Jun 27 18:40) drops AZ-b dead borrows from 7.9 to 0.1/s within 12 minutes and AZ-b checkout p99 from 1,610 to 335 ms by 19:10, while AZ-a/c controls are unchanged (~1,620 ms) - causal confirmation and the first fix validation in one experiment.",
+      "evidence": {
+        "kind": "figure",
+        "caption": "Dead-borrow rate and checkout p99 per AZ around the Jun 27 18:40 AZ-b revert",
+        "values": { "revert_time": "2026-06-27 18:40 UTC", "azb_dead_borrows_before_per_s": 7.9, "azb_dead_borrows_after_per_s": 0.1, "azb_p99_before_ms": 1610, "azb_p99_after_ms": 335, "control_p99_ms": 1620 }
+      },
+      "strength": "strong",
+      "depends_on": ["F24", "F21"],
+      "notes": "First Q4 evidence (position 28/40) - the proactive-intent gap closes here. AZ-b carries 40% of traffic: 19.7 x 0.4 = 7.9/s."
+    },
+    {
+      "id": "F29",
+      "questions": ["Q3"],
+      "claim": "The checkout p99 page threshold had been raised from 800 to 2,500 ms on Mar 11 2026 (OBS-1873, 'flapping during spring sale') with an unactioned revert TODO; all five regressed weekday peaks (1,590-1,655 ms) sat under the raised threshold - the original 800 ms threshold would have paged on Jun 16.",
+      "evidence": {
+        "kind": "table",
+        "caption": "Alert-config change history for checkout p99, with regressed peak values plotted against both thresholds",
+        "values": { "threshold_before_ms": 800, "threshold_after_ms": 2500, "change_date": "2026-03-11", "ticket": "OBS-1873", "regressed_peaks_ms": "1590-1655" }
+      },
+      "strength": "strong",
+      "depends_on": ["F01"],
+      "notes": "First Q3 finding (position 29/40) - the emergent question opens here."
+    },
+    {
+      "id": "F30",
+      "questions": ["Q3"],
+      "claim": "SLO math shows the miss was procedural, not informational: daily error-budget burn ran 4.4x from Jun 16 (peak-hour burn 9x vs the 14.4x fast-burn page threshold), the 3x slow-burn rule filed 23 tickets into an untriaged queue, and June's checkout budget was 100% consumed by Jun 22 20:00 - before the incident was even opened.",
+      "evidence": {
+        "kind": "table",
+        "caption": "Burn-rate reconstruction Jun 12-23: hourly and daily burn vs page/ticket thresholds, budget depletion curve",
+        "values": { "daily_burn_x": 4.4, "peak_burn_x": 9, "fast_burn_page_x": 14.4, "slow_burn_ticket_x": 3, "unread_tickets": 23, "budget_exhausted": "2026-06-22 20:00 UTC" }
+      },
+      "strength": "moderate",
+      "depends_on": ["F02"],
+      "notes": "Burn arithmetic derives from F02's error rates; see DESIGN 5.6."
+    },
+    {
+      "id": "F31",
+      "questions": ["Q3"],
+      "claim": "The synthetic canary was blind by construction: one probe per minute at concurrency 1 from 2 regions, each probe on a fresh connection - it can never borrow a pooled connection that has idled past 60 s, and canary p99 read 313-317 ms through the entire incident.",
+      "evidence": {
+        "kind": "stat",
+        "caption": "Canary probe design parameters vs the failure preconditions, with canary p99 series Jun 12-27",
+        "values": { "probe_rate_per_min": 1, "concurrency": 1, "regions": 2, "connection_reuse": false, "canary_p99_range_ms": "313-317" }
+      },
+      "strength": "moderate",
+      "depends_on": ["F22"],
+      "notes": "Explains blindness via the mechanism's preconditions (needs F22's idle threshold); F40 later fixes it."
+    },
+    {
+      "id": "F32",
+      "questions": ["Q3"],
+      "claim": "Root-cause attribution lost roughly 3 days to a change-visibility gap: triage consulted only the deploy tracker, which does not ingest netops changes; NETOPS-4112 sat in a separate system and was found only once the 60 s idle threshold provided a targeted search key.",
+      "evidence": {
+        "kind": "table",
+        "caption": "Timeline of change-source consultation during INC-2419, with tracker coverage matrix",
+        "values": { "attribution_delay_days": 3, "trackers_consulted_at_triage": 1, "netops_feed_in_tracker": false, "change_found_via": "idle-threshold search of netops system" }
+      },
+      "strength": "moderate",
+      "depends_on": ["F12", "F24"]
+    },
+    {
+      "id": "F33",
+      "questions": ["Q1", "Q3"],
+      "claim": "The Jun-16 onset misread traces to the ops dashboard's default 24 h rollup grain: the 5-min percentile store held the Jun-12 AZ-a step all along, but the default view collapsed it - and the misread anchored the pricing hypothesis for two days.",
+      "evidence": {
+        "kind": "stat",
+        "caption": "Same underlying series rendered at 24 h vs 5-min grain, side by side, with the Jun 12 step visible only at 5-min",
+        "values": { "default_rollup": "24h", "store_grain": "5min", "misread_cost_days": 2 }
+      },
+      "strength": "weak",
+      "depends_on": ["F20"],
+      "notes": "Interpretive attribution linking F03's error to a tooling default; bridges Q1's history to Q3's lesson."
+    },
+    {
+      "id": "F34",
+      "questions": ["Q3"],
+      "claim": "On-call context evaporated across three handoffs (Jun 15-22): each shift logged the elevated peaks as 'high but in-SLO, likely summer promo' and no shift compared against the prior week - the runbook contains no cross-shift trend review step.",
+      "evidence": {
+        "kind": "table",
+        "caption": "Shift-log excerpts and handoff notes, Jun 15-22, coded for how each shift explained the elevated peaks",
+        "values": { "handoffs": 3, "window": "2026-06-15..22", "shifts_attributing_to_promo": 3, "trend_review_in_runbook": false }
+      },
+      "strength": "weak",
+      "depends_on": [],
+      "notes": "Anecdotal shift-log review; independent of the technical chain, discoverable any time after the incident opens."
+    },
+    {
+      "id": "F35",
+      "questions": ["Q4"],
+      "claim": "The fleet-wide revert to 350 s plus client hardening (TCP keepalive 30 s via pod sysctl, HikariCP keepaliveTime 30 s, idleTimeout 600 to 45 s) shipped Jun 28 09:00; the Jun 29 peak was clean: p99 318 ms, errors 0.05%, dead borrows 0.0/s.",
+      "evidence": {
+        "kind": "table",
+        "caption": "Post-fix Jun 29 peak scorecard vs baseline: p99, error rate, dead-borrow counter",
+        "values": { "fix_shipped": "2026-06-28 09:00 UTC", "tcp_keepalive_s": 30, "hikari_keepalive_s": 30, "hikari_idle_timeout_s": 45, "p99_jun29_ms": 318, "error_pct": 0.05, "dead_borrows_per_s": 0.0 }
+      },
+      "strength": "strong",
+      "depends_on": ["F28"],
+      "notes": "Defense in depth: even if an LB timeout drops again, client keepalive (30 s) and eviction (45 s) stay under any plausible floor."
+    },
+    {
+      "id": "F36",
+      "questions": [],
+      "claim": "inventory-svc emits 4.3k WARN lines/min (38% of its log volume) for the deprecated warehouse_zone field - pure noise that measurably slowed log searches during the investigation; filed as a hygiene ticket.",
+      "evidence": {
+        "kind": "stat",
+        "caption": "Log-volume breakdown for inventory-svc by level and message template, Jun 23-27",
+        "values": { "warn_lines_per_min": 4300, "share_of_log_volume_pct": 38, "field": "warehouse_zone" }
+      },
+      "strength": "weak",
+      "depends_on": [],
+      "notes": "Tangential drive-by from log sweeps; bears on no question - routing stress."
+    },
+    {
+      "id": "F37",
+      "questions": ["Q3", "Q4"],
+      "claim": "Replaying the restored alert policy (800 ms p99 threshold plus the 14.4x/3x multiwindow burn rules) against June telemetry first pages at Jun 16 12:07 - 6.9 days before the actual Jun 23 10:15 detection; the stage-1 AZ-a period (fleet p99 480 ms) is still missed by every threshold rule, leaving the pooled-canary class (F40) as the only cover for it.",
+      "evidence": {
+        "kind": "run",
+        "caption": "Alert-replay harness over Jun 12-23 telemetry: first-page times under old, raised, and restored policies",
+        "values": { "replay_first_page": "2026-06-16 12:07 UTC", "actual_detection": "2026-06-23 10:15 UTC", "improvement_days": 6.9, "stage1_caught": false, "stage1_fleet_p99_ms": 480 }
+      },
+      "strength": "moderate",
+      "depends_on": ["F29", "F30"],
+      "notes": "Honest negative half: threshold restoration alone does not cover single-AZ partial failures."
+    },
+    {
+      "id": "F38",
+      "questions": ["Q4"],
+      "claim": "A 2x-peak load test (620 rps checkout, Jul 2) on the hardened configuration holds p50 59 ms / p99 322 ms with zero dead borrows and the same 55-85 per-pod pool oscillation - the fix is not load-marginal.",
+      "evidence": {
+        "kind": "run",
+        "caption": "Load-test report: latency percentiles, dead-borrow counter, and pool telemetry at 620 rps sustained 2 h",
+        "values": { "load_rps": 620, "p50_ms": 59, "p99_ms": 322, "dead_borrows": 0, "duration_h": 2 }
+      },
+      "strength": "moderate",
+      "depends_on": ["F35"]
+    },
+    {
+      "id": "F39",
+      "questions": ["Q2", "Q4"],
+      "claim": "A conformance sweep of all 41 service-to-dependency pairs (client keepalive/idle-eviction vs path idle timeout) found 3 more latent pairs with the same failure geometry: notifications to queue-broker (keepalive off, eviction 900 s), exports to object-gateway (keepalive 300 s vs LB 120 s), and search-indexer to ledger-replica (keepalive off, eviction 600 s).",
+      "evidence": {
+        "kind": "table",
+        "caption": "Keepalive/eviction vs path-timeout matrix for 41 service pairs, violations highlighted",
+        "values": { "pairs_swept": 41, "at_risk_pairs": 3, "violations": "notifications->queue-broker (off/900s); exports->object-gateway (300s vs 120s); search-indexer->ledger-replica (off/600s)" }
+      },
+      "strength": "moderate",
+      "depends_on": ["F24"],
+      "notes": "Generalizes the root cause into a failure class (Q2 blast radius) and a standing guardrail (Q4)."
+    },
+    {
+      "id": "F40",
+      "questions": ["Q3", "Q4"],
+      "claim": "A redesigned canary holding a persistent connection pool with forced 90 s idle cycles detects this failure class directly: in a staging game-day that re-lowered the ilb timeout to 60 s, the canary alarmed in 9 minutes - versus 10.5 days for the June incident.",
+      "evidence": {
+        "kind": "run",
+        "caption": "Game-day log: staged ilb timeout drop vs pooled-canary alarm timeline",
+        "values": { "canary_idle_cycle_s": 90, "gameday_mttd_min": 9, "june_detection_days": 10.5 }
+      },
+      "strength": "moderate",
+      "depends_on": ["F31", "F26"],
+      "notes": "Closes both Q3 (the blindness is fixed) and Q4 (the class is detectable), including the stage-1 gap F37 left open."
+    }
+  ]
+}
