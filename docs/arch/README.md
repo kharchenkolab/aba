@@ -42,6 +42,7 @@ attach uniformly to all of them — **knowledge/bundle**, **verifiability/proven
 
 **Contact plane — the human surface**
 - [`contact-surface.md`](contact-surface.md) — the frontend architecture (platform shell / lib seams / bio domain / viewer registry) and the uniform interaction primitives (focus / highlight / reference / revise).
+- [`record-face.md`](record-face.md) — the Record: a document-first, read-only projection of a project (questions/claims/prose/sediment/sittings) behind `GET /api/record/world`; design in `RECORD_DESIGN.md`.
 
 **Cross-cuts — attach uniformly to every plane**
 - [`bundle-and-content.md`](bundle-and-content.md) — the scope-chain (system → installation → lab → user → `EffectiveBundle`), skills/recipes, capabilities, and **the content-pack seam** (`core ↛ content`).

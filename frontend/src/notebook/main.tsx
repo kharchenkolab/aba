@@ -1,10 +1,41 @@
-import { StrictMode } from 'react'
+import { StrictMode, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import Record from './Record'
+import { fetchLiveWorld } from './live'
+import type { World } from './world'
 import './record.css'
 
-createRoot(document.getElementById('root')!).render(
+/** `/notebook.html` renders the fixture, exactly as before.
+ *  `/notebook.html?live=1[&api=http://localhost:8000][&project=<pid>]`
+ *  renders the SAME renderer over a real project's World (phase-1 face). */
+function Live(props: { api: string; project?: string }) {
+  const [world, setWorld] = useState<World | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  useEffect(() => {
+    fetchLiveWorld(props.api, props.project)
+      .then(setWorld)
+      .catch(e => setErr(String(e)))
+  }, [props.api, props.project])
+  if (err) {
+    return (
+      <div style={{ padding: '2rem', fontFamily: 'monospace' }}>
+        <p>live world unavailable — {err}</p>
+        <p>is the backend up, and CORS open for this origin?
+          {' '}<a href="/notebook.html">fixture face</a></p>
+      </div>
+    )
+  }
+  if (!world) return <div style={{ padding: '2rem' }}>assembling the record…</div>
+  return <Record world={world} />
+}
+
+const params = new URLSearchParams(window.location.search)
+const root = createRoot(document.getElementById('root')!)
+root.render(
   <StrictMode>
-    <Record />
+    {params.get('live')
+      ? <Live api={params.get('api') || 'http://localhost:8000'}
+              project={params.get('project') || undefined} />
+      : <Record />}
   </StrictMode>,
 )
