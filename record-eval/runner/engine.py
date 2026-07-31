@@ -5,18 +5,40 @@ each editorial moment and applying returned ops through one gate.
 
 THE GATE (non-negotiable, enforced in transition code as asserts):
 
-1. **Consent conservation** — no op with class '2', '3' or 'X' applies unless
-   it arrives as the payload of a proposal that is `accepted` (via an explicit
-   ratify).  Class-2 proposals expire (lapse) when their active-day timer runs
-   out — an expired or pending or dismissed proposal can never apply.  Writing
-   prose flagged `ratified`/`authored` is a decision and equally needs consent
-   regardless of the declared class.
+1. **Consent conservation** — no op whose EFFECTIVE class is '2', '3' or 'X'
+   applies unless it arrives as the payload of a proposal that is `accepted`
+   (via an explicit ratify).  The effective class is max(declared class,
+   per-op-type floor) — see ops.class_floor: a policy declaring
+   `DemoteSection(cls="1")` is treated at the floor ('3'), so misdeclaration
+   cannot buy a cheaper consent tier.  MarkSuperseded carries a
+   state-dependent floor: 'X' while live ratified/authored prose cites the
+   finding (invalidating ratified prose is the interrupt, not a Class-1
+   touch-up).  Class-2 proposals expire (lapse) when their active-day timer
+   runs out — an expired or pending or dismissed proposal can never apply.
+   Writing prose flagged `ratified`/`authored` floors at the decision class
+   ('only the user writes').
+
+   *Consent ceiling*: a proposal's class must dominate every payload op's
+   effective class — asserted at propose time AND re-asserted per payload op
+   at apply time (the state may have changed in between, e.g. prose ratified
+   after the propose).  A Class-2 wrapper can therefore never smuggle a
+   Class-3/X payload through a cheap consent.  Note the residual, structural
+   gap: ratify matches proposals by free-text DESCRIPTION, and no gate can
+   verify that a description honestly summarizes its payload — the class
+   ceiling is the enforceable part; description honesty is graded (S3), not
+   gated.
+
 2. **Authored-text immutability** — prose flagged ratified or authored is
    never rewritten by any op (ReviseProse on it violates, even inside a
    consented payload); revision arrives only as a dated, provenance-linked
    AddAddendum applied through an accepted proposal.
 
 Both raise :class:`GateViolation` (an AssertionError subclass).
+
+Section 14.2 hysteresis (N-consecutive-cycles) is delegated to policies —
+the engine models no waiting period, so the decisive-evidence rule is
+enforced only on its consent-class half (a same-cycle proposal is legal;
+applying it still takes the classed consent).
 
 ABSENCE / TIMER-FREEZE RULE (RECORD_DESIGN section 14.7), exact form:
 
@@ -160,8 +182,15 @@ class ReplayEngine:
         st.event_index = ev.index
         self.trace.begin_event(self._event_dict(ev))
 
-        scientist_driven = (ev.type in SCIENTIST_EVENT_TYPES
-                            or (ev.type == "finding" and not ev.background))
+        # a finding's foreground/background status must be judged exactly as
+        # the landing path judges it: an authored-foreground finding arriving
+        # with no live sitting IS a background landing and must not break the
+        # attention gap
+        if ev.type == "finding":
+            scientist_driven = not (ev.background
+                                    or st.live_sitting_id is None)
+        else:
+            scientist_driven = ev.type in SCIENTIST_EVENT_TYPES
         if scientist_driven:
             self._settle_gap()
 
@@ -456,19 +485,37 @@ class ReplayEngine:
 
     # -- THE GATE + op application -------------------------------------------
 
+    def _effective_class(self, op: O.Op) -> str:
+        """Static floor (ops.effective_class) plus the state-dependent floor:
+        marking a finding superseded while live ratified/authored prose cites
+        it is the Class-X interrupt, never a Class-1 citation touch-up."""
+        eff = O.effective_class(op)
+        if isinstance(op, O.MarkSuperseded) \
+                and self._ratified_prose_cites(op.finding_id) \
+                and O.CLASS_ORDER[eff] < O.CLASS_ORDER["X"]:
+            eff = "X"
+        return eff
+
+    def _ratified_prose_cites(self, fid: str) -> bool:
+        return any(p.superseded_by is None and (p.ratified or p.authored)
+                   and fid in p.provenance
+                   for p in self.state.prose.values())
+
     def _apply(self, op: O.Op, consent: Proposal | None):
         st = self.state
-        # Gate 1 — consent conservation
-        if op.cls in ("2", "3", "X"):
+        eff = self._effective_class(op)
+        # Gate 1 — consent conservation (on the EFFECTIVE class)
+        if eff in ("2", "3", "X"):
             if consent is None or consent.status != "accepted":
                 raise GateViolation(
-                    f"consent conservation: class-{op.cls} op "
-                    f"{op.kind} applied without an accepted proposal")
-        if isinstance(op, O.WriteProse) and (op.ratified or op.authored):
-            if consent is None or consent.status != "accepted":
+                    f"consent conservation: class-{eff} op {op.kind} "
+                    f"(declared class {op.cls}) applied without an accepted "
+                    f"proposal")
+            if O.CLASS_ORDER[consent.cls] < O.CLASS_ORDER[eff]:
                 raise GateViolation(
-                    "consent conservation: ratified/authored prose can enter "
-                    "only through an accepted proposal (only the user writes)")
+                    f"consent ceiling: class-{eff} payload op {op.kind} "
+                    f"exceeds its proposal's class {consent.cls} — a cheap "
+                    f"wrapper cannot carry an expensive payload")
         # Gate 2 — authored-text immutability
         if isinstance(op, O.ReviseProse):
             block = st.prose.get(op.prose_id)
@@ -479,15 +526,11 @@ class ReplayEngine:
                     f"authored-text immutability: prose {op.prose_id} is "
                     f"ratified/authored; revision arrives only as a dated "
                     f"addendum proposal")
-        if isinstance(op, O.AddAddendum):
-            if consent is None or consent.status != "accepted":
-                raise GateViolation(
-                    "consent conservation: an addendum is a decision — it "
-                    "applies only through an accepted proposal")
 
         handler = self._OP_HANDLERS[type(op)]
         result = handler(self, op, consent)
         self.trace.op("applied", op.to_dict(), result=result,
+                      effective_cls=eff,
                       consent=consent.id if consent else None)
         return result
 
@@ -572,6 +615,11 @@ class ReplayEngine:
             new_ids.append(sid)
         src.status = "merged"
         src.merged_into = new_ids[0]
+        # like merge, split must not strand prose on a retired section:
+        # the source's blocks reparent to the first child
+        for p in st.prose.values():
+            if p.section_id == src.id:
+                p.section_id = new_ids[0]
         return new_ids
 
     def _op_write_prose(self, op: O.WriteProse, consent):
@@ -646,21 +694,35 @@ class ReplayEngine:
         return iid
 
     def _op_advance_plan_item(self, op: O.AdvancePlanItem, consent):
+        # NOTE (section 6 discharge subsumption): a direct advance — even to
+        # 'absorbed' — does NOT clear a scrutiny item's provisional mark.
+        # Marks clear only through an accepted RouteFinding row whose
+        # `discharges` names the item (see _apply_row): subsumption is
+        # proposed and consented, never asserted by fiat.
         st = self.state
         item = st.plan_items.get(op.item_id)
         if item is None:
             raise EngineError(f"advance_plan_item: unknown item {op.item_id}")
         item.state = op.to_state
         item.history.append({"event": st.event_index, "to": op.to_state})
-        if op.to_state == "absorbed" and item.provisional:
-            item.provisional = False
-            tgt = st.findings.get(item.target)
-            if tgt and item.id in tgt.provisional_open:
-                tgt.provisional_open.remove(item.id)
         return item.id
 
     def _op_propose(self, op: O.Propose, consent):
         st = self.state
+        # consent ceiling (propose-time half): the proposal's class must
+        # dominate every payload op's effective class, evaluated against the
+        # current state; the apply-time gate re-asserts per payload op.  The
+        # free-text-description <-> payload semantic gap cannot be fully
+        # closed here (ratify matches by description, which no gate can
+        # verify against payload semantics) — this class ceiling is the
+        # enforceable part.
+        payload_classes = [self._effective_class(pop) for pop in op.payload]
+        for pop, eff in zip(op.payload, payload_classes):
+            if O.CLASS_ORDER[op.proposal_cls] < O.CLASS_ORDER[eff]:
+                raise GateViolation(
+                    f"consent ceiling: proposal class {op.proposal_cls} is "
+                    f"below its payload op {pop.kind}'s effective class "
+                    f"{eff} — consent must be sought at the payload's tier")
         pid = st.new_id("PR")
         pr = Proposal(id=pid, cls=op.proposal_cls, kind=op.proposal_kind,
                       description=op.description, payload=list(op.payload),
@@ -674,7 +736,8 @@ class ReplayEngine:
                 if block is not None:
                     block.contested = True
         self.trace.note("proposal_opened", proposal=pid, cls=pr.cls,
-                        kind=pr.kind, description=pr.description)
+                        kind=pr.kind, description=pr.description,
+                        payload_classes=payload_classes)
         return pid
 
     def _op_apply_consented(self, op: O.ApplyConsented, consent):
@@ -695,8 +758,10 @@ class ReplayEngine:
                 f"consent conservation: proposal {pr.id} already applied — "
                 f"consent is spent once")
         pr.applied = True
+        payload_classes = [self._effective_class(pop) for pop in pr.payload]
         results = [self._apply(pop, consent=pr) for pop in pr.payload]
         self.trace.note("proposal_applied", proposal=pr.id, cls=pr.cls,
+                        payload_classes=payload_classes,
                         results=[str(r) for r in results])
         return pr.id
 

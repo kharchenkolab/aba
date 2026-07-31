@@ -48,16 +48,62 @@ import dataclasses
 from dataclasses import dataclass, field
 
 CLASSES = ("0", "1", "2", "3", "X")
+#: total order over consent classes: 0 < 1 < 2 < 3 < X
+CLASS_ORDER = {"0": 0, "1": 1, "2": 2, "3": 3, "X": 4}
 MATURITIES = ("conjecture", "supported", "cross-checked", "robust")
 STRATA = ("story", "notes", "sediment")
 PLAN_STATES = ("proposed", "planned", "taken-up", "produced", "absorbed")
 PLAN_KINDS = ("check", "corroborate", "alternatives", "expand", "plan", "analysis")
 SALIENCE_MARKS = ("pinned", "faded", "held", None)
 
+#: The proposal class used for claim drafts (and other decision-tier
+#: proposals).  Not in 14.1's table — that table classes STRUCTURAL change —
+#: but decisions (claim drafts, addenda) are consent-required and never
+#: expire, so the runner borrows the never-expiring Class 3 for claim drafts
+#: (addenda take 'X'); only class-'2' proposals carry the expiry timer.
+CLAIM_DRAFT_PROPOSAL_CLS = "3"
+
 
 def strength_to_maturity(strength: str) -> str:
     return {"weak": "conjecture", "moderate": "supported",
             "strong": "cross-checked"}.get(strength, "conjecture")
+
+
+#: Per-op-type class FLOORS.  `cls` is policy-declared, but the gate judges
+#: the EFFECTIVE class = max(declared, floor) in the CLASS_ORDER total order:
+#: an op declaring below its floor is treated AT ITS FLOOR (misdeclaration is
+#: not itself a violation — it simply cannot buy a cheaper consent tier).
+_MIN_CLASS = {
+    "promote_section": "2",
+    "demote_section": "3",
+    "merge_sections": "2",
+    "split_section": "2",
+    "add_addendum": "X",
+}
+
+
+def class_floor(op: "Op") -> str:
+    """Static class floor for an op.
+
+    create_section is keyed on section_kind (stub -> '1' additive container,
+    full section -> '2' tier presence); write_prose flagged ratified/authored
+    is a decision and floors at CLAIM_DRAFT_PROPOSAL_CLS ('only the user
+    writes').  MarkSuperseded has an additional STATE-DEPENDENT floor ('X'
+    while live ratified/authored prose cites the finding) that only the
+    engine can evaluate — see ReplayEngine._effective_class.
+    """
+    if op.kind == "create_section":
+        return "1" if getattr(op, "section_kind", "stub") == "stub" else "2"
+    if op.kind == "write_prose" and (getattr(op, "ratified", False)
+                                     or getattr(op, "authored", False)):
+        return CLAIM_DRAFT_PROPOSAL_CLS
+    return _MIN_CLASS.get(op.kind, "0")
+
+
+def effective_class(op: "Op") -> str:
+    """max(op.cls, class_floor(op)) under CLASS_ORDER (static part only)."""
+    floor = class_floor(op)
+    return op.cls if CLASS_ORDER[op.cls] >= CLASS_ORDER[floor] else floor
 
 
 class Op:

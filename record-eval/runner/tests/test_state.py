@@ -137,6 +137,25 @@ class AbsenceTimerTest(unittest.TestCase):
         self.assertEqual(pr.active_age, 0)
         self.assertEqual([a["days"] for a in r.state.absences], [4])
 
+    def test_foreground_authored_finding_with_no_sitting_does_not_break_gap(self):
+        # regression: an authored-foreground finding landing with no live
+        # sitting IS a background landing (the clock filed the sitting), so
+        # it must not settle the attention gap — the two 2-day clocks around
+        # it form one 4-day gap, which freezes
+        events = [
+            {"type": "session_start", "anchor": "Q1"},
+            {"type": "instruction", "text": "tidy this up"},
+            {"type": "clock", "advance_days": 2},
+            {"type": "finding", "ref": "G01"},          # no background flag!
+            {"type": "clock", "advance_days": 2},
+            {"type": "instruction", "text": "back"},
+        ]
+        r = run(ProposeOnInstruction(), events)
+        self.assertTrue(r.state.findings["G01"].background)
+        pr = r.state.proposals["PR1"]
+        self.assertEqual(pr.active_age, 0)
+        self.assertEqual([a["days"] for a in r.state.absences], [4])
+
     def test_class2_expires_at_14_active_days_and_never_applies(self):
         events = [
             {"type": "session_start", "anchor": "Q1"},

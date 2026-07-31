@@ -36,10 +36,16 @@ Documented readings:
   overturned finding superseded (citations revised, never deleted) and
   revises every live prose block citing it.  It treats BOTH severity cases
   with the same mechanical rule — no severity judgment — but expresses the
-  revision through the only legal channel in each case: direct ReviseProse
-  where the block is unratified, an addendum PROPOSAL where the block is
-  ratified/authored (the gate forbids rewriting; the fallback is gate-shaped,
-  not judgment-shaped).  What it cannot fake: cascade re-examination of
+  revision through the only legal channel in each case: where NO
+  ratified/authored prose cites the overturned finding, the supersession
+  mark and the prose revisions apply directly (Class 1); where ratified
+  prose IS implicated, the supersession mark and the addenda ride ONE
+  Class-X addendum PROPOSAL (the gate floors mark_superseded at 'X' there,
+  and forbids rewriting) — pending until an explicit ratify, which the
+  corpus streams mostly never supply.  Unratified blocks citing the same
+  finding are still revised directly (legal at Class 1).  The channel choice
+  is gate-shaped, not judgment-shaped: the policy still applies one rule to
+  every overturns edge.  What it cannot fake: cascade re-examination of
   dependent claims, withdrawal of pending drafts, structural demotion — the
   corpus assertions that were sharpened to kill it.
 
@@ -112,7 +118,7 @@ class NeverRestructure(Policy):
                                                           or moment.pool.question_ids[0])
             return [O.Propose(
                 proposal_kind="claim_draft",
-                proposal_cls="3",
+                proposal_cls=O.CLAIM_DRAFT_PROPOSAL_CLS,
                 description=f"claim draft on {f.id}: {_short(f.claim)}",
                 payload=(O.WriteProse(
                     section=section,
@@ -163,7 +169,7 @@ class AppendToFirstQuestion(Policy):
                                              else moment.pool.question_ids[0])
             return [O.Propose(
                 proposal_kind="claim_draft",
-                proposal_cls="3",
+                proposal_cls=O.CLAIM_DRAFT_PROPOSAL_CLS,
                 description=f"claim draft on {f.id}: {_short(f.claim)}",
                 payload=(O.WriteProse(
                     section=anchor,
@@ -185,31 +191,37 @@ class ObeyOverturnLabels(NeverRestructure):
         for old in f.overturns:
             if moment.state.finding_record(old) is None:
                 continue                    # not landed in this ordering
-            ops.append(O.MarkSuperseded(
+            live = [b for b in moment.state.prose_blocks(citing=old)
+                    if b["superseded_by"] is None]
+            ratified = [b for b in live if b["ratified"] or b["authored"]]
+            mark = O.MarkSuperseded(
                 finding_id=old, by=f.id,
-                note="mechanical: overturns edge in pool metadata"))
-            for block in moment.state.prose_blocks(citing=old):
-                if block["superseded_by"] is not None:
-                    continue
+                note="mechanical: overturns edge in pool metadata")
+            if ratified:
+                # ratified prose implicated: the mark and the addenda ride
+                # one Class-X proposal (the legal channel; same mechanical
+                # decision, no severity judgment)
+                addenda = tuple(O.AddAddendum(
+                    prose_id=b["id"],
+                    text=f"Addendum: {old}'s reading is superseded by {f.id}.",
+                    provenance=(f.id, old)) for b in ratified)
+                ops.append(O.Propose(
+                    proposal_kind="addendum",
+                    proposal_cls="X",
+                    description=(f"addendum: {old} superseded by {f.id} "
+                                 f"— {_short(f.claim, 100)}"),
+                    payload=addenda + (mark,),
+                ))
+            else:
+                ops.append(mark)
+            for block in live:
                 if block["ratified"] or block["authored"]:
-                    # the gate forbids rewriting; same revision, legal channel
-                    ops.append(O.Propose(
-                        proposal_kind="addendum",
-                        proposal_cls="X",
-                        description=(f"addendum: {old} superseded by {f.id} "
-                                     f"— {_short(f.claim, 100)}"),
-                        payload=(O.AddAddendum(
-                            prose_id=block["id"],
-                            text=(f"Addendum: {old}'s reading is superseded "
-                                  f"by {f.id}."),
-                            provenance=(f.id, old)),),
-                    ))
-                else:
-                    ops.append(O.ReviseProse(
-                        prose_id=block["id"],
-                        text=(f"Revised: {old} superseded by {f.id} — "
-                              f"{_short(f.claim, 140)}"),
-                        provenance=(f.id,)))
+                    continue                # handled via the addendum channel
+                ops.append(O.ReviseProse(
+                    prose_id=block["id"],
+                    text=(f"Revised: {old} superseded by {f.id} — "
+                          f"{_short(f.claim, 140)}"),
+                    provenance=(f.id,)))
         return ops
 
 

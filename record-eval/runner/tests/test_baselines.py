@@ -119,10 +119,13 @@ class ObeyOverturnLabelsTest(unittest.TestCase):
         r = _replay("checkout-p99-lb-idle-timeout", "contradiction",
                     "obey_overturn_labels")
         st = r.state
-        # all three overturned findings marked superseded, findable
-        self.assertEqual(st.findings["F03"].superseded_by, "F20")
+        # unratified severities marked superseded directly, findable
         self.assertEqual(st.findings["F10"].superseded_by, "F15")
         self.assertEqual(st.findings["F05"].superseded_by, "F16")
+        # F03 backs RATIFIED prose: its supersession mark rides the pending
+        # Class-X proposal (the gate floors mark_superseded at 'X' there),
+        # so it is NOT applied without consent
+        self.assertIsNone(st.findings["F03"].superseded_by)
         # unratified prose citing F10/F05 was revised in place (chain kept)
         for fid in ("F10", "F05"):
             olds = [p for p in st.prose.values()
@@ -139,6 +142,9 @@ class ObeyOverturnLabelsTest(unittest.TestCase):
         self.assertEqual(addenda_props[0].status, "pending")
         self.assertTrue(ratified[0].contested)
         self.assertEqual(len(st.addenda), 0)      # pending, never silently applied
+        # the pending payload carries both the addendum and the mark
+        kinds = sorted(op.kind for op in addenda_props[0].payload)
+        self.assertEqual(kinds, ["add_addendum", "mark_superseded"])
 
     def test_gaia_contradiction_treats_both_severities_identically(self):
         # F12-over-F03 (unratified) -> direct revision; F35-over-F32 arrives

@@ -169,6 +169,31 @@ class DischargeSubsumptionTest(unittest.TestCase):
         self.assertFalse(any(i.provisional for i in items))
         self.assertEqual(r.state.findings["G01"].provisional_open, [])
 
+    def test_direct_advance_to_absorbed_does_not_clear_provisional(self):
+        # section 6: "provisional marks clear only when that row is accepted"
+        # — a policy advancing the item by fiat does not lift the mark
+        class DirectAdvancer(Policy):
+            name = "direct_advancer"
+
+            def decide(self, moment):
+                if moment.kind == "instruction":
+                    item = moment.state.plan_items(target="G01")[0]
+                    return [O.AdvancePlanItem(item_id=item["id"],
+                                              to_state="absorbed")]
+                return []
+
+        r = ReplayEngine(tiny_pool(), scenario([
+            {"type": "session_start", "anchor": "Q1"},
+            {"type": "finding", "ref": "G01"},
+            {"type": "gesture", "verb": "check", "target": "G01"},
+            {"type": "instruction", "text": "call it settled"},
+        ]), DirectAdvancer()).run()
+        item = r.state.plan_items["PI1"]
+        self.assertEqual(item.state, "absorbed")
+        self.assertTrue(item.provisional)               # mark still held
+        self.assertIsNone(item.discharged_by)
+        self.assertEqual(r.state.findings["G01"].provisional_open, ["PI1"])
+
     def test_provisional_holds_until_the_row_is_accepted(self):
         class Silent(Policy):
             name = "silent"
@@ -186,6 +211,44 @@ class DischargeSubsumptionTest(unittest.TestCase):
         self.assertEqual(item.state, "planned")    # user's own intent: no ceremony
         self.assertEqual(item.origin, "gesture")
         self.assertEqual(r.state.findings["G01"].provisional_open, ["PI1"])
+
+
+class SplitReparentsProseTest(unittest.TestCase):
+    def test_split_does_not_strand_prose_on_the_retired_section(self):
+        class Splitter(Policy):
+            name = "splitter"
+
+            def decide(self, moment):
+                if moment.kind == "finding_landed":
+                    return [
+                        O.CreateSection(question_id="Q1", title="Old",
+                                        section_kind="stub", cls="1"),
+                        O.WriteProse(section="Q1/Old", text="carried prose",
+                                     provenance=("G01",)),
+                        O.Propose(proposal_kind="restructuring",
+                                  proposal_cls="2",
+                                  description="split the old section",
+                                  payload=(O.SplitSection(
+                                      section="Q1/Old",
+                                      new_titles=("A", "B")),)),
+                    ]
+                if moment.kind == "ratified":
+                    return [O.ApplyConsented(proposal_id=pid)
+                            for pid in moment.matched]
+                return []
+
+        r = ReplayEngine(tiny_pool(), scenario([
+            {"type": "session_start", "anchor": "Q1"},
+            {"type": "finding", "ref": "G01"},
+            {"type": "ratify", "target": "split the old section"},
+        ]), Splitter()).run()
+        st = r.state
+        old = next(s for s in st.sections.values() if s.title == "Old")
+        self.assertEqual(old.status, "merged")
+        block = st.prose["P1"]
+        self.assertEqual(block.section_id, old.merged_into)   # first child
+        child = st.sections[old.merged_into]
+        self.assertEqual(child.title, "A")
 
 
 class DeterminismTest(unittest.TestCase):

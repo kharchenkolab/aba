@@ -12,9 +12,12 @@ authored `t` values) and does what the scenario's assertions expect:
   ratified prose is never rewritten — a dated, provenance-linked addendum
   proposal is raised the same cycle (decisive evidence bypasses the wait, not
   the ceremony) and stays pending to the end (no second ratify exists in the
-  stream); the unratified onset note is revised with provenance; F03 is
-  marked superseded-but-findable; and a cascade re-examination item is raised
-  against the still-committed pricing attribution;
+  stream); the unratified onset note is revised with provenance; F03's
+  supersession mark rides the same Class-X proposal (marking a finding cited
+  by ratified prose is itself the interrupt — the gate floors it at 'X'),
+  with the contested flag carrying "no face-value assertion" meanwhile; and
+  a cascade re-examination item is raised against the still-committed
+  pricing attribution;
 * F15-over-F10 and F16-over-F05 (t=26/27) are Class-1/2 absorptions of
   never-ratified prose: revise with provenance, mark superseded, never
   delete;
@@ -97,7 +100,7 @@ class ScriptedGood(Policy):
     def _t7(self, m):   # draft_claim on F03
         return [O.Propose(
             proposal_kind="claim_draft",
-            proposal_cls="3",
+            proposal_cls=O.CLAIM_DRAFT_PROPOSAL_CLS,
             description="claim draft: the Jun 16 onset claim — daily rollup "
                         "places the regression onset Jun 16 ~15:00 UTC — "
                         "into the Q1 impact section",
@@ -174,9 +177,6 @@ class ScriptedGood(Policy):
         ops: list[O.Op] = [
             O.RouteFinding(finding_id="F20", stratum="story",
                            questions=("Q1", "Q2")),
-            O.MarkSuperseded(finding_id="F03", by="F20",
-                             note="per-AZ reconstruction supersedes the "
-                                  "rollup onset reading"),
         ]
         # revise the unratified onset note with provenance
         for block in m.state.prose_blocks(citing="F03", ratified=False):
@@ -187,7 +187,11 @@ class ScriptedGood(Policy):
                          "true onset Jun 12 (F20); the Jun-16 step was a "
                          "24h-rollup artifact.",
                     provenance=("F20",)))
-        # the ratified onset prose: dated addendum PROPOSAL, never a rewrite
+        # the ratified onset prose: dated addendum PROPOSAL, never a rewrite.
+        # F03 is cited by RATIFIED prose, so marking it superseded is itself
+        # Class X (the gate's state-dependent floor): the mark rides the same
+        # proposal and stays pending with it — the contested flag carries the
+        # "no face-value assertion" semantics meanwhile.
         for block in m.state.prose_blocks(citing="F03", ratified=True):
             if block["superseded_by"] is None:
                 ops.append(O.Propose(
@@ -202,7 +206,11 @@ class ScriptedGood(Policy):
                         text="Addendum: F20 supersedes the Jun-16 onset "
                              "reading; the true onset is Jun 12 (per-AZ "
                              "p99 reconstruction).",
-                        provenance=("F20", "F03")),),
+                        provenance=("F20", "F03")),
+                        O.MarkSuperseded(
+                        finding_id="F03", by="F20",
+                        note="per-AZ reconstruction supersedes the rollup "
+                             "onset reading"),),
                 ))
         # cascade: the pricing attribution was anchored on that onset and is
         # still committed — visible re-examination, raised the same cycle

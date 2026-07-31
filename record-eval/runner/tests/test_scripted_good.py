@@ -94,9 +94,16 @@ class ScriptedGoodTest(unittest.TestCase):
 
     def test_revise_with_provenance_superseded_findable(self):
         st = self.st
-        self.assertEqual(st.findings["F03"].superseded_by, "F20")
+        # F10/F05 backed no ratified prose: superseded directly, findable
         self.assertEqual(st.findings["F10"].superseded_by, "F15")
         self.assertEqual(st.findings["F05"].superseded_by, "F16")
+        # F03 backs the ratified onset prose: its supersession mark rides the
+        # pending Class-X addendum proposal (the gate floors it at 'X'), so
+        # the record-level mark is not applied without consent
+        self.assertIsNone(st.findings["F03"].superseded_by)
+        addendum = [p for p in st.proposals.values() if p.kind == "addendum"][0]
+        payload_kinds = sorted(op.kind for op in addendum.payload)
+        self.assertEqual(payload_kinds, ["add_addendum", "mark_superseded"])
         for old_f, new_f in (("F03", "F20"), ("F10", "F15"), ("F05", "F16")):
             olds = [p for p in st.prose.values()
                     if old_f in p.provenance and not p.ratified
