@@ -2,7 +2,7 @@
   "id": "flood",
   "pool": "checkout-p99-lb-idle-timeout",
   "stresses": "one sitting emits 10 findings; triage bounds; tray depth stays sane",
-  "description": "The Jun 26-27 deep-dive day as one marathon sitting: the mechanism battery (F19-F24, F26) salted with the onset post-mortem (F33), the shift-log review (F34), and the log-spam tangential (F36), so triage - not just throughput - is stressed. Routine drafts must batch, decisions must stay one-by-one, the salt must route to notes/sediment rather than the causal narrative, and narrative growth must stay far below the finding count.",
+  "description": "The Jun 26-27 deep-dive day as one marathon sitting: the mechanism battery (F19-F24, F26) salted with the onset post-mortem (F33), the shift-log review (F34), and the log-spam tangential (F36), so triage - not just throughput - is stressed. Routine drafts must batch, decisions must stay one-by-one, the salt must route to notes/sediment rather than the causal narrative, and narrative growth must stay far below the finding count - but not at zero: the mechanism section must actually grow. Scenario end implies attention lapse: the marathon sitting parks and files, which is what clears the held excerpt.",
   "events": [
     { "t": 1, "type": "session_start", "anchor": "Q1" },
     { "t": 2, "type": "finding", "ref": "F01" },
@@ -37,17 +37,19 @@
     { "t": 31, "type": "finding", "ref": "F23" },
     { "t": 32, "type": "finding", "ref": "F24" },
     { "t": 33, "type": "gesture", "verb": "pin", "target": "F24" },
-    { "t": 34, "type": "finding", "ref": "F34" },
-    { "t": 35, "type": "finding", "ref": "F26" },
-    { "t": 36, "type": "finding", "ref": "F36" },
-    { "t": 37, "type": "gesture", "verb": "fade", "target": "F36" },
-    { "t": 38, "type": "distill" }
+    { "t": 34, "type": "gesture", "verb": "draft_claim", "target": "F24" },
+    { "t": 35, "type": "finding", "ref": "F34" },
+    { "t": 36, "type": "finding", "ref": "F26" },
+    { "t": 37, "type": "finding", "ref": "F36" },
+    { "t": 38, "type": "gesture", "verb": "fade", "target": "F36" },
+    { "t": 39, "type": "distill" }
   ],
   "assertions": [
     { "at": "event:24..30", "kind": "structure", "expect": "mid-flood the pending tray stays bounded and triaged: routine note/fragment drafts are batchable in one act while claim-grade decisions (the F24-bound causal story) are one-by-one; the tray never shows 10 undifferentiated rows" },
     { "at": "event:30", "kind": "structure", "expect": "the mid-sitting distill-so-far produces a routing table for the findings landed so far without closing the sitting, which keeps accreting afterward" },
-    { "at": "event:29..37", "kind": "routing", "expect": "the salt routes away from the causal narrative: F33 to the Q3/Q1 detection post-mortem territory, F34 to Q3 notes, faded F36 to sediment/notes findable-but-not-carried - none of the three lands in Q2's mechanism section" },
+    { "at": "event:29..38", "kind": "routing", "expect": "the salt routes away from the causal narrative: F33 to the Q3/Q1 detection post-mortem territory, F34 to Q3 notes, faded F36 to sediment/notes findable-but-not-carried - none of the three lands in Q2's mechanism section" },
     { "at": "end", "kind": "structure", "expect": "the 10-finding sitting produces at most 2-3 narrative-level changes (the mechanism section and the onset revision); the rest lands as sediment, notes, or drafts - narrative growth tracks insight, not output volume" },
+    { "at": "end", "kind": "structure", "expect": "Q2's mechanism section exists and grew from this sitting - citing F19, F21, F22, F24, F26 - with the F24 causal-claim draft (from t=34) pending, and the onset revision (F20 over F03) landed as an addendum; a route-everything-to-sediment policy fails this" },
     { "at": "end", "kind": "provenance", "expect": "flood artifacts never pinned, noted, or discussed appear on the leftovers shelf, findable for late review; the held F21 excerpt evaporated at close without entering the record" },
     { "at": "end", "kind": "consent", "expect": "nothing from the flood was ratified without a user act; batch-filing covered only veto-tier routine items and was undoable" }
   ]

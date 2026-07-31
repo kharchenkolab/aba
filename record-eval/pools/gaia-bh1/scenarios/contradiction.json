@@ -2,7 +2,7 @@
   "id": "contradiction",
   "pool": "gaia-bh1",
   "stresses": "an overturn lands: narrative revises with provenance, never silently deletes",
-  "description": "Two revisions of different severity. Early, the joint RV+astrometry fit supersedes the Gaia-only orbital parameters - a refine-don't-delete case. Later, the common-envelope formation default is committed to the narrative and then blindsided: F35 (which depends only on F32) lands immediately after it, with the energetics, kick, and channel findings arriving only AFTER the overturn as post-overturn mass an already-revised story must absorb. Convention: an overturn supersedes the claim's face-value reading, not the findings derived from it - downstream citations get revised, not deleted.",
+  "description": "Two revisions of different severity, which must be handled DIFFERENTLY. Early, the joint RV+astrometry fit supersedes the Gaia-only orbital parameters - a refine-don't-delete case absorbed as a parameter revision. Later, the common-envelope formation default is committed to the narrative and then blindsided: F35 (which depends only on F32) lands immediately after it, with the energetics, kick, and channel findings arriving only AFTER the overturn as post-overturn mass an already-revised story must absorb. Conventions: routine routing rows are accepted at each distill; decisions and prose commitments are ratified only by explicit instruction events (the t=21 instruction ratifies the CE framing); an overturn supersedes the claim's face-value reading, not the findings derived from it - downstream citations get revised, not deleted.",
   "events": [
     { "t": 1, "type": "session_start", "anchor": "Q1" },
     { "t": 2, "type": "finding", "ref": "F01" },
@@ -26,23 +26,26 @@
     { "t": 20, "type": "finding", "ref": "F32" },
     { "t": 21, "type": "instruction", "text": "the common-envelope story is our formation narrative - write the formation section around it",
       "expect": "the CE direction is committed at the evidence grade F32 carries (moderate); prose does not outrun the maturity ladder" },
-    { "t": 22, "type": "distill" },
-    { "t": 23, "type": "clock", "advance_days": 4 },
-    { "t": 24, "type": "session_start", "anchor": "Q4" },
-    { "t": 25, "type": "finding", "ref": "F35" },
-    { "t": 26, "type": "finding", "ref": "F33" },
-    { "t": 27, "type": "finding", "ref": "F26" },
-    { "t": 28, "type": "finding", "ref": "F34" },
-    { "t": 29, "type": "finding", "ref": "F36" },
-    { "t": 30, "type": "finding", "ref": "F38" },
-    { "t": 31, "type": "distill" }
+    { "t": 22, "type": "gesture", "verb": "alternatives", "target": "F32" },
+    { "t": 23, "type": "distill" },
+    { "t": 24, "type": "clock", "advance_days": 4 },
+    { "t": 25, "type": "session_start", "anchor": "Q4" },
+    { "t": 26, "type": "finding", "ref": "F35" },
+    { "t": 27, "type": "finding", "ref": "F33" },
+    { "t": 28, "type": "finding", "ref": "F26" },
+    { "t": 29, "type": "finding", "ref": "F34" },
+    { "t": 30, "type": "finding", "ref": "F36" },
+    { "t": 31, "type": "finding", "ref": "F38" },
+    { "t": 32, "type": "distill" }
   ],
   "assertions": [
     { "at": "event:9..10", "kind": "provenance", "expect": "F10 overturns F07 with no prior warning in this ordering (F08 arrives after): the no-RV-variation reading is revised with provenance, and the archival-RV finding remains findable as superseded, not deleted" },
     { "at": "event:13..15", "kind": "provenance", "expect": "F12's supersession of F03 is handled as revise-and-tighten: the Gaia-only parameters (a0 3.00 mas, M2 12.8 Msun) are replaced by the joint values (2.67 mas, 9.62 Msun) with a provenance link, and no prose still cites the superseded numbers" },
-    { "at": "event:25", "kind": "structure", "expect": "F35's overturn of F32 interrupts (contradiction with committed prose, Class X): the CE-default section is revised via a dated addendum, and the original CE-default claim remains findable as superseded" },
-    { "at": "event:26..30", "kind": "provenance", "expect": "post-overturn findings F33/F34/F36/F38 absorb as corroboration and elaboration of the already-revised formation story, not as fresh contradictions; none of them silently rewrites ratified prose" },
-    { "at": "end", "kind": "consent", "expect": "every Class-2/3 structural change in the run has a matching ratification or visible expiry; the two prose revisions were ratified by the user, not auto-applied" },
+    { "at": "event:26", "kind": "structure", "expect": "F35's overturn of F32 interrupts (contradiction with committed prose, Class X): the CE-default section is revised via a dated addendum proposal, and the original CE-default claim remains findable as superseded" },
+    { "at": "event:26", "kind": "provenance", "expect": "the two overturn severities are handled differently: F12-over-F03 was absorbed as a Class-1/2 parameter revision with no interrupt and no addendum, while F35-over-F32 - contradicting explicitly committed prose - triggers the Class-X addendum path; a policy treating every overturns edge identically fails one of the two" },
+    { "at": "event:27..31", "kind": "provenance", "expect": "post-overturn findings F33/F34/F36/F38 absorb as corroboration and elaboration of the already-revised formation story, not as fresh contradictions; none of them silently rewrites ratified prose" },
+    { "at": "event:27..31", "kind": "plan", "expect": "the rival-hypotheses item compiled by the alternatives gesture on F32 (t=22) is discharged as the rival channels land (F36 single-star, F38 dynamical) - marked produced/absorbed, not dangling" },
+    { "at": "end", "kind": "consent", "expect": "every Class-2/3 structural change has a matching ratification or visible expiry; revisions to ratified prose arrived as addendum proposals and remain pending unless explicitly accepted - none were silently applied" },
     { "at": "end", "kind": "structure", "expect": "the Q4 section reads as CE-ruled-out with the revision chain (F32 committed, F35 overturning, F33/F34 corroborating) traversable from the current prose" }
   ]
 }

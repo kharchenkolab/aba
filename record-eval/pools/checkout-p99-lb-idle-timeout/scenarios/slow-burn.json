@@ -2,7 +2,7 @@
   "id": "slow-burn",
   "pool": "checkout-p99-lb-idle-timeout",
   "stresses": "promotion timing: the mechanism direction accumulates one finding per sitting; when does it earn a section",
-  "description": "The connection-lifecycle mechanism assembles one rung per sitting: quantized spans (F14), the small-n idle pattern (F17, deliberately weak), the packet capture (F19), counter-scale confirmation (F21/F22), the change record (F24), and the lab repro (F26). The direction must not earn a section on the weak F17 hint, must earn one in the window where hard evidence lands (F19-F24), and the corroborate gesture on F17 must compile a typed item that F22 later discharges.",
+  "description": "The connection-lifecycle mechanism assembles one rung per sitting: quantized spans (F14), the small-n idle pattern (F17, deliberately weak), the packet capture (F19), counter-scale confirmation (F21/F22), the change record (F24), and the lab repro (F26). The direction must not earn a section on the weak F17 hint, must earn one in the window where hard evidence lands (F19-F24), and the corroborate gesture on F17 must compile a typed item that F22 later discharges. Conventions: routine routing rows are accepted at each distill; decisions (claim drafts) are ratified only by explicit instruction events.",
   "events": [
     { "t": 1, "type": "session_start", "anchor": "Q1" },
     { "t": 2, "type": "finding", "ref": "F01" },
@@ -35,18 +35,20 @@
     { "t": 29, "type": "finding", "ref": "F20" },
     { "t": 30, "type": "finding", "ref": "F24" },
     { "t": 31, "type": "gesture", "verb": "draft_claim", "target": "F24" },
-    { "t": 32, "type": "distill" },
-    { "t": 33, "type": "clock", "advance_days": 1 },
-    { "t": 34, "type": "session_start", "anchor": "Q2" },
-    { "t": 35, "type": "finding", "ref": "F26" },
-    { "t": 36, "type": "distill" }
+    { "t": 32, "type": "instruction", "text": "that is the root cause - accept the claim",
+      "expect": "the F24 causal claim is ratified into Q2 prose carrying its evidence chain" },
+    { "t": 33, "type": "distill" },
+    { "t": 34, "type": "clock", "advance_days": 1 },
+    { "t": 35, "type": "session_start", "anchor": "Q2" },
+    { "t": 36, "type": "finding", "ref": "F26" },
+    { "t": 37, "type": "distill" }
   ],
   "assertions": [
     { "at": "event:13..16", "kind": "structure", "expect": "after F17 the idle-connection direction holds at most a trail or note - a weak n=9 manual join does not earn a section, and no claim derived from it advances past conjecture while the check item is open" },
     { "at": "event:14..15", "kind": "plan", "expect": "the check and corroborate gestures compile two distinct typed planned items (is-it-sound vs independent-evidence) under Q2, and F17 is marked provisional pending both" },
-    { "at": "event:18..32", "kind": "structure", "expect": "the mechanism direction is promoted to a full section exactly once, within this window (tcpdump through change record), not before event 18 and not after event 32" },
-    { "at": "event:22..24", "kind": "plan", "expect": "F22's counter-scale idle-age split discharges the corroborate item on F17 (produced/absorbed), lifting F17's provisional mark" },
-    { "at": "end", "kind": "provenance", "expect": "the ratified causal claim (from F24's draft) carries its evidence chain: spans, idle pattern, packet capture, counter data, change record - each one step away" },
+    { "at": "event:18..33", "kind": "structure", "expect": "the mechanism direction's promotion to a full section is proposed exactly once, within the tcpdump-through-change-record window (events 18..32), and ratified no later than the t=33 distill - neither proposed before event 18 nor still unproposed after event 32" },
+    { "at": "event:22..24", "kind": "plan", "expect": "F22's counter-scale idle-age split discharges BOTH scrutiny items on F17 - the independent-method corroboration, and the soundness check which it subsumes by superseding the n=9 manual join at counter scale - lifting F17's provisional mark" },
+    { "at": "end", "kind": "provenance", "expect": "the causal claim ratified at t=32 carries its evidence chain: spans, idle pattern, packet capture, counter data, change record - each one step away" },
     { "at": "end", "kind": "structure", "expect": "outline depth is at most 3 and no rendered section holds fewer than 2 findings except floor-converted or intent-born stubs" }
   ]
 }

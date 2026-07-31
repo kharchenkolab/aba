@@ -1,8 +1,8 @@
 {
   "id": "absence",
   "pool": "gaia-bh1",
-  "stresses": "a 3+ week gap: re-entry briefing; structure held; timers paused",
-  "description": "The scientist confirms the black hole, files the X-ray/radio checks, and disappears for 24 days (observing run). On return, orientation must be a consequence-ranked briefing rather than an activity diff, the document must be structurally exactly as left (Class-2 expiry timers paused), and the formation work then resumes cleanly from the held plan.",
+  "stresses": "a 3+ week gap: re-entry briefing; structure held; timers paused; fast clock runs while governance freezes",
+  "description": "Before leaving for a 24-day observing run, the scientist declares the formation direction (stub + plan) and asks for a tidy-up that provokes a Class-2 merge proposal - which must then sit pending, unexpired, through the whole gap. During the absence the machine keeps working: a robustness re-fit (F16) and the archival X-ray/radio checks (F27, F28) land in the sediment with no sitting. Re-entry must brief by consequence (the science that changed, the pending decision), structure must be exactly as left, and the formation sitting must resume from the held plan.",
   "events": [
     { "t": 1, "type": "session_start", "anchor": "Q1" },
     { "t": 2, "type": "finding", "ref": "F01" },
@@ -13,15 +13,17 @@
     { "t": 7, "type": "finding", "ref": "F11" },
     { "t": 8, "type": "finding", "ref": "F12" },
     { "t": 9, "type": "gesture", "verb": "pin", "target": "F12" },
-    { "t": 10, "type": "distill" },
-    { "t": 11, "type": "clock", "advance_days": 2 },
-    { "t": 12, "type": "session_start", "anchor": "Q1" },
-    { "t": 13, "type": "finding", "ref": "F16" },
-    { "t": 14, "type": "finding", "ref": "F27" },
-    { "t": 15, "type": "finding", "ref": "F28" },
-    { "t": 16, "type": "gesture", "verb": "plan", "target": "F28" },
-    { "t": 17, "type": "distill" },
-    { "t": 18, "type": "clock", "advance_days": 24 },
+    { "t": 10, "type": "instruction", "text": "before I disappear: formation is the next front - set up that section with the analyses we discussed (progenitor constraints, kinematics, channel modeling)",
+      "expect": "a Q4 stub is born whose content is the plan: three named planned analyses, no prose; the intent is recorded with standing pre-consent for that direction" },
+    { "t": 11, "type": "instruction", "text": "also, the confirmation prose is sprawling - see about merging the RV and astrometry subsections",
+      "expect": "the agent proposes a Class-2 section merge; the proposal sits pending in the tray at departure, unratified" },
+    { "t": 12, "type": "distill" },
+    { "t": 13, "type": "clock", "advance_days": 9 },
+    { "t": 14, "type": "finding", "ref": "F16" },
+    { "t": 15, "type": "finding", "ref": "F27" },
+    { "t": 16, "type": "clock", "advance_days": 8 },
+    { "t": 17, "type": "finding", "ref": "F28" },
+    { "t": 18, "type": "clock", "advance_days": 7 },
     { "t": 19, "type": "session_start", "anchor": "Q4" },
     { "t": 20, "type": "finding", "ref": "F18" },
     { "t": 21, "type": "finding", "ref": "F20" },
@@ -31,10 +33,11 @@
     { "t": 25, "type": "distill" }
   ],
   "assertions": [
-    { "at": "event:19", "kind": "structure", "expect": "re-entry after 24 days opens with a briefing: authored prose ranked by consequence to the science (the confirmed 9.62 Msun mass and its open formation question lead), scaled to time away - not a raw activity feed or unread-items dump" },
-    { "at": "event:19", "kind": "consent", "expect": "Class-2 proposals pending at departure did not expire during the gap - their timers paused - and the held stack is finite and presented for decision, with nothing auto-applied above Class 1 while away" },
-    { "at": "event:19", "kind": "structure", "expect": "the document's structure is exactly as left before the gap: no section was promoted, demoted, split, or archived during the absence" },
-    { "at": "event:20..25", "kind": "plan", "expect": "the planned item registered before the gap (from the plan gesture on F28) is still present and resumable; formation work resumes by taking up plan items rather than re-deriving context" },
-    { "at": "end", "kind": "provenance", "expect": "the work record shows the 24-day gap honestly (no fabricated activity), and the resumed sitting carries a chain edge to the pre-gap episode" }
+    { "at": "event:14..17", "kind": "structure", "expect": "the mid-gap landings (F16, F27, F28) accrete into the sediment and refresh numbers at Class 0/1 only - no draft prose is pushed into the story, and nothing above Class 1 is applied while the scientist is away" },
+    { "at": "event:19", "kind": "structure", "expect": "re-entry after 24 days opens with a briefing: authored, past-tense, ranked by consequence to the science - the robustness confirmation and the expected-quiescence checks lead, the pending merge decision is flagged - scaled to time away, not an activity feed" },
+    { "at": "event:19", "kind": "consent", "expect": "the Class-2 merge proposal from t=11 is still pending and unexpired on return - its ~14-day expiry timer paused across the 24-day gap - and it is decided in the tray, not auto-applied" },
+    { "at": "event:19", "kind": "structure", "expect": "the record's structure is exactly as left at departure: the merge was not applied, and no promotion, demotion, split, or archive happened during the absence" },
+    { "at": "event:20..25", "kind": "plan", "expect": "the formation sitting takes up the planned analyses declared at t=10: items transition planned to taken-up to produced as F26 (kinematics) and F32 (progenitor constraints) land, with the channel-modeling item still open at the end" },
+    { "at": "end", "kind": "provenance", "expect": "the work record shows the gap honestly: three sediment landings with no sitting marks inside a 24-day stretch of no attention, and the post-gap sitting findable from every section it touched" }
   ]
 }

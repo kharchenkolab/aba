@@ -37,7 +37,9 @@
   "assertions": [
     { "at": "event:8", "kind": "plan", "expect": "the check gesture on F03 compiles a typed is-it-sound planned item under Q1 (spurious-solution worry), marks F03 provisional pending scrutiny, and executes nothing" },
     { "at": "event:15..20", "kind": "structure", "expect": "the two same-day micro-bursts on Q1 (t=15 and t=17) coalesce into one episode in the work record; opening the second sitting parked the first automatically (one live sitting per scientist)" },
-    { "at": "event:21..22", "kind": "consent", "expect": "the draft_claim on F12 produces an inbox draft that is still pending at scenario end - it is never auto-ratified no matter how long it waits" },
+    { "at": "event:21..22", "kind": "consent", "expect": "the draft_claim on F12 produces an inbox draft" },
+    { "at": "event:21..22", "kind": "salience", "expect": "the F12 claim draft carries the provisional flag inherited from F03's still-open check item - a claim resting on a provisional target does not advance the maturity ladder until the scrutiny lands" },
+    { "at": "end", "kind": "consent", "expect": "the F12 claim draft is still pending at scenario end - decisions are never auto-ratified no matter how long they wait" },
     { "at": "end", "kind": "routing", "expect": "gesture-prefilled routing rows (pin F02, check F03, fade F43, expand F39) are settled in the tray by place, not per-episode - no sitting accumulated its own review debt, and sittings that left no residue filed silently" },
     { "at": "end", "kind": "structure", "expect": "the held excerpt (F04) evaporated when its sitting was parked/superseded; the pinned F02 is filed and can never fade; faded F43 is findable but not carried" },
     { "at": "end", "kind": "salience", "expect": "the expand gesture on F39 birthed or fed an intent-marked Q5 stub with a plan, without any Q5 prose being written on one finding's evidence" }

@@ -21,8 +21,8 @@
     { "t": 15, "type": "session_start", "anchor": "Q3" },
     { "t": 16, "type": "finding", "ref": "F06" },
     { "t": 17, "type": "finding", "ref": "F23" },
-    { "t": 18, "type": "finding", "ref": "F25" },
-    { "t": 19, "type": "gesture", "verb": "corroborate", "target": "F23" },
+    { "t": 18, "type": "gesture", "verb": "corroborate", "target": "F23" },
+    { "t": 19, "type": "finding", "ref": "F25" },
     { "t": 20, "type": "session_start", "anchor": "Q2" },
     { "t": 21, "type": "finding", "ref": "F14" },
     { "t": 22, "type": "finding", "ref": "F15" },
@@ -43,9 +43,9 @@
   "assertions": [
     { "at": "event:21..23", "kind": "routing", "expect": "F14 (emitted in a Q2-anchored sitting, tagged Q1 and Q3) is cited under both the Q1 and Q3 sections as live references to one entity - no copies, and no citation under Q2 merely because of the anchor" },
     { "at": "event:26..28", "kind": "routing", "expect": "F20 (tagged Q2, Q3, Q4) is reachable from all three sections; the Q4 citation notes its formation relevance (no mass transfer) distinctly from its Q3 imposter-check role" },
-    { "at": "event:15..19", "kind": "consent", "expect": "cross-anchor placements (e.g. F25's Q3 content arriving while F18's Q2 characterization is cited) are visible proposals or receipts - out-of-anchor writes are never silent" },
+    { "at": "event:15..19", "kind": "consent", "expect": "cross-anchor placements - e.g. F23 (tagged Q1 and Q3), emitted in this Q3-anchored sitting, landing its imposter-check content under Q1 - are visible proposals or receipts; out-of-anchor writes are never silent" },
     { "at": "end", "kind": "structure", "expect": "Q2, Q3, Q4 and Q5 sections have each developed in parallel; no section's prose duplicates another's account of a shared finding" },
     { "at": "end", "kind": "routing", "expect": "every finding is reachable from every question it bears on, and from the sitting that produced it (the touched-set index)" },
-    { "at": "end", "kind": "plan", "expect": "the corroborate gesture on F23 exists as a typed planned item and is marked produced/absorbed once F24 (the flux-ratio exclusion) lands" }
+    { "at": "end", "kind": "plan", "expect": "the corroborate item on F23 is discharged (produced/absorbed) as independent lines of evidence land: the photometric surface-gravity check F25 in the same sitting and the flux-ratio exclusion F24 later" }
   ]
 }

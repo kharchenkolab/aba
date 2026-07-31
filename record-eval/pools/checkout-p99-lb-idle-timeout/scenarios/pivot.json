@@ -2,7 +2,7 @@
   "id": "pivot",
   "pool": "checkout-p99-lb-idle-timeout",
   "stresses": "direction change mid-project: demotion/appendixing of the old arc; Class-3 consent",
-  "description": "The pricing-blame arc is deliberately allowed to earn real structure: the scientist commits the direction, pins the rollback result, and drafts the causal claim. Then the relapse and the two overturns land in one sitting, and the committed direction must be demoted - with explicit Class-3 consent, with the pricing material surviving as findable history, and with the new causal chain citing the overturning evidence. Convention: overturns supersede the claims' face-value readings; artifacts derived from them keep revised citations.",
+  "description": "The pricing-blame arc is deliberately allowed to earn real structure: the scientist commits the direction, pins the rollback result, and drafts the causal claim. Then the relapse and the two overturns land in one sitting and the committed direction must be demoted - proposed as Class-3, applied only at the explicit consent granted afterward, with the pricing material surviving as findable history and the redirected narrative citing the overturning evidence. Conventions: routine routing rows are accepted at each distill (veto-tier); decisions - claim drafts, addenda, Class-3 changes - are ratified only by explicit instruction events. A same-sitting demotion proposal is consistent with the §14.2 hysteresis rule because a controlled overturn (F16) is decisive evidence, not optimizer noise. Overturns supersede the claims' face-value readings; artifacts derived from them keep revised citations.",
   "events": [
     { "t": 1, "type": "session_start", "anchor": "Q1" },
     { "t": 2, "type": "finding", "ref": "F01" },
@@ -36,14 +36,16 @@
     { "t": 29, "type": "finding", "ref": "F14" },
     { "t": 30, "type": "finding", "ref": "F15" },
     { "t": 31, "type": "finding", "ref": "F16" },
-    { "t": 32, "type": "distill" }
+    { "t": 32, "type": "instruction", "text": "agreed - the pricing attribution is dead; move the pricing story to an appendix and keep the exoneration linked",
+      "expect": "explicit Class-3 consent: the demotion/appendixing proposal is ratified and applied; the pricing material archives with its evidence and provenance links intact" },
+    { "t": 33, "type": "distill" }
   ],
   "assertions": [
     { "at": "event:18..25", "kind": "structure", "expect": "after the commitment instruction and the pinned/drafted F10, the pricing direction holds a real committed section under Q2 with a pending causal-claim draft - structure exists that the overturns will have to demote" },
-    { "at": "event:28..31", "kind": "provenance", "expect": "F15 and F16 revise the record with provenance: F10's false-fix claim and F05's attribution are marked superseded with links to the overturning evidence, and the pending causal-claim draft from t=24 is withdrawn or re-graded, never silently dropped" },
-    { "at": "event:28..32", "kind": "consent", "expect": "demoting/appendixing the committed pricing section is proposed as a Class-3 change requiring explicit consent - it is never applied silently, and it waits indefinitely if unratified" },
-    { "at": "end", "kind": "structure", "expect": "the pricing arc survives as findable history (appendixed or archived with its evidence), not deleted; the +40 ms pricing regression itself remains recorded as real-but-benign" },
-    { "at": "end", "kind": "provenance", "expect": "the current causal narrative cites F15/F16 as the evidence that redirected the investigation, and walking from the demoted section to the overturning findings takes one step" },
+    { "at": "event:30..31", "kind": "provenance", "expect": "F15 and F16 revise the record with provenance: F10's false-fix claim and F05's attribution are marked superseded with links to the overturning evidence, and the still-pending causal-claim draft from t=24 is withdrawn or re-graded, never silently dropped" },
+    { "at": "event:30..33", "kind": "consent", "expect": "demoting/appendixing the committed pricing section is proposed as a Class-3 change and applied only at the explicit consent of t=32 - never silently, and it would have waited indefinitely unratified" },
+    { "at": "end", "kind": "structure", "expect": "per the ratified Class-3 change, the pricing arc is appendixed/archived with its evidence - findable, not deleted - and the +40 ms pricing regression itself remains recorded as real-but-benign" },
+    { "at": "end", "kind": "provenance", "expect": "the redirected narrative cites F15/F16 as the evidence that killed the attribution, and walking from the appendixed section to the overturning findings takes one step" },
     { "at": "end", "kind": "salience", "expect": "no prose anywhere still asserts the pricing attribution at face value; its remaining mentions are past-tense, provenance-linked history" }
   ]
 }

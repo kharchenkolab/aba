@@ -2,7 +2,7 @@
   "id": "flood",
   "pool": "gaia-bh1",
   "stresses": "triage bounds: one sitting emits 10 findings; tray depth stays sane",
-  "description": "The characterization-and-alternatives blitz: after the orbit is secure, a single marathon sitting emits the full stellar characterization and imposter-exclusion battery (F18-F25) plus two tangential drive-bys on other teams' candidates (F43, F44). Triage must stay bounded - routine drafts batchable, decisions one-by-one, tangentials routed to notes, and the leftovers shelf catching what nobody routed - and narrative growth must stay far below finding count (prolific/rare asymmetry).",
+  "description": "The characterization-and-alternatives blitz: after the orbit is secure, a single marathon sitting emits the full stellar characterization and imposter-exclusion battery (F18-F25) plus two tangential drive-bys on other teams' candidates (F43, F44). Triage must stay bounded - routine drafts batchable, decisions one-by-one, tangentials routed to notes, and the leftovers shelf catching what nobody routed - and narrative growth must stay far below finding count (prolific/rare asymmetry) without dropping to zero. Scenario end implies attention lapse: the marathon sitting parks and files, which is what clears the held excerpt.",
   "events": [
     { "t": 1, "type": "session_start", "anchor": "Q1" },
     { "t": 2, "type": "finding", "ref": "F01" },
@@ -45,11 +45,12 @@
     { "t": 39, "type": "distill" }
   ],
   "assertions": [
-    { "at": "event:25..31", "kind": "structure", "expect": "mid-flood, the pending tray holds a bounded, triaged set: routine note/fragment drafts are batchable in one act, while claim-grade decisions (e.g. from F24) are listed one-by-one - the tray never renders 10 undifferentiated items" },
+    { "at": "event:25..31", "kind": "structure", "expect": "mid-flood, the pending tray is non-empty and triaged: routine note/fragment drafts from F18-F22 are present and batchable in one act, while claim-grade decisions (e.g. F18's adopted stellar parameters) are listed one-by-one - the tray never renders 10 undifferentiated items and is never empty" },
     { "at": "event:31", "kind": "structure", "expect": "the mid-sitting distill-so-far produces a routing table for the five findings landed so far without closing the session, and the session continues accreting afterward" },
     { "at": "event:36..39", "kind": "routing", "expect": "the tangentials F43/F44 route to notes/sediment, not into any question section; faded F43 stops being carried forward but remains findable; unfaded F44's destination is an agent proposal, not silence" },
     { "at": "end", "kind": "structure", "expect": "the sitting's 10 findings produce at most 2-3 narrative-level changes; everything else lands as sediment, notes, or drafts - narrative growth tracks insight rate, not output rate" },
-    { "at": "end", "kind": "provenance", "expect": "artifacts produced in the flood sitting that were never pinned, noted, or discussed appear on the leftovers shelf, findable for late review" },
+    { "at": "end", "kind": "structure", "expect": "at least one claim-grade draft from the flood sitting exists, pending or ratified (F24's luminous-companion exclusion or F18's adopted parameters) - an inert never-draft policy fails this" },
+    { "at": "end", "kind": "provenance", "expect": "flood artifacts that were never pinned or routed (at minimum, output artifacts of F19, F21, F22) appear on the leftovers shelf, findable for late review" },
     { "at": "end", "kind": "consent", "expect": "the held excerpt (F20) evaporated at session close without entering the record; nothing from the flood was ratified without a user act" }
   ]
 }
