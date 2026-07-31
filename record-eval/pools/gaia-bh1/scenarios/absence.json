@@ -1,0 +1,40 @@
+{
+  "id": "absence",
+  "pool": "gaia-bh1",
+  "stresses": "a 3+ week gap: re-entry briefing; structure held; timers paused",
+  "description": "The scientist confirms the black hole, files the X-ray/radio checks, and disappears for 24 days (observing run). On return, orientation must be a consequence-ranked briefing rather than an activity diff, the document must be structurally exactly as left (Class-2 expiry timers paused), and the formation work then resumes cleanly from the held plan.",
+  "events": [
+    { "t": 1, "type": "session_start", "anchor": "Q1" },
+    { "t": 2, "type": "finding", "ref": "F01" },
+    { "t": 3, "type": "finding", "ref": "F02" },
+    { "t": 4, "type": "finding", "ref": "F03" },
+    { "t": 5, "type": "finding", "ref": "F07" },
+    { "t": 6, "type": "finding", "ref": "F10" },
+    { "t": 7, "type": "finding", "ref": "F11" },
+    { "t": 8, "type": "finding", "ref": "F12" },
+    { "t": 9, "type": "gesture", "verb": "pin", "target": "F12" },
+    { "t": 10, "type": "distill" },
+    { "t": 11, "type": "clock", "advance_days": 2 },
+    { "t": 12, "type": "session_start", "anchor": "Q1" },
+    { "t": 13, "type": "finding", "ref": "F16" },
+    { "t": 14, "type": "finding", "ref": "F27" },
+    { "t": 15, "type": "finding", "ref": "F28" },
+    { "t": 16, "type": "gesture", "verb": "plan", "target": "F28" },
+    { "t": 17, "type": "distill" },
+    { "t": 18, "type": "clock", "advance_days": 24 },
+    { "t": 19, "type": "session_start", "anchor": "Q4" },
+    { "t": 20, "type": "finding", "ref": "F18" },
+    { "t": 21, "type": "finding", "ref": "F20" },
+    { "t": 22, "type": "finding", "ref": "F26" },
+    { "t": 23, "type": "finding", "ref": "F32" },
+    { "t": 24, "type": "finding", "ref": "F33" },
+    { "t": 25, "type": "distill" }
+  ],
+  "assertions": [
+    { "at": "event:19", "kind": "structure", "expect": "re-entry after 24 days opens with a briefing: authored prose ranked by consequence to the science (the confirmed 9.62 Msun mass and its open formation question lead), scaled to time away - not a raw activity feed or unread-items dump" },
+    { "at": "event:19", "kind": "consent", "expect": "Class-2 proposals pending at departure did not expire during the gap - their timers paused - and the held stack is finite and presented for decision, with nothing auto-applied above Class 1 while away" },
+    { "at": "event:19", "kind": "structure", "expect": "the document's structure is exactly as left before the gap: no section was promoted, demoted, split, or archived during the absence" },
+    { "at": "event:20..25", "kind": "plan", "expect": "the planned item registered before the gap (from the plan gesture on F28) is still present and resumable; formation work resumes by taking up plan items rather than re-deriving context" },
+    { "at": "end", "kind": "provenance", "expect": "the work record shows the 24-day gap honestly (no fabricated activity), and the resumed sitting carries a chain edge to the pre-gap episode" }
+  ]
+}
