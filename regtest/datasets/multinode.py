@@ -302,7 +302,6 @@ def mn_hop_chain(client, pid, tid):
     ]
 
 
-@scenario("mn_status_surfaces")
 def _resolves_by_name(client, pid, name):
     """Does a SECOND door find this output by bare name? Independent evidence
     from the entity-graph walk that located it: the search tier is what a later
@@ -321,6 +320,7 @@ def _resolves_by_name(client, pid, name):
         return False
 
 
+@scenario("mn_status_surfaces")
 def mn_status_surfaces(client, pid, tid):
     """(iii) After a remote run produces a LARGE output that STAYS on the node
     (small outputs auto-come-home by design), the SURFACES the cards render
@@ -520,6 +520,293 @@ def mn_crash_fix_rerun(client, pid, tid):
         ("correct sum reported", str(total) in full),
     ]
 
+
+
+# ── restart survival: an OnDemand session's walltime expires ─────────────────
+#
+# THE QUESTION. On OnDemand the whole allocation goes when walltime expires —
+# controller, node, everything. Work already dispatched to the CLUSTER must
+# outlive that, and the next session must pick up its results. These three cases
+# ask whether ABA's bookkeeping actually delivers that, and whether a job that
+# FAILED while nobody was watching keeps its real cause.
+#
+# Prescribing the mechanism is correct here: what is under test is ABA's
+# bookkeeping, not the agent's judgement. So the jobs are submitted through the
+# same entry point guide.py uses, and the "outage" is the absence of a poll pass
+# between submit and reconcile — which is exactly what a dead controller is,
+# from the row's point of view.
+#
+# ARMING is the whole game. Each case proves its own precondition or refuses to
+# grade: an earlier run showed four green downstream checks that were quietly
+# exercising the LOCAL lane. Where the substrate's terminal state disagrees with
+# what the case set up, the verdict is SETUP INVALID rather than a pass or a
+# fail — a real run died on env.realize_failed, a true failure but not the
+# scripted one, and grading the harvest on it would have been meaningless.
+
+REAP_NOTE = "backend restarted while job was running — orphaned"
+
+
+def _jparams(row: dict) -> dict:
+    """A job row's params as a dict, whatever the caller handed us.
+
+    /api/jobs returns params ALREADY PARSED (graph/jobs.py _row_to_job) while the
+    sqlite column is text. json.loads on the dict raises TypeError, and swallowing
+    that yields {} — which reads as "not a cluster job" and silently skips the
+    test. Both shapes, explicitly.
+    """
+    p = row.get("params")
+    if isinstance(p, dict):
+        return p
+    if isinstance(p, str) and p.strip():
+        try:
+            return json.loads(p) or {}
+        except Exception:  # noqa: BLE001
+            return {}
+    return {}
+
+
+def _is_detached_hpc(row: dict) -> bool:
+    """Is this row on the DETACHED cluster lane, not the local one?
+
+    Both lanes stamp submitter='weft', so that field cannot discriminate. ABA
+    stores no raw Slurm id either, so squeue -j / sacct -j are not available.
+    The site is the discriminator.
+    """
+    p = _jparams(row)
+    site = p.get("weft_site") or p.get("site")
+    return p.get("submitter") == "weft" and bool(site) and site != "local"
+
+
+def _task_state(row: dict) -> str:
+    """The SUBSTRATE's state for this row's task, or "" when unknowable.
+
+    Unknown states are treated as LIVE by _armed_live below: mistaking LIVE for
+    terminal invalidates the case, while mistaking terminal for LIVE only costs
+    a wait. RESOLVING_ENV is the one that catches people out.
+
+    NOTE `info()` answers "unsubmitted" when the row has no weft_id. That is NOT
+    live — nothing was ever dispatched — but it is not terminal either, so a
+    naive `not terminal` test would arm the midflight case on a job that never
+    reached the cluster. Hence _armed_live, not a bare negation.
+    """
+    from core.jobs.weft_submitter import WeftSubmitter
+    try:
+        return str((WeftSubmitter().info(row) or {}).get("state") or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _armed_live(row: dict) -> bool:
+    """Is there genuinely a LIVE task on the cluster to protect?"""
+    if not _jparams(row).get("weft_id"):
+        return False                      # never dispatched — nothing to survive
+    state = _task_state(row)
+    return bool(state) and state != "unsubmitted" and not _is_terminal(state)
+
+
+def _is_terminal(state: str) -> bool:
+    from core.jobs.weft_submitter import _TERMINAL   # DONE / FAILED / CANCELLED
+    return state in _TERMINAL
+
+
+def _submit_hpc_bg(pid: str, tid: str, code: str, title: str):
+    """One background job on the cluster fixture, via the entry guide.py calls.
+
+    Returns `(job | None, error_text)`. A submit that DIES (env.realize_failed on
+    a cold fixture, say) is a true failure but not the scripted one — the caller
+    reports SETUP INVALID rather than letting a traceback read as a product
+    verdict.
+    """
+    from core.jobs.submit import submit_python_job
+    try:
+        job = submit_python_job(code=code, title=title, focus_entity_id=None,
+                                timeout_s=600, project_id=pid, thread_id=tid,
+                                site="hpc")
+        return job, ""
+    except Exception as e:  # noqa: BLE001
+        return None, f"{type(e).__name__}: {e}"
+
+
+def _row_now(job_id: str) -> dict:
+    from core.graph.jobs import get_job
+    return get_job(job_id) or {}
+
+
+def _await_substrate(job_id: str, *, want_terminal: bool, budget_s: int = 420) -> str:
+    """Poll the SUBSTRATE (never aba's row) until it is terminal / observed live.
+
+    This is the arming step for the finished_* cases: the job must genuinely have
+    ended while nobody was watching, or the harvest assertion downstream proves
+    nothing. Deliberately does NOT touch aba's row — polling it here would be the
+    very finalization the outage is supposed to withhold.
+    """
+    end = time.time() + budget_s
+    state = ""
+    while time.time() < end:
+        state = _task_state(_row_now(job_id))
+        if want_terminal and _is_terminal(state):
+            return state
+        if not want_terminal and _armed_live(_row_now(job_id)):
+            return state
+        time.sleep(5)
+    return state
+
+
+def _restart_controller() -> dict:
+    """The restart path itself. In-process, a dead controller IS 'no poll pass
+    happened, then reconcile_jobs() ran at boot' — which is the code under test.
+    (restart_study.py covers the real kill -9 on the LOCAL lane; what is
+    unverified anywhere is that a genuine OnDemand walltime expiry behaves like
+    that kill, which needs the real cluster.)"""
+    from core.jobs.runner import reconcile_jobs
+    return reconcile_jobs()
+
+
+def _poll_and_finalize(job_id: str) -> None:
+    """One pass of the weft poll loop over this row — the next session adopting
+    the task and finalizing from the substrate's durable state."""
+    import asyncio
+    from core.jobs import runner as _r
+    from core.jobs.weft_submitter import WeftSubmitter
+    sub = WeftSubmitter()
+
+    async def go():
+        for job in _r._active_weft_jobs():
+            if job.get("id") != job_id:
+                continue
+            result = sub.poll(job)
+            if result is not None:
+                await _r._finalize_job(job, result, job.get("project_id"),
+                                       str(job.get("project_id") or "default"))
+
+    asyncio.run(go())
+
+
+def _reaped_as_orphan(row: dict) -> bool:
+    return REAP_NOTE in str(row.get("error") or "")
+
+
+@scenario("mn_restart_midflight")
+def mn_restart_midflight(client, pid, tid):
+    """The allocation dies while the cluster job is still RUNNING.
+
+    reconcile must not reap a row whose task is alive — reaping it would mark a
+    live job failed and destroy the continuation the next session is owed.
+    """
+    job, err = _submit_hpc_bg(pid, tid, "import time\nprint('start', flush=True)\n"
+                                        "time.sleep(240)\nprint('done')",
+                              "restart-midflight")
+    if job is None:
+        return [], [(f"SETUP INVALID — submit to hpc died: {err}", False)]
+    jid = job["id"]
+    checks = [("submitted on the DETACHED cluster lane, not local",
+               _is_detached_hpc(_row_now(jid)))]
+
+    # ARM: the task must be observed ALIVE substrate-side, or "not reaped"
+    # below is a statement about nothing.
+    live_state = _await_substrate(jid, want_terminal=False, budget_s=300)
+    alive = _armed_live(_row_now(jid))
+    checks.append((f"task is LIVE substrate-side after the outage ({live_state or 'unknown'})",
+                   alive))
+    if not alive:
+        checks.append(("SETUP INVALID — no live task to protect; verdict not graded",
+                       False))
+        return [], checks
+
+    stats = _restart_controller()
+    row = _row_now(jid)
+    checks += [
+        ("reconcile ran", isinstance(stats, dict)),
+        ("row was NOT reaped as an orphan", not _reaped_as_orphan(row)),
+        ("row did NOT go to failed", row.get("status") != "failed"),
+        ("task is STILL live after reconcile",
+         not _is_terminal(_task_state(_row_now(jid)))),
+    ]
+    return [], checks
+
+
+@scenario("mn_restart_finished_ok")
+def mn_restart_finished_ok(client, pid, tid):
+    """The cluster job COMPLETES while the controller is gone.
+
+    The next session must harvest a job it never saw terminate — that is the
+    whole promise of dispatching to the cluster from a walltime-limited session.
+    """
+    marker = "RESTART_OK_MARKER_7391"
+    job, err = _submit_hpc_bg(pid, tid, f"print('{marker}', flush=True)",
+                              "restart-finished-ok")
+    if job is None:
+        return [], [(f"SETUP INVALID — submit to hpc died: {err}", False)]
+    jid = job["id"]
+    checks = [("submitted on the DETACHED cluster lane, not local",
+               _is_detached_hpc(_row_now(jid)))]
+
+    state = _await_substrate(jid, want_terminal=True)
+    checks.append((f"task reached a terminal state unwatched ({state or 'unknown'})",
+                   _is_terminal(state)))
+    if state != "DONE":
+        # A true failure that is not the scripted one (env.realize_failed, say)
+        # must not be graded as a harvest verdict.
+        checks.append((f"SETUP INVALID — wanted DONE, substrate said {state or 'unknown'}",
+                       False))
+        return [], checks
+
+    _restart_controller()
+    row = _row_now(jid)
+    checks.append(("reconcile did NOT reap the finished job", not _reaped_as_orphan(row)))
+
+    _poll_and_finalize(jid)
+    row = _row_now(jid)
+    checks += [
+        ("the restarted controller HARVESTED it",
+         row.get("status") in ("done", "completed", "finished")),
+        ("no orphan note on a job that actually finished",
+         not _reaped_as_orphan(row)),
+    ]
+    return [], checks
+
+
+@scenario("mn_restart_finished_fail")
+def mn_restart_finished_fail(client, pid, tid):
+    """The cluster job FAILS while the controller is gone.
+
+    THE defect this exists to catch: recording a genuinely-crashed job with
+    REAP_NOTE destroys the only copy of the reason. The row must carry the JOB's
+    cause, not the orphan note.
+    """
+    marker = "RESTART_FAIL_MARKER_4417"
+    job, err = _submit_hpc_bg(pid, tid,
+                              f"import sys\nprint('{marker}', flush=True)\n"
+                              f"sys.exit(3)",
+                              "restart-finished-fail")
+    if job is None:
+        return [], [(f"SETUP INVALID — submit to hpc died: {err}", False)]
+    jid = job["id"]
+    checks = [("submitted on the DETACHED cluster lane, not local",
+               _is_detached_hpc(_row_now(jid)))]
+
+    state = _await_substrate(jid, want_terminal=True)
+    checks.append((f"task reached a terminal state unwatched ({state or 'unknown'})",
+                   _is_terminal(state)))
+    if state not in ("DONE", "FAILED"):
+        checks.append((f"SETUP INVALID — wanted a finished task, substrate said "
+                       f"{state or 'unknown'}", False))
+        return [], checks
+
+    _restart_controller()
+    checks.append(("reconcile did NOT reap it", not _reaped_as_orphan(_row_now(jid))))
+
+    _poll_and_finalize(jid)
+    row = _row_now(jid)
+    err = str(row.get("error") or "")
+    checks += [
+        ("row is terminal after the restart",
+         row.get("status") in ("failed", "done", "completed", "finished")),
+        ("row does NOT carry the orphan note", not _reaped_as_orphan(row)),
+        ("row carries the JOB's own cause",
+         bool(err) and REAP_NOTE not in err),
+    ]
+    return [], checks
 
 @scenario("mn_fanout_gather")
 def mn_fanout_gather(client, pid, tid):
@@ -2338,6 +2625,9 @@ def main():
     scenarios = [(fn._scenario, fn) for fn in
                  [mn_size_up, mn_hop_chain, mn_status_surfaces, mn_honesty,
                   mn_isolated_env_remote, mn_crash_fix_rerun, mn_fanout_gather,
+                  # restart survival across an OnDemand walltime expiry
+                  mn_restart_midflight, mn_restart_finished_ok,
+                  mn_restart_finished_fail,
                   mn_pin_remote_result, mn_external_ref_inject,
                   mn_background_monitor, mn_provenance_after_chain,
                   mn_preflight_disconnect, mn_reference_drift,

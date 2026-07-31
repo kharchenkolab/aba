@@ -1097,6 +1097,13 @@ def _active_weft_jobs() -> list[dict]:
     return out
 
 
+def _projects_ctx_poll():
+    """core.projects, imported lazily — the poll loop is hot and this module is
+    imported very early."""
+    from core import projects as _p
+    return _p
+
+
 async def _weft_poll_loop() -> None:
     """Watch weft-submitted background jobs for completion (W2 — the local
     background lane). Started unconditionally; idles while the compute
@@ -1115,7 +1122,16 @@ async def _weft_poll_loop() -> None:
                     announced = True
                 for job in _active_weft_jobs():
                     pid = job.get("project_id")
-                    result = sub.poll(job)
+                    # OFF the loop. poll()'s fast substrate reads are safe on the
+                    # loop thread (adapter.sync_call is built for that), but its
+                    # lazy platform RE-LOCK is a solve, and named_envs._sync
+                    # refuses to run on the event loop by design — so that
+                    # recovery path could never fire in production. Found by
+                    # regtest mn_restart_finished_ok on the aarch64 fixture:
+                    # "platform re-lock failed: named_envs is sync-only", and the
+                    # job stayed FAILED on a mismatch it was supposed to heal.
+                    # in_thread also carries the project binding across the hop.
+                    result = await _projects_ctx_poll().in_thread(sub.poll, job)
                     if result is not None:
                         # Nextflow heads ride THIS lane now (§4a / nextflow→weft);
                         # auto-resume one Slurm killed (walltime/node-fail) before it
