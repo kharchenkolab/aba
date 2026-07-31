@@ -475,6 +475,14 @@ scrutiny rungs mirror the maturity glyphs: check guards ○, corroborate
 earns ◐→◕, alternatives is the road to ● — the gestures are the
 ladder's rungs, requested by hand.
 
+**Discharge is by evidence, not one-to-one.** A scrutiny item is
+discharged by whatever landing answers its question, and one landing may
+discharge several at once when it dominates them — an independent
+measurement that corroborates a result also settles the pending
+soundness check on it. Subsumption is proposed, never silent: the
+landing's routing row names every item it closes, and the provisional
+marks clear only when that row is accepted.
+
 Three disciplines make the vocabulary safe:
 
 1. **Receipts.** Every gesture leaves a chip on the message — "pinned
@@ -896,6 +904,12 @@ propose(change)  iff  Δutility − λ·disruption > θ   for N consecutive cycl
   the structure and the next flip it back.
 - A **structural budget** caps reader-visible reorganisation per cycle
   regardless of how much the optimiser wants.
+- **Decisive evidence bypasses the wait, not the ceremony.** Hysteresis
+  guards against optimiser noise; a controlled overturn — a result that
+  directly refutes a section's premise — is not noise, and may raise its
+  structural proposal the same cycle it lands. What protects the
+  scientist there is the consent class, not the waiting period: the
+  proposal still arrives classed, priced, and consented like any other.
 
 Structure proposals batch into one **restructuring proposal** reviewed in
 one sitting, each item carrying the *why in evidence terms* ("F-0441
