@@ -16,24 +16,40 @@ Roles (all optional — an unregistered role simply yields empty lists):
 """
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Optional, Sequence
 
+from core.graph.audit import list_events
 from core.graph.entities import find_entities
 from core.graph.edges import edges_from, edges_to
+from core.graph.proposals_store import list_proposals
 from core.graph.runs_port import list_runs
 
 _ROLES: dict[str, str] = {}
 _MATURITY: tuple[str, ...] = ()
+_ARTIFACT_TYPES: tuple[str, ...] = ()
+
+#: A sitting ends when attention moves — operationally, when the next run on
+#: the same thread starts more than this many minutes after the last one.
+SITTING_GAP_MINUTES = 45
+
+#: An artifact is a leftover when nothing carries it: no includes/supports
+#: edge in either direction and it isn't pinned (§13.1's edge-complement).
+_CARRY_RELS = ("includes", "supports")
 
 
 def register_record_roles(roles: dict[str, str],
-                          maturity_order: Sequence[str] = ()) -> None:
+                          maturity_order: Sequence[str] = (),
+                          artifact_types: Sequence[str] = ()) -> None:
     """Content-pack registration: map Record roles to this pack's entity-type
-    names, and order the claim-status ladder (index = maturity rung).
-    Re-registration replaces (same semantics as the type registry)."""
-    global _ROLES, _MATURITY
+    names, order the claim-status ladder (index = maturity rung), and name
+    the artifact types the leftovers shelf sweeps (the pack typically derives
+    these from its registry's `is_artifact` capability). Re-registration
+    replaces (same semantics as the type registry)."""
+    global _ROLES, _MATURITY, _ARTIFACT_TYPES
     _ROLES = dict(roles)
     _MATURITY = tuple(maturity_order)
+    _ARTIFACT_TYPES = tuple(artifact_types)
 
 
 def record_roles() -> dict[str, str]:
@@ -87,6 +103,78 @@ def _question_ref(e: dict, question_ids: set[str]) -> list[str]:
     return refs
 
 
+def _parse_ts(s: Optional[str]) -> Optional[datetime]:
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def derive_sittings(runs: list[dict],
+                    gap_minutes: int = SITTING_GAP_MINUTES) -> list[dict]:
+    """Cluster a project's runs into sittings — bounded episodes of work.
+
+    Pure function over run rows (oldest first, as list_runs returns them).
+    Per thread: a run starting more than `gap_minutes` after the previous
+    run's last timestamp opens a new sitting; anything closer coalesces
+    (micro-bursts are one episode). Runs with no thread are background
+    landings, not sittings. A run with no parseable timestamp joins the
+    current sitting (it cannot prove a gap). Boundaries derived here are
+    provisional by design — once a sitting owns a distillation record it
+    becomes an entity and the boundary freezes (RECORD_DESIGN §13.2.5).
+    """
+    by_thread: dict[str, list[dict]] = {}
+    for r in runs:
+        if r.get("thread_id"):
+            by_thread.setdefault(r["thread_id"], []).append(r)
+
+    out: list[dict] = []
+    for tid, rows in by_thread.items():
+        cur: Optional[dict] = None
+        last_ts: Optional[datetime] = None
+        for r in rows:
+            start = _parse_ts(r.get("started_at")) or _parse_ts(r.get("updated_at"))
+            gap = (start is not None and last_ts is not None
+                   and (start - last_ts).total_seconds() > gap_minutes * 60)
+            if cur is None or gap:
+                cur = {"id": f"sit-{tid}-{len([s for s in out if s['thread_id'] == tid]) + 1}",
+                       "thread_id": tid, "run_ids": [],
+                       "started_at": r.get("started_at") or r.get("updated_at"),
+                       "ended_at": None}
+                out.append(cur)
+            cur["run_ids"].append(r["run_id"])
+            end = _parse_ts(r.get("updated_at")) or start
+            if end is not None and (last_ts is None or end > last_ts):
+                last_ts = end
+            cur["ended_at"] = r.get("updated_at") or r.get("started_at") or cur["ended_at"]
+        # threads interleave in `out`; order sittings project-wide by start
+    out.sort(key=lambda s: (s["started_at"] or "", s["id"]))
+    return out
+
+
+def _leftovers() -> list[dict]:
+    """Artifact entities nothing carries: no includes/supports edge in either
+    direction, not pinned, not archived — the §13.1 edge-complement."""
+    if not _ARTIFACT_TYPES:
+        return []
+    rows = []
+    for e in find_entities(type_in=list(_ARTIFACT_TYPES),
+                           include_archived=False, not_deleted=True):
+        if e.get("pinned"):
+            continue
+        carried = any(ed["rel_type"] in _CARRY_RELS
+                      for ed in edges_to(e["id"]))
+        carried = carried or any(ed["rel_type"] in _CARRY_RELS
+                                 for ed in edges_from(e["id"]))
+        if not carried:
+            rows.append({"id": e["id"], "type": e["type"],
+                         "title": e.get("title"),
+                         "created_at": e.get("created_at")})
+    return rows
+
+
 def assemble_world(*, sediment_limit: int = 200) -> dict:
     """One project's Record World. Read-only; call under a bound project."""
     questions = _of_role("question")
@@ -126,9 +214,8 @@ def assemble_world(*, sediment_limit: int = 200) -> dict:
         "prose": prose,
         "notes": notes,
         "sediment": {"runs": runs},
-        # OODA-2 organs — keys stable from day one, filled next pass:
-        "sittings": [],
-        "whats_new": [],
-        "tray": [],
-        "leftovers": [],
+        "sittings": derive_sittings(runs),
+        "whats_new": list_events(limit=100),
+        "tray": list_proposals(status="pending"),
+        "leftovers": _leftovers(),
     }

@@ -29,14 +29,18 @@ if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 
 from core.graph._schema import _conn, init_db          # noqa: E402
+from core.graph.audit import log_event                 # noqa: E402
 from core.graph.entities import create_entity, get_entity, update_entity  # noqa: E402
 from core.graph.edges import add_edge                  # noqa: E402
+from core.graph.proposals_store import add_proposal, update_proposal  # noqa: E402
 from core.graph.runs_port import list_runs             # noqa: E402
 from core.record.world import (                        # noqa: E402
-    assemble_world, register_record_roles, record_roles,
+    assemble_world, derive_sittings, register_record_roles, record_roles,
 )
 
 LADDER = ("draft", "firm", "solid", "contested", "dead")
+ROLES = {"question": "qq", "claim": "cc", "prose": "pp", "note": "nn"}
+ARTS = ("aa",)
 
 
 def _seed_run(run_id: str, thread_id, started_at: str) -> None:
@@ -52,9 +56,8 @@ class RecordWorldTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         init_db()
-        register_record_roles(
-            {"question": "qq", "claim": "cc", "prose": "pp", "note": "nn"},
-            maturity_order=LADDER)
+        register_record_roles(ROLES, maturity_order=LADDER,
+                              artifact_types=ARTS)
         cls.q1 = create_entity(
             entity_type="qq", title="Q1 variance across siteA runs",
             metadata={"question": "what drives variance in siteA?",
@@ -77,6 +80,26 @@ class RecordWorldTest(unittest.TestCase):
         _seed_run("r-early", cls.q1, "2026-01-01T10:00:00Z")
         _seed_run("r-mid", None, "2026-01-02T10:00:00Z")     # NULL thread
         _seed_run("r-late", cls.q1, "2026-01-03T10:00:00Z")
+        # leftovers shelf: a1 loose; a2 carried (inbound includes); a3 pinned;
+        # a4 archived; a5 carried by its own outbound supports
+        cls.a1 = create_entity(entity_type="aa", title="figs/scatter.png")
+        cls.a2 = create_entity(entity_type="aa", title="figs/carried.png")
+        holder = create_entity(entity_type="rr", title="holder")
+        add_edge(holder, cls.a2, "includes")
+        cls.a3 = create_entity(entity_type="aa", title="figs/pinned.png")
+        update_entity(cls.a3, pinned=True)
+        cls.a4 = create_entity(entity_type="aa", title="figs/gone.png")
+        update_entity(cls.a4, status="archived")
+        cls.a5 = create_entity(entity_type="aa", title="figs/backing.png")
+        add_edge(cls.a5, cls.c1, "supports")
+        # tray: one pending, one dismissed
+        cls.pr1 = add_proposal(thread_id=cls.q1, kind="route",
+                               headline="file the scatter under Q1",
+                               signature="sig-1")
+        pr2 = add_proposal(thread_id=cls.q1, kind="route",
+                           headline="stale suggestion", signature="sig-2")
+        update_proposal(pr2, status="dismissed")
+        log_event("marker", entity_id=cls.q1, title="seeded-event")
 
     # -- armed: the seeds this file reasons about must actually exist --
     def test_00_armed_seeds_present(self):
@@ -128,6 +151,68 @@ class RecordWorldTest(unittest.TestCase):
         for key in ("sittings", "whats_new", "tray", "leftovers"):
             self.assertIn(key, w)
 
+    # -- sittings: pure clustering over run rows --
+    def test_sittings_cluster_by_gap_and_thread(self):
+        runs = [
+            {"run_id": "r1", "thread_id": "T1",
+             "started_at": "2026-01-01T10:00:00Z", "updated_at": "2026-01-01T10:05:00Z"},
+            {"run_id": "r2", "thread_id": "T1",   # 10 min later: same sitting
+             "started_at": "2026-01-01T10:15:00Z", "updated_at": "2026-01-01T10:20:00Z"},
+            {"run_id": "r3", "thread_id": "T1",   # 3 h later: new sitting
+             "started_at": "2026-01-01T13:30:00Z", "updated_at": "2026-01-01T13:31:00Z"},
+            {"run_id": "r4", "thread_id": "T2",   # other thread, own sitting
+             "started_at": "2026-01-01T10:16:00Z", "updated_at": "2026-01-01T10:17:00Z"},
+            {"run_id": "r5", "thread_id": None,   # background: no sitting
+             "started_at": "2026-01-01T11:00:00Z", "updated_at": "2026-01-01T11:00:00Z"},
+            {"run_id": "r6", "thread_id": "T1",   # no timestamps: coalesces
+             "started_at": None, "updated_at": None},
+        ]
+        sits = derive_sittings(runs, gap_minutes=45)
+        self.assertEqual(len(sits), 3)
+        t1 = [s for s in sits if s["thread_id"] == "T1"]
+        self.assertEqual([s["run_ids"] for s in t1], [["r1", "r2"], ["r3", "r6"]])
+        self.assertEqual([s["run_ids"] for s in sits
+                          if s["thread_id"] == "T2"], [["r4"]])
+        self.assertNotIn("r5", [rid for s in sits for rid in s["run_ids"]])
+        self.assertEqual(t1[0]["started_at"], "2026-01-01T10:00:00Z")
+        self.assertEqual(t1[0]["ended_at"], "2026-01-01T10:20:00Z")
+
+    def test_sittings_gap_exactly_at_threshold_coalesces(self):
+        runs = [
+            {"run_id": "r1", "thread_id": "T1",
+             "started_at": "2026-01-01T10:00:00Z", "updated_at": "2026-01-01T10:00:00Z"},
+            {"run_id": "r2", "thread_id": "T1",   # exactly 45 min after end
+             "started_at": "2026-01-01T10:45:00Z", "updated_at": "2026-01-01T10:45:00Z"},
+        ]
+        self.assertEqual(len(derive_sittings(runs, gap_minutes=45)), 1)
+
+    def test_world_sittings_from_seeded_runs(self):
+        w = assemble_world()
+        self.assertEqual([s["run_ids"] for s in w["sittings"]],
+                         [["r-early"], ["r-late"]])   # days apart, r-mid unthreaded
+
+    # -- tray, what's-new, leftovers --
+    def test_tray_carries_only_pending(self):
+        self.assertIsNotNone(self.pr1)   # armed: dedup didn't swallow the seed
+        w = assemble_world()
+        heads = [p["headline"] for p in w["tray"]]
+        self.assertIn("file the scatter under Q1", heads)
+        self.assertNotIn("stale suggestion", heads)
+
+    def test_whats_new_carries_events(self):
+        w = assemble_world()
+        titles = [e["title"] for e in w["whats_new"]]
+        self.assertIn("seeded-event", titles)
+
+    def test_leftovers_edge_complement(self):
+        w = assemble_world()
+        ids = {r["id"] for r in w["leftovers"]}
+        self.assertIn(self.a1, ids)          # loose artifact
+        self.assertNotIn(self.a2, ids)       # carried by inbound includes
+        self.assertNotIn(self.a3, ids)       # pinned
+        self.assertNotIn(self.a4, ids)       # archived
+        self.assertNotIn(self.a5, ids)       # carries a claim (outbound supports)
+
     def test_unregistered_roles_yield_empty_skeleton(self):
         register_record_roles({})
         try:
@@ -136,9 +221,8 @@ class RecordWorldTest(unittest.TestCase):
             self.assertEqual(w["claims"], [])
             self.assertEqual(w["roles"], {})
         finally:
-            register_record_roles(
-                {"question": "qq", "claim": "cc", "prose": "pp", "note": "nn"},
-                maturity_order=LADDER)
+            register_record_roles(ROLES, maturity_order=LADDER,
+                                  artifact_types=ARTS)
 
     def test_router_contract(self):
         from core.web.routers.record import record_world

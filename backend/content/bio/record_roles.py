@@ -4,6 +4,7 @@ The Record face (core/record/world.py) is domain-neutral; here the pack
 declares which of its types play which role and how the claim ladder orders
 into maturity rungs (index = rung; terminal states past the ladder's third
 rung render as contested/refuted marks, a renderer concern)."""
+from core.entity_types.registry import types_with
 from core.record.world import register_record_roles
 
 register_record_roles(
@@ -15,4 +16,6 @@ register_record_roles(
     },
     maturity_order=("preliminary", "supported", "validated",
                     "contested", "refuted"),
+    # the leftovers shelf sweeps whatever this pack flags as an artifact
+    artifact_types=sorted(types_with("is_artifact")),
 )
