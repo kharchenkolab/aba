@@ -107,11 +107,17 @@ def _utcnow() -> str:
 
 
 def _is_slurm_params(params_text) -> bool:
-    """True if a job row's params JSON marks it EXTERNALLY submitted (Slurm, or
-    a weft task — W2). Such jobs run independently of this process and survive
-    an ABA restart, so reconcile must NOT reap (running) or re-enqueue (queued)
-    them — the matching poll loop re-adopts them (shared-FS sentinel for Slurm;
-    weft's own durable job state for weft tasks)."""
+    """True if a job row's params JSON marks it EXTERNALLY submitted. Such jobs
+    run independently of this process and survive an ABA restart, so reconcile
+    must NOT reap (running) or re-enqueue (queued) them — `_weft_poll_loop`
+    re-adopts them from weft's own durable job state.
+
+    In practice that means WEFT: since the W2 cutover nothing stamps
+    `submitter="slurm"` and `_slurm_poll_loop` (the shared-FS sentinel) is
+    retired. "slurm" stays in the tuple only so a LEGACY row left in an existing
+    DB by a pre-cutover build is still protected from reaping — there is no live
+    lane behind it, and no poll loop that would adopt one. The name is historical;
+    read it as _is_externally_submitted."""
     if not params_text:
         return False
     try:
