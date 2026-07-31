@@ -26,6 +26,28 @@ from core.exec.run import _MAX_HARVEST_BYTES  # noqa: E402
 _BIG = _MAX_HARVEST_BYTES + 1_000_000
 
 
+def _stub_stats(monkeypatch, answer=None, calls: list | None = None):
+    """Stub retention.file_stats — the BATCHED seam the view calls (weft
+    bd6ae6e). Stubbing the single `file_stat` here would measure NOTHING: the
+    view no longer consults it. `answer(rel)->dict` (default: absent), or an
+    Exception instance to make the whole batch fail (→ not-checked). `calls`
+    records (target, rels) so a test can assert the batch shape itself."""
+    def _fs(t, rels):
+        if calls is not None:
+            calls.append((t, list(rels)))
+        if isinstance(answer, Exception):
+            raise answer
+        fn = answer or (lambda r: {"exists": False})
+        return {"files": {r: fn(r) for r in rels}}
+    monkeypatch.setattr(retmod, "file_stats", _fs)
+
+
+def _stub_inventories(monkeypatch, entries=None):
+    """Stub retention.inventories (batched) — same rationale as _stub_stats."""
+    monkeypatch.setattr(retmod, "inventories", lambda ts: {
+        "inventories": {t: {"entries": list(entries or [])} for t in ts}})
+
+
 def _retained_dir(tmp: Path, target: str, files: dict) -> str:
     """Build a runs/<label>/<target>/ tree with a v1 sidecar (grounded shape)."""
     d = tmp / "runs" / "lbl" / target
@@ -54,8 +76,8 @@ def test_durable_view_outage_reads_unknown_not_discarded(monkeypatch):
     monkeypatch.setattr(runsmod, "get_entity",
                         lambda rid: {"id": rid, "metadata": {"weft_targets": ["krn_9"]}})
     monkeypatch.setattr(retmod, "retained", _boom)
-    monkeypatch.setattr(retmod, "inventory", lambda t: {"entries": []})
-    monkeypatch.setattr(retmod, "file_stat", _boom)
+    _stub_inventories(monkeypatch)
+    _stub_stats(monkeypatch, answer=RuntimeError("substrate unreachable"))
     monkeypatch.setattr(admod, "status", lambda: {"ok": True})   # configured
     monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [
         {"original_name": "big.parquet", "url": None, "kind": "file",
@@ -83,7 +105,7 @@ def test_durable_view_states(tmp_path, monkeypatch):
          "location": "/somewhere/krn_1",
          "selection": json.dumps({"include": ["model.pt"]})},   # per-file saving: covers model.pt
     ])
-    monkeypatch.setattr(retmod, "inventory", lambda t: {"entries": []})
+    _stub_inventories(monkeypatch)
     monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [
         {"original_name": "umap.png", "url": "/artifacts/p/x.png",
          "kind": "figure", "size": 2048},                       # small surfaced, not weft-kept → in-store
@@ -116,7 +138,7 @@ def test_durable_view_serves_retained_local_directly_from_weft(tmp_path, monkeyp
                         lambda rid: {"id": rid, "metadata": {"weft_targets": ["krn_x"]}})
     monkeypatch.setattr(retmod, "retained", lambda **kw: [
         {"state": "done", "site": "local", "in_place": 0, "location": loc}])
-    monkeypatch.setattr(retmod, "inventory", lambda t: {"entries": []})
+    _stub_inventories(monkeypatch)
     monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [
         {"original_name": "umap.png", "url": "/artifacts/p/x.png", "kind": "figure", "size": 2048},
         {"original_name": "orphan.png", "url": "/artifacts/p/o.png", "kind": "figure", "size": 512},
@@ -137,10 +159,11 @@ def test_durable_view_in_sandbox_vs_cleared_via_stat(tmp_path, monkeypatch):
     monkeypatch.setattr(runsmod, "get_entity",
                         lambda rid: {"id": rid, "metadata": {"weft_targets": ["krn_9"]}})
     monkeypatch.setattr(retmod, "retained", lambda **kw: [])          # nothing retained
-    monkeypatch.setattr(retmod, "inventory", lambda t: {"entries": []})
-    monkeypatch.setattr(retmod, "file_stat", lambda t, rel:
-                        {"exists": True, "bytes": 4096} if rel == "still.csv"
-                        else {"exists": False})
+    _stub_inventories(monkeypatch)
+    calls: list = []
+    _stub_stats(monkeypatch, lambda rel:
+                {"exists": True, "bytes": 4096} if rel == "still.csv"
+                else {"exists": False}, calls=calls)
     monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [
         {"original_name": "still.csv", "url": None, "kind": "table", "size": 0},   # on disk
         {"original_name": "gone.dat", "url": None, "kind": "file", "size": 9},     # swept
@@ -148,6 +171,10 @@ def test_durable_view_in_sandbox_vs_cleared_via_stat(tmp_path, monkeypatch):
     by = {f["rel"]: f for f in runsmod.run_durable_view("run-2")["files"]}
     assert by["still.csv"]["state"] == "in-sandbox" and by["still.csv"]["bytes"] == 4096
     assert by["gone.dat"]["state"] == "cleared" and by["gone.dat"]["url"] is None
+    # The amplifier stays dead: BOTH rels travelled in ONE batched call (the
+    # per-file loop was 2N store queries + N subprocess spawns — the convoy).
+    # Ceiling AND floor: exactly one call, covering exactly the unresolved rels.
+    assert calls == [("krn_9", ["still.csv", "gone.dat"])]
 
 
 def test_durable_view_falls_back_to_inventory_proxy_when_stat_unavailable(tmp_path, monkeypatch):
@@ -155,12 +182,9 @@ def test_durable_view_falls_back_to_inventory_proxy_when_stat_unavailable(tmp_pa
     monkeypatch.setattr(runsmod, "get_entity",
                         lambda rid: {"id": rid, "metadata": {"weft_targets": ["krn_9"]}})
     monkeypatch.setattr(retmod, "retained", lambda **kw: [])
-    monkeypatch.setattr(retmod, "inventory",
-                        lambda t: {"entries": [{"path": "was.csv", "bytes": 5, "mtime": 1}]})
-
-    def _boom(t, rel):
-        raise RuntimeError("weft unreachable")
-    monkeypatch.setattr(retmod, "file_stat", _boom)
+    _stub_inventories(monkeypatch,
+                      entries=[{"path": "was.csv", "bytes": 5, "mtime": 1}])
+    _stub_stats(monkeypatch, answer=RuntimeError("weft unreachable"))
     monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [
         {"original_name": "was.csv", "url": None, "kind": "table", "size": 5},   # in inventory
         {"original_name": "never.dat", "url": None, "kind": "file", "size": 9},  # nowhere
@@ -195,7 +219,7 @@ def test_durable_tree_nests_with_durable_fields(tmp_path, monkeypatch):
                         lambda rid: {"id": rid, "metadata": {"weft_targets": ["krn_t"]}})
     monkeypatch.setattr(retmod, "retained", lambda **kw: [
         {"state": "done", "site": "local", "in_place": 0, "location": loc}])
-    monkeypatch.setattr(retmod, "inventory", lambda t: {"entries": []})
+    _stub_inventories(monkeypatch)
     monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [
         {"original_name": "umap.png", "url": "/artifacts/p/x.png", "kind": "figure", "size": 2048},
         {"original_name": "samples/A/qc.csv", "url": "/artifacts/p/y.csv", "kind": "table", "size": 30},
@@ -230,7 +254,7 @@ def test_durable_view_remote_in_place_kept_via_selection(tmp_path, monkeypatch):
         "selection": json.dumps({"include": ["big.h5ad", "figs/**"],
                                  "exclude": ["*.tmp"]}),
     }])
-    monkeypatch.setattr(retmod, "inventory", lambda t: {"entries": []})
+    _stub_inventories(monkeypatch)
     monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [
         {"original_name": "big.h5ad", "url": None, "kind": "file", "size": _BIG},
         {"original_name": "figs/umap.png", "url": None, "kind": "figure", "size": 40},
@@ -250,7 +274,7 @@ def test_durable_view_dedups_repeated_filename(tmp_path, monkeypatch):
     monkeypatch.setattr(runsmod, "get_entity",
                         lambda rid: {"id": rid, "metadata": {"weft_targets": ["krn_1"]}})
     monkeypatch.setattr(retmod, "retained", lambda **kw: [])
-    monkeypatch.setattr(retmod, "inventory", lambda t: {"entries": []})
+    _stub_inventories(monkeypatch)
     # umap.png produced 3×: first two un-surfaced, the LAST surfaced to the store.
     monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [
         {"original_name": "umap.png", "url": None, "kind": "figure", "size": 10},
@@ -266,9 +290,12 @@ def test_durable_view_dedups_repeated_filename(tmp_path, monkeypatch):
     assert view["summary"]["total"] == 1 and view["summary"]["in_store"] == 1
 
 
-def test_durable_view_remote_in_place_has_no_local_file_url(tmp_path, monkeypatch):
-    """A remote in-place `kept` file (no local sidecar) must NOT advertise a
-    /api/runs/{id}/file URL — resolve_run_file can't read it, so the link 404s."""
+def test_durable_view_remote_in_place_gets_live_file_url(tmp_path, monkeypatch):
+    """Presentation parity: a remote in-place `kept` file surfaces WITH a live
+    /api/runs/{id}/file URL — the route resolves remote bytes through the
+    canonical locate/materialize pair (transparent under the gate, an honest
+    site-naming 413 above it) — and the `on <site>` badge names where the
+    bytes durably live."""
     monkeypatch.setattr(runsmod, "get_entity",
                         lambda rid: {"id": rid, "metadata": {"weft_targets": ["krn_r"]}})
     monkeypatch.setattr(retmod, "retained", lambda **kw: [{
@@ -276,12 +303,13 @@ def test_durable_view_remote_in_place_has_no_local_file_url(tmp_path, monkeypatc
         "location": "/groups/lab/weft-retained/runs/lbl/krn_r",   # not on this box
         "selection": json.dumps({"include": ["big.h5ad"], "exclude": []}),
     }])
-    monkeypatch.setattr(retmod, "inventory", lambda t: {"entries": []})
+    _stub_inventories(monkeypatch)
     monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [
         {"original_name": "big.h5ad", "url": None, "kind": "file", "size": _BIG}])
     f = runsmod.run_durable_view("run-r2")["files"][0]
     assert f["state"] == "retained" and f["site"] == "hpc"
-    assert f["url"] is None                     # not locally servable → no dead link
+    assert "on hpc" in f["badge"]               # location is information, on the surface
+    assert f["url"] == "/api/runs/run-r2/file?rel=big.h5ad"   # live link, not a dead None
 
 
 def test_durable_view_selection_glob_does_not_span_slash(tmp_path, monkeypatch):
@@ -293,8 +321,8 @@ def test_durable_view_selection_glob_does_not_span_slash(tmp_path, monkeypatch):
         "state": "done", "site": "hpc", "in_place": 1,
         "location": "/remote/only", "selection": json.dumps({"include": ["*.txt"]}),
     }])
-    monkeypatch.setattr(retmod, "inventory", lambda t: {"entries": []})
-    monkeypatch.setattr(retmod, "file_stat", lambda t, rel: {"exists": False})  # nested → cleared
+    _stub_inventories(monkeypatch)
+    _stub_stats(monkeypatch)                                 # nested → cleared
     monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [
         {"original_name": "top.txt", "url": None, "kind": "file", "size": 5},
         {"original_name": "sub/deep.txt", "url": None, "kind": "file", "size": 5},
@@ -312,8 +340,8 @@ def test_durable_view_temporary_by_absence_while_open(monkeypatch):
         return lambda rid: {"id": rid, "metadata": {"weft_targets": ["krn_o"],
                                                     "run_state": state}}
     monkeypatch.setattr(retmod, "retained", lambda **kw: [])
-    monkeypatch.setattr(retmod, "inventory", lambda t: {"entries": []})
-    monkeypatch.setattr(retmod, "file_stat", lambda t, rel: {"exists": True, "bytes": _BIG})
+    _stub_inventories(monkeypatch)
+    _stub_stats(monkeypatch, lambda rel: {"exists": True, "bytes": _BIG})
     monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [
         {"original_name": "work.parquet", "url": None, "kind": "file", "size": _BIG}])
     monkeypatch.setattr(runsmod, "get_entity", _ent("open"))
@@ -323,6 +351,95 @@ def test_durable_view_temporary_by_absence_while_open(monkeypatch):
     f_closed = runsmod.run_durable_view("run-o")["files"][0]
     assert f_closed["state"] == "at-risk"
     assert f_closed["badge"].startswith("temporary")
+
+
+def test_store_members_collapse_to_one_row(monkeypatch):
+    """A chunked directory store is ONE logical output: its member rows fold
+    into a single kind="store" row with an honest byte sum and a declared
+    member count — the manifest and the surface probe already hold this line;
+    the view listed every shard (385 rows for one store, live 2026-07-24)."""
+    monkeypatch.setattr(runsmod, "get_entity",
+                        lambda rid: {"id": rid, "metadata": {"weft_targets": ["krn_s"]}})
+    monkeypatch.setattr(retmod, "retained", lambda **kw: [])
+    _stub_inventories(monkeypatch)
+    _stub_stats(monkeypatch, lambda rel: {"exists": True, "bytes": 10})
+    monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [
+        {"original_name": "out/data.zarr/meta.json", "url": None, "kind": "file", "size": 100},
+        {"original_name": "out/data.zarr/c/0", "url": None, "kind": "file", "size": 200},
+        {"original_name": "out/data.zarr/c/1", "url": None, "kind": "file", "size": 300},
+        {"original_name": "top.csv", "url": None, "kind": "table", "size": 5},
+    ])
+    view = runsmod.run_durable_view("run-s")
+    by = {f["rel"]: f for f in view["files"]}
+    # ceiling AND floor: exactly two rows — the store and the plain file
+    assert set(by) == {"out/data.zarr", "top.csv"}, \
+        "store members must fold into one row (no shard leaks)"
+    st = by["out/data.zarr"]
+    assert st["kind"] == "store" and st["n_members"] == 3
+    assert st["bytes"] == 600                      # honest sum, raw ints
+    assert st["state"] == "in-sandbox"             # all members live-unkept
+    assert "store of 3 files" in st["badge"]       # aggregation is visible
+    assert st["url"] == "/api/runs/run-s/file?rel=out/data.zarr"
+    # summary counts describe what the panel SHOWS (post-fold)
+    assert view["summary"]["total"] == 2
+    assert view["summary"]["in_sandbox"] == 2
+
+
+def test_store_state_is_weakest_of_live_members(monkeypatch):
+    """WIDE: mixed member states → the store claims only its weakest live
+    protection; all-cleared → the store is cleared with no link."""
+    loc_files = {"data.zarr/meta.json": "m"}      # one member retained
+    monkeypatch.setattr(runsmod, "get_entity",
+                        lambda rid: {"id": rid, "metadata": {"weft_targets": ["krn_m"]}})
+    monkeypatch.setattr(retmod, "retained", lambda **kw: [
+        {"state": "done", "site": "local", "in_place": 0,
+         "location": None, "selection": json.dumps(
+             {"include": ["data.zarr/meta.json"]})}])
+    _stub_inventories(monkeypatch)
+    _stub_stats(monkeypatch, lambda rel: {"exists": True, "bytes": _BIG})
+    monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [
+        {"original_name": "data.zarr/meta.json", "url": None, "kind": "file", "size": 1},
+        {"original_name": "data.zarr/c/0", "url": None, "kind": "file", "size": _BIG},
+    ])
+    st = runsmod.run_durable_view("run-m")["files"][0]
+    assert st["kind"] == "store"
+    assert st["state"] == "at-risk", \
+        "a store with one unprotected shard must not claim its strongest state"
+
+    # all members cleared → the store is cleared, linkless, zero live members
+    monkeypatch.setattr(retmod, "retained", lambda **kw: [])
+    _stub_stats(monkeypatch, lambda rel: {"exists": False})
+    st2 = runsmod.run_durable_view("run-m")["files"][0]
+    assert st2["state"] == "cleared" and st2["url"] is None
+    assert st2["n_members"] == 0
+
+
+def test_runtime_bookkeeping_folds_to_declared_count(monkeypatch):
+    """Runtime bookkeeping — the blocks/ transcript AND root-level runner
+    scaffolding (pid/log/launchers) — leaves the file list with its count
+    DECLARED in the summary: folding is visible, hiding would be silent.
+    WIDE: the match is exact-root-only — a user's own out/log survives."""
+    monkeypatch.setattr(runsmod, "get_entity",
+                        lambda rid: {"id": rid, "metadata": {"weft_targets": ["krn_t"]}})
+    monkeypatch.setattr(retmod, "retained", lambda **kw: [])
+    _stub_inventories(monkeypatch)
+    _stub_stats(monkeypatch, lambda rel: {"exists": True, "bytes": 10})
+    monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [
+        {"original_name": "blocks/0001.code", "url": None, "kind": "file", "size": 1},
+        {"original_name": "blocks/0001.out", "url": None, "kind": "file", "size": 1},
+        {"original_name": "pid", "url": None, "kind": "file", "size": 1},
+        {"original_name": "runner.sh", "url": None, "kind": "file", "size": 1},
+        {"original_name": "log", "url": None, "kind": "file", "size": 1},
+        {"original_name": "out/log", "url": None, "kind": "file", "size": 3},
+        {"original_name": "result.csv", "url": None, "kind": "table", "size": 9},
+    ])
+    view = runsmod.run_durable_view("run-t2")
+    rels = sorted(f["rel"] for f in view["files"])
+    assert rels == ["out/log", "result.csv"], \
+        "bookkeeping must fold; a user file NAMED like scaffolding in a " \
+        "subdir must survive"
+    assert view["summary"]["runtime_files"] == 5
+    assert view["summary"]["total"] == 2
 
 
 def test_read_run_file_previews_in_sandbox(monkeypatch):
@@ -365,7 +482,7 @@ _TESTS = [test_durable_view_states,
           test_durable_tree_nests_with_durable_fields,
           test_durable_view_remote_in_place_kept_via_selection,
           test_durable_view_dedups_repeated_filename,
-          test_durable_view_remote_in_place_has_no_local_file_url,
+          test_durable_view_remote_in_place_gets_live_file_url,
           test_durable_view_selection_glob_does_not_span_slash,
           test_durable_view_temporary_by_absence_while_open,
           test_read_run_file_previews_in_sandbox,

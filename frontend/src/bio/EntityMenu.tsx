@@ -43,7 +43,7 @@ export default function EntityMenu({ entity, onChange }: Props) {
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<Editing>(null)
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
-  const [delError, setDelError] = useState<{ msg: string; refs?: Blocker[] } | null>(null)
+  const [delError, setDelError] = useState<{ msg: string; refs?: Blocker[]; canOverride?: boolean } | null>(null)
   const [deleting, setDeleting] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const popRef = useRef<HTMLDivElement>(null)
@@ -96,16 +96,19 @@ export default function EntityMenu({ entity, onChange }: Props) {
     onChange()
   }
 
-  async function hardDelete() {
+  async function hardDelete(force = false) {
     setDeleting(true); setDelError(null)
     // For Results (and any bio type whose menu-traits set cascadeMembers)
     // we cascade to members + their revision chains; the backend skips
     // members that are also referenced from outside the cascade (shared
     // with another Result, cited by a Claim) and detaches only the
     // includes/supports/wasDerivedFrom edges from THIS Result.
-    const qs = entity_menu_traits(entity.type).cascadeMembers
+    // `force` is the informed override for a 409 (live dependents): the
+    // user has SEEN the dependents list; the backend keeps the dependents
+    // and stamps each with the severed reference.
+    const qs = (entity_menu_traits(entity.type).cascadeMembers
       ? '?hard=true&cascade=members'
-      : '?hard=true'
+      : '?hard=true') + (force ? '&force=true' : '')
     try {
       const r = await fetch(`/api/entities/${encodeURIComponent(entity.id)}${qs}`,
         { method: 'DELETE' })
@@ -113,19 +116,21 @@ export default function EntityMenu({ entity, onChange }: Props) {
         setOpen(false); setEditing(null); onChange()
         return
       }
-      // 409 (live refs) returns detail = {error, references}
+      // 409 (live dependents) returns detail = {error, references, can_override}
       let msg = `HTTP ${r.status}`
       let refs: Blocker[] | undefined
+      let canOverride = false
       try {
         const j = await r.json()
         if (j?.detail && typeof j.detail === 'object') {
           msg = j.detail.error || msg
           refs = j.detail.references as Blocker[] | undefined
+          canOverride = j.detail.can_override === true
         } else if (typeof j?.detail === 'string') {
           msg = j.detail
         }
       } catch { /* keep default */ }
-      setDelError({ msg, refs })
+      setDelError({ msg, refs, canOverride })
     } finally {
       setDeleting(false)
     }
@@ -195,7 +200,9 @@ export default function EntityMenu({ entity, onChange }: Props) {
               busy={deleting}
               error={delError}
               onCancel={() => { setEditing(null); setDelError(null) }}
-              onConfirm={hardDelete}
+              onConfirm={() => hardDelete(false)}
+              onForce={() => hardDelete(true)}
+              onArchive={del}
             />
           )}
           {editing?.kind === 'rename' && (
@@ -233,13 +240,15 @@ function formatBytes(n: number): string {
 }
 
 function DeleteConfirm({
-  entity, onCancel, onConfirm, busy, error, style,
+  entity, onCancel, onConfirm, onForce, onArchive, busy, error, style,
 }: {
   entity: Entity
   onCancel: () => void
   onConfirm: () => void
+  onForce: () => void
+  onArchive: () => void
   busy: boolean
-  error: { msg: string; refs?: Blocker[] } | null
+  error: { msg: string; refs?: Blocker[]; canOverride?: boolean } | null
   style?: React.CSSProperties
 }) {
   // Bio menu-traits decides the delete-confirm body variant. dataset →
@@ -299,9 +308,19 @@ function DeleteConfirm({
       </div>
       <div className="entity-menu__buttons">
         <button onClick={onCancel} disabled={busy}>Cancel</button>
-        <button onClick={onConfirm} disabled={busy}
+        {/* The refusal is actionable, not a dead end: Archive always succeeds
+            (soft, reversible) whenever something went wrong. The primary
+            button is ALWAYS present — it becomes "Delete anyway" only when the
+            server advertised the override (the user has now SEEN the
+            dependents this will detach, each of which gets a severed-ref
+            mark). Gating the primary on `error` alone stranded every NON-409
+            failure — a transient 500 carries no can_override, so the dialog
+            offered Archive as the only way forward for an error that a plain
+            retry would clear. */}
+        {error && <button onClick={onArchive} disabled={busy}>Archive instead</button>}
+        <button onClick={error?.canOverride ? onForce : onConfirm} disabled={busy}
                 className="entity-menu__primary entity-menu__danger-btn">
-          {busy ? 'Deleting…' : 'Delete'}
+          {busy ? 'Deleting…' : error?.canOverride ? 'Delete anyway' : 'Delete'}
         </button>
       </div>
     </div>

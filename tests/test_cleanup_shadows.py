@@ -28,6 +28,7 @@ os.environ["ABA_WORK_DIR"] = str(Path(_tmp) / "work")
 os.environ["DATA_DIR"] = str(Path(_tmp) / "data")
 sys.path.insert(0, str(ROOT / "backend"))
 
+from core.graph import _schema
 from core.graph._schema import init_db, _conn          # noqa: E402
 from core.graph import entities, edges                  # noqa: E402
 import content.bio  # noqa: F401, E402
@@ -39,6 +40,8 @@ def check(label, cond, detail=""):
     print(f"  [{'PASS' if cond else 'FAIL'}] {label}" + (f" — {detail}" if detail else ""))
     if not cond:
         _failures.append(label)
+        raise AssertionError(  # armed: pytest sees check() failures
+            f"{label}" + (f" — {detail}" if detail else ""))
 
 
 def test_cleanup_keeps_pinned_revisions_results():
@@ -71,7 +74,13 @@ def test_cleanup_keeps_pinned_revisions_results():
 
     # Run the script in --apply mode
     script = ROOT / "tools" / "cleanup_shadow_figures.py"
-    env = {**os.environ}
+    # Hand the subprocess the DB THIS PROCESS IS ACTUALLY WRITING TO.
+    # conftest's autouse fixture rebinds the DB in-process (set_db_path),
+    # so the module-level ABA_DB_PATH points at a DIFFERENT, empty file:
+    # the script then found nothing to clean and every assertion below was
+    # vacuously satisfied under pytest (it only passed standalone, where no
+    # conftest rebinds anything).
+    env = {**os.environ, "ABA_DB_PATH": str(_schema.active_db_path())}
     r = subprocess.run(
         [sys.executable, str(script), "--apply"],
         env=env, capture_output=True, text=True,
@@ -105,7 +114,13 @@ def test_dry_run_changes_nothing():
     sh3 = entities.create_entity(entity_type="figure", title="shadow3",
                                   artifact_path="/sh3.png")
     script = ROOT / "tools" / "cleanup_shadow_figures.py"
-    env = {**os.environ}
+    # Hand the subprocess the DB THIS PROCESS IS ACTUALLY WRITING TO.
+    # conftest's autouse fixture rebinds the DB in-process (set_db_path),
+    # so the module-level ABA_DB_PATH points at a DIFFERENT, empty file:
+    # the script then found nothing to clean and every assertion below was
+    # vacuously satisfied under pytest (it only passed standalone, where no
+    # conftest rebinds anything).
+    env = {**os.environ, "ABA_DB_PATH": str(_schema.active_db_path())}
     r = subprocess.run(
         [sys.executable, str(script)],   # no --apply
         env=env, capture_output=True, text=True,

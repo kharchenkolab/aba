@@ -282,8 +282,93 @@ def close_run(thread_id: str) -> Optional[str]:
             patch_metadata(rid, {"run": run_md})
     except Exception:  # noqa: BLE001 — the stamp must never block a close
         pass
+    # Settlement input re-check (sweep item E): analysis code can WRITE INTO a
+    # registered read-in-place source home mid-run — the identity was validated
+    # at first use, so the mutation stayed invisible until the NEXT run's
+    # check, with this run's provenance claiming the original content. Scope:
+    # only sources homed on machines this run actually executed on (local +
+    # recorded run.sites) — the run cannot have mutated data elsewhere, and
+    # remote fingerprints cost a round trip each. A drift found here flips the
+    # SAME recorded flags the card banner / safety ledger already render, and
+    # stamps the run so its results carry the caveat.
+    _recheck_consumed_inputs(rid)
     patch_metadata(rid, {"run_state": "closed"})   # single-key: no blob race
     return rid
+
+
+def _consumed_input_ids(run_id: str) -> set:
+    """Entity ids this run's steps actually recorded as inputs.
+
+    The recheck exists to catch a source mutated BY THIS RUN, so its scope is
+    the run's own inputs — swept over every dataset in the project it costs a
+    full stat walk each (up to the fingerprint entry cap), on a path where one
+    plan-Go can close several idle runs back to back. `inputs[]` lives in the
+    exec record's hydrated body, not its index row, so this reads the sidecar
+    per step. Empty set on any failure → the caller re-validates nothing,
+    which is the safe direction for a best-effort honesty sweep."""
+    out: set = set()
+    try:
+        from core.graph.exec_records import get as _xget, list_by_run as _lbr
+        for row in _lbr(run_id) or []:
+            rec = _xget(row.get("exec_id")) or {}
+            for i in rec.get("inputs") or []:
+                ref = i.get("ref")
+                if ref:
+                    out.add(ref)
+    except Exception as e:  # noqa: BLE001 — scope failure must not block a close
+        _log.debug("input scope lookup failed for %s: %s", run_id, e)
+    return out
+
+
+def _recheck_consumed_inputs(run_id: str) -> None:
+    """Best-effort, never blocks a close. See close_run's item-E note."""
+    try:
+        import time as _time
+        from core.graph.entities import list_entities, patch_metadata
+        from core.data.datasets import revalidate
+        ent = get_entity(run_id)
+        run_md = dict((ent or {}).get("metadata") or {})
+        run_sites = {"local", *((run_md.get("run") or {}).get("sites") or [])}
+        consumed = _consumed_input_ids(run_id)
+        modified: list = []
+        for d in list_entities(type_filter="dataset", include_archived=False):
+            md = d.get("metadata") or {}
+            home = md.get("home") or {}
+            if d["id"] not in consumed:
+                continue                    # this run never read it — see below
+            if not home.get("path"):
+                continue
+            if (home.get("site") or "local") not in run_sites:
+                continue                    # the run never touched that machine
+            if md.get("source_changed") or md.get("source_missing"):
+                continue                    # already flagged — nothing new to say
+            # PER-DATASET best-effort: one unreachable home must not abort the
+            # remaining inputs (nor drop the roll-up stamp for those that did
+            # check out) — a whole-loop guard turned a single site outage into
+            # a silently half-finished sweep.
+            try:
+                out = revalidate(md)
+            except Exception as e:  # noqa: BLE001
+                _log.debug("input recheck skipped %s: %s", d["id"], e)
+                continue
+            state = out.get("state")
+            # BOTH bad shapes count (review finding: `missing` was skipped —
+            # a run that DELETES/MOVES an input home in place is the other
+            # side of the same invisibility): drifted → source_changed,
+            # missing → source_missing, matching the drift banner's fields.
+            if state in ("drifted", "missing"):
+                modified.append(d["id"])
+                flag = "source_changed" if state == "drifted" else "source_missing"
+                patch_metadata(d["id"], {flag: True,
+                                         "source_checked_at": int(_time.time())})
+        if modified:
+            # dotted nested key — a whole-`run` read-modify-write here races
+            # the manifest writer on the same key (the exact recheck-confirmed
+            # race note_run_site documents below); single-key patch has no
+            # RMW window.
+            patch_metadata(run_id, {"run.inputs_modified": modified})
+    except Exception as e:  # noqa: BLE001 — a recheck failure never blocks close
+        _log.debug("close_run input recheck failed for %s: %s", run_id, e)
 
 
 def note_run_site(run_id: Optional[str], site: Optional[str]) -> None:
@@ -410,6 +495,16 @@ def _retained_so_far(run_id: str) -> tuple:
     return decided, placed
 
 
+# Job-runner scaffolding written at a job sandbox's ROOT — process
+# bookkeeping, never analysis products. Matched as EXACT root-level rels
+# (a user's own out/log or logs/x is untouched). One owner: the durable
+# view folds these from its listing (declared in summary.runtime_files),
+# and the files tree's disk top-up skips them on disk.
+_RUNNER_SCAFFOLDING = frozenset({
+    "pid", "pid.epoch", "pid.real", "log", "cmd.sh", "runner.sh",
+    "activate.sh", "rusage", "node",
+})
+
 # Directory-shaped stores (a chunked columnar/array store is a DIRECTORY, not a file).
 # Harvest lists single files by extension, so these never reach artifacts_for_run —
 # the jobdir scan below is how they enter the keeper set (P1 / #71). Suffix-matched
@@ -450,7 +545,81 @@ def _jobdir_store_dirs(run_id: str) -> set:
     return out
 
 
-def _retain_run_outputs(run_id: str, run_metadata: dict) -> None:
+def _disk_truth_includes(run_id: str, run_metadata: dict, includes,
+                         produced: set) -> tuple[set, set, list]:
+    """F10 (PK-approved, 2026-07-20): EXPLICIT keep = DISK TRUTH. The automatic
+    harvest allowlist (`_FILE_EXTS`) decides what gets TRACKED, never what CAN
+    be kept. Literal named includes already enter the keeper set (`_keeper_set`
+    adds agent-named literals); this closes the two remaining gaps:
+      * GLOB includes resolve against the run's REAL on-disk listing (local
+        sandbox walk + each weft target's inventory), so `keep=['out/*.dat']`
+        works even though `.dat` is not a harvested extension. Matches that are
+        already tracked cost nothing; UNTRACKED matches are added as concrete
+        rels — gated by total size (FETCH_GUARDRAIL_BYTES, the same "never a
+        silent multi-GB commitment" doctrine as ship-home) so a broad glob
+        can't silently pin a huge tree. Gated globs are surfaced, not dropped.
+      * LITERAL includes are checked against the same listing, so the keep
+        tool's coverage note can tell the truth ("on disk, will be kept")
+        instead of pessimistically warning NOT-COVERED for every untracked file.
+    Returns (glob_added_rels, literals_seen_on_disk, size_gated_reports).
+    Best-effort: listing failures degrade to empty (behavior = pre-F10)."""
+    import fnmatch
+    import os
+    from pathlib import Path
+    inc = [s for s in (includes or []) if s and str(s).strip()]
+    if not inc:
+        return set(), set(), []
+    listing: dict[str, int] = {}                       # rel -> bytes
+    try:                                               # local sandbox walk
+        ap = (get_entity(run_id) or {}).get("artifact_path")
+        if ap and os.path.isdir(ap):
+            base = Path(ap)
+            for f in base.rglob("*"):
+                if f.is_file():
+                    try:
+                        listing[str(f.relative_to(base))] = f.stat().st_size
+                    except OSError:
+                        pass
+    except Exception:  # noqa: BLE001
+        pass
+    for t in (run_metadata.get("weft_targets") or []):  # remote target inventories
+        try:
+            from core.compute.adapter import get_compute
+            inv = get_compute().sync_call("run_inventory", t)
+            for e in (inv.get("entries") or inv.get("files") or []):
+                if isinstance(e, dict) and e.get("path"):
+                    listing.setdefault(e["path"], int(e.get("bytes") or 0))
+        except Exception:  # noqa: BLE001
+            continue
+    if not listing:
+        return set(), set(), []
+    from core.data.datasets import FETCH_GUARDRAIL_BYTES
+    glob_added: set = set()
+    disk_seen: set = set()
+    size_gated: list = []
+    basenames = {r.rsplit("/", 1)[-1]: r for r in listing}
+    for pat in inc:
+        if not any(c in pat for c in "*?["):           # literal name
+            rel = pat if pat in listing else basenames.get(pat)
+            if rel is not None:
+                disk_seen.add(pat)
+            continue
+        matched = {r for r in listing
+                   if fnmatch.fnmatch(r, pat)
+                   or fnmatch.fnmatch(r.rsplit("/", 1)[-1], pat)}
+        untracked = matched - produced
+        if not untracked:
+            continue
+        total = sum(listing[r] for r in untracked)
+        if total > FETCH_GUARDRAIL_BYTES:
+            size_gated.append({"glob": pat, "files": len(untracked),
+                               "bytes": total})
+            continue
+        glob_added |= untracked
+    return glob_added, disk_seen, size_gated
+
+
+def _retain_run_outputs(run_id: str, run_metadata: dict) -> dict:
     """Durably retain this Run's KEEPER outputs against its weft target(s) — labeled to the
     Run (runs/<run>/<target>/), pinned-pending on the live session kernel (captured at
     settlement; §6.3). CUMULATIVE + IDEMPOTENT: each call submits the FULL keeper set
@@ -464,13 +633,13 @@ def _retain_run_outputs(run_id: str, run_metadata: dict) -> None:
     (`metadata.retention_alert`) rather than swallowed."""
     targets = list(run_metadata.get("weft_targets") or [])
     if not targets:
-        return  # jupyter / no weft kernel → nothing to retain against
+        return {}  # jupyter / no weft kernel → nothing to retain against
     try:
         from core.exec.artifacts import artifacts_for_run
         arts = artifacts_for_run(run_id)
     except Exception as e:  # noqa: BLE001
         _log.warning("retain: could not list artifacts for run %s: %s", run_id, e)
-        return
+        return {}
     produced = {(a.get("original_name") or "").strip() for a in arts} - {""}
     produced |= _jobdir_store_dirs(run_id)   # directory stores — invisible to harvest
     declared = _declared_output_names(run_metadata)
@@ -478,13 +647,20 @@ def _retain_run_outputs(run_id: str, run_metadata: dict) -> None:
         produced_basenames = {p.rsplit("/", 1)[-1] for p in produced}
         produced |= {n for n in declared if n not in produced_basenames}
     decision = run_metadata.get("keep_decision") or {}            # level-2: agent keep_outputs triage
+    # F10: explicit keep = disk truth (globs resolve against the real listing,
+    # size-gated; literals validated for honest coverage reporting).
+    glob_added, disk_seen, size_gated = _disk_truth_includes(
+        run_id, run_metadata, decision.get("include"), produced)
+    produced |= glob_added
+    info = {"disk_kept": sorted(glob_added), "disk_seen": sorted(disk_seen),
+            "size_gated": size_gated}
     keep = _keeper_set(produced, decision.get("include"), decision.get("exclude"))
     decided, placed = _retained_so_far(run_id)
     if not (keep - decided - placed):
-        return   # nothing newly decided — the stored selection / retained tree covers it
+        return info   # nothing newly decided — the stored selection / retained tree covers it
     cumulative = sorted(keep | decided)      # full keeper set, never a delta (§6.3)
     if not cumulative:
-        return   # run_retain errors on an empty match
+        return info   # run_retain errors on an empty match
     # Attribute each keeper to the target that ACTUALLY produced it, so a multi-target
     # Run (a backend restart mid-Run minted a new kernel_id → both recorded) retains
     # each target's OWN files against it. A blanket include per target would settle the
@@ -529,6 +705,7 @@ def _retain_run_outputs(run_id: str, run_metadata: dict) -> None:
             _log.info("retain: %s had none of %s — covered by another "
                       "target, no alert", t, sorted(inc))
     _note_retention_alert(run_id, run_metadata, "; ".join(errors) if errors else None)
+    return info
 
 
 def _attribute_keepers(arts: list, targets: list, cumulative: list) -> dict:
@@ -662,12 +839,17 @@ def set_keep_decision(run_id: str, keep=None, drop=None) -> dict:
     md["keep_decision"] = dec
     from core.graph.entities import patch_metadata
     patch_metadata(run_id, {"keep_decision": dec})   # single-key: no blob race
-    _retain_run_outputs(run_id, md)     # apply now, honoring the merged decision
+    info = _retain_run_outputs(run_id, md) or {}   # apply now, honoring the merged decision
     try:
         summary = run_durable_view(run_id).get("summary")
     except Exception:  # noqa: BLE001 — the decision is recorded regardless of the view
         summary = None
-    return {"run_id": run_id, "decision": dec, "summary": summary}
+    out = {"run_id": run_id, "decision": dec, "summary": summary}
+    # F10 disk-truth report: which glob-matched untracked rels were kept, which
+    # literal includes exist on disk, and any size-gated globs (surfaced, not
+    # silently dropped) — the keep tool folds these into its coverage note.
+    out.update({k: v for k, v in info.items() if v})
+    return out
 
 
 def bring_back_run(run_id: str, force: bool = False) -> dict:
@@ -768,34 +950,201 @@ def _sidecar_files(location: Optional[str]) -> set:
     return out
 
 
-def resolve_run_file(run_id: str, rel: str) -> Optional[str]:
-    """Absolute on-disk path for one of a Run's files, resolved across tiers
-    (misc/output_durability.md §6.2): weft's retained tree (a `done` row's
-    `location`) first, then the live sandbox (`artifact_path`). None if not
-    resolvable. Rejects path escapes on every candidate base."""
-    import os as _os
-    from core.compute import retention
+def _kernel_site_map() -> dict:
+    """{target: site} for the compute targets weft currently knows — so a Run's
+    output can be attributed to the machine it lives on. Best-effort; a stopped
+    kernel may be absent (the retained index then supplies the site)."""
+    try:
+        from core.compute import get_compute
+        return {k.get("kernel_id"): k.get("site")
+                for k in (get_compute().sync_call("list_kernels").get("kernels") or [])
+                if k.get("kernel_id")}
+    except Exception:  # noqa: BLE001 — no map just means we fall back to the index
+        return {}
 
-    def _under(base: Optional[str]) -> Optional[str]:
-        if not base:
-            return None
-        baser = _os.path.realpath(base)
-        cand = _os.path.realpath(_os.path.join(baser, rel))
-        if (cand == baser or cand.startswith(baser + _os.sep)) and _os.path.isfile(cand):
-            return cand
+
+def _is_kernel_target(t) -> bool:
+    return isinstance(t, str) and t.startswith("krn_")
+
+
+def _safe_join(base: Optional[str], rel: str) -> Optional[str]:
+    """Join a caller-controlled `rel` under `base`, refusing escapes: an absolute
+    `rel` or any `..` segment is rejected, and the normalized candidate must stay
+    under `base`. Returns the joined path, or None on rejection — NEVER raises into
+    a route. Pure lexical (normpath), so it is valid for a remote abs path (a
+    kernel sandbox) as well as a local cache dir. Callers must treat None as
+    'refuse' (no cache read, no cache write, no fetch)."""
+    import os as _os
+    if not base or not rel:
+        return None
+    r = str(rel).replace("\\", "/")
+    if r.startswith("/") or _os.path.isabs(r):
+        return None
+    if any(seg == ".." for seg in r.split("/")):
+        return None
+    baser = _os.path.normpath(base)
+    cand = _os.path.normpath(_os.path.join(baser, r))
+    if cand != baser and not cand.startswith(baser + _os.sep):
+        return None
+    return cand
+
+
+@lru_cache(maxsize=32)
+def _site_root(site: str) -> Optional[str]:
+    """A registered site's weft root abs path (from its capabilities/config) —
+    the base under which a kernel sandbox lives (`<root>/kernels/<kernel_id>`).
+    None when unknown. Cached (site config doesn't change mid-session)."""
+    try:
+        from core.compute.adapter import get_compute
+        d = get_compute().sync_call("sites_describe", site) or {}
+        return (d.get("config") or {}).get("root")
+    except Exception:  # noqa: BLE001
         return None
 
+
+def _kernel_abs_path(target: str, site: str, rel: str) -> Optional[str]:
+    """Absolute path of a rel inside a LIVE kernel's sandbox on its site
+    (`<root>/kernels/<kernel_id>/<rel>`) — the handle the data-plane
+    (`register_source → fetch`) needs to bring a store/large file home from an
+    OPEN run (the retain lane defers on a live kernel; the read lane caps at
+    8 MB). None when the site root is unknown, the target isn't a kernel, or
+    `rel` escapes the kernel sandbox (absolute / `..` — the normpath must stay
+    under `<root>/kernels/<target>/`)."""
+    if not _is_kernel_target(target):
+        return None
+    root = _site_root(site)
+    if not root:
+        return None
+    return _safe_join(f"{root.rstrip('/')}/kernels/{target}", rel)
+
+
+def _data_plane_fetch(abs_path: str, site: str, dest: str,
+                      *, force: bool = False) -> bool:
+    """Bring a remote abs path (file or directory) home to `dest` over the
+    datasets data-plane (`register_source → fetch`) — one transfer, all sizes,
+    size-gated by the same `FETCH_GUARDRAIL_BYTES` fetch enforces (`force=True`
+    bypasses that gate for an explicit forced bring-back). True on a complete
+    local copy. The transport datasets already use; not a new one."""
+    try:
+        import os as _os
+        from core.data import datasets as _ds
+        _os.makedirs(_os.path.dirname(dest) or ".", exist_ok=True)
+        meta = _ds.register_source(abs_path, site=site)
+        res = _ds.fetch(meta, dest, force=force)
+        return bool(res.get("ok")) and _os.path.exists(dest)
+    except Exception as e:  # noqa: BLE001
+        _log.debug("_data_plane_fetch(%s@%s) failed: %s", abs_path, site, e)
+        return False
+
+
+def _live_inventory(target: str, **kw) -> dict:
+    """Inventory a target, preferring the LIVE sandbox for a kernel target — an
+    OPEN run's outputs sit in the live kernel dir, which has NO terminal record
+    yet (`run_inventory` without live raises data.missing). Try live-first for a
+    kernel, terminal-first otherwise, falling back across both so a just-settled
+    kernel still resolves. {} on total failure (caller reads as 'unknown → too big')."""
+    from core.compute.adapter import get_compute
+    c = get_compute()
+    for live in ((True, False) if _is_kernel_target(target) else (False, True)):
+        try:
+            return c.sync_call("run_inventory", target, live=live, **kw)
+        except Exception:  # noqa: BLE001
+            continue
+    return {}
+
+
+def _live_file_stat(target: str, rel: str) -> dict:
+    """file_stat, live-aware for a kernel target (open run). For a kernel, try a
+    LIVE-flag read first (its dir has no terminal record); otherwise use the
+    `retention.file_stat` wrapper. Both fall back to the other. {} on failure."""
+    from core.compute import retention
+
+    def _live():
+        try:
+            from core.compute.adapter import get_compute
+            st = get_compute().sync_call("run_file_stat", target, rel, live=True)
+            return st if isinstance(st, dict) else None
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _wrapped():
+        try:
+            return retention.file_stat(target, rel)
+        except Exception:  # noqa: BLE001
+            return None
+
+    for fn in ((_live, _wrapped) if _is_kernel_target(target) else (_wrapped, _live)):
+        st = fn()
+        if st is not None:
+            return st
+    return {}
+
+
+def _run_remote_targets(run_id: str) -> list:
+    """`[(target, site)]` — the Run's targets whose bytes live on a NON-local site,
+    from retained rows (which carry the site) + the Run's recorded weft targets.
+    Used by both the single-FILE locate and the DIRECTORY-store bring-back."""
+    from core.compute import retention
+    md = (get_entity(run_id) or {}).get("metadata") or {}
+    kmap = _kernel_site_map()
+    site_of: dict = {}
     try:
         for row in (retention.retained(label=run_id) or []):
-            if row.get("state") != "done":
-                continue
-            hit = _under(retention.location_path(row))
-            if hit:
-                return hit
+            t, s = row.get("target"), row.get("site")
+            if t and s:
+                site_of.setdefault(t, s)
     except Exception as e:  # noqa: BLE001
-        _log.warning("resolve_run_file: retained() failed for %s: %s", run_id, e)
-    ent = get_entity(run_id)
-    return _under((ent or {}).get("artifact_path"))
+        _log.debug("_run_remote_targets: retained() failed for %s: %s", run_id, e)
+    out = []
+    for t in dict.fromkeys(list(site_of) + list(md.get("weft_targets") or [])):
+        site = site_of.get(t) or kmap.get(t) or "local"
+        if site != "local":
+            out.append((t, site))
+    return out
+
+
+def run_output_site(run_id: str, rel: str) -> Optional[str]:
+    """The site where a Run output's bytes live, when that is NOT this controller —
+    for honest "on <site>" messaging in the serving routes. None when the file is
+    local, unknown, or the substrate is unreachable. Best-effort, never raises."""
+    try:
+        loc = locate_run_output(run_id, rel)
+    except Exception:  # noqa: BLE001
+        return None
+    return loc["site"] if loc and loc.get("locality") == "remote" else None
+
+
+def _fetched_cache_dir(run_id: str):
+    """Stable local cache dir for bytes fetched from a remote site to open a Run
+    output — a `<run_id>-fetched` sibling under the project scratch tree, so a
+    second open is a free cache hit (durability + resolvability converge: fetching
+    to view IS bringing a local copy home)."""
+    from core.data.workspace import scratch_dir
+    from core import projects
+    pid = str(projects.current() or "default")
+    return scratch_dir(pid, f"{run_id}-fetched")
+
+
+def resolve_run_file(run_id: str, rel: str) -> Optional[str]:
+    """Absolute on-disk path for one of a Run's FILES at its EXACT rel — the
+    serve/archive policy over the canonical pair: `locate_run_output`
+    (match="exact" — a same-named file elsewhere must never answer a /file
+    request) + a transparent `materialize_run_output` under the request-blocking
+    gate (`_MAX_HARVEST_BYTES` — these surfaces block an HTTP request on the
+    fetch, so their budget is small). Files above the gate — and of UNKNOWN
+    size — stay remote (None → the route names the site honestly). Never
+    raises."""
+    from core.exec.run import _MAX_HARVEST_BYTES
+    try:
+        loc = locate_run_output(run_id, rel, match="exact")
+        if not loc or loc.get("kind") != "file":
+            return None
+        if loc.get("local_path"):
+            return loc["local_path"]
+        return materialize_run_output(loc, max_bytes=_MAX_HARVEST_BYTES)
+    except Exception as e:  # noqa: BLE001 — a resolver must degrade, not raise
+        _log.debug("resolve_run_file failed for %s/%s: %s", run_id, rel, e)
+        return None
 
 
 @lru_cache(maxsize=512)
@@ -937,22 +1286,40 @@ def _sidecar_resolve(loc: str, name: str) -> Optional[str]:
     return None
 
 
-def resolve_output(run_id: str, name: str) -> Optional[dict]:
-    """P3 serving facade: resolve a Run output (FILE or DIRECTORY store) matching
-    `name` (basename or rel) across tiers, catalog-first —
+def locate_run_output(run_id: str, name: str, *, match: str = "name",
+                      remote: bool = True) -> Optional[dict]:
+    """THE canonical Run-output resolver: answers WHERE an output lives and how
+    big it is, and NEVER moves bytes — a lookup must not transfer; only
+    `materialize_run_output` (the one mover) may, on an action surface's
+    explicit budget. Every consumption surface (serve, list, view, render,
+    download) resolves through here, so the local-or-remote decision has
+    exactly one home.
 
-        {local_path, rel, root, locality, durability, kind}
+        {run_id, rel, kind: "file"|"dir", locality: "local"|"remote",
+         local_path, root, durability, site, target, size, mtime, digest}
 
-    Tiers, in order: weft retained tree (`done` rows — resolved from the catalog
-    sidecar, walk only as fallback; durability="retained") → the live weft jobdir(s)
-    (durability="live"; `rel` is sandbox-relative, i.e. retain-include ready) → the
-    run sandbox `artifact_path` (jupyter / non-weft; durability="scratch").
-    `locality` is hard-wired "local" until the remote arms (P6). `kind` is
-    "dir" | "file". Escape-safe on every tier. None when not locally resolvable
-    (in-sandbox on a REMOTE site, or swept). aba serves IN PLACE from `local_path`
-    — weft is the system of record; nothing here copies bytes."""
+    LOCAL tiers first (bytes on this machine → `local_path` set, site "local"),
+    catalog-first: weft retained tree (`done` rows; durability="retained") →
+    the live weft jobdir(s) ("live"; `rel` is sandbox-relative, retain-include
+    ready) → the run sandbox `artifact_path` ("scratch") → weft's own
+    (run, rel) key (`run_file_stat.abs_path` — catches keeps under another
+    label / moved by PLACE; exact-rel, weft confines traversal). Then the
+    REMOTE tier: the Run's non-local targets, confirmed by live-aware
+    `file_stat` (a file) or inventory membership (a directory store) —
+    `local_path` None, `size` None when unknown/truncated (readers treat that
+    as too-big-to-move), `digest` the store's freshness identity (hashed
+    member path/bytes/mtime — the same idiom as the data-plane fingerprint).
+
+    `match="name"` resolves a logical name (exact rel, then store-dir prefix,
+    then basename — the viewer/lookup semantic); `match="exact"` joins the
+    exact rel only (the serve/archive/keep semantic — a same-named file
+    elsewhere must NOT answer). `remote=False` skips the remote tier (for a
+    bounded scan's cheap local pass). Escape-safe on every tier; never
+    raises."""
     import os as _os
     from core.compute import retention
+    ent = get_entity(run_id)
+    md = (ent or {}).get("metadata") or {}
     tiers: list = []                                   # (root, durability, catalog_first)
     try:
         for row in (retention.retained(label=run_id) or []):
@@ -961,56 +1328,183 @@ def resolve_output(run_id: str, name: str) -> Optional[dict]:
                 if loc:
                     tiers.append((loc, "retained", True))
     except Exception as e:  # noqa: BLE001
-        _log.debug("resolve_output: retained() failed for %s: %s", run_id, e)
+        _log.debug("locate_run_output: retained() failed for %s: %s", run_id, e)
     tiers.extend((d, "live", False) for d in _run_jobdirs(run_id))
-    ent = get_entity(run_id)
     ap = (ent or {}).get("artifact_path")
     if ap:
-        tiers.append((ap, "scratch", False))           # jupyter / non-weft fallback
+        tiers.append((ap, "scratch", False))           # legacy / non-weft fallback
+    # exec-cwd tier: every exec attributed to this Run wrote its sidecar under
+    # <cwd>/.exec, so dirname² of record_path recovers the directory the bytes
+    # were written in — a DETACHED JOB's scratch dir or a kernel sandbox. The
+    # kernel-jobdir map above only sees KERNEL targets (list_kernels), so a
+    # detached job's outputs were unreachable (found live: dead_link on a file
+    # sitting in its job scratch dir).
+    try:
+        from core.graph import exec_records as _xr
+        seen = {_os.path.realpath(r) for r, _, _ in tiers}
+        for _ix in _xr.list_by_run(run_id):
+            rp = _ix.get("record_path")
+            if not rp:
+                continue
+            cdir = _os.path.dirname(_os.path.dirname(str(rp)))
+            if cdir and _os.path.isdir(cdir) \
+                    and _os.path.realpath(cdir) not in seen:
+                seen.add(_os.path.realpath(cdir))
+                tiers.append((cdir, "live", False))
+    except Exception as e:  # noqa: BLE001 — a tier must never break the resolver
+        _log.debug("locate_run_output: exec-cwd tier failed for %s: %s", run_id, e)
+
+    def _exact_under(root: str) -> Optional[str]:
+        baser = _os.path.realpath(root)
+        cand = _os.path.realpath(_os.path.join(baser, name))
+        if (cand == baser or cand.startswith(baser + _os.sep)) and _os.path.exists(cand):
+            return cand
+        return None
+
     for root, durability, catalog_first in tiers:
-        hit = (_sidecar_resolve(root, name) if catalog_first else None) \
-            or _search_root_for(root, name)
+        if match == "exact":
+            hit = _exact_under(root)
+        else:
+            hit = (_sidecar_resolve(root, name) if catalog_first else None) \
+                or _search_root_for(root, name)
         if hit:
             rootr = _os.path.realpath(root)
-            return {"local_path": hit,
+            isdir = _os.path.isdir(hit)
+            size = None
+            if not isdir:
+                try:
+                    size = _os.path.getsize(hit)
+                except OSError:
+                    size = None
+            return {"run_id": run_id,
                     "rel": _os.path.relpath(hit, rootr).replace(_os.sep, "/"),
-                    "root": rootr,
-                    "locality": "local",
+                    "root": rootr, "local_path": hit,
+                    "locality": "local", "site": "local",
                     "durability": durability,
-                    "kind": "dir" if _os.path.isdir(hit) else "file"}
+                    "kind": "dir" if isdir else "file",
+                    "size": size, "mtime": None, "target": None, "digest": None}
     # retention2 fallback: the (run, relpath) KEY, resolved by weft itself
-    # (run_file_stat answers sandbox-or-keep with `at`) — catches states the
-    # tier walk misses: kernel row gone, keep under a different label, keep
-    # moved by PLACE. Exact-rel only; weft confines traversal to the jobdir.
+    # (run_file_stat answers sandbox-or-keep with `at` + a LOCAL abs_path).
     try:
         from core.compute.adapter import get_compute
         comp = get_compute()
-        for t2 in ((ent or {}).get("metadata") or {}).get("weft_targets") or []:
+        for t2 in md.get("weft_targets") or []:
             st = comp.sync_call("run_file_stat", t2, name)
             pth = st.get("abs_path")
             if st.get("exists") and pth and _os.path.exists(pth):
                 real = _os.path.realpath(pth)
-                return {"local_path": real,
-                        "rel": name,
-                        "root": _os.path.dirname(real),
-                        "locality": "local",
+                return {"run_id": run_id, "rel": name,
+                        "root": _os.path.dirname(real), "local_path": real,
+                        "locality": "local", "site": "local",
                         "durability": ("retained" if st.get("at") == "retained"
                                        else "live"),
-                        "kind": "dir" if _os.path.isdir(real) else "file"}
+                        "kind": "dir" if _os.path.isdir(real) else "file",
+                        "size": st.get("bytes"), "mtime": st.get("mtime"),
+                        "target": t2, "digest": None}
     except Exception as e:  # noqa: BLE001 — a fallback must stay a fallback
-        _log.debug("resolve_output (run,rel) fallback failed for %s: %s",
+        _log.debug("locate_run_output (run,rel) fallback failed for %s: %s",
                    run_id, e)
+    # HARVESTED-ARTIFACT tier (serving cache, last local tier): what the run
+    # itself ADVERTISES — produced[] entries on its exec records, whose bytes
+    # are content-addressed copies under the project's artifacts dir. The
+    # name-lookup surfaces (viewer/path-lookup) must see everything the
+    # run-file surface serves; resolving them from different catalogs is the
+    # presentation-parity violation the surfaces oracle caught live
+    # (viewer_blind on a durably-served table).
+    try:
+        from core.exec.artifacts import artifacts_for_run
+        from core.config import project_artifacts_dir
+        base = _os.path.basename(name)
+        for a in artifacts_for_run(run_id):
+            on = (a.get("original_name") or "").strip()
+            url = a.get("url") or ""
+            if not on or not url.startswith("/artifacts/"):
+                continue
+            if not ((on == name) if match == "exact"
+                    else (on == name or _os.path.basename(on) == base)):
+                continue
+            parts = url.split("/")            # ['', 'artifacts', pid, served]
+            if len(parts) != 4:
+                continue
+            f = project_artifacts_dir(parts[2]) / parts[3]
+            if f.is_file():
+                try:
+                    size = a.get("size") or _os.path.getsize(str(f))
+                except OSError:
+                    size = a.get("size")
+                # the harvested copy KNOWS its producer: the artifact row
+                # carries exec_id, and the exec record's compute block holds
+                # the kernel target — surface it, or every consumer that
+                # needs the durable (target, rel) identity (run_key capture,
+                # retention) sees an identity-less hit whenever this tier
+                # answers first (live: the remote wing's last red — a
+                # remote-born file's serving copy shadowed the remote tier)
+                _tgt = None
+                try:
+                    from core.graph import exec_records as _er
+                    _tgt = (((_er.get(a.get("exec_id")) or {})
+                             .get("compute") or {}).get("kernel_id"))
+                except Exception:  # noqa: BLE001 — identity is enrichment
+                    pass
+                return {"run_id": run_id, "rel": on, "root": str(f.parent),
+                        "local_path": str(f), "locality": "local",
+                        "site": "local", "durability": "store",
+                        "kind": "file", "size": size, "mtime": None,
+                        "target": _tgt, "digest": a.get("sha256")}
+    except Exception as e:  # noqa: BLE001 — a tier must never break the resolver
+        _log.debug("locate_run_output: artifact-store tier failed for %s: %s",
+                   run_id, e)
+    if not remote:
+        return None
+    # REMOTE tier — the bytes exist, on a non-local site. Locate-only:
+    # existence + size + freshness identity; never a transfer.
+    try:
+        for target, site in _run_remote_targets(run_id):
+            st = _live_file_stat(target, name)
+            if st.get("exists"):
+                return {"run_id": run_id, "rel": name,
+                        "root": None, "local_path": None,
+                        "locality": "remote", "site": site,
+                        "durability": ("retained" if st.get("at") == "retained"
+                                       else "live" if _is_kernel_target(target)
+                                       else "scratch"),
+                        "kind": "file", "size": st.get("bytes"),
+                        "mtime": st.get("mtime"), "target": target,
+                        "digest": _file_digest(st.get("bytes"), st.get("mtime"))}
+            mem = _store_members(target, name)
+            if mem:
+                return {"run_id": run_id, "rel": name,
+                        "root": None, "local_path": None,
+                        "locality": "remote", "site": site,
+                        "durability": ("live" if _is_kernel_target(target)
+                                       else "scratch"),
+                        "kind": "dir",
+                        "size": (None if mem["truncated"]
+                                 else mem["total_bytes"]),
+                        "mtime": None, "target": target,
+                        "digest": mem["digest"]}
+    except Exception as e:  # noqa: BLE001 — the remote tier degrades to None
+        _log.debug("locate_run_output remote tier failed for %s/%s: %s",
+                   run_id, name, e)
     return None
+
+
+def resolve_output(run_id: str, name: str) -> Optional[dict]:
+    """P3 serving facade — an alias of the canonical `locate_run_output`
+    (match="name"). NOTE the honest-locality contract: a REMOTE-only output now
+    returns locality="remote" with local_path=None (it used to be None
+    outright); path consumers use `resolve_run_output_path` (still
+    local-or-None) or materialize explicitly."""
+    return locate_run_output(run_id, name)
 
 
 def resolve_run_output_path(run_id: str, name: str) -> Optional[str]:
     """Absolute LOCAL path to a Run output FILE or DIRECTORY matching `name` (basename or rel),
-    across tiers: weft retained tree (`done` location) → the live weft jobdir(s) → the run
-    sandbox. Directory-aware — a `.zarr` STORE resolves (unlike `resolve_run_file`, which is
-    file-only) — and escape-safe. None when not locally resolvable (in-sandbox on a REMOTE site,
-    or swept). Thin wrapper over the P3 `resolve_output` facade (path only)."""
-    info = resolve_output(run_id, name)
-    return info["local_path"] if info else None
+    across the canonical local tiers (retained tree → live jobdir(s) → sandbox → weft's
+    (run,rel) key). Directory-aware and escape-safe. None when not locally resolvable
+    (in-sandbox on a REMOTE site, or swept) — this wrapper never moves bytes."""
+    info = locate_run_output(run_id, name)
+    return info.get("local_path") if info else None
 
 
 def resolve_entity_output(entity_id: str) -> Optional[dict]:
@@ -1046,19 +1540,453 @@ def resolve_entity_output(entity_id: str) -> Optional[dict]:
         return None
 
 
-def resolve_project_run_output(name: str, *, max_runs: int = 12) -> Optional[tuple]:
-    """`(run_id, abs_path)` for a project Run output matching `name`, searching Runs newest-first
-    (capped). Backs open_viewer / the viewer-launch route resolving a fresh weft output that
-    isn't in the entity-graph files tree yet — so the user needn't `data_register` it first."""
+def _locate_project_run_output(name: str, *, max_runs: int = 12) -> Optional[tuple]:
+    """Locate a project Run output matching `name` WITHOUT moving bytes:
+    `(run_id, site, size, is_remote)` for a confident match, or None. A cheap
+    LOCAL-only locate pass over recent Runs first; then the remote tier over a
+    bounded few weft-target candidates. When only remote candidates match and
+    MORE THAN ONE run has the output (a bare-basename collision across runs),
+    the result is ambiguous → None — run A's output never silently answers a
+    request that could be run B's."""
     scanned = 0
+    remote_cands: list = []
     for e in reversed(list_entities(type_filter="analysis", include_archived=False)):
-        hit = resolve_run_output_path(e["id"], name)
-        if hit:
-            return (e["id"], hit)
+        rid = e["id"]
+        loc = locate_run_output(rid, name, remote=False)
+        if loc and loc.get("local_path"):
+            return (rid, "local", loc.get("size"), False)
+        if (e.get("metadata") or {}).get("weft_targets"):
+            remote_cands.append(rid)
         scanned += 1
         if scanned >= max_runs:
             break
+    matches: list = []
+    for rid in remote_cands[:4]:
+        loc = locate_run_output(rid, name)
+        if loc and loc.get("locality") == "remote":
+            matches.append((rid, loc))
+    if len(matches) == 1:                     # unambiguous remote hit
+        rid, loc = matches[0]
+        return (rid, loc["site"], loc.get("size"), True)
+    return None                               # no match, or ambiguous across runs
+
+
+def resolve_project_run_output_located(name: str, *, max_runs: int = 12) -> Optional[tuple]:
+    """`(run_id, abs_path, site, total_bytes, is_remote)` for a project Run
+    output matching `name`, else None — resolve_project_run_output plus the
+    located facts (site, size, locality) it already computes internally, so a
+    caller can annotate a link with the source's location cost WITHOUT a second
+    inventory probe. `abs_path` is the real on-disk path for a local output, or
+    the logical NAME (a remote marker the launch path fetches under the size
+    gate) for a remote one."""
+    loc = _locate_project_run_output(name, max_runs=max_runs)
+    if not loc:
+        return None
+    run_id, site, size, is_remote = loc
+    if not is_remote:
+        hit = resolve_run_output_path(run_id, name)
+        return (run_id, hit, site, size, False) if hit else None
+    return (run_id, name, site, size, True)    # remote marker — launch fetches, not the lookup
+
+
+def resolve_project_run_output(name: str, *, max_runs: int = 12) -> Optional[tuple]:
+    """`(run_id, abs_path)` for a project Run output matching `name` — a LOOKUP
+    that NEVER moves bytes (it backs the viewer menu GET `/api/viewers/for`,
+    download, and open_viewer). A local output returns its real on-disk path. A
+    REMOTE output returns `(run_id, name)` — a REMOTE MARKER where `abs_path`
+    is the logical name, NOT an on-disk file — so the viewer LAUNCH path
+    (pagoda3._resolve_source → `resolve_run_store`) performs the size-gated,
+    freshness-revalidated fetch. (Deliberately no cached-copy fast path here: a
+    marker forces the launch to revalidate, so a stale cache of a still-growing
+    output can't be handed out as the real thing.) None when no Run confidently
+    has the output."""
+    located = resolve_project_run_output_located(name, max_runs=max_runs)
+    return (located[0], located[1]) if located else None
+
+
+def run_id_for_entity(entity_id: str) -> Optional[str]:
+    """The Run that produced a pinned entity, via its `exec_id` → exec record
+    `run_id`. Lets a viewer node carrying only an `entity_id` reach the canonical
+    Run resolver. None when the entity isn't run-linked. Best-effort."""
+    try:
+        ent = get_entity(entity_id)
+        if not ent:
+            return None
+        exec_id = ent.get("exec_id")
+        if not exec_id:
+            return None
+        from core.graph import exec_records
+        return (exec_records.get(exec_id) or {}).get("run_id")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _rel_under_store(path: Optional[str], name: str) -> bool:
+    """Is inventory `path` part of the store addressed by `name` (an exact match,
+    or a member under the store's dir prefix — matched on the full rel or the
+    basename, since a jobdir listing and a logical name may differ in leading
+    segments)?"""
+    if not path:
+        return False
+    base = name.rsplit("/", 1)[-1].rstrip("/")
+    n = name.rstrip("/")
+    return (path == n or path.startswith(n + "/")
+            or path == base or path.startswith(base + "/"))
+
+
+def _store_members(target: str, name: str) -> Optional[dict]:
+    """The store addressed by `name` in a target's inventory (live-aware):
+    `{n_files, total_bytes, truncated, digest}`, or None when it has no members
+    there. `digest` hashes the sorted member (path, bytes, mtime) lines — the
+    store's freshness identity AS LISTED NOW (the same idiom as the data-plane
+    fingerprint: any write, including a same-size rewrite, changes it; a
+    FINISHED target's inventory is frozen, so its digest never changes). None
+    digest when the inventory was truncated — an undercount can't identify
+    anything, so readers treat the copy as unverifiable. Never raises."""
+    try:
+        inv = _live_inventory(target)
+    except Exception:  # noqa: BLE001
+        return None
+    entries = [e for e in (inv.get("entries") or inv.get("files") or [])
+               if isinstance(e, dict) and _rel_under_store(e.get("path"), name)]
+    if not entries:
+        return None
+    truncated = bool(inv.get("truncated"))
+    digest = None
+    if not truncated:
+        import hashlib as _hl
+        lines = sorted(f"{e.get('path')}\t{e.get('bytes', 0)}\t{e.get('mtime', 0)}"
+                       for e in entries)
+        digest = _hl.sha1("\n".join(lines).encode()).hexdigest()
+    return {"n_files": len(entries),
+            "total_bytes": sum(e.get("bytes", 0) for e in entries),
+            "truncated": truncated, "digest": digest}
+
+
+def _file_digest(size, mtime) -> str:
+    """Freshness digest for a single remote file — its live (bytes, mtime)
+    pair. Same role as the store digest: equality ⇒ a fetched copy is
+    current; any rewrite (even same-size) changes it."""
+    return f"{size or 0}:{mtime or 0}"
+
+
+def _stamp_read(dest: str) -> Optional[str]:
+    """The freshness digest a fetched-home copy at `dest` was stamped with, or
+    None (no stamp / unreadable → the copy counts as stale)."""
+    import json
+    try:
+        with open(dest + ".stamp") as fh:
+            d = json.load(fh)
+        return d.get("digest") if isinstance(d, dict) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+# Per-dest install serialization. A directory-store install is check-then-swap
+# (is dest present & fresh? → keep; else supersede + rename in) across TWO
+# non-atomic files (the dir and its sibling `.stamp`). Two concurrent opens of
+# the SAME store can otherwise interleave so the second sees the first's dir
+# present but its stamp not yet written, misreads it as stale, and rmtree's the
+# fresh copy out from under the first caller (which already handed the path to a
+# viewer). A per-dest lock makes the short critical section atomic within the
+# server process (the case that actually races: two viewers opening one store).
+import threading as _threading
+_INSTALL_LOCKS: dict = {}
+_INSTALL_LOCKS_GUARD = _threading.Lock()
+
+
+def _install_lock(dest: str) -> "_threading.Lock":
+    with _INSTALL_LOCKS_GUARD:
+        lk = _INSTALL_LOCKS.get(dest)
+        if lk is None:
+            lk = _INSTALL_LOCKS[dest] = _threading.Lock()
+        return lk
+
+
+def _stamp_write(dest: str, digest: Optional[str]) -> None:
+    """Record the SOURCE freshness digest the copy at `dest` was fetched
+    against — captured at locate time, BEFORE the fetch, so a store that grew
+    mid-transfer can never validate as current. No digest (unknown/truncated
+    source) → no stamp → the next open re-fetches. Best-effort."""
+    if not digest:
+        return
+    import json
+    try:
+        with open(dest + ".stamp", "w") as fh:
+            json.dump({"digest": digest}, fh)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def materialize_run_output(loc: Optional[dict], *, max_bytes: int,
+                           force: bool = False, progress=None) -> Optional[str]:
+    """THE single byte-mover for Run outputs. Takes a `locate_run_output`
+    result and returns a LOCAL path — as-is for a local hit, otherwise by
+    bringing the bytes home. Movement is always deliberate: the CALLER (an
+    action surface — a serve route, a viewer launch, a download) chooses
+    `max_bytes` as its own budget; an unknown size (None — including a
+    truncated store inventory) or an over-budget output is refused (None)
+    unless `force` (the user's explicit override). `progress` (optional
+    callable) receives human-readable phase strings for the action's UI.
+
+    Caching: fetched copies land in the run's `<run_id>-fetched` scratch cache,
+    installed ATOMICALLY and stamped with the source's freshness digest; every
+    later open revalidates against the CURRENT digest. A finished target's
+    digest never changes → cache hits forever; an OPEN run's changes on any
+    write → re-fetch — a frozen first fetch can never masquerade as current.
+    Never raises."""
+    if not loc:
+        return None
+    if loc.get("local_path"):
+        return loc["local_path"]
+    if loc.get("locality") != "remote":
+        return None
+    try:
+        size = loc.get("size")
+        if not force and (size is None or size > max_bytes):
+            return None                       # unknown or over-budget ⇒ honest refusal
+        if loc.get("kind") == "dir":
+            return _materialize_store(loc, force=force, progress=progress)
+        return _materialize_file(loc, force=force, progress=progress)
+    except Exception as e:  # noqa: BLE001 — a mover must degrade, not raise
+        _log.debug("materialize_run_output failed for %s/%s: %s",
+                   loc.get("run_id"), loc.get("rel"), e)
+        return None
+
+
+def _materialize_file(loc: dict, *, force: bool = False, progress=None) -> Optional[str]:
+    """Bring one remote Run FILE home (the caller's gate already passed).
+    Lanes: ≤ 8 MB → the `file_read` preview channel; bigger on a LIVE KERNEL →
+    the datasets data-plane on the sandbox abs path (the retain lane defers on
+    a live kernel); bigger on a FINISHED target → a location-axis
+    `retention.retain(dest="@workspace")` copy, which lands in the retained
+    tree — the local tier serves it from then on. Cache-dir writes are ATOMIC
+    (unique .partial + os.replace — a reader never sees a half-written file)
+    and digest-stamped for revalidation."""
+    import os as _os
+    import uuid as _uuid
+    from core.compute import retention
+    run_id, rel = loc["run_id"], loc["rel"]
+    target, site = loc["target"], loc["site"]
+    size = loc.get("size") or 0
+    digest = loc.get("digest") or _file_digest(loc.get("size"), loc.get("mtime"))
+    dest = _safe_join(str(_fetched_cache_dir(run_id)), rel)
+    if not dest:
+        return None
+    if _os.path.isfile(dest) and _stamp_read(dest) == digest:
+        return _os.path.realpath(dest)        # a current copy is already home
+    sp = progress or (lambda *_: None)
+    _os.makedirs(_os.path.dirname(dest) or ".", exist_ok=True)
+    if size <= _PREVIEW_CAP:
+        try:
+            rd = retention.file_read(target, rel, max_bytes=_PREVIEW_CAP)
+        except Exception:  # noqa: BLE001
+            return None
+        b64 = rd.get("bytes_b64")
+        if b64 is None or rd.get("truncated"):
+            return None
+        import base64
+        _bytes = base64.b64decode(b64)
+        # Verify against the size the locate step recorded rather than trusting
+        # `truncated` alone — same class as the viewer chunk-cache truncation
+        # (2026-07-27). This copy is stamped with the digest and treated as
+        # current from here on, so installing a short one poisons every later
+        # read of that file.
+        if size and len(_bytes) != size:
+            return None
+        tmp = f"{dest}.partial.{_os.getpid()}.{_uuid.uuid4().hex}"
+        with open(tmp, "wb") as fh:
+            fh.write(_bytes)
+        _os.replace(tmp, dest)                # atomic: never a half-written dest
+        _stamp_write(dest, digest)
+        return _os.path.realpath(dest)
+    if _is_kernel_target(target):
+        abs_path = _kernel_abs_path(target, site, rel)
+        if not abs_path:
+            return None
+        sp(f"Fetching {rel} from {site} ({size / 1e6:.0f} MB)…")
+        tmp = f"{dest}.partial.{_os.getpid()}.{_uuid.uuid4().hex}"
+        if _data_plane_fetch(abs_path, site, tmp, force=force) and _os.path.isfile(tmp):
+            _os.replace(tmp, dest)
+            _stamp_write(dest, digest)
+            return _os.path.realpath(dest)
+        try:
+            _os.remove(tmp)
+        except OSError:
+            pass
+        return None
+    # Finished target past the preview cap: place via retention into the
+    # workspace retained tree (immutable bytes — the retained tier serves the
+    # copy from now on; no cache stamp needed).
+    sp(f"Fetching {rel} from {site} ({size / 1e6:.0f} MB)…")
+    try:
+        res = retention.retain(target, include=[rel], dest="@workspace",
+                               label=run_id, background=False)
+    except Exception:  # noqa: BLE001
+        return None
+    lp = retention.location_path(res)
+    if not lp:
+        return None
+    for cand in (_os.path.join(lp, rel), _os.path.join(lp, rel.rsplit("/", 1)[-1])):
+        real = _os.path.realpath(cand)
+        if _os.path.isfile(real):
+            return real
     return None
+
+
+def _materialize_store(loc: dict, *, force: bool = False, progress=None) -> Optional[str]:
+    """Bring a remote DIRECTORY store home (the caller's gate already passed).
+    LIVE KERNEL → the datasets data-plane on the sandbox abs path (retain
+    defers there; the read channel caps at 8 MB); FINISHED target → a
+    location-axis `retain(dest="@workspace")` into the retained tree. Data-
+    plane installs are atomic (unique temp dir → swap) and stamped with the
+    digest captured at LOCATE time — a store that grew during the transfer
+    reads as stale on the next open, never as current. At install time a
+    `dest` that already matches the CURRENT digest is kept (a concurrent open
+    won) rather than destroyed — the swap can only ever replace stale bytes."""
+    import os as _os
+    import shutil as _sh
+    import uuid as _uuid
+    from core.compute import retention
+    run_id, rel = loc["run_id"], loc["rel"]
+    target, site = loc["target"], loc["site"]
+    digest = loc.get("digest")
+
+    if _is_kernel_target(target):
+        abs_path = _kernel_abs_path(target, site, rel)
+        if not abs_path:                             # unknown root or escaping name
+            return None
+        dest = _safe_join(str(_fetched_cache_dir(run_id)), rel)
+        if not dest:
+            return None
+        if _os.path.isdir(dest) and digest and _stamp_read(dest) == digest:
+            return _os.path.realpath(dest)           # current copy already home
+        size = loc.get("size")
+        sp = progress or (lambda *_: None)
+        sp(f"Fetching {rel.rsplit('/', 1)[-1]} from {site}"
+           + (f" ({size / 1e6:.0f} MB)…" if size else "…"))
+        _os.makedirs(_os.path.dirname(dest) or ".", exist_ok=True)
+        tmp = f"{dest}.partial.{_os.getpid()}.{_uuid.uuid4().hex}"
+        if _data_plane_fetch(abs_path, site, tmp, force=force) and _os.path.isdir(tmp):
+            # Serialize the check-then-swap for THIS dest: without the lock a
+            # peer that installed while we fetched would be seen mid-install
+            # (dir present, stamp not yet written) and destroyed as "stale".
+            with _install_lock(dest):
+                try:
+                    if _os.path.isdir(dest):
+                        if digest and _stamp_read(dest) == digest:
+                            _sh.rmtree(tmp, ignore_errors=True)   # a peer already installed the current copy
+                            return _os.path.realpath(dest)
+                        trash = f"{dest}.stale.{_uuid.uuid4().hex}"
+                        _os.rename(dest, trash)                   # supersede stale bytes
+                        _sh.rmtree(trash, ignore_errors=True)
+                    _os.replace(tmp, dest)
+                    _stamp_write(dest, digest)                    # locate-time digest
+                    return _os.path.realpath(dest) if _os.path.isdir(dest) else None
+                except OSError:                                   # dest raced in — keep theirs
+                    _sh.rmtree(tmp, ignore_errors=True)
+                    return _os.path.realpath(dest) if _os.path.isdir(dest) else None
+        _sh.rmtree(tmp, ignore_errors=True)
+        return None                                  # failure → honest "on <site>"
+
+    # Finished target: location-copy into the workspace retained tree
+    # (immutable bytes — the retained tier serves the copy from now on).
+    try:
+        res = retention.retain(target, include=[rel], dest="@workspace",
+                               label=run_id, background=False)
+        lp = retention.location_path(res)
+    except Exception:  # noqa: BLE001
+        lp = None
+    if lp:
+        base = rel.rsplit("/", 1)[-1]
+        for cand in (_os.path.join(lp, rel), _os.path.join(lp, base), lp):
+            real = _os.path.realpath(cand)
+            if _os.path.isdir(real):
+                return real
+    return None
+
+
+def _remote_store_rel(target: str, name: str) -> Optional[str]:
+    """The SANDBOX-relative ROOT of the store addressed by `name` in a target's
+    inventory — derived with the SAME leading-segment rule as `_rel_under_store`
+    (the gate that classified this output as a store), so the registry can never
+    point the backhaul at a directory the gate did not confirm: a member is
+    `<name>/…` or root-level `<basename>/…`. An INTERIOR `<other>/<basename>/…`
+    path is deliberately NOT a match — a colliding interior path must not steal
+    the derivation (its digest/size were never what got registered), and a store
+    nested under a subdir isn't confirmable by the gate either, so it falls back
+    to the materialize path (Known gap: run-outputs.md). Returns the store dir
+    rel, or None when no member pins it down. Never raises."""
+    try:
+        inv = _live_inventory(target)
+    except Exception:  # noqa: BLE001
+        return None
+    base = name.rsplit("/", 1)[-1].rstrip("/")
+    n = name.rstrip("/")
+    for e in (inv.get("entries") or inv.get("files") or []):
+        if not isinstance(e, dict):
+            continue
+        p = e.get("path") or ""
+        if not p:
+            continue
+        if p == n or p.startswith(n + "/"):       # members under the full rel
+            return n
+        if p == base or p.startswith(base + "/"):  # members under the root-level basename
+            return base
+    return None
+
+
+def resolve_remote_store_stream(run_id: str, name: str) -> Optional[dict]:
+    """The authoritative REMOTE home of a directory store for CHUNK STREAMING —
+    `{target, site, store_rel, size, digest}` — resolved through the canonical
+    `locate_run_output` (so run placement / the stamped home is the single
+    source of truth) with the store's sandbox-relative root derived from the
+    inventory members by the SAME rule as the store gate (`_remote_store_rel` —
+    leading segment only, so the registered home is exactly the store whose
+    digest/size the gate measured). None when the output is local, not a
+    directory store, or the remote tier can't confirm it. NEVER moves bytes;
+    never raises. This is the range channel's home-{site,rel} resolver."""
+    try:
+        loc = locate_run_output(run_id, name)
+        if not loc or loc.get("locality") != "remote" or loc.get("kind") != "dir":
+            return None
+        # locality=="remote" already implies a non-local site (the remote tier
+        # only yields sites != local), so target+site presence is the only check.
+        target, site = loc.get("target"), loc.get("site")
+        if not target or not site:
+            return None
+        store_rel = _remote_store_rel(target, name)
+        if not store_rel:
+            return None
+        return {"target": target, "site": site, "store_rel": store_rel,
+                "size": loc.get("size"), "digest": loc.get("digest")}
+    except Exception as e:  # noqa: BLE001 — a resolver must degrade, not raise
+        _log.debug("resolve_remote_store_stream failed for %s/%s: %s",
+                   run_id, name, e)
+        return None
+
+
+def resolve_run_store(run_id: str, name: str, *, force: bool = False,
+                      progress=None) -> Optional[str]:
+    """Local path to a Run output — FILE or DIRECTORY store — matching `name`,
+    bringing a remote one home when the local tiers miss. This is the
+    EXPLICIT-OPEN action (a viewer launch, a deliberate store download): its
+    budget is the transfer guardrail (`FETCH_GUARDRAIL_BYTES`), it reports
+    fetch progress to the action's UI, and `force=True` is the user's explicit
+    override past the gate. None when unresolvable or refused (the caller then
+    names the site honestly); never raises."""
+    from core.data.datasets import FETCH_GUARDRAIL_BYTES
+    try:
+        loc = locate_run_output(run_id, name)
+        if not loc:
+            return None
+        if loc.get("local_path"):
+            return loc["local_path"]
+        return materialize_run_output(loc, max_bytes=FETCH_GUARDRAIL_BYTES,
+                                      force=force, progress=progress)
+    except Exception as e:  # noqa: BLE001 — a resolver must degrade, not raise
+        _log.debug("resolve_run_store failed for %s/%s: %s", run_id, name, e)
+        return None
 
 
 def _sel_match(rel: str, done_sel: list):
@@ -1153,13 +2081,20 @@ def run_durable_view(run_id: str) -> dict:
             pass
 
     # terminal inventory paths (survive the sweep) across the Run's targets — the fallback
-    # when a live stat isn't available.
+    # when a live stat isn't available. ONE batched call for all targets (weft bd6ae6e);
+    # per-entry typed errors (no receipt yet is fine) skip that target, never the batch.
+    from core.compute.errors import is_error_payload
     inv_paths: set = set()
-    for t in (md.get("weft_targets") or []):
+    targets = list(md.get("weft_targets") or [])
+    if targets:
         try:
-            inv = retention.inventory(t)
-            inv_paths.update(e.get("path") for e in (inv.get("entries") or []))
-        except Exception:  # noqa: BLE001 — no inventory yet is fine
+            for inv in (retention.inventories(targets).get("inventories")
+                        or {}).values():
+                if is_error_payload(inv):
+                    continue
+                inv_paths.update(e.get("path")
+                                 for e in (inv.get("entries") or []))
+        except Exception:  # noqa: BLE001 — substrate trouble ≠ empty inventory
             pass
 
     # DEDUP by relpath: `artifacts_for_run` returns one row PER EXEC (ordered by
@@ -1169,30 +2104,6 @@ def run_durable_view(run_id: str) -> dict:
     # url/size/kind). Without this, rows + summary counts inflate and the tree gets
     # duplicate sibling nodes with identical paths.
     by_rel: dict = {}
-    # Live on-disk check (weft run_file_stat, 5d1c5dc) — authoritative for in-sandbox vs
-    # cleared, and the ONLY signal on a live kernel (which has no terminal inventory yet;
-    # the inventory proxy would mislabel every live file "cleared"). Bounded round-trips.
-    targets = list(md.get("weft_targets") or [])
-    _stat_budget = [50]
-
-    def _on_disk(rel: str):
-        """(performed, exists, bytes) across the Run's targets. `performed=False` → couldn't
-        check (jupyter / no target / budget spent) → caller falls back to the inventory proxy."""
-        if not targets or _stat_budget[0] <= 0:
-            return (False, False, 0)
-        answered = False   # did any stat actually return (vs. all erroring)?
-        for t in targets:
-            if _stat_budget[0] <= 0:
-                break
-            _stat_budget[0] -= 1
-            try:
-                st = retention.file_stat(t, rel)
-            except Exception:  # noqa: BLE001 — treat as not-checked → proxy fallback
-                continue
-            answered = True
-            if st.get("exists"):
-                return (True, True, st.get("bytes") or 0)
-        return (answered, False, 0)
 
     import fnmatch as _fnmatch
 
@@ -1224,6 +2135,53 @@ def run_durable_view(run_id: str) -> dict:
         if rel:
             by_rel[rel] = a
 
+    # Runtime bookkeeping is not a product: the per-block transcript under
+    # blocks/ (44 of a panel's 438 rows live) and the runner scaffolding a
+    # job sandbox carries at its ROOT (pid/log/launcher files — exact root
+    # names only, so a user's own out/log survives). Folded to a DECLARED
+    # summary count, never silently: the code narrative is surfaced as
+    # producing_code, the run log through the run's own log surfaces, and
+    # the raw transcript through its exec records.
+    runtime_n = 0
+    for r in [r for r in by_rel
+              if r == "blocks" or r.startswith("blocks/")
+              or r in _RUNNER_SCAFFOLDING]:
+        del by_rel[r]
+        runtime_n += 1
+
+    # Live on-disk check (weft run_file_stat) — authoritative for in-sandbox
+    # vs cleared, and the ONLY signal on a live kernel (no terminal inventory
+    # yet; the proxy would mislabel every live file "cleared"). BATCHED (weft
+    # bd6ae6e): only the rels no earlier tier answers, ONE call per target.
+    # The per-file loop this replaces was the convoy's amplifier — 2N store
+    # queries + N subprocess spawns, serialized, under a 50-round-trip budget
+    # that silently left the tail to the proxy.
+    _STAT_CAP = 500          # per-request bound; files beyond it → proxy path
+    need_stat = [rel for rel, a in by_rel.items()
+                 if rel not in done_files and not _sel_match(rel, done_sel)
+                 and not _is_saving(rel) and not a.get("url")][:_STAT_CAP]
+    stat_res: dict = {}      # rel -> (performed, exists, bytes)
+    if targets and need_stat:
+        answered: set = set()
+        found: dict = {}     # rel -> live bytes; FIRST target with the file wins
+        for t in targets:
+            unresolved = [r for r in need_stat if r not in found]
+            if not unresolved:
+                break
+            try:
+                ans = retention.file_stats(t, unresolved).get("files") or {}
+            except Exception:  # noqa: BLE001 — target unreachable → not-checked
+                continue
+            for r in unresolved:
+                st = ans.get(r)
+                if not isinstance(st, dict):
+                    continue   # unanswered (emulation cap) → stays not-checked
+                answered.add(r)
+                if st.get("exists"):
+                    found[r] = st.get("bytes") or 0
+        stat_res = {r: (r in answered, r in found, found.get(r, 0))
+                    for r in need_stat}
+
     files = []
     counts = {"retained": 0, "saving": 0, "in_store": 0,
               "at_risk": 0, "in_sandbox": 0, "cleared": 0, "unknown": 0}
@@ -1234,7 +2192,6 @@ def run_durable_view(run_id: str) -> dict:
         large = bool(size and size > _MAX_HARVEST_BYTES)
         site = None
         remote = False                            # bytes live on a site, not on this controller
-        local_servable = False                    # is the file readable on THIS box (→ /file works)?
         # Weft durability is the truth and comes FIRST — done, then pinned-pending (saving) —
         # so a file already retained by weft never mislabels as a mere serving copy. aba's
         # artifact store (`url`) is only a serving cache (in-store), below weft. Then the live
@@ -1242,7 +2199,6 @@ def run_durable_view(run_id: str) -> dict:
         if rel in done_files:                     # weft retained tree, local (sidecar readable here)
             d = done_files[rel]; site = d["site"]; remote = bool(d["in_place"]) and site != "local"
             state = "retained"; badge = f"kept ✓ · on {site}" if remote else "kept ✓"
-            local_servable = True                 # location dir is on this box → resolve_run_file finds it
         elif (dm := _sel_match(rel, done_sel)):   # remote in-place durable retain (§5.1)
             site = dm["site"]; remote = bool(dm["in_place"]) and site != "local"
             state = "retained"
@@ -1254,7 +2210,7 @@ def run_durable_view(run_id: str) -> dict:
         elif url:                                 # small surfaced → aba serving cache only
             state, badge = "in-store", "temporary · a viewing copy is held here"
         else:
-            performed, exists, live_bytes = _on_disk(rel)
+            performed, exists, live_bytes = stat_res.get(rel, (False, False, 0))
             if exists:
                 if not size and live_bytes:          # real size for a live file
                     size = live_bytes
@@ -1280,18 +2236,27 @@ def run_durable_view(run_id: str) -> dict:
         if state in ("cleared", "unknown"):
             view_url = None
         elif state == "retained":
-            # A LOCALLY-servable retained file (weft's durable tree on this box, incl. a local
-            # in-place store) is served straight from weft's durable tier via /file. A REMOTE
-            # in-place retain has no local sidecar and B4 fetch-on-open isn't wired
-            # (resolve_run_file → None), so a /file link would 404 — leave it None rather than
-            # hand out a dead link (review finding #2); the `on <site>` badge says where it is.
-            view_url = weft_url if local_servable else None
+            # Served straight from weft's durable tier via /file — which resolves
+            # REMOTE bytes too (canonical locate + a transparent bring-home under
+            # the gate, an honest site-naming 413 above it), so a remote in-place
+            # keep gets a LIVE link; the `on <site>` badge still says where the
+            # bytes durably live (presentation parity with the recorded truth).
+            view_url = weft_url
         else:
             view_url = url or weft_url
         files.append({"rel": rel, "bytes": size, "kind": kind, "state": state,
                       "badge": badge, "url": view_url, "site": site, "large": large})
-        counts[_COUNT_KEY[state]] += 1
+    # A chunked directory store is ONE logical output — its member rows fold
+    # into a single kind="store" row (the manifest + surface probe already
+    # hold this line; the view listed every shard, 385 rows for one store
+    # live). Counting happens AFTER the fold so the summary describes what
+    # the panel actually shows.
+    files = _collapse_store_rows(files, run_id)
+    for f in files:
+        counts[_COUNT_KEY[f["state"]]] += 1
     summary: dict = {**counts, "total": len(files)}
+    if runtime_n:
+        summary["runtime_files"] = runtime_n
     if view_degraded:
         summary["degraded"] = True   # UI: badge honesty, not "discarded"
     # P1 honest surfacing (UI-only — never injected into agent context; see project
@@ -1314,7 +2279,14 @@ def run_durable_tree(run_id: str) -> dict:
     """`run_durable_view` nested into a TreeNode-compatible tree (root → folders →
     file nodes carrying the durable `state`/`badge`), for the Files panel to render
     directly. Folders sort before files, name-ascending. Carries `summary` alongside."""
-    dv = run_durable_view(run_id)
+    return durable_tree_from_view(run_durable_view(run_id))
+
+
+def durable_tree_from_view(dv: dict) -> dict:
+    """Pure view→tree transform. Split from run_durable_tree so the /durable
+    route can compute the (expensive) view ONCE per coalesced flight and
+    derive flat/tree shapes per request. `dv` may be shared across concurrent
+    requests — this function must never mutate it."""
     root: dict = {"kind": "root", "name": "", "path": "", "children": []}
     dirs: dict = {"": root}
 
@@ -1523,6 +2495,97 @@ def _human_size(n: int) -> str:
     return f"{n} B"
 
 
+def _collapse_store_rows(files: list, run_id: str) -> list:
+    """Durable-view counterpart of `_collapse_store_members` below: a chunked
+    directory store is ONE logical output, so its member rows fold into a
+    single kind="store" row. Unlike the manifest path, sizes here are still
+    raw ints, so the store row carries an honest byte sum over its present
+    members. State is WEAKEST-WINS — a store is only as protected as its
+    least-protected shard; a store whose members are all `cleared` is cleared.
+    The badge names the member count so the aggregation is visible, not
+    hidden. Member order: non-store rows keep their order; store rows append."""
+    from urllib.parse import quote as _q
+    from core.exec.run import _MAX_HARVEST_BYTES
+    _rank = {"at-risk": 0, "in-sandbox": 1, "unknown": 2, "saving": 3,
+             "in-store": 4, "retained": 5}
+    stores: dict[str, list] = {}
+    kept: list = []
+    for f in files:
+        root = next(_store_root_of(f.get("rel") or ""), None)
+        if root is None:
+            kept.append(f)
+        else:
+            stores.setdefault(root, []).append(f)
+    for root, members in stores.items():
+        live = [m for m in members if m["state"] != "cleared"]
+        rep = min(live or members, key=lambda m: _rank.get(m["state"], 0))
+        state = rep["state"] if live else "cleared"
+        size = sum(m.get("bytes") or 0 for m in live)
+        badge = (f"{rep['badge']} · store of {len(live)} files" if live
+                 else rep["badge"])
+        kept.append({"rel": root, "bytes": size, "kind": "store",
+                     "state": state, "badge": badge,
+                     "url": (None if state in ("cleared", "unknown")
+                             else f"/api/runs/{run_id}/file?rel={_q(root)}"),
+                     "site": rep.get("site"),
+                     "large": size > _MAX_HARVEST_BYTES,
+                     "n_members": len(live)})
+    return kept
+
+
+def _collapse_store_members(outputs: list[dict], run_id: str) -> list[dict]:
+    """Fold the members of a directory-shaped store (a `.zarr`/etc chunk tree
+    is ONE logical output, not its hundreds of shards) into a single `store`
+    entry. Without this the manifest is dominated by internal shard rows
+    (`axes/x/zarr.json`, chunk files …) — noise for the user, and since a
+    store is one artifact every shard row carried the SAME artifact_id, which
+    broke per-output addressing (live 2026-07-21). The store entry keeps the
+    store's own artifact_id (if any) and a member count; its href points at the
+    store root so a viewer/download resolves the unit.
+
+    No aggregate size: by this point each member's `size` has already been
+    rendered human-readable ("1.2 MB"), so there are no raw byte counts left to
+    sum. Showing a store without a size is the honest option — deriving one
+    would mean re-statting the tree here, on a path that must stay cheap."""
+    from urllib.parse import quote as _q
+    stores: dict[str, dict] = {}          # store-root rel → aggregate
+    kept: list[dict] = []
+    for o in outputs:
+        rel = o.get("label") or ""
+        root = None
+        for part_end in _store_root_of(rel):
+            root = part_end
+            break
+        if root is None:
+            kept.append(o)
+            continue
+        agg = stores.get(root)
+        if agg is None:
+            agg = stores[root] = {"kind": "store", "label": root,
+                                  "href": f"/api/runs/{run_id}/file?rel={_q(root)}",
+                                  "n_members": 0, "artifact_id": None}
+        agg["n_members"] += 1
+        # the row whose label IS the store root carries the store's identity
+        if rel == root and o.get("artifact_id"):
+            agg["artifact_id"] = o["artifact_id"]
+    for root, agg in stores.items():
+        if agg.get("artifact_id") is None:
+            agg.pop("artifact_id", None)
+        kept.append(agg)
+    return kept
+
+
+def _store_root_of(rel: str):
+    """Yield the store-root prefix of `rel` if it lies under (or is) a
+    store-suffix directory, else yield nothing. e.g. `out/x.zarr/axes/0` →
+    `out/x.zarr`; `out/x.zarr` → `out/x.zarr`; `fig.png` → (nothing)."""
+    parts = rel.split("/")
+    for i, p in enumerate(parts):
+        if p.lower().endswith(_STORE_DIR_SUFFIXES):
+            yield "/".join(parts[:i + 1])
+            return
+
+
 def refresh_output_manifest(run_id: str, *, plot_urls_by_name: Optional[dict] = None,
                             ensure_names: Optional[list] = None) -> None:
     """Scan the Run's output directory and write a `metadata.run` manifest
@@ -1563,16 +2626,36 @@ def refresh_output_manifest(run_id: str, *, plot_urls_by_name: Optional[dict] = 
     # on basename as a safe lowest common denominator; collisions across
     # subdirs prefer the most recently produced exec.
     from core.exec.artifacts import artifacts_for_run
+    # Two maps: REL PATH (authoritative — a distinct output has a distinct id)
+    # and basename (fallback only when the leaf is UNIQUE across the run). The
+    # basename-only map collapsed every store member sharing a leaf (e.g. the
+    # per-subdir `zarr.json` of a chunked store) onto ONE artifact_id, so
+    # pin/dedup/address couldn't tell them apart (live 2026-07-21). Rel-path
+    # first fixes that; the basename fallback is dropped for any leaf that
+    # occurs more than once.
+    rel_to_artifact: dict[str, str] = {}
+    _leaf_counts: dict[str, int] = {}
     name_to_artifact: dict[str, str] = {}
     run_artifacts: list = []
     try:
         run_artifacts = artifacts_for_run(run_id)
         for a in run_artifacts:
-            leaf = (a.get("original_name") or "").rsplit("/", 1)[-1]
-            if leaf:
-                name_to_artifact[leaf] = a["artifact_id"]
+            on = (a.get("original_name") or "").strip()
+            if not on:
+                continue
+            rel_to_artifact[Path(on).as_posix()] = a["artifact_id"]
+            leaf = on.rsplit("/", 1)[-1]
+            _leaf_counts[leaf] = _leaf_counts.get(leaf, 0) + 1
+            name_to_artifact[leaf] = a["artifact_id"]
+        # a leaf that maps ambiguously must NOT lend its id to a basename match
+        name_to_artifact = {k: v for k, v in name_to_artifact.items()
+                            if _leaf_counts.get(k, 0) == 1}
     except Exception as e:  # noqa: BLE001 — manifest refresh must not fail
         _log.warning("refresh_output_manifest: artifact lookup failed: %s", e)
+
+    def _artifact_for(rel: str, name: str) -> Optional[str]:
+        # rel-path match is authoritative; fall back to a UNIQUE basename
+        return rel_to_artifact.get(Path(rel).as_posix()) or name_to_artifact.get(name)
 
     def _entry(f: Path) -> Optional[dict]:
         if not f.is_file() or f.name.startswith("."):
@@ -1588,7 +2671,7 @@ def refresh_output_manifest(run_id: str, *, plot_urls_by_name: Optional[dict] = 
         rel = f.relative_to(base).as_posix()
         ext = f.suffix.lower().lstrip(".")
         url = f"/api/runs/{run_id}/file?rel={quote(rel)}"
-        artifact_id = name_to_artifact.get(f.name)
+        artifact_id = _artifact_for(rel, f.name)
         if ext in _FIG_EXT:
             # PDF: rasterize page 1 to a sibling preview PNG + use that
             # as the thumb URL so the Plots grid can actually render it.
@@ -1646,7 +2729,7 @@ def refresh_output_manifest(run_id: str, *, plot_urls_by_name: Optional[dict] = 
             out = {"kind": "file", "label": rel, "href": url + "&download=1"}
         if sz is not None:
             out["size"] = _human_size(sz)
-        artifact_id = name_to_artifact.get(name)
+        artifact_id = _artifact_for(rel, name)
         if artifact_id:
             out["artifact_id"] = artifact_id
         return out
@@ -1674,6 +2757,7 @@ def refresh_output_manifest(run_id: str, *, plot_urls_by_name: Optional[dict] = 
         if e:
             outputs.append(e)
             seen_rel.add(e["label"])
+    outputs = _collapse_store_members(outputs, run_id)
     outputs.sort(key=lambda o: o["label"])
     bulk = None
     if len(outputs) > _MANIFEST_CAP:

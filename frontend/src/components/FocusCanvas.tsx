@@ -5,6 +5,9 @@ import PromoteDialog from './PromoteDialog'
 import AnnotatedFigure from '../bio/AnnotatedFigure'
 import ThreadHeader from './ThreadHeader'
 import SplitButton from './SplitButton'
+import EditableTitle from './EditableTitle'
+import SeveredRefs, { type SeveredRef } from './SeveredRefs'
+import { renameEntity } from '../lib/api'
 // Importing the bio side has the side-effect of registering all bio
 // focus-view components against the registry. The shell below dispatches
 // via `focus_view_for` — it never references entity-type-specific
@@ -20,8 +23,11 @@ interface Props {
   onChange: () => void
   onFocus: (id: string) => void
   onSelectThread?: (id: string) => void
-  onAnnotate?: (a: Annotation) => void
+  onAnnotate?: (a: Annotation, ownerId?: string) => void
   annotClear?: number
+  /** Token of the cell/panel that owns the pinned highlight (App state),
+   *  threaded to the Result view so a captured panel mark stays frozen. */
+  hlOwner?: string | null
   /** Compact peek variant (chat-first): trim meta + provenance for the rail. */
   compact?: boolean
   /** Hand a request to the Guide (e.g. a Run's Re-run / Discuss → chat). */
@@ -52,7 +58,7 @@ type PromoteMode =
   | { kind: 'figure-to-claim' }
   | { kind: 'scenario' }
 
-export default function FocusCanvas({ entity, entities, onChange, onFocus, onSelectThread, onAnnotate, annotClear, compact, onAsk, onPrefill, onChatResult, onBrowseFiles, projectId, highlighting, onHighlightingChange }: Props) {
+export default function FocusCanvas({ entity, entities, onChange, onFocus, onSelectThread, onAnnotate, annotClear, hlOwner, compact, onAsk, onPrefill, onChatResult, onBrowseFiles, projectId, highlighting, onHighlightingChange }: Props) {
   const [promote, setPromote] = useState<PromoteMode | null>(null)
   const [compareOn, setCompareOn] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -106,18 +112,30 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus, onSel
 
   return (
     <div className={`focus ${compact ? 'focus--compact' : ''}`}>
-      {/* Runs and Results render their own title header; skip the generic one
-          to avoid a duplicate type pill + title. */}
-      {entity.type !== 'analysis' && entity.type !== 'result' && (
+      {/* Above the per-type body so it reaches EVERY entity type, including the
+          three that supply their own header below. */}
+      <SeveredRefs refs={(entity.metadata as { severed_refs?: SeveredRef[] } | undefined)?.severed_refs} />
+      {/* Runs, Results, and Claims render their own body header; skip the
+          generic one. Claims have no separate title (the statement IS the
+          content, edited in the card), so a generic title here would only
+          repeat the global-header string. */}
+      {entity.type !== 'analysis' && entity.type !== 'result' && entity.type !== 'claim' && (
       <div className="focus__header">
-        <span className={`focus__type focus__type--${entity.type}`}>{entity.type}</span>
-        <h2 className="focus__title">{entity.title}</h2>
+        {/* The type pill lives in the global header above — not repeated here.
+            The title is click-to-edit via the shared component, which also gives
+            dataset/figure/finding/note/table/narrative in-card renaming. */}
+        <EditableTitle as="h2" className="focus__title" value={entity.title} ariaLabel="Rename"
+          aiSuggested={(entity.metadata as { title_origin?: string } | undefined)?.title_origin === 'ai'}
+          onCommit={t => { renameEntity(entity.id, entity.type, t).then(onChange) }} />
         {entity.metadata?.by_reference ? (
           <span
             className="focus__ref-badge"
             title={`Imported by reference — the payload lives at ${String(entity.metadata?.ref_path ?? '')} and is not copied into ABA.`}
           >
-            ↪ external
+            {/* Name WHERE it lives, not just that it's elsewhere — "external"
+                alone left the site a mystery (live UX finding). */}
+            ↪ external{(entity.metadata as { home?: { site?: string } })?.home?.site
+              ? ` · ${(entity.metadata as { home?: { site?: string } }).home!.site}` : ''}
           </span>
         ) : null}
         {entity.scenario_of && baseline && (
@@ -167,7 +185,7 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus, onSel
           ? renderCompareBody(entity, baseline)
           : entity.type === 'figure' && onAnnotate
           ? <AnnotatedFigure entity={entity} onAttach={onAnnotate} clearSignal={annotClear} />
-          : renderRegistryView(entity, entities, onFocus, onChange, compact, onAsk, onChatResult, onBrowseFiles, projectId, onAnnotate, annotClear, highlighting, onHighlightingChange, onPrefill)}
+          : renderRegistryView(entity, entities, onFocus, onChange, compact, onAsk, onChatResult, onBrowseFiles, projectId, onAnnotate, annotClear, hlOwner, highlighting, onHighlightingChange, onPrefill)}
       </div>
       <div className="focus__meta">
         <span title={entity.id}>id {entity.id}</span>
@@ -435,8 +453,9 @@ function renderRegistryView(
                   entityId?: string) => void,
   onBrowseFiles?: (path?: string) => void,
   projectId?: string,
-  onAnnotate?: (a: { image: string; note: string }) => void,
+  onAnnotate?: (a: { image: string; note: string }, ownerId?: string) => void,
   annotClear?: number,
+  hlOwner?: string | null,
   highlighting?: boolean,
   onHighlightingChange?: (on: boolean) => void,
   onPrefill?: (text: string) => void,
@@ -458,6 +477,7 @@ function renderRegistryView(
     projectId={projectId}
     onAnnotate={onAnnotate}
     annotClear={annotClear}
+    hlOwner={hlOwner}
     highlighting={highlighting}
     onHighlightingChange={onHighlightingChange}
   />

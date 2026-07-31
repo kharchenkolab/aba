@@ -1,0 +1,48 @@
+id: r_wrong_name
+title: A typo'd package name is a naming problem, not an environment problem
+domain: technical
+gpu: false
+summary: >
+  The false-positive side of the system-library remedy. The user asks for an R package whose
+  name is a plausible typo (an extra letter on a real package's name). The correct response is
+  to recognize a probable naming problem — suggest the likely intended name or ask — and NOT to
+  reach for environment machinery: no isolated env build, no system-library lecture. This is
+  the noise-discipline contract: the remedy that saves the day on a genuine build failure is
+  misdirection on a bad name, and an agent that gets lectured toward env-building on every
+  failed lookup will thrash. Fully local, no data files.
+lifecycle: []
+data_files: []
+
+steps:
+- id: s1
+  kind: analyze
+  actor: agent
+  prompt: >
+    Please install the R package RNetCDFF — I'll need it shortly.
+  expect:
+    tool_max_calls:
+      make_isolated_env: 0     # a name problem must never trigger an env build
+    must_mention: ["rnetcdff"]
+    must_not: ["system library", "missing system", "make_isolated_env("]
+    checks: >
+      'RNetCDFF' (extra F) is not a real package; 'RNetCDF' is. A correct response establishes
+      that the name does not resolve (a registry search / capability lookup / install attempt
+      that reports not-found is all acceptable evidence) and then treats it as a NAMING problem:
+      proposing the probable intended name RNetCDF, or asking the user to confirm, is ideal.
+      Hard failure modes: (a) building an isolated environment for a package that does not
+      exist; (b) diagnosing a missing SYSTEM library or lecturing about environment mechanics —
+      that advice belongs to build-stage failures only; (c) claiming the package was installed;
+      (d) silently installing the DIFFERENT (real) package without telling the user the name
+      they gave was wrong.
+
+expected_overall:
+  planted_truth: >
+    There is nothing to install — the name is wrong. The contract under test is the error
+    TAXONOMY: a not-found name is a resolve-stage problem and must be answered with name
+    correction, never with environment machinery or a system-library diagnosis (those belong to
+    build-stage failures). An agent steered toward env-building here has been misled by its own
+    tooling's error rendering.
+  notes: >
+    Pairs with r_system_library: that scenario asserts the remedy APPEARS on a genuine build
+    failure; this one asserts it does NOT appear on a naming failure. Together they pin the
+    classifier from both sides at the agent-visible level.

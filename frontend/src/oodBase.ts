@@ -57,6 +57,22 @@ if (BASE) {
         set(v: string) { set.call(this, typeof v === 'string' ? withBase(v) : v) },
       })
     }
+    // …and the ATTRIBUTE door. The setter above fires for `img.src = x`, but
+    // React DOM writes `src` with setAttribute, so a React-rendered <img>
+    // bypassed the patch entirely and requested `/artifacts/...` at the
+    // dashboard ROOT — a 404 that renders as a broken-image icon (live
+    // 2026-07-23: "half the harvested plot icons showed as broken links").
+    // Scoped to HTMLImageElement (an own property shadowing Element's), so
+    // no other element's setAttribute is touched. withBase is idempotent —
+    // an already-prefixed URL no longer starts with /artifacts/ or /api/.
+    const setAttr = HTMLImageElement.prototype.setAttribute
+    Object.defineProperty(HTMLImageElement.prototype, 'setAttribute', {
+      configurable: true, writable: true,
+      value(this: HTMLImageElement, name: string, value: string) {
+        return setAttr.call(this, name,
+          name === 'src' && typeof value === 'string' ? withBase(value) : value)
+      },
+    })
   } catch { /* non-DOM env */ }
 }
 

@@ -2,7 +2,7 @@
 
 .runview__titlerow { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
 .runview__title { font-size: 19px; font-weight: 700; color: var(--text); margin: 0; cursor: text; line-height: 1.3; min-width: 0; }
-.runview__title:hover { color: var(--accent); }
+/* Hover cue comes from the shared .edit-title (background halo) — no per-view override. */
 .runview__titlerow .run-pill { flex: none; align-self: center; }
 .runview__title-input {
   font-size: 19px; font-weight: 700; color: var(--text); flex: 1; min-width: 0; box-sizing: border-box;

@@ -62,18 +62,48 @@ identity). ABA keeps per-project `name → EnvID` handles in `PROJECTS_DIR/<pid>
   `role: base` env pack (a missing one is a loud, structured misconfiguration). `env_id()`
   **adopts** an EnvID from a published catalog when one exists (the managed-cluster path —
   `seeding.publish_base_packs` / `adopt_env_id`), else solves the spec locally.
-- **Project default env — a weft session cloned from the base pack** (`core/compute/project_env.py`).
-  The per-project default is a **session** off the base: interactive kernels and local
-  one-shot runs execute the session's prefix, and `ensure_capability` installs land **live**
-  in it (`session_install`). Because a live session is mutable, background jobs and exports
-  don't run it directly — they run a `session_snapshot` **EnvID** (a frozen, dirty-cached
-  point-in-time), so a job's env can't shift under it mid-flight. The registry is the `default`
-  key of `weft_envs.json`.
+- **Project default env — a weft session over the base pack** (`core/compute/project_env.py`).
+  The per-project default is a **session** off the base. What a session *runs from* is the
+  substrate's fact, consumed as weft's **runtime block** `{source: session|base, env_id,
+  prefix, activation, ns_wrap, direct_exec}` (`session_runtime`, observation-only): the clone
+  may be **lazy** — a zero-delta session runs from its base realization in place
+  (`source: "base"`, identity = the base EnvID) until the first `session_install`
+  **materializes** its own clone (the *flip moment* — the install result carries the fresh
+  block, and a mutated session is honestly identity-less scratch until snapshot). ABA never
+  probes prefix existence for liveness (`ensure()` asks `session_runtime`; only a truly
+  pruned session rebuilds + replays recorded additions), and one-shot lanes compose commands
+  through `project_env.argv_for_runtime(...)` — direct `prefix/bin/*` exec only when
+  `direct_exec`, else through the activation line (inside `unshare -rm` when `ns_wrap`;
+  squashfs bases are mount-scoped and have no path outside their activation).
+  `interpreter()`/`prefix()` refuse typed (`session.no_direct_exec`) rather than hand out a
+  dangling path. Against a pre-runtime (eager-cloning) weft, an activation-shaped shim
+  (`_shim_runtime`) synthesizes the block — deleted once every deployment's weft exposes
+  `session_runtime`. `ensure_capability` installs land **live** in the session
+  (`session_install`). Because a live session is mutable, background jobs and exports don't
+  run it directly — they run a `session_snapshot` **EnvID** (frozen, dirty-cached; weft
+  returns the base EnvID for a zero-delta session rather than minting a duplicate). The
+  registry is the `default` key of `weft_envs.json`. Guard: `tests/test_lazy_session_lane.py`
+  runs the lane under BOTH substrate personalities (eager and lazy) × both topologies
+  (direct-exec and activation-only).
 - **Named / isolated envs** (`core/compute/named_envs.py`) — the escape hatch for a hard
   conflict or a deliberately-pinned stack: a fully separate, **frozen** EnvID. `create(...)`
   solves a fresh one; `extend(name, packages)` adds packages as an `extends_env` layer over the
   current EnvID → a **new** EnvID the handle then points at — it **never installs into a frozen
   env**. Each named env carries its own persistent kernel and its own reproducible lock.
+- **Selection — which env runs a bare call** (`named_envs.resolve_env(project_id, language,
+  explicit=None)`): the ONE policy every execution lane resolves through. An explicit
+  `env=` wins (`''`/reserved names → the default session); else the project's **active
+  pointer** for that language (the `active` namespace of `weft_envs.json`, a per-language
+  map written by `set_active_env(name, language=…)` — bind-time validated: the env must
+  exist and match the slot's language); else the default session. A dangling pointer falls
+  back to the default session with a printed warning. Promotion is what makes an isolated
+  env *ambient*: bare `run_python`/`run_r`, background submits, remote kernel/sync runs,
+  `ensure_capability` installs (and their success probes), and the package-status probes
+  all follow the pointer — for R this is the only route to make a package that needs
+  **system libraries** the base lacks available to bare calls (the session overlay carries
+  packages, never system libs). Census guard: `tests/test_env_resolution.py` forbids
+  private pointer reads and unlisted default-session consumers (rationale-annotated
+  allowlists), so a new lane cannot silently opt out of the policy.
 
 CLI tools that are *executables*, not importable libraries (samtools, STAR, nextflow), are a
 content-addressed **tool env** of their own (`named_envs.ensure_tool_env`), exposed to runs via
@@ -81,16 +111,43 @@ PATH — the weft successor to the old micromamba tools env.
 
 ## Provisioning — adding a capability on demand
 
-The agent calls `ensure_capability(name)` (`content/bio/tools/discovery.py:884`); it resolves
-the capability record (the catalog entity + bundle composition are owned by
-[`bundle-and-content.md`](bundle-and-content.md)) and provisions by target lane:
+The agent calls `ensure_capability(name)` (`content/bio/tools/discovery.py`). The request is
+**normalized once** into a `CapRequest` (`content/bio/tools/cap_request.py` — the single place
+tool arguments and the capability record are merged; explicit input wins; empty strings are
+absent) and travels to whichever door serves it, so a field the agent sent cannot evaporate at
+a door that never learned of it. The capability record itself (catalog entity + bundle
+composition) is owned by [`bundle-and-content.md`](bundle-and-content.md).
 
-- **Default lane → the project session.** A pip/library capability installs **live** into the
-  project's default weft session via `project_env.install(...)` (`session_install`). Nothing is
-  shadow-stacked on a frozen base: the session is a single coherent weft-solved environment, so an
-  install is re-solved against the whole set.
-- **Named lane → a frozen env.** A request scoped to a named env routes to
-  `named_envs.create` / `extend`, which solve a new EnvID rather than mutating one.
+- **Target resolution.** Explicit `env=` (reserved names → session) → the project's **active**
+  pointer for the request's language → the default session. The installer lands where bare
+  runs execute; promotion does not change what a request means (the same request through the
+  pointer and through explicit `env=` produces identical substrate plans — guarded). An
+  ambiguous language consults both slots; exactly one set slot decides, two stay ambiguous —
+  never guess.
+- **Session installs ride the substrate's `ensure_available` verb.** Registry/conda-sourced R
+  requests go **ranked** (`project_env.ensure_ranked`, `lanes=["conda","cran"]`; secondary
+  registries via `cran_repos`): the substrate derives per-lane spellings, verifies inside the
+  lane loop, and returns typed per-lane `attempts`. Eco-explicit installs go **tagged**
+  (`project_env.install(eco=…)` → the verb's tagged mode) with verify-first pre-check and
+  record-gating below the API. Pre-verb substrates degrade to `session_install` byte-identically.
+- **Named lane → a frozen env, claims enforced by the substrate.** `named_envs.create/extend`
+  solve a new EnvID (history kept); the request's **claim** (load names + version floors,
+  composed by `cap_request.verify_block`) rides the spec / the env-target verb call. Readiness
+  carries honest enforcement facts as a branchable field: `verification: "verified_now"` (claim
+  proven live against a ready realization) or `"deferred"` (recorded on the identity, enforced
+  at every realization — a broken build surfaces at first use, typed). There is **no
+  consumer-side load probe** (it forced a cold env's first realization at install time).
+- **Failure rendering is typed end to end.** Error results carry the substrate's `attempts`
+  verbatim; the missing-system-library remedy keys **solely** on the substrate's
+  `hints.failure_class == "missing_system_lib"` (no text matching — the consumer-side sign
+  taxonomy is deleted, tombstone-guarded); remedial doctrine lives in the system-bundle
+  playbook rule (`system_bundle/rules/env_failures.md`), not in composed prose; a failed
+  install whose (prefix-stripped) name matches a capability card quotes the card's headline.
+  Positive import probes are memoized per identity (`core/exec/verify.py` — sessions key on
+  (session_id, rev), frozen envs on EnvID; negatives never cache).
+
+The result envelope is a **pinned cross-repo contract** (`tests/schemas/ensure_envelope.schema.json`,
+byte-compared against the substrate's copy; `tests/test_ensure_envelope_contract.py`).
 
 `core/exec/materialize.py` is now only the **subprocess run harness**: `MaterializingExecutor`
 supplies the ABA-runtime venv that *launches* a one-shot script (`_base_env`), while the
@@ -98,9 +155,11 @@ science interpreter comes from the weft env. Its old `materialize()` provisionin
 (pip-into-overlay, conda, container) **raises `NotImplementedError`** — conda and tool envs are
 weft's now.
 
-The local run lane selects its interpreter accordingly (`core/exec/run.py:44-72`):
+The local run lane selects its interpreter accordingly (`core/exec/run.py`):
 `env=<name>` → `named_envs.interpreter()`; a pre-resolved job-spec snapshot → that EnvID's
-python; else the default → `base_env.require("python")` + `project_env.interpreter()`.
+python; else the default → `base_env.require("python")` + the session **runtime block**
+(`project_env.runtime()` → `argv_for_runtime`, topology-blind). The best-effort env
+fingerprint is skipped (never faked) when no direct interpreter path exists.
 
 ## Platform membership (multi-site envs)
 
@@ -135,6 +194,35 @@ weft's `kernel_start` default), so state carries between calls; a detached job r
 the node interpreter and is graded `env_grade: node-system` on its exec record
 ([`provenance.md`](provenance.md)). Nothing is installable into a bare kernel — `ensure_capability`
 targets the project session, not the node's interpreter.
+
+**The system lever is the ONLY path to the node interpreter.** A step that asked for the project's
+environment and cannot resolve one **fails**; it is never relocated onto whatever `python3` sits on
+the node's PATH, because that silently swaps the entire scientific stack for an arbitrary one.
+`core/compute/errors.py:is_env_resolution_failure` is the single policy, consumed by both places
+that resolve env identity — `core/jobs/weft_submitter._detached_env` (the detached/one-shot choke
+point, which the interactive lane also falls through to) and
+`content/bio/tools/run_exec._run_remote_kernel`. It carries weft's diagnosis
+(`solver_message`/`stderr_tail`) into an `env.unresolved` error naming the levers, and an unknown
+named env is refused rather than quietly downgraded. Its `untyped_is_env` flag encodes the caller's
+scope: a `try` around env resolution *alone* treats an untyped failure as an env failure, while one
+around a whole kernel start does not (a kernel that merely cannot start keeps its legitimate
+one-shot fallback). Guarded by `tests/test_env_resolution_honesty.py`.
+
+**Session snapshottability is a first-class health fact.** The default session travels to another
+machine only as a **frozen snapshot**, and a snapshot re-solves the base plus every recorded
+addition — so one addition that contradicts the base's pins makes the project's whole remote lane
+unusable. Two mechanisms keep that from being latent: capability installs pass `solve_at_add=True`
+(weft `fast=False`), pulling the substrate's otherwise-deferred conflict check forward so a
+contradicting leaf raises `env.solve_conflict` **at add time** with nothing installed and nothing
+recorded — where `_is_constraint_conflict` routes it into an isolated env instead; and
+`project_env.snapshot_health()` reports the verdict (surfaced by `inspect_env`, which warns when
+the default session cannot be frozen). When a session is already poisoned,
+`project_env.repair(pid, lang, drop_specs=…|drop_last=True)` prunes the offending addition, stops
+the session, and lets `ensure()` rebuild from the base with the remaining additions replayed — the
+substrate needs no un-install verb because the registry is the record. The overlay's
+`shadows_base` warning (an addition shadowing base-pinned versions) rides the ensure envelope and
+is surfaced to the agent. Guarded by `tests/test_capability_install_conflict.py` and
+`tests/test_env_session_repair.py`.
 
 ## Integrity, verification & disk reclaim
 
@@ -212,7 +300,7 @@ the install-time probe can't run.
 | `core/compute/adapter.py` · `ports.py` | the **one** weft doorway (`from weft.api import Weft`, `:105`) + the abstract compute port (`env_ensure`/`env_evict`/`env_status`/`session_*`/`task_*`) |
 | `core/compute/env_packs.py` | bundle `envs/` facet → weft `EnvSpec` → `env_ensure` → EnvID; `pack_spec`, `import_names` maps |
 | `core/compute/base_env.py` | the shared base pack: `require(language)` (no served-base fallback), `env_id()` (adopt-or-solve), `ensure_platform`, `interpreter`/`prefix` |
-| `core/compute/project_env.py` | the per-project **default env as a weft session**: `ensure`, `install` (live `session_install`), `snapshot` (frozen EnvID for jobs/exports), `stop_all_sessions`, `reset` |
+| `core/compute/project_env.py` | the per-project **default env as a weft session**: `ensure` (runtime-block liveness, rebuild+replay), `runtime`/`argv_for_runtime`/`exec_argv` (topology-blind one-shot argv), `install` (live `session_install`, flip-aware), `snapshot` (frozen EnvID for jobs/exports), `stop_all_sessions`, `reset` |
 | `core/compute/named_envs.py` | named/isolated **frozen** EnvIDs: `create`/`extend` (extend→new EnvID), `ensure_ready`/`ensure_realized`, `ensure_platform`, `ensure_tool_env` (CLI tools) |
 | `core/compute/seeding.py` | managed-cluster catalog: `publish_base_packs` / `adopt_env_id` (published `image.sqfs` keyed by EnvID) |
 | `core/exec/verify.py` | the honest runtime probes: `verify_python_imports`, `gpu_capability_ok`, `torch_cuda_build` |
@@ -234,7 +322,39 @@ the install-time probe can't run.
   GPU partition (driver new enough), nor build node-arch-specific artifacts (source-only wheels,
   `-march=native`, CUDA extensions) on the target partition. The login-node build is the wrong
   hardware for those; a per-partition build-into-a-job + wheel cache is designed, unbuilt.
-- **Stale in-code docstrings.** `content/bio/tools/discovery.py`'s `ensure_capability` docstring
-  still says "wipeable overlay" and `core/exec/materialize.py`'s module header still describes the
-  `ENVS_DIR/pylib` overlay — both pre-weft text; the code routes to `session_install` / raises.
-  Trust the behavior described above, not those headers.
+- **Stale in-code docstrings.** `core/exec/materialize.py`'s module header still describes the
+  `ENVS_DIR/pylib` overlay — pre-weft text; the code raises. Trust the behavior described
+  above, not that header.
+- **Legacy cascade fallbacks exist only for pre-verb substrates.** The R session lane and the
+  session install path keep `session_install`/try-except branches reachable solely when the
+  substrate lacks `ensure_available` (guarded); they are deletion candidates once no deployed
+  substrate predates the verb. `run_installer` remains outside the ranked vocabulary (explicit-
+  cmd ranked entries are a tracked substrate follow-up).
+- **Probe memoization is a consumer stopgap.** The identity-keyed positive-probe memo
+  (`core/exec/verify.py`) duplicates what the verb's verify-first pre-check does below the API;
+  it stays until the already-importable shortcut path also rides the verb, then deletes.
+- **Pre-parity named R envs lack `r-irkernel`.** New named R envs bake it (as python bakes
+  `ipykernel`), so named/promoted R runs get a persistent per-env kernel; an env created
+  before that parity has no kernel package, so its kernel can't start and runs degrade to
+  the env's own stateless one-shot with a loud warning naming the one-time remedy
+  (`ensure_capability('r-irkernel', env=name)`). No automatic migration.
+- **Two consumers still compare against the default session regardless of the pointer**
+  (census-allowlisted, with rationale): the provenance env-diff (`lifecycle/revisions.py`,
+  "current env" = default session — a pointer-aware diff is backlog) and the viewer
+  launchers' converters (`viewers/launchers/pagoda3.py` — the converter's own deps live in
+  the platform-managed default session, but a serialized R object whose classes live in the
+  user's promoted env would need *both* stacks at once; a two-sided dependency with no
+  composition story yet).
+- **Direct-path residue outside the default lane.** The default lane — including the
+  capability layer's import probes (`_default_probe_argv`, a per-call command builder
+  consumed by `verify_python_imports(argv_builder=…)`, so a post-install verify sees the
+  flipped session) — is topology-blind. Remaining residue: `named_envs.interpreter()` still
+  hands out a bare prefix path (mount-scoped named-env realizations would need the same
+  activation treatment — `named_envs.run_in` already routes through weft when no ready
+  prefix exists), and a few presentation surfaces are direct-exec-only by construction
+  (`env_layers` site-dir scans, `_session_site_dirs`, the viewer launchers' interpreter
+  resolution, run-lane env fingerprints). Presentation residue degrades honestly (omitted
+  layer / skipped fingerprint) and under-reports on activation-only topologies; migrating
+  it to argv/runtime consumption is backlog. Lesson recorded: a typed refusal is only
+  "honest degradation" where the caller has an alternative — on a lane with none it is an
+  outage (the mounted-base extend bug).

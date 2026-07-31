@@ -65,7 +65,15 @@ def register_ctx_read_tools(mcp: FastMCP) -> None:
                       aba_ctx_id: str | None = None) -> dict:
         """List/find entities in this project (datasets, figures, tables,
         results, findings, claims, narratives). Discovery hook before
-        pinning, promoting, annotating, or citing as evidence."""
+        pinning, promoting, annotating, or citing as evidence.
+
+        `query` matches TITLES only, by word: every whitespace-separated token
+        must appear somewhere in the title, in any order (so "counts matrix"
+        finds "matrix_of_counts.h5"); contiguous matches rank first. It does NOT
+        search notes, paths, or ids — an empty result means "no title matched
+        those words", NOT "no such entity". If you expect something and get
+        nothing, drop tokens or omit `query` and scan, rather than concluding
+        the entity is absent."""
         from core.runtime.tool_ctx import peek_ctx
         from content.bio.tools import list_entities_tool
         return list_entities_tool(

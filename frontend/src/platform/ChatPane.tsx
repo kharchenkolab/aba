@@ -30,8 +30,11 @@ interface Props {
   prefill?: string
   onPrefillConsumed?: () => void
   composerFocus?: number
-  onAnnotate?: (a: { image: string; note: string }) => void
+  onAnnotate?: (a: { image: string; note: string }, ownerId?: string) => void
   annotClear?: number
+  /** Token of the cell that currently owns the pinned highlight (App state).
+   *  A Message keeps its frozen mark only while it holds this token. */
+  hlOwner?: string | null
   onRetry?: () => void
   /** Posture-shell mode: drop the advisor tabs (header carries them) and
    *  show a slim panel-head + focus context chip above the composer. */
@@ -104,6 +107,7 @@ export default function ChatPane({
   composerFocus,
   onAnnotate,
   annotClear,
+  hlOwner,
   onRetry,
   embedded,
   compact,
@@ -426,6 +430,7 @@ export default function ChatPane({
                   onDrawingChange={setAnyDrawing}
                   onHighlightDone={() => setHighlighting(false)}
                   annotClear={annotClear}
+                  hlOwner={hlOwner}
                   onRetry={!streaming && i === all.length - 1 ? onRetry : undefined}
                   entities={entities}
                   onPin={onPin}

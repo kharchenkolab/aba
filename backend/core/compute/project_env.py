@@ -3,13 +3,21 @@
 iteration; snapshot before recording results").
 
 On a pack-declaring deployment, each project's default env (per language) is a
-**session cloned from the base pack**: kernels and one-shot runs execute the
-session's prefix, and `ensure_capability` installs land LIVE in it
-(`session_install`) — the running kernel imports the new package without a
-restart, matching the old overlay UX. Frozen identity is minted exactly when
-it matters: **background jobs and exports run a `session_snapshot` EnvID**
-(dirty-cached — one snapshot per change-set, not per job), which is what puts
-a true EnvID into those exec records.
+**session over the base pack**. What the session RUNS FROM is the substrate's
+fact, consumed as weft's runtime block ({source: session|base, env_id, prefix,
+activation, ns_wrap, direct_exec}): the clone may be LAZY — a zero-delta
+session runs from the base realization in place until the first install
+materializes its own clone (the flip moment). Kernels attach by session_id
+(weft activates the right thing); one-shot lanes compose commands with
+`argv_for_runtime` (direct prefix exec only when the runtime permits,
+activation-wrapped otherwise — squashfs bases are mount-scoped and have no
+path outside their activation). `ensure_capability` installs land LIVE in the
+session (`session_install`) — the running kernel imports the new package
+without a restart, matching the old overlay UX. Frozen identity is minted
+exactly when it matters: **background jobs and exports run a
+`session_snapshot` EnvID** (dirty-cached — one snapshot per change-set, not
+per job; a zero-delta session's snapshot IS the base EnvID), which is what
+puts a true EnvID into those exec records.
 
 Policy: the Settings → Modules toggles govern packs. A pack whose module is
 OFF refuses with the enable prompt (never silently solves a toolchain the user
@@ -26,15 +34,20 @@ Sync, worker-thread callable (same rules as named_envs).
 """
 from __future__ import annotations
 
+import shlex
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 from core.compute import adapter as _adapter
 from core.compute import base_env, named_envs
 from core.compute.errors import ComputeError
 
-_ECOS = ("conda", "pypi")
+_ECOS = ("conda", "pypi", "cran")
+
+
+def _exe(language: str) -> str:
+    return "Rscript" if language.lower() == "r" else "python"
 
 
 def _gate_module_policy(language: str) -> None:
@@ -81,22 +94,79 @@ def _save_row(pid: str, language: str, row: dict) -> None:
 
 
 # ── session lifecycle ────────────────────────────────────────────────────────
+#
+# What a session RUNS FROM is the substrate's fact, not ours. Weft's `runtime`
+# block ({source: session|base, env_id, prefix, activation, ns_wrap,
+# direct_exec}) is the authoritative answer — an unmaterialized (lazy) session
+# runs from its base realization in place, a materialized one from its own
+# clone, and on squashfs/userns topologies the prefix is MOUNT-SCOPED (exists
+# only inside the activation's namespace — a bare `prefix/bin/*` exec is
+# wrong there even against an EAGER weft). We therefore never probe the
+# filesystem to decide liveness or resolve interpreters; `_shim_runtime` is
+# the one compatibility exception, for weft versions that predate the runtime
+# contract (those clone eagerly, so a live session always owns a plain
+# on-disk prefix).
 
-def _session_prefix(session_id: str) -> Optional[Path]:
-    """The session's live prefix on the local site. Session location is
-    deterministic (`sessions/<id>` under the site root — weft's session_exec
-    activates `<location>/pixi.toml`, interpreter under `.pixi/envs/default`);
-    existence doubles as the liveness check (session_stop rm -rf's the dir)."""
-    p = (_adapter.weft_workspace() / "site-local" / "sessions" / session_id
-         / ".pixi" / "envs" / "default")
-    return p if p.exists() else None
+
+def _shim_runtime(session_id: str) -> Optional[dict]:
+    """Runtime block synthesized for a PRE-RUNTIME weft (eager clones only).
+    None ⇒ the prefix is gone ⇒ the session was pruned (session_stop rm -rf's
+    the dir) — the caller's cue to rebuild. Activation-shaped like weft's own
+    block (the same pixi shell-hook session_exec uses) so callers stay
+    topology-blind; deleted with the shim once every deployment's weft
+    exposes session_runtime."""
+    root = _adapter.weft_workspace() / "site-local" / "sessions" / session_id
+    p = root / ".pixi" / "envs" / "default"
+    if not p.exists():
+        return None
+    pixi = _adapter.resolve_pixi() or "pixi"
+    return {
+        "source": "session", "env_id": None, "prefix": str(p),
+        "activation": (f"eval \"$({shlex.quote(pixi)} shell-hook "
+                       f"--manifest-path {shlex.quote(str(root / 'pixi.toml'))})\""),
+        "ns_wrap": False, "direct_exec": True,
+    }
+
+
+def _current_runtime(session_id: str) -> Optional[dict]:
+    """The session's current runtime block, substrate-first: weft's
+    session_runtime (observation-only — deliberately does NOT touch the
+    session's last_used, so polling can't mask idleness) when this weft
+    exposes it, else the eager-clone shim. Returns None when the session is
+    GONE (pruned/stopped) — and never for a merely-unmaterialized one; that
+    distinction is exactly what the old prefix-existence probe conflated."""
+    ad = _adapter.get_compute()
+    try:
+        rt_call = ad.session_runtime      # AttributeError: pre-runtime weft
+    except AttributeError:
+        return _shim_runtime(session_id)
+    try:
+        return named_envs._sync(rt_call(session_id))
+    except ComputeError:
+        return None                        # task.invalid: no active session
+
+
+def _ensure_out(session_id: str, base_eid: str, rt: dict) -> dict:
+    p = rt.get("prefix")
+    # "materialized" = the session owns an on-disk layer of its own: a full
+    # clone (source=session) OR an additive overlay riding the base — pylib
+    # (cold-base pypi, weft 6070bfc) / rlib (cran layer on ANY base, 80e609d).
+    return {"session_id": session_id, "base_env_id": base_eid, "runtime": rt,
+            "prefix": Path(p) if p else None,
+            "materialized": (rt.get("source") == "session"
+                             or bool(rt.get("pylib")) or bool(rt.get("rlib")))}
 
 
 def ensure(pid: str, language: str) -> dict:
     """The project's default session for `language` (create on first use —
     the lazy-install moment for `first_use` packs). Returns {session_id,
-    prefix, base_env_id}. A pruned/lost session is rebuilt from the base pack
-    and the recorded additions are REPLAYED. Raises ComputeError/RuntimeError
+    prefix, base_env_id, runtime, materialized}; `prefix` may be None
+    (activation-only topologies) and `materialized=False` means the session
+    legitimately runs from its base realization — NOT an error. Liveness is
+    the substrate's answer (session_runtime), never prefix existence: a lazy
+    live session must not trigger a rebuild (that was the duplicate-session
+    leak), and only a truly pruned/lost session is rebuilt from the base pack
+    with the recorded additions REPLAYED. Raises ComputeError/RuntimeError
     (module OFF) — surfaced to the agent, never silent."""
     pid = str(pid)
     _gate_module_policy(language)
@@ -106,10 +176,9 @@ def ensure(pid: str, language: str) -> dict:
                            f"no {language} base pack declared", stage="aba")
     row = get(pid, language)
     if row and row.get("base_env_id") == base_eid:
-        prefix = _session_prefix(row["session_id"])
-        if prefix is not None:
-            return {"session_id": row["session_id"], "prefix": prefix,
-                    "base_env_id": base_eid}
+        rt = _current_runtime(row["session_id"])
+        if rt is not None:
+            return _ensure_out(row["session_id"], base_eid, rt)
     # (Re)create — new project, base pack CHANGED, or session pruned. Tell the
     # three apart: a changed base under an existing project is a drift the agent
     # must SEE (old snapshots/EnvIDs no longer match; additions are replayed onto
@@ -128,86 +197,432 @@ def ensure(pid: str, language: str) -> dict:
               f"{len(additions)} recorded addition(s). Snapshots/EnvIDs recorded "
               f"under the old base no longer match — re-run to record results "
               f"under the new env.")
+    rt = res.get("runtime")
     for add in additions:                      # replay the recorded deltas
-        named_envs._sync(ad.session_install(sid, **{add["eco"]: add["specs"]}))
+        if add.get("eco") == "out-of-band" or not (
+                add.get("eco") == "installer" or add.get("specs")):
+            # event markers (a prefix mutation recorded by the snapshot
+            # tripwire) carry nothing to replay — they exist so the registry
+            # is honest about changes it cannot describe. Skipping is the
+            # honest replay too: whatever the in-code installer did cannot
+            # be reproduced from here (that is exactly why it was flagged).
+            continue
+        if add.get("eco") == "installer":      # captured arbitrary installer
+            _ikw = {k: add[k] for k in ("writes_to", "verify") if add.get(k)}
+            while True:
+                try:
+                    ires = named_envs._sync(ad.session_run_installer(
+                        sid, add.get("cmd") or "", note=add.get("note", ""),
+                        **_ikw))
+                    break
+                except TypeError:              # substrate predates a kw —
+                    if not _ikw:               # degrade newest-first
+                        raise
+                    _ikw.pop("verify", None) if "verify" in _ikw \
+                        else _ikw.pop("writes_to", None)
+        else:
+            _rkw = dict(add.get("opts") or {})
+            if add.get("verify"):
+                _rkw["verify"] = add["verify"]
+            try:
+                ires = named_envs._sync(ad.session_install(
+                    sid, **{add["eco"]: add["specs"]}, **_rkw))
+            except TypeError:              # substrate predates verify=
+                _rkw.pop("verify", None)
+                ires = named_envs._sync(ad.session_install(
+                    sid, **{add["eco"]: add["specs"]}, **_rkw))
+        # installs are the FLIP moment (base → own clone): the install result
+        # carries the fresh runtime; the start-time block is stale after one
+        rt = (ires or {}).get("runtime") or rt
+    if rt is None:
+        rt = _shim_runtime(sid)
+        if rt is None:
+            # only reachable on a pre-runtime (eager) weft, where a missing
+            # prefix after session_start IS a realization failure
+            raise ComputeError("env.realize_failed",
+                               f"session {sid} has no local prefix", stage="realize")
     new_row = {"session_id": sid, "base_env_id": base_eid,
                "additions": additions, "rev": (row or {}).get("rev", 0),
                "snapshot": None,               # stale after a rebuild
                "created_at": time.time()}
     _save_row(pid, language, new_row)
-    prefix = _session_prefix(sid)
-    if prefix is None:
-        raise ComputeError("env.realize_failed",
-                           f"session {sid} has no local prefix", stage="realize")
-    out = {"session_id": sid, "prefix": prefix, "base_env_id": base_eid}
+    out = _ensure_out(sid, base_eid, rt)
     if base_changed:
         out["base_changed"] = {"from": old_base, "to": base_eid,
                                "additions_replayed": len(additions)}
     return out
 
 
+def runtime(pid: str, language: str) -> dict:
+    """The default session's runtime contract: {source: "session"|"base",
+    env_id, prefix, activation, ns_wrap, direct_exec}. `activation` is always
+    correct; `prefix` only when `direct_exec` (see argv_for_runtime)."""
+    return ensure(pid, language)["runtime"]
+
+
+def _keep_mount_tooling() -> str:
+    """Shell prefix that keeps the CONTROLLER's bin on PATH across an
+    activation. Empty string when there is nothing to add.
+
+    A successful env activation replaces PATH with that env's own bin. The
+    squashfs mount helper lives in the controller's bin, so anything the
+    activated process then asks the substrate to MOUNT — a second env, an
+    interpreter of another language — fails to find it, and the substrate can
+    only report the helper absent. Measured: `command -v squashfuse` resolves
+    before activation and not after.
+
+    Applied only under `ns_wrap`, which is precisely the flag meaning "this
+    runtime's prefix lives inside a mount namespace" — i.e. where on-demand
+    mounts happen. APPENDED, never prepended: the activated env's own binaries
+    must keep winning; this only restores a fallback the activation dropped.
+    """
+    import os
+    import sys
+    d = os.path.dirname(os.path.abspath(sys.executable))
+    return f"export PATH=\"$PATH:{d}\"; " if d else ""
+
+
+def argv_for_runtime(rt: dict, language: str, args: Sequence[str], *,
+                     pre: Sequence[str] = ()) -> list[str]:
+    """argv that runs the default env's interpreter with `args`, topology-blind
+    — the ONE builder every one-shot lane (harness, probes, launchers) shares.
+    A plain-prefix runtime execs `prefix/bin/<exe>` directly; anything else
+    goes through the runtime's activation line, inside a user+mount namespace
+    when the substrate says the activation's mounts live only there (ns_wrap —
+    squashfs bases). `pre` prepends a wrapper (e.g. stdbuf -oL) in either
+    shape. bash mirrors weft's own wrapper choice: conda activate.d hooks
+    contain bashisms."""
+    tail = [str(a) for a in args]
+    head = [str(x) for x in pre]
+    exe = _exe(language)
+    p = rt.get("prefix")
+    if rt.get("direct_exec") and p:
+        return [*head, str(Path(p) / "bin" / exe), *tail]
+    script = f"{rt['activation']} && exec {shlex.join([*head, exe, *tail])}"
+    if rt.get("ns_wrap"):
+        script = f"{_keep_mount_tooling()}{script}"
+        script = f"unshare -rm bash -c {shlex.quote(script)}"
+    return ["bash", "-c", script]
+
+
+def exec_argv(pid: str, language: str, args: Sequence[str], *,
+              pre: Sequence[str] = ()) -> list[str]:
+    """`argv_for_runtime` over the project's current default-session runtime."""
+    return argv_for_runtime(runtime(pid, language), language, args, pre=pre)
+
+
 def prefix(pid: str, language: str) -> Path:
-    return ensure(pid, language)["prefix"]
+    """The default env's on-disk prefix — only where the runtime permits
+    direct filesystem access; raises a typed refusal otherwise (mount-scoped /
+    packed bases have no caller-usable path — the old code handed out a
+    dangling one). Code that RUNS things wants exec_argv; presentation wants
+    runtime()."""
+    out = ensure(pid, language)
+    rt = out["runtime"]
+    if rt.get("direct_exec") and out["prefix"] is not None:
+        return out["prefix"]
+    raise ComputeError(
+        "session.no_direct_exec",
+        f"the default {language} env has no directly-accessible prefix on "
+        f"this topology (runs from {rt.get('source')!r} via activation); use "
+        f"project_env.exec_argv()/runtime()", stage="aba")
 
 
 def interpreter(pid: str, language: str) -> Path:
-    exe = "Rscript" if language.lower() == "r" else "python"
-    return prefix(pid, language) / "bin" / exe
+    """Direct path to the default env's interpreter — same contract (and same
+    honest refusal) as prefix()."""
+    return prefix(pid, language) / "bin" / _exe(language)
+
+
+def _check_envelope_soft(env: dict) -> list:
+    """The pinned ensure_available envelope, checked at the crossing.
+    Minimal structural read (success shape only — errors raise upstream as
+    ComputeError); the full executable reading lives in
+    tests/test_ensure_envelope_contract.py."""
+    out = []
+    for k in ("satisfied", "changed", "attempts", "verified", "runtime"):
+        if k not in env:
+            out.append(f"missing {k!r}")
+    return out
 
 
 def install(pid: str, language: str, specs: list[str], *,
-            eco: str = "pypi") -> dict:
+            eco: str = "pypi", solve_at_add: Optional[bool] = None,
+            **opts) -> dict:
     """LIVE install into the project's default session (the running kernel
     sees it after an importlib cache invalidation — no restart). Recorded in
     the registry so a rebuilt session replays it, and the snapshot goes dirty
-    (the next background job/export mints a fresh EnvID)."""
+    (the next background job/export mints a fresh EnvID).
+
+    `solve_at_add=True` pulls the substrate's DEFERRED conflict check forward
+    (weft `fast=False`): the pypi lane normally skips the manifest re-solve and
+    leaves the check to the snapshot's own solve, so a leaf that contradicts the
+    base's pins installs "successfully" into the pip overlay — shadowing a
+    pinned dep — and only fails later, when the snapshot is minted. Asking for
+    the solve HERE means such a leaf raises `env.solve_conflict` at add time,
+    with nothing installed and nothing recorded, so the caller can route it to
+    an isolated env instead of leaving the project's default session
+    un-snapshottable. Costs one full solve (seconds) — right for agent-facing
+    capability installs, wrong for bulk internal adds. Identity is
+    content-addressed, so the validating solve mints the same EnvID the eventual
+    snapshot resolves to and the later snapshot hits the cached solve.
+
+    `specs` speak the SUBSTRATE's spec vocabulary, not a reduced one: for
+    eco='cran' that is plain names, `name ==X.Y.Z`, and `owner/repo@ref` git
+    sources (weft d51f9fc). Extra `opts` (e.g. `cran_repos=[url]` for a
+    secondary repository) ride through to the substrate verb and are recorded
+    with the addition, so a rebuilt session replays the same request — send
+    them here rather than pre-resolving to a bespoke installer, which is a
+    different lane with different (full-realize, refuses-on-cold-base)
+    semantics."""
     if eco not in _ECOS:
-        raise ValueError(f"eco must be one of {_ECOS} (R goes conda-first; "
-                         f"source-CRAN via run_installer)")
+        raise ValueError(f"eco must be one of {_ECOS} (R goes conda-first on "
+                         f"warm bases; eco='cran' layers a session rlib on ANY "
+                         f"base — delta-only, no clone; bespoke installers via "
+                         f"run_installer)")
     pid = str(pid)
     s = ensure(pid, language)
     ad = _adapter.get_compute()
-    out = named_envs._sync(ad.session_install(s["session_id"], **{eco: list(specs)}))
+    _verify = opts.pop("verify", None)
+    # F-V2 (env_refi2 §3.4): the tagged-mode verb is the crossing — verify-
+    # first pre-check (a satisfied re-ensure short-circuits in ~0.4s instead
+    # of re-installing/re-probing) and record-gating run below the API, and
+    # the typed envelope (attempts/verified) arrives from below. Exceptions
+    # that stay on session_install: extra opts the verb's tagged request
+    # doesn't speak yet (cran_repos), and pre-verb substrates (no attribute).
+    _verb = getattr(ad, "ensure_available", None) if not opts else None
+    _fast_kw = {} if solve_at_add is None else {"fast": not solve_at_add}
+    if _verb is not None:
+        try:
+            out = dict(named_envs._sync(
+                _verb({"session": s["session_id"]}, {eco: list(specs)},
+                      verify=_verify, **_fast_kw)) or {})
+        except TypeError:
+            # pre-lever substrate: no fast= on the tagged verb. Degrade to the
+            # default lane — the conflict then surfaces at snapshot time, which
+            # is LOUD now (weft_submitter/_run_remote_kernel raise instead of
+            # relocating to the node interpreter), just later than we'd like.
+            out = dict(named_envs._sync(
+                _verb({"session": s["session_id"]}, {eco: list(specs)},
+                      verify=_verify)) or {})
+        _problems = _check_envelope_soft(out)
+        if _problems:
+            # the pinned cross-repo contract, checked where the payload
+            # crosses into aba's model — loud, never fatal (install landed)
+            print(f"[project_env] ensure_available envelope violation: "
+                  f"{_problems[:3]}", flush=True)
+        # per-attempt resolved names flatten to the top level (the github
+        # resolved-name adoption reads them there)
+        if "resolved" not in out:
+            _res = [n for a in (out.get("attempts") or [])
+                    for n in (a.get("resolved") or [])]
+            if _res:
+                out["resolved"] = _res
+        # The overlay's base-shadow warning is the EARLIEST signal that a leaf
+        # contradicts the base's pins (one dropped warning is how a single pypi
+        # add silently made a project's remote python lane un-snapshottable —
+        # the pip overlay shadowed a conda-pinned dep and nothing said so until
+        # the snapshot's deferred solve, which was then swallowed). Flatten it
+        # so the agent-facing caller can say it out loud.
+        if "shadows_base" not in out:
+            _sh = [a["shadows_base"] for a in (out.get("attempts") or [])
+                   if a.get("shadows_base")]
+            if _sh:
+                out["shadows_base"] = _sh[0] if len(_sh) == 1 else _sh
+    else:
+        out = dict(named_envs._sync(
+            ad.session_install(s["session_id"], **{eco: list(specs)},
+                               **opts, **_fast_kw,
+                               **({"verify": _verify} if _verify else {}))) or {})
     row = get(pid, language)
-    row["additions"].append({"eco": eco, "specs": list(specs), "at": time.time()})
-    row["rev"] = int(row.get("rev") or 0) + 1
-    _save_row(pid, language, row)
-    return {"session_id": s["session_id"], "prefix": str(s["prefix"]), **(out or {})}
-
-
-def run_installer(pid: str, language: str, cmd: str, *, note: str = "") -> dict:
-    """Escape hatch (captured + portable): arbitrary installer inside the
-    session — e.g. source-CRAN `Rscript -e 'install.packages(…)'`. Rides
-    snapshots as a labeled post_install step."""
-    pid = str(pid)
-    s = ensure(pid, language)
-    ad = _adapter.get_compute()
-    out = named_envs._sync(ad.session_run_installer(s["session_id"], cmd, note=note))
-    row = get(pid, language)
-    row["additions"].append({"eco": "installer", "cmd": cmd, "note": note,
+    row["additions"].append({"eco": eco, "specs": list(specs),
+                             **({"opts": dict(opts)} if opts else {}),
+                             **({"verify": _verify} if _verify else {}),
                              "at": time.time()})
     row["rev"] = int(row.get("rev") or 0) + 1
     _save_row(pid, language, row)
+    # an install is the FLIP moment (lazy session materializes its own clone):
+    # surface the post-install runtime, never the stale pre-install block
+    rt = out.get("runtime") or _current_runtime(s["session_id"]) or s["runtime"]
+    out["runtime"] = rt
+    p = rt.get("prefix")
+    return {"session_id": s["session_id"],
+            "prefix": str(p) if p else None, **out}
+
+
+def ensure_ranked(pid: str, language: str, names: list[str], *,
+                  lanes: list[str], verify: Optional[dict] = None,
+                  cran_repos: Optional[list] = None) -> "dict | None":
+    """Ranked-mode ensure (F-V3a): the CALLER ranks the lanes; the substrate
+    executes the chain mechanically — per-lane dialect spellings, verify
+    inside the loop, typed attempts back. Returns the envelope, or None when
+    the substrate lacks the verb (caller falls back to its legacy cascade).
+
+    Recording follows the identity doctrine — what HAPPENED, never what was
+    asked: each installed attempt is recorded as a plain eco addition with
+    the spelling the lane actually used, so a session rebuild replays
+    reality through the existing per-eco paths. A pre-check short-circuit
+    (changed=False) records nothing and mints no revision."""
+    pid = str(pid)
+    s = ensure(pid, language)
+    ad = _adapter.get_compute()
+    verb = getattr(ad, "ensure_available", None)
+    if verb is None:
+        return None
+    _kw = {"cran_repos": list(cran_repos)} if cran_repos else {}
+    try:
+        out = dict(named_envs._sync(
+            verb({"session": s["session_id"]}, list(names),
+                 lanes=list(lanes), verify=verify, **_kw)) or {})
+    except TypeError:
+        if not _kw:
+            raise
+        return None      # substrate predates ranked cran_repos → legacy cascade
+    _problems = _check_envelope_soft(out)
+    if _problems:
+        print(f"[project_env] ensure_available (ranked) envelope violation: "
+              f"{_problems[:3]}", flush=True)
+    _landed = [a for a in (out.get("attempts") or [])
+               if a.get("outcome") == "installed"]
+    if _landed:
+        row = get(pid, language)
+        for a in _landed:
+            eco = a.get("lane")
+            if eco in _ECOS:
+                row["additions"].append(
+                    {"eco": eco,
+                     "specs": [a.get("spelling") or a.get("package")
+                               or (names[0] if names else "")],
+                     **({"verify": dict(verify)} if verify else {}),
+                     "at": time.time()})
+        row["rev"] = int(row.get("rev") or 0) + 1
+        _save_row(pid, language, row)
+    rt = out.get("runtime") or _current_runtime(s["session_id"]) or s["runtime"]
+    out["runtime"] = rt
+    return {"session_id": s["session_id"], **out}
+
+
+def run_installer(pid: str, language: str, cmd: str, *, note: str = "",
+                  writes_to: Optional[str] = None,
+                  verify: Optional[dict] = None) -> dict:
+    """Escape hatch (captured + portable): arbitrary installer inside the
+    session — e.g. source-CRAN `Rscript -e 'install.packages(…)'`. Rides
+    snapshots as a labeled post_install step.
+
+    `writes_to='rlib'|'pylib'` DECLARES the write target as the session layer
+    (weft d51f9fc): the substrate provisions that layer, points R_LIBS/PIP_TARGET
+    at it, and runs the command over the read-only base — so it works on an
+    adopted base, where an UNdeclared installer is refused (it could write
+    anywhere in the prefix). Declare it whenever the command only adds to the
+    session layer. Cost, per the substrate's own result: a post_install spec
+    realizes FULL rather than overlay, so prefer `install()` when the addition
+    fits the spec vocabulary. Passed through only when set, so an older
+    substrate that lacks the parameter is unaffected."""
+    pid = str(pid)
+    s = ensure(pid, language)
+    ad = _adapter.get_compute()
+    _kw: dict = {}
+    if writes_to:
+        _kw["writes_to"] = writes_to
+    if verify:
+        # weft V1: the postcondition runs INSIDE the install and record-gating
+        # holds below the API — a verify-failed installer never enters the
+        # captured additions on the substrate side.
+        _kw["verify"] = verify
+    while True:
+        try:
+            out = dict(named_envs._sync(
+                ad.session_run_installer(s["session_id"], cmd, note=note,
+                                         **_kw)) or {})
+            break
+        except TypeError:
+            # substrate predates a kw — degrade newest-first (verify, then
+            # writes_to), same behavior each kw had before it existed
+            if "verify" in _kw:
+                _kw.pop("verify")
+            elif "writes_to" in _kw:
+                _kw.pop("writes_to")
+            else:
+                raise
+    row = get(pid, language)
+    row["additions"].append({"eco": "installer", "cmd": cmd, "note": note,
+                             **({"writes_to": writes_to} if writes_to else {}),
+                             **({"verify": verify} if verify else {}),
+                             "at": time.time()})
+    row["rev"] = int(row.get("rev") or 0) + 1
+    _save_row(pid, language, row)
+    # same FLIP handling as install(): callers get the post-install runtime
+    out["runtime"] = (out.get("runtime")
+                      or _current_runtime(s["session_id"]) or s["runtime"])
     return out
+
+
+def _prefix_signature(rt: Optional[dict], language: str) -> Optional[str]:
+    """Cheap content signature of a LOCAL session prefix — sorted package-
+    metadata dir names + their newest mtime, hashed. The out-of-band
+    tripwire's comparator (harvest-honesty sweep item D): an in-code
+    installer (subprocess pip / in-interpreter install) mutates the prefix
+    WITHOUT bumping the registry rev, so the dirty-cached identity lies.
+    None = abstain (no locally statable prefix — activation-only topology)."""
+    p = (rt or {}).get("prefix")
+    if not p:
+        return None
+    import glob as _glob
+    import hashlib as _hl
+    import os as _os
+    pats = ([_os.path.join(str(p), "lib", "R", "library", "*")]
+            if language == "r" else
+            [_os.path.join(str(p), "lib", "python*", "site-packages",
+                           "*.dist-info")])
+    names: list[str] = []
+    latest = 0.0
+    for pat in pats:
+        for d in _glob.glob(pat):
+            names.append(_os.path.basename(d))
+            try:
+                latest = max(latest, _os.stat(d).st_mtime)
+            except OSError:
+                pass
+    if not names:
+        return None
+    return _hl.sha1(("\n".join(sorted(names))
+                     + f"|{latest:.0f}").encode()).hexdigest()[:16]
 
 
 def snapshot(pid: str, language: str) -> str:
     """A FROZEN EnvID of the session's current state (for background jobs and
     exports). Dirty-cached: unchanged session → the previous snapshot's id
     (identity is content-addressed; re-snapshotting an unchanged set would
-    yield the same env anyway — this just skips the round trip)."""
+    yield the same env anyway — this just skips the round trip).
+
+    The cache key is rev + a cheap PREFIX SIGNATURE: an out-of-band install
+    (agent code shelling out to a package manager) changes the prefix but
+    not the rev, and used to make every later identity claim — and every
+    job realized from it — silently omit the package. Now it is RECORDED
+    as an `out-of-band` addition (the registry stays honest about the event
+    it cannot describe) and the session is re-snapshotted so the frozen
+    identity carries the real content."""
     pid = str(pid)
     s = ensure(pid, language)
     row = get(pid, language)
     snap = row.get("snapshot") or {}
+    sig = _prefix_signature(s.get("runtime"), language)
     if snap.get("env_id") and snap.get("at_rev") == row.get("rev"):
-        return snap["env_id"]
+        if sig is None or not snap.get("prefix_sig") or sig == snap["prefix_sig"]:
+            return snap["env_id"]      # abstain / legacy row / genuinely unchanged
+        row["additions"].append({
+            "eco": "out-of-band", "at": time.time(),
+            "note": "session prefix changed outside the platform install "
+                    "verbs (in-code installer?) — re-snapshotted so the "
+                    "frozen identity stays true"})
+        row["rev"] = int(row.get("rev") or 0) + 1
     ad = _adapter.get_compute()
     res = named_envs._sync(ad.session_snapshot(
         s["session_id"], name=f"aba-{pid}-default-{language}"))
     eid = res["env_id"]
     row["snapshot"] = {"env_id": eid, "at_rev": row.get("rev"),
-                       "at": time.time()}
+                       "at": time.time(),
+                       **({"prefix_sig": sig} if sig else {})}
     _save_row(pid, language, row)
     return eid
 
@@ -245,6 +660,115 @@ def stop_all_sessions(pid: str) -> dict:
         except Exception as e:  # noqa: BLE001 — a dead session is already freed
             errors.append(f"{lang}/{sid}: {e}")
     return {"stopped": stopped, "errors": errors}
+
+
+def snapshot_health(pid: str, language: str) -> dict:
+    """Can this session still be FROZEN? — the question every remote/background
+    step silently depends on.
+
+    A session is snapshottable while its recorded additions still solve against
+    the base. One addition that contradicts the base's pins makes every future
+    snapshot fail, and since a snapshot is how the default env travels to
+    another machine, the project's whole remote lane goes with it. Nothing used
+    to ask this question until a step needed it (and the answer was then
+    swallowed), so a project could sit broken for hours.
+
+    Returns {ok, rev, at_rev, stale, additions, error?} — never raises."""
+    pid = str(pid)
+    row = get(pid, language) or {}
+    rev, at_rev = row.get("rev"), (row.get("snapshot") or {}).get("at_rev")
+    out = {
+        "ok": None, "rev": rev, "at_rev": at_rev,
+        # a snapshot older than the current rev is what forces a re-solve; when
+        # that re-solve is the failing one, THIS is the visible symptom
+        "stale": bool(row) and at_rev != rev,
+        "additions": [{"eco": a.get("eco"), "specs": a.get("specs")}
+                      for a in (row.get("additions") or [])],
+    }
+    if not row:
+        return {**out, "ok": None, "note": "no default session recorded yet"}
+    try:
+        out["env_id"] = snapshot(pid, language)
+        out["ok"] = True
+        # A successful freeze UPDATES the row, so the rev/at_rev/stale read
+        # above is already history — re-read it, or the report says
+        # "ok: true, stale: true", which is the opposite of clarifying.
+        fresh = get(pid, language) or {}
+        out["rev"] = fresh.get("rev")
+        out["at_rev"] = (fresh.get("snapshot") or {}).get("at_rev")
+        out["stale"] = out["at_rev"] != out["rev"]
+    except Exception as e:  # noqa: BLE001 — a diagnosis must never raise
+        from core.compute.errors import describe as _d
+        out["ok"] = False
+        out["error"] = {"code": getattr(e, "code", type(e).__name__),
+                        "detail": _d(e, limit=600),
+                        **({"hints": e.hints} if getattr(e, "hints", None) else {})}
+        out["fix"] = ("an addition contradicts the base pack's pins — repair with "
+                      "project_env.repair(pid, language, drop_last=True) (or name "
+                      "the specs to drop), then install it via make_isolated_env "
+                      "instead")
+    return out
+
+
+def repair(pid: str, language: str, *, drop_specs: Optional[list] = None,
+           drop_last: bool = False) -> dict:
+    """Make an un-snapshottable session solvable again by DROPPING recorded
+    additions and replaying the rest.
+
+    The substrate has no un-install verb, and it should not need one: the
+    registry is the record of what was added, and `ensure()` already rebuilds a
+    stopped session from the base pack with its additions replayed. So repair is
+    a registry edit plus a stop — prune the offending addition(s), stop the
+    session, and let the next `ensure()` reconstruct the session without them.
+
+    `drop_last=True` drops the most recent addition (nearly always the culprit:
+    the session solved before it and not after). `drop_specs=[...]` drops every
+    addition whose specs intersect that list. Dropping nothing is refused —
+    that would stop the session for no reason.
+
+    Returns {dropped, kept, rebuilt, health} where `health` is the post-repair
+    verdict, so the caller never has to trust the repair blindly."""
+    pid = str(pid)
+    row = get(pid, language)
+    if not row:
+        return {"dropped": [], "kept": [], "rebuilt": False,
+                "note": f"no default {language} session recorded for {pid}"}
+    adds = list(row.get("additions") or [])
+    want = {str(s).lower() for s in (drop_specs or [])}
+
+    def _hit(a: dict, is_last: bool) -> bool:
+        if drop_last and is_last:
+            return True
+        return bool(want & {str(s).lower() for s in (a.get("specs") or [])})
+
+    last_i = len(adds) - 1
+    dropped = [a for i, a in enumerate(adds) if _hit(a, i == last_i)]
+    if not dropped:
+        return {"dropped": [], "kept": adds, "rebuilt": False,
+                "note": "nothing matched — pass drop_last=True or name specs "
+                        "present in `additions` (see snapshot_health)"}
+    kept = [a for a in adds if a not in dropped]
+    # Stop FIRST: a live session is adopted as-is by ensure(), so the replay
+    # only happens once the old prefix is gone.
+    try:
+        named_envs._sync(_adapter.get_compute().session_stop(row["session_id"]))
+    except Exception:  # noqa: BLE001 — already dead is already stopped
+        pass
+    # Re-base the rev on the kept set and clear the stale snapshot, so the next
+    # snapshot re-solves the repaired spec instead of returning a cached id.
+    row = {**row, "additions": kept, "rev": len(kept), "snapshot": None}
+    _save_row(pid, language, row)
+    rebuilt = False
+    try:
+        ensure(pid, language)          # rebuild from base + replay `kept`
+        rebuilt = True
+    except Exception:  # noqa: BLE001 — report it in `health` below
+        pass
+    return {"dropped": [{"eco": a.get("eco"), "specs": a.get("specs")}
+                        for a in dropped],
+            "kept": [{"eco": a.get("eco"), "specs": a.get("specs")} for a in kept],
+            "rebuilt": rebuilt,
+            "health": snapshot_health(pid, language)}
 
 
 def reset(pid: str, language: str) -> None:

@@ -75,11 +75,12 @@ describe('LedgerStrip', () => {
     expect(screen.getByText(/retention index is unreachable/)).toBeTruthy()
   })
 
-  it('renders the verdict + Review list when something needs attention', async () => {
+  it('renders the attention verdict + Review list when something needs attention', async () => {
     mockLedger(noisyLedger)
     const onFocus = vi.fn()
     await act(async () => { render(<LedgerStrip projectId="p1" onFocus={onFocus} />) })
-    expect(screen.getByText(/2 items · 1 safe/)).toBeTruthy()
+    // leads with the PROBLEM, not the census
+    expect(screen.getByText(/1 of 2 items needs attention/)).toBeTruthy()
     expect(screen.getByText('1 at risk')).toBeTruthy()
     fireEvent.click(screen.getByText('Review'))
     expect(screen.getByText(/declares no durable storage/)).toBeTruthy()
@@ -87,13 +88,17 @@ describe('LedgerStrip', () => {
     expect(onFocus).toHaveBeenCalledWith('ds1')
   })
 
-  it('multi-site but all-safe: one quiet line, no flags, no Review', async () => {
+  it('multi-site but all-safe renders NOTHING (where data lives is card business)', async () => {
+    // "86 items · 86 safe (some on …)" was full-width plaintext chrome that
+    // answered a question nobody asked (live UX finding, 2026-07-25): the
+    // strip flags ATTENTION; an item's home site is shown on its own card.
     mockLedger({ ...noisyLedger,
       items: noisyLedger.items.map(i => ({ ...i, state: 'safe' })),
       totals: { items: 2, safe: 2, at_risk: 0, changed: 0, unknown: 0 } })
-    await act(async () => { render(<LedgerStrip projectId="p1" />) })
-    expect(screen.getByText(/2 items · 2 safe/)).toBeTruthy()
-    expect(screen.queryByText('Review')).toBeNull()
-    expect(screen.queryByText(/at risk/)).toBeNull()
+    let container: HTMLElement
+    await act(async () => { ({ container } = render(<LedgerStrip projectId="p1" />)) })
+    expect(container!.innerHTML).toBe('')
+    expect(screen.queryByText(/safe/)).toBeNull()
+    expect(screen.queryByText(/siteB|siteC/)).toBeNull()
   })
 })

@@ -1,0 +1,43 @@
+# Environment & install failures — the playbook
+
+Install/environment tool results are TYPED: read `error`/`stage`/`retryable`
+and the `attempts` list (one typed record per lane tried) before acting. Each
+attempt names its own remedy in its `hints` — never synthesize an aggregate
+guess. Never resubmit an unchanged failing request more than once.
+
+| signal | meaning | your move |
+|---|---|---|
+| `retryable: true` | transient (index/network/site) — NOT a package problem | retry once before changing anything; if it persists, tell the user |
+| `env.solve_conflict` | the name/pin cannot be satisfied in the configured registries | check the NAME first (typos are resolve-stage, not environment problems); then relax the pin hints name |
+| `env.solve_failed` | a registry index is unreachable | retryable — the packages are not missing, the index is |
+| `env.realize_failed` + build signatures (configure/compiler/header errors) | a source BUILD died — usually a missing SYSTEM library | the project session can never carry a system library. Route to an isolated env: `make_isolated_env(name='<pkg>-env', language='r', packages=['r-<pkg>'])` then `set_active_env('<pkg>-env', language='r')` — the solver pulls C libraries transitively; you do not need to name them. CAVEAT: a promoted env moves the run lanes, not viewer converters — a package a VIEWER needs must go into the shared base pack instead; say so rather than retrying |
+| `env.unavailable_in_lanes` | every ranked lane was tried; `attempts` carries each lane's typed verdict | read the FIRST attempt's error (usually the informative one); each attempt names its own lever |
+| attempt `outcome: skipped, skip_reason: halted` | an outage/substrate fault stopped the chain — availability was NOT determined | treat as infrastructure, not as "package unavailable" |
+| `installed_unverified` | landed but the postcondition did not run | verify before relying on it (a quick load check in the target) |
+| `verification: verified_now` | the claim was proven live against a ready realization (site named in the result) | trust it — install-target and proof-target are the same environment |
+| `verification: deferred` | the claim is recorded on the env identity and enforced at every realization | normal for a fresh/unrealized env — NOT a gap: a broken build surfaces at first use as a typed failure naming the claim; no need to pre-verify yourself |
+| `verified: unknown` | the CHECK could not run (interpreter/site trouble) | retry the check, not the install — unknown ≠ failed |
+| `session.cold_base` | this base cannot be cloned here; delta lanes only | use the levers in hints (package-layer installs work; bespoke installers need `writes_to=`) |
+| "Installed, but not loadable" | a build reported success while producing nothing | treat as a build failure: see the realize_failed row |
+| `env.solve_failed` whose log names a missing `activate.sh` / `getcwd` error | the environment's realized files are GONE from disk (swept/deleted) — not a solver or network problem, retrying is futile whatever `retryable` says | restart the kernel/session (a fresh start re-realizes the environment from its recorded spec); if it recurs, tell the user — the machine's env storage is being reclaimed |
+| `task.invalid` | the request itself is malformed | fix the call per hints; not a retry case |
+
+Paths: a file result carrying `durability: ephemeral` (or an `opens` note
+saying the path is swept) is an address that DIES with its sandbox — make it
+durable before handing it to a viewer, storing it in an entity, or referring
+to it in a later turn. PICK THE RIGHT LANE: a working file the user wants
+kept is a RUN OUTPUT — `keep_outputs` (retention); `register_dataset` is ONLY
+for data that is a first-class scientific entity entering analysis (imported
+data, a curated deliverable). Keeping a scratch file must not mint a Dataset.
+Paths are lookups, never identities.
+
+Promotion recap: `set_active_env(name, language=…)` makes an isolated env
+ambient — bare `run_python`/`run_r` and later installs land there until reset
+with `set_active_env('default')`. Install-target, verify-target and
+execution-target are always the same environment; if a result names an env,
+that is where the package lives.
+
+Dataset provenance: every `register_dataset` states `origin` (kind) +
+`source` (traceable ref) — the platform records mechanics (fetch keys, run
+keys) but only you know where data is FROM; a result carrying
+`provenance: unstated` means go back and state it.

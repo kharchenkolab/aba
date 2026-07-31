@@ -90,15 +90,15 @@ def test_no_pack_errors_instead_of_served_base():
     assert not r.get("stdout"), "no-pack run must not execute on a served base"
 
 
-def test_default_probe_python_does_not_swallow():
-    """The silent-revival bug: _default_probe_python must not swallow a weft error
+def test_default_probe_does_not_swallow():
+    """The silent-revival bug: _default_probe_argv must not swallow a weft error
     into None (which routed installs to the old path). It returns None ONLY when no
     pack is declared; a pack-declared-but-unrealizable case propagates."""
     import inspect
     from content.bio.tools import discovery
-    src = inspect.getsource(discovery._default_probe_python)
+    src = inspect.getsource(discovery._default_probe_argv)
     assert "except Exception" not in src, \
-        "_default_probe_python swallows again — a weft error must propagate, not become None"
+        "_default_probe_argv swallows again — a weft error must propagate, not become None"
 
 
 TESTS = [v for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]

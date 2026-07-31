@@ -112,6 +112,35 @@ def bootstrap_env() -> None:
     sys.path.insert(0, str(ROOT / "backend"))
 
 
+def entity_type_bounds(st: dict, ents: list) -> list:
+    """Per-type entity-count assertions: `entities_of_type` (>= n) and
+    `entities_of_type_max` (<= n). Archived entities count for neither.
+
+    The ceiling is the OTHER half of a threshold check. `entities_of_type` is a
+    lower bound, so on its own it can only ever reward creating MORE: a scenario
+    asserting "the acquisition got registered" passes just as well when the agent
+    registers one entity per file, or mints one for a scratch/reference file —
+    i.e. it silently accepts "register everything", which is the entity-noise
+    failure the curation rule exists to prevent. Pair the two whenever the
+    behaviour under test has a threshold (2026-07-21).
+
+    Pure + side-effect-free so the guard itself is unit-testable
+    (tests/test_dataset_registration_guard.py) — a check that can't be shown to
+    FAIL is not a check.
+    """
+    fails: list = []
+    active = [e for e in ents if e.get("status") == "active"]
+    for k, n in (st.get("entities_of_type") or {}).items():
+        got = sum(1 for e in active if e.get("type") == k)
+        if got < n:
+            fails.append(f"entities_of_type[{k}]>={n} but {got}")
+    for k, n in (st.get("entities_of_type_max") or {}).items():
+        got = sum(1 for e in active if e.get("type") == k)
+        if got > n:
+            fails.append(f"entities_of_type_max[{k}]<={n} but {got}")
+    return fails
+
+
 def stage_into(pid: str, items) -> None:
     """Copy data files AND subdirectories into the project's real data dir (what
     the agent's DATA_DIR resolves to) AND the global fallback. Subdir support
@@ -164,6 +193,13 @@ def consume(stream, cap: dict) -> None:
             cap["text"].append(ev.get("text") or ev.get("delta") or "")
         elif t == "tool_start":
             cap["tools"].append(ev.get("name") or ev.get("tool") or "?")
+            # Arguments too (values stringified + capped): names alone cannot
+            # express the CEILING checks — "built exactly one env", "the bare
+            # run carried no env=" — that the promotion scenarios assert.
+            _inp = ev.get("input") if isinstance(ev.get("input"), dict) else {}
+            cap.setdefault("tool_calls", []).append(
+                {"name": ev.get("name") or ev.get("tool") or "?",
+                 "args": {k: str(v)[:200] for k, v in _inp.items()}})
         elif t == "tool_result":
             r = ev.get("result") or {}
             if isinstance(r, dict):
@@ -181,8 +217,9 @@ def consume(stream, cap: dict) -> None:
 
 
 def drive_turn(client, pid, tid, text, resume_answer="Yes, go ahead.") -> dict:
-    cap = {"run_id": None, "text": [], "tools": [], "entities": [], "usage": {},
-           "kinds": {}, "tool_errors": [], "errors": [], "resume_hops": 0, "jobs": []}
+    cap = {"run_id": None, "text": [], "tools": [], "tool_calls": [],
+           "entities": [], "usage": {}, "kinds": {}, "tool_errors": [],
+           "errors": [], "resume_hops": 0, "jobs": []}
     # H5: a read-timeout on the SSE stream so a turn that goes SILENT (wedged exec
     # emitting no events) unblocks iter_lines() on its own rather than leaking the
     # worker thread. Best-effort — the wall-clock call_with_timeout guard is the
@@ -230,10 +267,15 @@ def context_metrics(files: list[str]) -> dict:
     sysb = last.get("system") or []
     cc_sys = [bool(isinstance(b, dict) and b.get("cache_control")) for b in sysb]
     msgs = last.get("messages") or []
+    # Message-side breakpoint: the mark sits on the last message's last REAL
+    # block — the block AFTER it (when present) is the volatile tail, which is
+    # deliberately uncached (delivered outside every cached prefix; see
+    # core.llm.place_volatile_tail). Checking only content[-1] asserted the
+    # PRE-placement-fix layout and failed every post-fix request.
     last_cc = False
     if msgs and isinstance(msgs[-1].get("content"), list) and msgs[-1]["content"]:
-        last_cc = bool(isinstance(msgs[-1]["content"][-1], dict)
-                       and msgs[-1]["content"][-1].get("cache_control"))
+        last_cc = any(bool(isinstance(b, dict) and b.get("cache_control"))
+                      for b in msgs[-1]["content"])
     import hashlib
     stable = next((b.get("text", "") for b in sysb
                    if isinstance(b, dict) and b.get("cache_control")), "")
@@ -317,6 +359,26 @@ def run_checks(step, cap, cmetrics, prev_msgs, client, pid, tid, created, produc
     for t in (exp.get("tools_not_used") or []):   # advice/lightweight turns must NOT execute
         if t in (cap.get("tools") or []):
             fails.append(f"tool_used_unexpectedly:{t} (used={cap.get('tools')})")
+    # Ceilings and argument shapes — the checks tool NAMES alone can't express.
+    for t, n in (exp.get("tool_max_calls") or {}).items():
+        c = sum(1 for name in (cap.get("tools") or []) if name == t)
+        if c > int(n):
+            fails.append(f"tool_called_too_often:{t} ({c} > {n})")
+    for spec in (exp.get("tool_arg_absent") or []):   # EVERY call must lack the arg
+        t, a = spec.get("tool"), spec.get("arg")
+        for call in (cap.get("tool_calls") or []):
+            if call.get("name") == t and a in (call.get("args") or {}):
+                fails.append(
+                    f"tool_arg_present:{t}.{a}={call['args'][a]!r}")
+                break
+    for spec in (exp.get("tool_arg_equals") or []):   # SOME call carries arg=value
+        t, a, want = spec.get("tool"), spec.get("arg"), spec.get("value")
+        calls = [c for c in (cap.get("tool_calls") or []) if c.get("name") == t]
+        if calls and not any(str((c.get("args") or {}).get(a)) == str(want)
+                             for c in calls):
+            fails.append(
+                f"tool_arg_mismatch:{t}.{a} wanted {want!r} "
+                f"(got {[(c.get('args') or {}).get(a) for c in calls]})")
     bj = exp.get("background_job")                 # await + assert an async job's OUTCOME
     if bj is not None:
         results = await_jobs(client, cap.get("jobs") or [],
@@ -338,6 +400,24 @@ def run_checks(step, cap, cmetrics, prev_msgs, client, pid, tid, created, produc
         got = sum(1 for a in produced_arts if a.get("kind") == k)
         if got < n:
             fails.append(f"produces[{k}]>={n} but got {got}")
+    # AUTOMATIC surface level: a step that claims `produces` implicitly promises
+    # those artifacts are CONSUMABLE — every produced artifact with a served URL
+    # must stream non-empty bytes NOW (200, or an honest 413), not merely exist
+    # as a row. Opt out per step with `expect: {produces_served: false}`.
+    if exp.get("produces_served", bool(exp.get("produces"))):
+        for a in produced_arts:
+            url = a.get("url")
+            if not url:
+                continue
+            try:
+                r = client.get(url)
+                if r.status_code == 200 and r.content:
+                    continue
+                if r.status_code == 413:
+                    continue                      # honest over-budget refusal
+                fails.append(f"produces_served:{a.get('kind')} -> {r.status_code}")
+            except Exception as e:  # noqa: BLE001 — a crashed serve route is a failure
+                fails.append(f"produces_served:{a.get('kind')} -> crash:{type(e).__name__}")
     st = exp.get("state") or {}
     man = json.dumps(client.get(f"/api/threads/{tid}/manifest").json(), default=str).lower()
     ents = client.get("/api/entities", params={"project_id": pid, "include_archived": True}).json()
@@ -360,10 +440,7 @@ def run_checks(step, cap, cmetrics, prev_msgs, client, pid, tid, created, produc
             e = next((x for x in ents if x.get("id") == eid), None)
             if not (e and ((e.get("status") == "active") == want_active)):
                 fails.append(f"{key}:{spec['ref']} -> {e.get('status') if e else 'missing'}")
-    for k, n in (st.get("entities_of_type") or {}).items():
-        got = sum(1 for e in ents if e.get("type") == k and e.get("status") == "active")
-        if got < n:
-            fails.append(f"entities_of_type[{k}]>={n} but {got}")
+    fails.extend(entity_type_bounds(st, ents))
     # --- provenance / versioning state ---
     if "reproduced" in st:   # checks THIS step's reproduce result (user-action `reproduce`)
         rr = (created.get(step["id"]) or {}).get("reproduce") or {}
@@ -382,6 +459,50 @@ def run_checks(step, cap, cmetrics, prev_msgs, client, pid, tid, created, produc
         dr = (created.get(step["id"]) or {}).get("delete_revision") or {}
         if bool(dr.get("deleted")) != bool(st["revision_deleted"]):
             fails.append(f"revision_deleted={dr.get('deleted')} expected {st['revision_deleted']}")
+    # AUTOMATIC surface level: a PIN step implicitly promises the pinned entity
+    # is REACHABLE — its download must serve (200 with bytes, or an honest
+    # 413), because a pin the user can never open is the presentation-parity
+    # bug class. Explicit form: `state: {downloadable: {ref: sX, ok: true}}`
+    # (ok:false asserts an HONEST refusal — 4xx, never 200, never 5xx).
+    dl = st.get("downloadable")
+    if dl is None and step.get("kind") == "pin" and step.get("actor", "agent") == "user":
+        rec = created.get(step["id"]) or {}
+        if rec.get("result_id") or rec.get("entity_id"):
+            dl = {"ref": step["id"], "ok": True}
+    if dl and dl.get("ref"):
+        rec = created.get(dl["ref"]) or {}
+        eid = rec.get("result_id") or rec.get("entity_id")
+
+        def _dl(e):
+            try:
+                r = client.get(f"/api/entities/{e}/download")
+                return r.status_code, bool(r.content)
+            except Exception as ex:  # noqa: BLE001
+                return f"crash:{type(ex).__name__}", False
+
+        if not eid:
+            fails.append(f"downloadable:{dl['ref']} unresolved ref")
+        else:
+            code, body = _dl(eid)
+            ok = (code == 200 and body) or code == 413
+            if dl.get("ok", True):
+                if not ok:
+                    # a container result carries no artifact of its own — the
+                    # product opens it through its MEMBERS, so the pin counts
+                    # as reachable when at least one member serves
+                    try:
+                        ent = client.get(f"/api/entities/{eid}").json()
+                        refs = [m.get("ref") for m in
+                                ((ent.get("metadata") or {}).get("members") or [])
+                                if m.get("ref")]
+                    except Exception:  # noqa: BLE001
+                        refs = []
+                    ok = any(((c == 200 and b) or c == 413)
+                             for c, b in (_dl(x) for x in refs[:4]))
+                if not ok:
+                    fails.append(f"downloadable:{dl['ref']} -> {code} (no member serves either)")
+            elif code == 200 or (isinstance(code, int) and code >= 500):
+                fails.append(f"downloadable:{dl['ref']} expected honest refusal, got {code}")
     rv = st.get("revisions_min")   # {ref: sX, n: N}: the chain for that entity has >=N revisions
     if rv and rv.get("ref"):
         rec = created.get(rv["ref"]) or {}
@@ -404,7 +525,33 @@ def run_checks(step, cap, cmetrics, prev_msgs, client, pid, tid, created, produc
         fails.append(f"cache_breakpoints absent: sys={cmetrics.get('sys_cc_pattern')} last={cmetrics.get('last_msg_cc')}")
     if ctx.get("cache_read") and not (cap.get("usage", {}).get("cache_read") or 0) > 0:
         fails.append("cache_read=0 (no cache hit)")
+    fails.extend(cache_hit_check(ctx, cap.get("usage")))
     return fails
+
+
+def cache_hit_check(ctx: dict, usage: dict | None) -> list[str]:
+    """`cache_hit_min: <frac>` ctx check — a THRESHOLD on this turn's cache hit
+    fraction cr/(cr+cw+in), not just the boolean cache_read gate. ARMED per the
+    guard convention: usage missing/empty when the check was requested is a
+    LOUD distinct failure (unmeasured ≠ passed) — the whole caching episode
+    began with instruments reading 'nothing measured' as green. Only meaningful
+    on turns ≥2 of a warm conversation; scenarios opt in on such steps."""
+    want = ctx.get("cache_hit_min")
+    if want is None:
+        return []
+    u = usage or {}
+    cr = u.get("cache_read") or 0
+    cw = u.get("cache_write") or 0
+    inp = u.get("input") or 0
+    denom = cr + cw + inp
+    if not denom:
+        return [f"cache_hit_min:{want}: usage not captured — UNMEASURED, "
+                f"cannot verify (a run that measures nothing must not pass)"]
+    frac = cr / denom
+    if frac < float(want):
+        return [f"cache_hit_frac={frac:.3f} < {want} "
+                f"(read={cr} write={cw} in={inp}) — caching regression"]
+    return []
 
 
 # ---------- LLM-judge (vision rubric) ----------
@@ -548,6 +695,34 @@ def main() -> int:
         tid = client.post("/api/threads", json={"project_id": pid, "title": SCENARIO}).json().get("id")
         if src.is_dir():
             stage_into(pid, list(src.iterdir()))   # files AND subdirs (e.g. coloc/)
+
+        # Seed-staging guard: a scenario whose declared `data_files` are not all
+        # present in DATA_DIR runs the agent against INCOMPLETE inputs — it then
+        # (correctly) refuses to fabricate, and every downstream produce/pin step
+        # fails as if the PRODUCT under-performed. That masquerade cost a full
+        # investigation (a network-fetched, gitignored input silently absent on a
+        # clean checkout). Fail LOUDLY as a setup error instead: a missing seed is
+        # the harness's fault, not the agent's or the platform's. Exit 3 =
+        # SETUP-ERROR (distinct from a scenario regression), so a sweep can skip
+        # it rather than bake a fixture gap into the baseline.
+        # ONE definition of presence, shared with the sweep's pre-flight (see
+        # harness/fixtures.py) — when these two drifted, the sweep skipped
+        # scenarios the runner would have run AND the runner killed scenarios
+        # whose nested inputs were staged perfectly well.
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from fixtures import declared_inputs, missing_inputs
+        _declared = declared_inputs(spec)
+        if _declared:
+            from core.config import project_data_dir as _pdd
+            _missing = missing_inputs(_declared, Path(_pdd(pid)))
+            if _missing:
+                print(f"[SETUP-ERROR] {SCENARIO}: {len(_missing)} declared data_files "
+                      f"absent from DATA_DIR after staging (a generator/fetch step did "
+                      f"not run, or the file is gitignored + uncommitted). The scenario "
+                      f"is UNRUNNABLE — skipping so it is not misread as agent "
+                      f"under-production. Missing: {_missing}. Fix the scenario's "
+                      f"make_data/staging so every declared input is reproduced.")
+                return 3
 
         def restart_client():
             nonlocal client, client_cm
@@ -701,6 +876,65 @@ def main() -> int:
                     restart_client()
                 except Exception:
                     pass
+
+        # ---- scenario-end SURFACE-PARITY oracle (default-on) ----
+        # The per-step checks verify records; this walks the CONSUMPTION
+        # surfaces (durability listing URLs, artifact serving, entity
+        # downloads, viewer lookup) so "recorded right rows" can never again
+        # pass while "a person opens the result" fails. Opt out with a
+        # top-level `surfaces: false` in scenario.yaml.
+        if spec.get("surfaces", True):
+            try:
+                from harness.surfaces import surface_parity_failures
+            except ImportError:
+                from surfaces import surface_parity_failures
+            try:
+                sfails = surface_parity_failures(client, pid)
+            except Exception as e:  # noqa: BLE001 — the oracle itself must not crash the run
+                sfails = [f"surface:oracle_crash:{type(e).__name__}: {e}"]
+            verdict = "PASS" if not sfails else "FAIL"
+            print(f"[_surfaces] consumption-surface parity: [{verdict}] "
+                  f"{('; '.join(sfails)) if sfails else 'all advertised surfaces answer honestly'}\n")
+            report.append({"step": "_surfaces", "kind": "surface_parity",
+                           "actor": "oracle", "verdict": verdict,
+                           "fails": sfails, "rubric": None})
+            bundle_steps.append({"step": "_surfaces", "kind": "surface_parity",
+                                 "actor": "oracle", "verdict": verdict,
+                                 "fails": sfails})
+
+        # ---- scenario-end TRANSPORT (mechanism-truth) oracle (default-on) ----
+        # Outcome oracles cannot see MECHANISM: the legacy and substrate lanes
+        # produce identical results, so only the exec records' compute stamps
+        # say how each block actually ran. Every scenario asserts none of its
+        # executions self-identify as legacy. Opt out with `transport: false`.
+        if spec.get("transport", True):
+            try:
+                from harness.transport import transport_truth, transport_verdict
+            except ImportError:
+                from transport import transport_truth, transport_verdict
+            try:
+                tt = transport_truth(client, pid)
+            except Exception as e:  # noqa: BLE001
+                tt = {"failures": [f"transport:oracle_crash:{type(e).__name__}: {e}"],
+                      "checked": 0}
+            # NON-VACUITY: checked==0 is a pass that verified NOTHING — the exact
+            # blind spot that let the legacy lane hide for months. transport_verdict
+            # records `proven` and (opt-in strict) can FAIL it; by default it stays
+            # PASS so a vacuous flip can't perturb an accepted baseline's mech_pass.
+            tv = transport_verdict(
+                tt, strict=os.environ.get("ABA_REGTEST_TRANSPORT_STRICT") == "1")
+            verdict, tfails, tchecked = tv["verdict"], tv["fails"], tv["checked"]
+            tag = "" if tv["proven"] else " UNPROVEN(checked=0)"
+            print(f"[_transport] mechanism truth: [{verdict}]{tag} checked={tchecked} "
+                  f"{('; '.join(tfails)) if tfails else 'every stamped execution ran on the substrate'}\n")
+            report.append({"step": "_transport", "kind": "transport_truth",
+                           "actor": "oracle", "verdict": verdict,
+                           "fails": tfails, "rubric": None,
+                           "checked": tchecked, "proven": tv["proven"]})
+            bundle_steps.append({"step": "_transport", "kind": "transport_truth",
+                                 "actor": "oracle", "verdict": verdict,
+                                 "fails": tfails, "checked": tchecked,
+                                 "proven": tv["proven"]})
     finally:
         try:
             client_cm.__exit__(None, None, None)
@@ -714,13 +948,32 @@ def main() -> int:
         vals = [r.get(dim) for r in rubrics if isinstance(r.get(dim), (int, float))]
         return round(sum(vals) / len(vals), 2) if vals else None
     rubric_summary = {d: _mean(d) for d in (*RUBRIC_DIMS, "overall")}
-    summary = {"scenario": SCENARIO, "mode": mode, "agent_model": os.environ.get("ABA_MODEL"),
+    # The model that ACTUALLY ran, read off the wire — not the one we asked for.
+    # `ABA_MODEL` is only set when ABA_SCENARIO_MODEL was passed; with it unset
+    # the deployment's own default agent runs, and recording None there let the
+    # sweep label the tier by its NAME ("haiku") while claude-opus-4-7 served
+    # every turn. A scorecard that names a model nobody called is worse than one
+    # that admits it does not know — and the mech tolerance is keyed to that
+    # name, so the fiction also decides which regressions are forgiven.
+    wire_model = None
+    try:
+        reqs = sorted((RUN / "rawreq").glob("req_*.json"))
+        if reqs:
+            wire_model = json.loads(reqs[-1].read_text()).get("model")
+    except Exception:  # noqa: BLE001 — provenance is advisory, never fatal
+        pass
+    summary = {"scenario": SCENARIO, "mode": mode,
+               "agent_model": wire_model or os.environ.get("ABA_MODEL"),
+               "agent_model_requested": os.environ.get("ABA_MODEL"),
                "judge_model": JUDGE_MODEL if DO_JUDGE else None,
                "mechanical": {"pass": npass, "total": len(report)},
                "rubric_mean": rubric_summary, "report": report, "timeline": timeline}
     (RUN / "report.json").write_text(json.dumps(summary, indent=2, default=str))
     (RUN / "bundle.json").write_text(json.dumps(
-        {"scenario": SCENARIO, "mode": mode, "agent_model": os.environ.get("ABA_MODEL"),
+        {"scenario": SCENARIO, "mode": mode,
+         # same observed-model source as report.json — the flag-derived value
+         # was the fiction the wire read replaced; two files must not disagree
+         "agent_model": wire_model or os.environ.get("ABA_MODEL"),
          "pid": pid, "tid": tid, "steps": bundle_steps,
          "dirs": {"raw_requests": "rawreq/", "turn_contexts": "turnlog/", "project": "projects/"}},
         indent=2, default=str))

@@ -27,6 +27,9 @@ from typing import Optional
 from .ctx_read import _ctx_thread
 from .run_exec import _run_scratch_cwd, _prior_run_files_preamble
 
+import logging
+_log = logging.getLogger(__name__)
+
 
 def _infer_scope(input_: dict, ctx: dict | None) -> str:
     """Default-by-signal placement (refs.md §3.3): an explicit scope always
@@ -318,8 +321,24 @@ def _within(p: str, base: str) -> bool:
 def _scratch_bases(ctx: dict | None) -> list[str]:
     """Where a relative-path download actually lands: the active Run's output
     dir and the thread's scratch dir (the kernel cwd), so register_dataset can
-    find files the agent wrote there with a bare name."""
+    find files the agent wrote there with a bare name.
+
+    ORDER IS THE CONTRACT. `_resolve_dataset_path` takes the first candidate
+    that exists, so this list decides which bytes a bare name means. Every
+    local kernel is offered (a legitimate register can name a file written in
+    an earlier kernel of the same run), but the CALLER'S kernel goes first and
+    the rest sort newest-first.
+
+    Unordered, this silently adopted another session's data: an agent
+    downloaded a set of files, verified every one of them, and registered the
+    directory by relative name — and got a partial download of the same name
+    left in a kernel sandbox from two days earlier, because the store happened
+    to list that kernel first. The entity went active carrying the agent's
+    verification claim, which was true of the copy it made and false of the
+    copy adopted. A stale sandbox must never outrank the caller's own.
+    """
     bases: list[str] = []
+    mine: list[str] = []
     try:
         from core.data.workspace import scratch_dir
         from core import projects
@@ -330,9 +349,14 @@ def _scratch_bases(ctx: dict | None) -> list[str]:
             from core.graph.entities import get_entity
             rid = active_run_id(tid)
             if rid:
-                ap = (get_entity(rid) or {}).get("artifact_path")
+                ent = get_entity(rid) or {}
+                ap = ent.get("artifact_path")
                 if ap:
                     bases.append(str(ap))
+                # the kernels THIS run executed in (run_exec records each one
+                # via record_weft_target) — the caller's own sandboxes
+                mine = [str(t) for t in
+                        ((ent.get("metadata") or {}).get("weft_targets") or []) if t]
             bases.append(str(scratch_dir(pid, f"thread-{tid}")))
     except Exception:  # noqa: BLE001
         pass
@@ -340,14 +364,68 @@ def _scratch_bases(ctx: dict | None) -> list[str]:
     # ($ABA_HOME/weft/site-local/kernels/<kid>/) — the datasets2.md §1 bug:
     # a bare filename the agent just wrote resolves nowhere without these.
     try:
+        import os as _os
         from core.compute.adapter import get_compute, weft_workspace
-        for k in (get_compute().sync_call("list_kernels") or {}).get("kernels", []):
-            jd = k.get("jobdir")
-            if jd and k.get("site") == "local":
-                bases.append(str(weft_workspace() / "site-local" / jd))
+        _ws = weft_workspace()
+        jds = [k.get("jobdir") for k in
+               (get_compute().sync_call("list_kernels") or {}).get("kernels", [])
+               if k.get("jobdir") and k.get("site") == "local"]
+
+        def _rank(jd: str) -> tuple:
+            # caller's kernels first (most recently recorded wins), then
+            # everything else newest-first. mtime is the only defensible
+            # tiebreak: the agent's own write is the newest thing on disk.
+            try:
+                owned = mine.index(jd)
+                own_key = -(len(mine) - owned)      # last recorded = smallest
+            except ValueError:
+                own_key = 1                          # not ours → after all ours
+            try:
+                mt = _os.path.getmtime(_ws / "site-local" / jd)
+            except OSError:
+                mt = 0.0
+            return (own_key, -mt)
+
+        for jd in sorted(jds, key=_rank):
+            bases.append(str(_ws / "site-local" / jd))
     except Exception:  # noqa: BLE001 — substrate offline → no jobdir candidates
         pass
     return bases
+
+
+_CORRUPT_SCAN_CAP = 64          # files; a big tree pays a bounded price
+
+
+def _corrupt_members(path: str) -> list[str]:
+    """Names of compressed members under `path` that do NOT decompress.
+
+    Cheap and decisive: the gzip/zip container carries its own end-of-stream
+    marker, so a truncated or damaged download is detectable without knowing
+    anything about the payload. Only reads members it can identify; anything
+    else (plain text, binary, unknown suffix) is left alone — this answers
+    "is the container intact", not "is the science right".
+    """
+    import gzip as _gz
+    import os as _os
+    import zipfile as _zf
+    out: list[str] = []
+    files = ([path] if _os.path.isfile(path)
+             else [_os.path.join(r, f)
+                   for r, _d, fs in _os.walk(path) for f in fs])
+    for p in files[:_CORRUPT_SCAN_CAP]:
+        low = p.lower()
+        try:
+            if low.endswith((".gz", ".bgz", ".tgz")):
+                with _gz.open(p, "rb") as fh:      # reads to the EOS marker
+                    while fh.read(1 << 20):
+                        pass
+            elif low.endswith(".zip"):
+                with _zf.ZipFile(p) as z:
+                    if z.testzip() is not None:
+                        out.append(_os.path.basename(p))
+        except Exception:  # noqa: BLE001 — unreadable IS the finding
+            out.append(_os.path.basename(p))
+    return out
 
 
 def _hardlink_tree(src: str, dest: str) -> None:
@@ -415,7 +493,35 @@ def _adopt_into_data_dir(src: str) -> tuple[str, bool]:
         return dest, True
 
 
-def _resolve_dataset_path(path: str, ctx: dict | None) -> str:
+def _ambient_run_for(thread_id: "str | None") -> "str | None":
+    """The thread's Run for addressing purposes — F11 parity everywhere:
+    resolve the active Run, else mint the AMBIENT one (as keep_outputs does),
+    and backfill this thread's live kernel targets so the canonical
+    resolver's remote tier has something to walk. One helper, used by BOTH
+    the registration resolution (P1) and run_key capture — the fix landing
+    in only one of them left the other returning None (live, twice)."""
+    if not thread_id:
+        return None
+    try:
+        from content.bio.lifecycle.runs import active_run_id, record_weft_target
+        rid = active_run_id(thread_id)
+        if rid is None:
+            from content.bio.lifecycle.registry import _ensure_analysis
+            rid = _ensure_analysis(None, {}, thread_id)
+        if rid:
+            try:
+                from core.exec.kernels import get_pool
+                for _sess in get_pool().sessions_for_thread(thread_id):
+                    record_weft_target(rid, getattr(_sess, "kernel_id", None))
+            except Exception:  # noqa: BLE001
+                pass
+        return rid
+    except Exception:  # noqa: BLE001 — addressing enrichment, never a gate
+        return None
+
+
+def _resolve_dataset_path(path: str, ctx: dict | None,
+                          _remote_out: "dict | None" = None) -> str:
     """Resolve a bare/relative path against the scratch tier first (where the
     agent's relative downloads land), then the **per-project** data dir (what
     the kernel preamble sets ``os.environ["DATA_DIR"]`` to — the dir the agent
@@ -435,11 +541,70 @@ def _resolve_dataset_path(path: str, ctx: dict | None) -> str:
     from core.projects import current_project_id
     if os.path.isabs(path):
         return os.path.normpath(path)        # also collapses `./` segments
+    # Canonical resolver FIRST (misc/paths.md P1): the Run's recorded outputs
+    # — site-aware, stopped-kernel-aware — outrank any filesystem scan; the
+    # ranked scratch scan (52c6d094) survives as the fallback and the only
+    # tier for no-run registrations (uploads).
+    try:
+        from content.bio.lifecycle.runs import locate_run_output
+        _tid = str((ctx or {}).get("thread_id") or "")
+        _rid = _ambient_run_for(_tid)
+        if _rid:
+            _hit = locate_run_output(_rid, path)
+            if _hit and _hit.get("local_path") and os.path.exists(_hit["local_path"]):
+                return os.path.normpath(_hit["local_path"])
+            if _hit and _hit.get("locality") == "remote":
+                # A remote hit is an ANSWER, not a miss (its local_path is
+                # None by the lookup-never-transfers contract). Bytes move
+                # only through the ONE mover, under the same small
+                # transparent gate the serve surfaces use; a refusal is
+                # stashed so the error can name the site instead of
+                # advising an absolute path that cannot work across sites.
+                try:
+                    from content.bio.lifecycle.runs import materialize_run_output
+                    from core.exec.run import _MAX_HARVEST_BYTES
+                    _local = materialize_run_output(
+                        _hit, max_bytes=_MAX_HARVEST_BYTES)
+                    if _local and os.path.exists(_local):
+                        if _remote_out is not None:
+                            # identity captured at the moment it is KNOWN —
+                            # after adoption a fresh lookup answers with the
+                            # local copy, which carries no producing-target
+                            # identity (live: the wing's last red)
+                            _remote_out.update(target=_hit.get("target"),
+                                               rel=_hit.get("rel"),
+                                               site=_hit.get("site"),
+                                               fetched=True)
+                        return os.path.normpath(_local)
+                except Exception as _me:  # noqa: BLE001 — refusal/size gate
+                    if _remote_out is not None:
+                        _remote_out.update(site=_hit.get("site"),
+                                           size=_hit.get("size"),
+                                           why=str(_me)[:200])
+                if _remote_out is not None and "site" not in _remote_out:
+                    _remote_out.update(site=_hit.get("site"),
+                                       size=_hit.get("size"))
+    except Exception:  # noqa: BLE001 — resolution falls to the ranked scan
+        pass
     cands = [os.path.normpath(os.path.join(b, path)) for b in _scratch_bases(ctx)]
     cands.append(os.path.normpath(os.path.join(str(project_data_dir(current_project_id())), path)))
     cands.append(os.path.normpath(os.path.join(str(DATA_DIR), path)))
     cands.append(os.path.normpath(os.path.abspath(path)))
-    return next((c for c in cands if os.path.exists(c)), cands[0])
+    hit = next((c for c in cands if os.path.exists(c)), None)
+    if hit:
+        return hit
+    # Door tier: the name may live in a sandbox or a prior run's recorded
+    # outputs (including the serving copy of something the agent just wrote on
+    # a remote kernel). Local hits only — registration needs bytes on disk.
+    try:
+        from content.bio.project_locate import locate_project_files
+        found = locate_project_files(os.path.basename(path), limit=4, ctx=ctx)
+        local = [h for h in found.get("matches", []) if h.get("path")]
+        if local:
+            return os.path.normpath(local[0]["path"])
+    except Exception:  # noqa: BLE001 — a fallback tier must never break resolution
+        pass
+    return cands[0]
 
 
 def _bundle_paths_into_data_dir(srcs: list[str], title: str) -> tuple[str, list[str], list[str]]:
@@ -536,7 +701,8 @@ def _url_preflight(url: str) -> str | None:
 
 
 def _register_dataset_url(url: str, site: str | None, title: str,
-                          input_: dict, ctx: dict | None) -> dict:
+                          input_: dict, ctx: dict | None,
+                          _okind: 'str | None' = None) -> dict:
     """URL lane (misc/datasets2.md §4A): weft fetches into the target site's
     CAS, hashed on arrival — the agent never pre-downloads. With site=, the
     bytes land on THAT site and never touch the controller; locally we also
@@ -565,6 +731,7 @@ def _register_dataset_url(url: str, site: str | None, title: str,
         except Exception:  # noqa: BLE001 — CAS copy still holds the bytes
             pass
     md = {"thread_id": _ctx_thread(ctx), "origin": "url",
+          "origin_kind": _okind or "url",
           "by_reference": abspath is None, "ref_path": abspath or url,
           "summary": (input_.get("summary") or "").strip(),
           "source": input_.get("source") or url,
@@ -573,6 +740,7 @@ def _register_dataset_url(url: str, site: str | None, title: str,
           "origin_class": rec["origin_class"],
           "descriptor": rec.get("descriptor") or {},
           "dataset_site": site or "local"}
+    md["title_origin"] = "ai"   # dataset titles are agent-chosen; shows the ❄ until the user renames
     eid = create_entity(entity_type="dataset", title=title,
                         artifact_path=abspath,
                         derivation=imported(url),
@@ -587,6 +755,7 @@ def _register_dataset_url(url: str, site: str | None, title: str,
              "fetched into the local data store")
     return {"status": "ok", "dataset_id": eid, "title": title,
             "artifact_path": abspath,
+            "provenance": _okind or "url",
             "note": f"Registered as a Dataset entity — {where}."}
 
 
@@ -601,7 +770,8 @@ def _slugify_for_dir(title: str) -> str:
     return (s or "dataset")[:80]
 
 
-def _weft_adopt(abspath: str, title: str) -> tuple[str, dict]:
+def _weft_adopt(abspath: str, title: str,
+                _thread_id: 'str | None' = None) -> tuple[str, dict]:
     """Weft-native adopt for PRODUCED/fetched bytes (replaces the plain
     copy-into-data-dir): CAS ingest mints the content identity (dedup — the
     same content re-registered is the same ref, re-fetches stop piling up),
@@ -619,12 +789,49 @@ def _weft_adopt(abspath: str, title: str) -> tuple[str, dict]:
     md = {"ref": rec["ref"], "origin_class": rec["origin_class"],
           "source_key": rec["source_key"],
           "descriptor": rec.get("descriptor") or {}}
-    # retention2: when the file sits in a weft kernel jobdir, record the
-    # (run, relpath) KEY — the durable handle that survives sweeps, keeps,
-    # and PLACE moves (paths are lookups, never identities)
+    _capture_run_key(abspath, md, _thread_id)
+    return dest, md
+
+
+def _capture_run_key(abspath: str, md: dict,
+                     _thread_id: "str | None" = None) -> None:
+    """Record the durable (run, rel) KEY for bytes born in a kernel jobdir —
+    the handle that survives sweeps, keeps and PLACE moves (paths are
+    lookups, never identities). Canonical resolver FIRST (misc/paths.md P2):
+    its tiers are site-aware, so a file born on a site-targeted kernel still
+    gets its handle; the local prefix scan below cannot see those and stays
+    only as the no-run fallback (census-allowlisted)."""
     try:
         from core.compute.adapter import get_compute, weft_workspace
         real = os.path.realpath(abspath)
+        try:
+            from content.bio.lifecycle.runs import locate_run_output
+            _rid = _ambient_run_for(_thread_id)
+            if _rid:
+                _hit = locate_run_output(_rid, os.path.basename(abspath))
+                if _hit and _hit.get("target") and _hit.get("rel"):
+                    md["run_key"] = {"run": _hit["target"], "rel": _hit["rel"]}
+                    return
+                if _hit and not _hit.get("target"):
+                    # An identity-less local copy (the thread-sandbox mirror
+                    # of a remote kernel's output) can shadow the identity-
+                    # bearing tiers. The run's recorded remote targets are
+                    # the truth channel: confirm the file exists kernel-side
+                    # via the retention stat verb and key against THAT —
+                    # never invent an identity the substrate can't confirm.
+                    try:
+                        from content.bio.lifecycle.runs import _run_remote_targets
+                        from core.compute import retention
+                        _base = os.path.basename(abspath)
+                        for _t, _site in _run_remote_targets(_rid):
+                            _st = retention.file_stat(_t, _base)
+                            if _st.get("exists"):
+                                md["run_key"] = {"run": _t, "rel": _base}
+                                return
+                    except Exception:  # noqa: BLE001 — enrichment only
+                        pass
+        except Exception:  # noqa: BLE001 — fall to the local scan
+            pass
         for k in (get_compute().sync_call("list_kernels") or {})                 .get("kernels", []):
             jd = k.get("jobdir")
             if not jd or k.get("site") != "local":
@@ -637,7 +844,24 @@ def _weft_adopt(abspath: str, title: str) -> tuple[str, dict]:
                 break
     except Exception:  # noqa: BLE001 — the key is enrichment, never a gate
         pass
-    return dest, md
+
+
+def _paths_set_source_key(paths_list, site) -> str | None:
+    """Semantic identity of a multi-file registration: the sorted member
+    paths, order-free. ONE function for the dedup check AND the stored
+    metadata — the SET shape had no dedup at all (check-time key, nothing
+    persisted), and the register-on-landing rule funnels agents onto exactly
+    this shape, so a retried fetch or resumed session minted duplicate
+    entities with no backstop."""
+    if not paths_list or not all(os.path.isabs(str(x)) for x in paths_list):
+        return None
+    from core.data import datasets as _wds
+    return _wds.source_key(
+        "|".join(sorted(os.path.normpath(str(x)) for x in paths_list)), site)
+
+
+_ORIGIN_KINDS = {"url", "upload", "derived", "collaborator",
+                 "instrument", "simulated", "public_registry", "unknown"}
 
 
 def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
@@ -657,8 +881,22 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
     title = input_.get("title")
     if not title:
         return {"error": "title is required"}
+    # Agent-STATED origin (misc/paths.md follow-on): where the dataset is
+    # from is conversation meaning — only the agent holds it, and it is
+    # unrecoverable after registration. Structured kind + the existing
+    # `source` as the traceable ref; absence is legal but LOUD (the result
+    # carries provenance: unstated), never silent. The url door pre-fills
+    # what the system genuinely knows; it never invents meaning.
+    _okind = (str(input_.get("origin") or "").strip().lower() or None)
+    if _okind is not None and _okind not in _ORIGIN_KINDS:
+        return {"error": f"origin must be one of {sorted(_ORIGIN_KINDS)} "
+                         f"(got {_okind!r}); use 'unknown' to state that "
+                         f"the origin is genuinely not known"}
+    if _okind is None and input_.get("url"):
+        _okind = "url"
     paths_list = input_.get("paths")
     path = input_.get("path")
+    _remote_key = None            # set on the single-path remote-fetch branch
     url = (input_.get("url") or "").strip() or None
     site = (input_.get("site") or "").strip() or None
     given = [x for x in (paths_list, path, url) if x]
@@ -675,9 +913,14 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
     # of re-fetching / minting a duplicate entity.
     from core.data import datasets as _wds
     try:
-        _skey = _wds.source_key(url) if url else (
-            _wds.source_key(os.path.normpath(str(path)), site)
-            if path and os.path.isabs(str(path)) else None)
+        if url:
+            _skey = _wds.source_key(url)
+        elif path and os.path.isabs(str(path)):
+            _skey = _wds.source_key(os.path.normpath(str(path)), site)
+        elif paths_list:
+            _skey = _paths_set_source_key(paths_list, site)
+        else:
+            _skey = None
         if _skey:
             from core.graph.entities import find_entities
             hits = find_entities(type="dataset", not_deleted=True,
@@ -693,7 +936,8 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
         pass
 
     if url:
-        return _register_dataset_url(url, site, title, input_, ctx)
+        return _register_dataset_url(url, site, title, input_, ctx,
+                             _okind=_okind)
 
     bundle_note = ""
     weft_md = {}
@@ -731,9 +975,18 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
             )
         else:
             bundle_note = f" Bundle has {len(present)} file(s) linked into DATA_DIR."
+        # Persist the SAME set identity the dedup check computes — a key that
+        # is checked but never stored can never match a prior registration.
+        _set_key = _paths_set_source_key(paths_list, site)
+        if _set_key:
+            weft_md["source_key"] = _set_key
     else:
-        abspath = _resolve_dataset_path(str(path), ctx)
+        _remote_miss: dict = {}
+        abspath = _resolve_dataset_path(str(path), ctx, _remote_out=_remote_miss)
         exists = os.path.exists(abspath)
+        _remote_key = ({"run": _remote_miss["target"], "rel": _remote_miss["rel"]}
+                       if _remote_miss.get("fetched") and _remote_miss.get("target")
+                       and _remote_miss.get("rel") else None)
         # Adopt: a file found in the SCRATCH tier (not already under DATA_DIR)
         # goes weft-native (misc/datasets2.md §4B): CAS ingest mints the
         # content identity (dedup, survives the kernel-jobdir sweep), then a
@@ -756,7 +1009,8 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
                    _within(abspath, _PROJECT_DATA))
         if exists and in_work and not in_data:
             try:
-                abspath, weft_md = _weft_adopt(abspath, str(title))
+                abspath, weft_md = _weft_adopt(abspath, str(title),
+                               _thread_id=_ctx_thread(ctx))
                 adopted = True
             except Exception:  # noqa: BLE001 — substrate offline → legacy adopt
                 try:
@@ -767,28 +1021,44 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
         elif exists and not in_data:
             # In place outside aba's trees: a DURABLE-HOME registration
             # (misc/datasets2.md §4C) — fingerprint + descriptor, NO ingest,
-            # NO copy; the content identity (ref) mints lazily at first use.
+            # NO copy. The content identity (ref) is minted EAGERLY when the
+            # tree fits the synchronous byte-work budget (the recorded ref is
+            # what lets the range channel's ref arm stream this dataset later
+            # with no resolvable run; an on-site read pass is strictly cheaper
+            # than the WAN fetch the same guardrail bounds). Best-effort: over
+            # the ceiling or on a mint failure the ref stays absent and the
+            # viewer launch mints it lazily (`_mint_dataset_ref`).
             try:
                 from core.data import datasets as _wds2
-                rec = _wds2.register_source(abspath, site=site)
+                rec = _wds2.register_source(
+                    abspath, site=site,
+                    eager_ref_max_bytes=_wds2.FETCH_GUARDRAIL_BYTES)
                 weft_md = {k: rec[k] for k in
                            ("source_key", "home", "fingerprint", "descriptor",
-                            "origin_class") if rec.get(k) is not None}
+                            "origin_class", "ref") if rec.get(k) is not None}
             except Exception:  # noqa: BLE001 — plain by-reference still works
                 pass
         elif not exists and site and site != "local":
             # A path that lives on a REMOTE site (never visible locally):
             # register the durable home site-side — bytes never touch this
-            # machine (the whole point for TB-scale remote data).
+            # machine (the whole point for TB-scale remote data). The content
+            # identity (ref) is minted EAGERLY under the synchronous byte-work
+            # budget — the recorded ref is what lets the range channel's ref
+            # arm stream this dataset later with no resolvable run (an on-site
+            # read pass, no transfer). Best-effort: over the ceiling or on a
+            # mint failure the ref stays absent and the viewer launch mints it
+            # lazily (`_mint_dataset_ref`).
             try:
                 from core.data import datasets as _wds2
-                rec = _wds2.register_source(str(path), site=site)
+                rec = _wds2.register_source(
+                    str(path), site=site,
+                    eager_ref_max_bytes=_wds2.FETCH_GUARDRAIL_BYTES)
                 if (rec.get("fingerprint") or {}).get("exists"):
                     abspath = os.path.normpath(str(path))
                     exists = True   # exists ON THE SITE — honest enough for the entity
                     weft_md = {k: rec[k] for k in
                                ("source_key", "home", "fingerprint",
-                                "descriptor", "origin_class")
+                                "descriptor", "origin_class", "ref")
                                if rec.get(k) is not None}
                 else:
                     return {"error": (f"nothing found at {path!r} on site "
@@ -803,6 +1073,31 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
         # 'artifact_path' is missing or empty" — the symptom when a relative
         # path resolved against a now-gone per-run scratch dir.
         if not exists:
+            # Branch on what the caller ALREADY supplied: telling someone who
+            # passed an absolute path to "pass an ABSOLUTE path" names the one
+            # thing they did — the input actually missing there is site=
+            # (an absolute path is exists()-checked on THIS controller; on a
+            # site-targeted kernel that check is about the wrong machine).
+            if _remote_miss.get("site"):
+                _sz = _remote_miss.get("size")
+                return {"error": (
+                    f"{path!r} was found on site {_remote_miss['site']!r}"
+                    + (f" ({_sz} bytes)" if _sz else "")
+                    + " but was not brought here"
+                    + (f" ({_remote_miss['why']})" if _remote_miss.get("why")
+                       else " (size gate)")
+                    + f" — register it in place with path=<absolute path on "
+                      f"the site> + site='{_remote_miss['site']}', or keep it "
+                      f"as a run output (keep_outputs) and register later."
+                )}
+            if os.path.isabs(str(path)):
+                return {"error": (
+                    f"Nothing to register: {path!r} does not exist on this "
+                    f"controller. If the file was written by a site-targeted "
+                    f"kernel (run_python(site=…)), pass site= to "
+                    f"register_dataset — an absolute path alone is checked "
+                    f"locally and cannot reach another site's filesystem."
+                )}
             return {"error": (
                 f"Nothing to register: no file or directory found at {path!r} "
                 f"(resolved to {abspath}). If you created/downloaded it in a run_python "
@@ -823,9 +1118,23 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
     # the entity sidecar and survives a DB-crash recovery. Stat-only; skipped for adopted/copied
     # datasets (those are ABA-owned in DATA_DIR, so there's nothing to drift).
     _md = {"thread_id": _ctx_thread(ctx), "origin": "external",
+           "origin_kind": _okind or "unstated",
            "by_reference": not adopted, "ref_path": abspath,
            "summary": summary, "source": input_.get("source", ""),
            "organism": input_.get("organism"), **weft_md}
+    # evidence enrichment runs for EVERY registration, not only adopted
+    # bytes — a by-reference file in a kernel jobdir deserves its durable
+    # key too (the adopt-only capture was a door-shaped gap)
+    if _remote_key and "run_key" not in _md:
+        _md["run_key"] = _remote_key
+    if "run_key" not in _md and exists:
+        _capture_run_key(abspath, _md, _ctx_thread(ctx))
+    # cross-check: authored claim vs mechanical evidence — a dataset said to
+    # be an upload/collaborator hand-off that carries a kernel run_key was
+    # BORN here; flag the contradiction, never silently prefer either side
+    if _okind in ("upload", "collaborator") and _md.get("run_key"):
+        _md["origin_mismatch"] = ("stated origin is external-to-platform but "
+                                  "the bytes carry a kernel run_key")
     _remote_home = ((weft_md.get("home") or {}).get("site") or "local") != "local"
     if exists and not adopted and not _remote_home:
         try:
@@ -833,6 +1142,7 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
             _md["import_fingerprint"] = _fp(abspath)
         except Exception:  # noqa: BLE001 — a missing baseline just means no drift detection
             pass
+    _md["title_origin"] = "ai"   # dataset titles are agent-chosen; shows the ❄ until the user renames
     eid = create_entity(
         entity_type="dataset", title=title,
         artifact_path=abspath if exists else None,
@@ -853,6 +1163,21 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
         note += " Files adopted into DATA_DIR (kept past scratch cleanup)."
     elif adopted and materializing:
         note += " Files are copying into DATA_DIR in the background — fully available shortly."
+    # Integrity at the boundary: whatever the resolver bound to, the bytes that
+    # landed are what the project will read. A compressed member that will not
+    # decompress is a BROKEN dataset, and saying so here costs milliseconds —
+    # while NOT saying it cost two agents four minutes and eight tool calls
+    # diagnosing damaged data that was intact at its source. Advisory, never
+    # fatal: the entity still registers (the caller may want to repair in
+    # place), but the result never reads as a clean success.
+    _bad = _corrupt_members(abspath) if (exists and not _remote_home) else []
+    if _bad:
+        note += (f" WARNING: {len(_bad)} file(s) in this dataset do not "
+                 f"decompress — {', '.join(_bad[:3])}"
+                 f"{' …' if len(_bad) > 3 else ''}. The registered copy is "
+                 f"damaged or partial; re-fetch before using it (verifying a "
+                 f"file where you downloaded it does NOT mean the registered "
+                 f"copy is intact).")
     if bundle_note:
         note += bundle_note
     if not exists:
@@ -874,9 +1199,15 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
             update_entity(eid, metadata={**cur, "layout_hint": layout_hint})
         except Exception:  # noqa: BLE001
             pass
+    if not _okind:
+        note += " PROVENANCE UNSTATED: say where this dataset is from — re-register or note it now (origin= kind + source= traceable ref); this is unrecoverable later."
+    elif _md.get("origin_mismatch"):
+        note += (f" NOTE: {_md['origin_mismatch']} — double-check the stated "
+                 f"origin.")
     return {"status": "ok", "dataset_id": eid, "title": title,
             "artifact_path": abspath if exists else None,
             "layout_hint": layout_hint or None,
+            "provenance": _okind or "unstated",
             "note": note}
 
 
@@ -1209,7 +1540,7 @@ def open_run_tool(input_: dict, ctx: dict | None = None) -> dict:
     # Resolve the new cwd + prior files so the agent has all the absolute paths
     # it might need in its very next code cell.
     from core import projects
-    project_id = projects.current() or "default"
+    project_id = (ctx or {}).get("project_id") or projects.current() or "default"
     cwd_str = ""
     try:
         cwd_str = str(_run_scratch_cwd(str(project_id), str(tid)))
@@ -1258,11 +1589,25 @@ def keep_outputs_tool(input_: dict, ctx: dict | None = None) -> dict:
     would drop that you want to KEEP. Paths/globs are relative to the Run's output dir."""
     from content.bio.lifecycle.runs import active_run_id, set_keep_decision
     rid = (input_.get("run_id") or "").strip() or None
+    tid = _ctx_thread(ctx) if not rid else None
+    if not rid and tid:
+        rid = active_run_id(tid)
+    if not rid and tid:
+        # F11: a "keep this for the project" in a quick / no-plan flow, where the
+        # user never opened a Run, previously hard-errored here — so the keep
+        # silently no-op'd and the file was never durably kept. Lazily
+        # resolve-or-create the thread's AMBIENT Run via the SAME mechanism the
+        # artifact-registration hook uses (registry._ensure_analysis): its
+        # artifact_path IS the thread scratch dir where run_python just wrote
+        # these files, so the keep attaches to the Run that actually holds them.
+        try:
+            from content.bio.lifecycle.registry import _ensure_analysis
+            rid = _ensure_analysis((ctx or {}).get("focus_entity_id"), {}, tid)
+        except Exception as e:  # noqa: BLE001 — fall through to the honest error
+            _log.warning("keep_outputs: ambient-run resolution failed: %s", e)
     if not rid:
-        tid = _ctx_thread(ctx)
-        rid = active_run_id(tid) if tid else None
-    if not rid:
-        return {"error": "no open run — open_run first (or pass run_id)"}
+        return {"error": "no run to keep into — pass run_id, or run a step in "
+                         "this thread first so its outputs can be kept"}
     keep = input_.get("keep") or []
     drop = input_.get("drop") or []
     if isinstance(keep, str):
@@ -1283,16 +1628,32 @@ def keep_outputs_tool(input_: dict, ctx: dict | None = None) -> dict:
         from core.exec.artifacts import artifacts_for_run
         tracked = {(a.get("original_name") or "").strip()
                    for a in artifacts_for_run(rid)}
+        # F10 disk truth: a literal include that EXISTS on disk (local sandbox
+        # or a target's inventory) IS covered — the keeper set carries it and
+        # the retain matches it in place, tracked-or-not. Only a literal that
+        # is in NEITHER the tracked outputs NOR the real listing is unmatched.
+        disk_seen = set(out.get("disk_seen") or [])
         unmatched = [p.strip() for p in keep
                      if p and p.strip() and not any(c in p for c in "*?[")
-                     and p.strip() not in tracked]
+                     and p.strip() not in tracked
+                     and p.strip() not in disk_seen]
         if unmatched:
             out["unmatched_includes"] = unmatched
             note += (" NOT COVERED: " + ", ".join(unmatched) +
-                     " — not in the run's tracked outputs (harvest collects "
-                     "known extensions only), so this keep does NOT protect "
-                     "them yet. Tell the user; do not describe these files "
-                     "as kept.")
+                     " — found neither in the run's tracked outputs nor on "
+                     "disk in its working area, so this keep does NOT protect "
+                     "them. Check the path; tell the user; do not describe "
+                     "these files as kept.")
+        for g in (out.get("size_gated") or []):
+            note += (f" SIZE GATE: '{g['glob']}' matched {g['files']} "
+                     f"untracked file(s) totaling {g['bytes'] / 1e9:.1f} GB — "
+                     f"NOT auto-kept (too large for a silent commitment). "
+                     f"Name specific files to keep them, or confirm with the "
+                     f"user and keep the largest ones explicitly.")
+        if out.get("disk_kept"):
+            note += (" Also kept (disk-truth glob matches outside tracked "
+                     "outputs): " + ", ".join(out["disk_kept"][:6])
+                     + ("…" if len(out["disk_kept"]) > 6 else "") + ".")
     except Exception:  # noqa: BLE001 — the guard must never break the keep
         pass
     return {"status": "ok", **out, "note": note}

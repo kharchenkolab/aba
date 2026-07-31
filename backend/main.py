@@ -14,7 +14,7 @@ from pathlib import Path
 from core.exec.cpu import pin_blas_threads as _pin_blas_threads
 _pin_blas_threads()
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, Request
 from fastapi.responses import StreamingResponse, FileResponse, Response, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,7 +24,7 @@ from core import config
 from core.config import ARTIFACTS_DIR, DATA_DIR
 from core.graph._schema import init_db, gen_entity_id, WORKSPACE_ID
 from core.graph.edges import add_edge, remove_edge, edges_from, edges_to
-from core.graph.entities import list_entities, get_entity, create_entity, update_entity, archive_entity, restore_entity, delete_entity_hard
+from core.graph.entities import list_entities, get_entity, create_entity, update_entity, archive_entity, restore_entity, delete_entity_hard, append_metadata_list
 from core.web.deps import require_project
 from core.graph.messages import get_messages, clear_messages
 from guide import stream_response
@@ -219,19 +219,23 @@ def entities_patch(entity_id: str, req: EntityPatch, _pid: str = Depends(require
     # update_result_member (result_members.py); this catches the
     # entity-level edits.
     user_edited_result = False
-    if meta_updates or ("title" in fields):
+    title_changed = "title" in fields
+    if meta_updates or title_changed:
         ent_probe = get_entity(entity_id)
         if ent_probe and ent_probe.get("type") == "result":
             user_edited_result = True
-    if meta_updates or user_edited_result:
+    if meta_updates or user_edited_result or title_changed:
         ent = get_entity(entity_id)
         if not ent:
             raise HTTPException(404, f"Entity {entity_id} not found")
         merged = {**(ent.get("metadata") or {}), **meta_updates}
+        # A user title change clears the AI-suggested origin on ANY entity type
+        # (drops the Guide ❄ glyph once they've made the title their own), not
+        # only Results. The `invested` flip stays Result-specific.
+        if title_changed:
+            merged["title_origin"] = "user"
         if user_edited_result:
             merged["invested"] = True
-            if "title" in fields:
-                merged["title_origin"] = "user"   # renamed → drop the Guide glyph
         fields["metadata"] = merged
     # status whitelist
     if "status" in fields and fields["status"] not in (
@@ -253,16 +257,53 @@ def entities_patch(entity_id: str, req: EntityPatch, _pid: str = Depends(require
 
 # _result_cascade_set → content/bio/services.py result_cascade_members service (Item 2A.4).
 
+# The two edge families the delete guard must tell apart. Every rel in this
+# graph points source --rel--> target = "source builds on target" (run
+# --used--> dataset, result --includes--> member, artifact --wasGeneratedBy-->
+# run, rev2 --wasRevisionOf--> rev1, claim --supports--> result). A DEPENDENCY
+# edge ("X includes / supports / was-derived-from / is-a-revision-of Y") means
+# X would BREAK if Y vanished — inbound ones are the real "live references" a
+# delete guard exists to protect. Everything else (wasGeneratedBy /
+# produced_by lineage stamps) is BOOKKEEPING: it records history, and deleting
+# the recorded thing doesn't break the record's other end. The cascade branch
+# below has always used this set for exactly this reason ("provenance edges …
+# don't make a Run depend on a figure"); the top-level blocker uses the SAME
+# judgment, so a producer is not held hostage by the outputs it created, nor
+# an output by the run that made it. NB: referenced inside entities_delete —
+# never rebind it locally there (a local assignment would shadow this and
+# UnboundLocalError every earlier read on the non-cascade path).
+_DEP_RELS = {"includes", "supports", "wasDerivedFrom", "wasRevisionOf"}
+
+# The TOP-LEVEL delete blocker adds one bookkeeping rel to that set: `used`.
+# The reasoning above holds for the lineage stamps — a record's other end
+# survives the recorded thing vanishing — but a `used` edge means a live run
+# CONSUMED this entity, and for a dataset the same request also removes the
+# bytes from disk (below). That target is not reconstructible from the record,
+# so it earns the informed 409 (archive / delete the run / delete anyway)
+# rather than erasing a run's inputs with no prompt. Deliberately NOT added to
+# _DEP_RELS itself: the cascade branch uses that set to decide whether a member
+# has live references outside the cascade, where consumption should stay
+# non-blocking (a Result's figure is still containment even if a run read it).
+_BLOCK_RELS = _DEP_RELS | {"used"}
+
 
 @app.delete("/api/entities/{entity_id}")
 def entities_delete(entity_id: str, hard: bool = False,
-                    cascade: str | None = None,
+                    cascade: str | None = None, force: bool = False,
                     _pid: str = Depends(require_project)):
     """Soft-delete (default): mark status='archived'. Workspace cannot be deleted.
 
-    With ?hard=true: hard-delete after refusing if other (non-archived) entities
-    reference this one via entity_edges. For dataset entities whose artifact is
-    a directory under the project's data dir, the directory is removed too.
+    With ?hard=true: hard-delete. Refuses — 409 {error, references,
+    can_override: true} — only when live DEPENDENTS exist: non-archived
+    entities pointing AT this one via a dependency-forming rel, or a live
+    run that CONSUMED it (_BLOCK_RELS = _DEP_RELS + used). Lineage stamps
+    (wasGeneratedBy / produced_by) and outbound edges (things THIS entity
+    builds on) never block. ?force=true deletes
+    despite dependents (informed override — the UI shows the list first).
+    Every surviving, non-archived neighbor of a hard-deleted entity gets a
+    metadata `severed_refs` stamp {id, type, title, at, rel, dir} recording
+    what vanished. For dataset entities whose artifact is a directory under
+    the project's data dir, the directory is removed too.
 
     With ?hard=true&cascade=members on a RESULT: includes/supports/
     wasDerivedFrom edges from the Result to its figure/table/cell members
@@ -299,27 +340,44 @@ def entities_delete(entity_id: str, hard: bool = False,
         from core.services import call_service
         cascade_set = call_service("result_cascade_members", entity_id, default=set())
 
-    # Hard-delete: refuse if any non-archived, non-cascade-set entity
-    # points at us (inbound), or if we point at any non-archived,
-    # non-cascade-set entity (outbound). Edges to archived entities are
-    # fine — they're already gone from the user's view. Edges into the
-    # cascade set (members + revision chains) are fine — they'll be
-    # deleted by the cascade.
+    # DEPENDENTS block; lineage does not. A blocker is a non-archived,
+    # non-cascade entity that DEPENDS ON us — points AT us (inbound) via a
+    # dependency rel (_DEP_RELS above). Outbound edges (things WE build on)
+    # never block: deleting a dependent can't break its dependency.
+    # Bookkeeping stamps never block: they only record history (this is what
+    # let a producer be held hostage by its own outputs — the confusing
+    # refusal). Edges to archived entities and into the cascade set are
+    # already out of the user's view. Neighbors are snapshotted here, BEFORE
+    # the delete FK-sweeps the edges, for the severed_refs stamps below.
+    all_neighbors: dict[str, dict] = {}     # id → {rel, dir} for the stamp
+    for e in edges_to(entity_id):
+        if e["source_id"] != entity_id:
+            all_neighbors.setdefault(e["source_id"], {"rel": e["rel_type"], "dir": "in"})
+    for e in edges_from(entity_id):
+        if e["target_id"] != entity_id:
+            all_neighbors.setdefault(e["target_id"], {"rel": e["rel_type"], "dir": "out"})
+
     blockers: list[dict] = []
-    for e in edges_to(entity_id) + edges_from(entity_id):
-        other_id = e["source_id"] if e["target_id"] == entity_id else e["target_id"]
-        if other_id == entity_id:
+    for e in edges_to(entity_id):
+        oid = e["source_id"]
+        if oid == entity_id or oid in cascade_set or e["rel_type"] not in _BLOCK_RELS:
             continue
-        if other_id in cascade_set:
-            continue
-        other = get_entity(other_id)
+        other = get_entity(oid)
         if other and other.get("status") != "archived":
-            blockers.append({"id": other_id, "type": other.get("type"),
+            blockers.append({"id": oid, "type": other.get("type"),
                              "title": other.get("title"), "rel_type": e["rel_type"]})
-    if blockers:
+    if blockers and not force:
+        # Actionable: name the REAL levers. "remove the references first" was
+        # never one — the user has no verb for that. Archive always succeeds;
+        # force is the informed override (the UI shows this list first).
         raise HTTPException(409, {
-            "error": "entity has live references; archive instead, or remove the references first",
+            "error": (f"{len(blockers)} live entit"
+                      f"{'y depends' if len(blockers) == 1 else 'ies depend'} "
+                      f"on this one. Archive it instead (reversible), delete "
+                      f"the dependents first, or delete anyway — dependents "
+                      f"are kept and marked with the severed reference."),
             "references": blockers[:20],
+            "can_override": True,
         })
 
     # Delete the on-disk artifact for dataset-shaped entities. Only remove paths
@@ -352,13 +410,13 @@ def entities_delete(entity_id: str, hard: bool = False,
         # wasRevisionOf edges resolve cleanly. Easiest proxy: delete in
         # any order — delete_entity_hard tolerates missing references
         # since edges are cascade-deleted by FK on the entity rows.
-        # Only INBOUND, dependency-forming edges count as outside
-        # references when deciding whether to preserve a cascade member.
-        # Provenance edges (wasGeneratedBy from analyses/runs) are
-        # bookkeeping — they don't make a Run "depend on" a figure in
-        # the user's sense. Without this filter, every harvested figure
-        # gets kept just because its parent Analysis exists.
-        _DEP_RELS = {"includes", "supports", "wasDerivedFrom", "wasRevisionOf"}
+        # Only INBOUND, dependency-forming edges (module-level _DEP_RELS —
+        # do NOT rebind it here, that would shadow the blocker check's read
+        # above) count as outside references when deciding whether to
+        # preserve a cascade member. Provenance edges (wasGeneratedBy from
+        # analyses/runs) are bookkeeping — they don't make a Run "depend on"
+        # a figure in the user's sense. Without this filter, every harvested
+        # figure gets kept just because its parent Analysis exists.
         for member_id in list(cascade_set):
             m = get_entity(member_id)
             if not m:
@@ -393,6 +451,34 @@ def entities_delete(entity_id: str, hard: bool = False,
 
     if not delete_entity_hard(entity_id):
         raise HTTPException(404, f"Entity {entity_id} not found")
+
+    # Provenance honesty: an edge severed by this delete must not vanish in
+    # silence (silence is a claim — "nothing was here"). Every SURVIVING,
+    # non-archived neighbor gets a small stamp recording what it was joined
+    # to and that the record is gone — so an output whose producing run was
+    # deleted, or a dependent kept via `force`, carries an honest gap instead
+    # of a dangling nothing. `dir` is from the DELETED entity's frame
+    # ("in" = the survivor pointed at it). Best-effort: the delete is
+    # already committed and a stamp must never fail it.
+    import time as _t
+    _stamp = {"id": entity_id, "type": ent.get("type"),
+              "title": ent.get("title"), "at": int(_t.time())}
+    _kept = {s["id"] for s in skipped}     # preserved members: edge cut, entity lives
+    for oid, meta in all_neighbors.items():
+        if oid in cascade_set and oid not in _kept:
+            continue                          # cascade-deleted along with us
+        # A PRESERVED member is the one case where an edge vanishes and the
+        # entity survives (its Result→member edges were removed above so the
+        # Result disappears cleanly). It is a survivor like any other, so it
+        # gets the same stamp — otherwise the honesty record is missing exactly
+        # where the graph changed under the user.
+        try:
+            nb = get_entity(oid)
+            if nb and nb.get("status") != "archived":
+                append_metadata_list(oid, "severed_refs",
+                                     {**_stamp, "rel": meta["rel"], "dir": meta["dir"]})
+        except Exception:  # noqa: BLE001
+            pass
     # Reclaim any retained outputs weft is holding for this Run (bytes only; the
     # terminal inventory survives — misc/output_durability.md §7). Only a Run
     # (analysis) owns retained bytes labeled by its id. Soft-archive returns above
@@ -438,11 +524,26 @@ def entities_download(entity_id: str):
         # not weft-managed — an evicted (or never-copied, link-only oversize)
         # artifact leaves this path dangling while weft still holds the bytes
         # durably. Resolve the entity's own reference (exec_id → run → rel)
-        # through the P3 facade before declaring it missing.
-        from content.bio.lifecycle.runs import resolve_entity_output
+        # through the canonical resolver before declaring it missing; a
+        # REMOTE-produced file is brought home under the request-blocking gate,
+        # a bigger one gets an honest "on <site>" answer instead of a 404.
+        from content.bio.lifecycle.runs import (resolve_entity_output,
+                                                materialize_run_output)
         info = resolve_entity_output(entity_id)
-        if info and info["kind"] == "file":
-            path = Path(info["local_path"])
+        if info and info.get("kind") == "file":
+            from core.exec.run import _MAX_HARVEST_BYTES
+            p = info.get("local_path") or materialize_run_output(
+                info, max_bytes=_MAX_HARVEST_BYTES)
+            if p:
+                path = Path(p)
+            elif info.get("locality") == "remote":
+                size = info.get("size")
+                sz = f" ({size / 1e6:.0f} MB)" if size else ""
+                raise HTTPException(
+                    413, f"this file lives on {info.get('site')}{sz} — too large "
+                         f"to download through the controller; open it with a "
+                         f"viewer (which fetches under a guardrail), or Keep it "
+                         f"and place it here first")
     if not path.exists() or not path.is_file():
         raise HTTPException(404, "artifact file is missing on disk")
     # Suggest a reasonable filename based on the entity's title.
@@ -488,6 +589,15 @@ def entities_preview(entity_id: str, limit: int = 20, offset: int = 0):
         raise HTTPException(404, f"Entity {entity_id} not found")
 
     offset = max(0, offset)
+    # A remote-homed dataset with no local bytes must say WHERE it lives, not
+    # silently return "none" (surfacing census 2026-07-26: the card rendered
+    # nothing and the site stayed a mystery). Typed answer → the card offers
+    # the mirror flow. Logic owned by content.bio.data_location.
+    if e["type"] == "dataset":
+        from content.bio.data_location import remote_preview_answer
+        _r = remote_preview_answer(e)
+        if _r:
+            return _r
     if e["type"] in ("dataset", "table") and e["artifact_path"]:
         raw = e["artifact_path"]
         # Tables are stored as /artifacts/<pid>/<id>.csv; datasets as disk paths.
@@ -608,6 +718,11 @@ async def chat(req: ChatRequest):
             thread_id=req.thread_id,
             started_at=started_at,
             body_gen=body_gen,
+            # F8: same text re-POSTed while this thread's turn is still live
+            # (client double-POST from a second tab) collapses onto the
+            # original sink instead of spawning a duplicate turn; a different
+            # text queues behind the live turn (turn_executor).
+            dedup_text=req.text,
         )
     # The SSE generator reads only the in-memory sink + turn_events JSONL (never
     # the project DB), so it runs correctly outside the bound context.
@@ -1371,8 +1486,69 @@ def pagoda3_app(path: str = ""):
     return _pagoda3_iso(FileResponse(str(target)))
 
 
+def _store_cors(origin: str | None) -> dict:
+    """CORS headers for a viewer-store response, given the request's `Origin`.
+
+    Same-origin by default: these are the project's own bytes and the route adds
+    no auth of its own, so the origin check IS the access boundary. A deployment
+    that genuinely serves a pagoda3 on another host widens it deliberately via
+    `ABA_STORE_ALLOWED_ORIGINS`; `*` is never accepted, because it would let any
+    page the user happens to visit read their data.
+
+    Two details that are easy to get wrong and both matter:
+
+    * **Expose-Headers.** Without it a cross-origin reader gets a perfectly good
+      206 whose `Content-Range` it cannot read — so every size/consistency check
+      breaks, including the 3-byte probe that catches a truncated store. That is
+      exactly how the 16 MiB truncation would have stayed invisible from the
+      browser (it was caught same-origin, where headers are readable).
+    * **Vary: Origin.** Ref-arm chunks are served `immutable` for a day. Without
+      Vary, a cache can hand one origin's `Allow-Origin` to a different origin —
+      the header would be as long-lived as the bytes.
+    """
+    allowed = {o.strip().rstrip("/") for o in
+               (config.settings.store_allowed_origins.get() or ()) if o.strip()}
+    allowed.discard("*")                       # never honoured, however configured
+    if origin and origin.rstrip("/") in allowed:
+        return {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Expose-Headers":
+                "Content-Range, Content-Length, Accept-Ranges",
+            "Vary": "Origin",
+            "Cross-Origin-Resource-Policy": "cross-origin",
+        }
+    return {"Vary": "Origin", "Cross-Origin-Resource-Policy": "same-origin"}
+
+
+@app.options("/pagoda3-store/{pid}/{relpath:path}")
+def pagoda3_store_options(pid: str, relpath: str, request: Request):
+    """Answer the preflight instead of 405.
+
+    Simple byte-range GETs are CORS-safelisted so a browser usually won't
+    preflight, but anything that does used to get a 405 — and an HTTP client
+    probing with OPTIONS learned nothing."""
+    headers = {"Allow": "GET, HEAD, OPTIONS", "Accept-Ranges": "bytes",
+               **_store_cors(request.headers.get("origin"))}
+    if "Access-Control-Allow-Origin" in headers:
+        headers["Access-Control-Allow-Methods"] = "GET, HEAD, OPTIONS"
+        headers["Access-Control-Allow-Headers"] = "Range, If-None-Match, If-Range"
+        headers["Access-Control-Max-Age"] = "600"
+    return Response(status_code=204, headers=headers)
+
+
+# HEAD alongside GET: FastAPI does not derive it (Starlette's plain Route does),
+# so a client asking for size/existence without the body got a 405 whose short
+# error page then read as `content-length: 31` — a bogus size for the object.
+# Starlette's FileResponse already suppresses the body on HEAD, so the handler
+# below needs no branch of its own.
+#
+# Stacked decorators rather than api_route(methods=[...]): the route-table
+# golden (tests/test_route_table.py) scans for `@app.<verb>` decorators, and an
+# api_route would make this path INVISIBLE to it — trading a 405 fix for a blind
+# spot over a real route.
+@app.head("/pagoda3-store/{pid}/{relpath:path}")
 @app.get("/pagoda3-store/{pid}/{relpath:path}")
-def pagoda3_store(pid: str, relpath: str):
+def pagoda3_store(pid: str, relpath: str, request: Request):
     """Serve one file from a project's pagoda3 data store (a `.lstar.zarr`
     tree) over HTTP Range. The path is containment-checked to the project's
     pagoda3/ dir; dotfiles (.zmetadata/.zarray/.zgroup/.zattrs) ARE served —
@@ -1397,18 +1573,60 @@ def pagoda3_store(pid: str, relpath: str):
     try:
         f = resolve_within(base, relpath, extra_roots=tuple(extra))
     except ValueError:
+        # A `..` in the URL is rejected for BOTH branches, before any registry
+        # consult or backhaul — the only legitimate escape is a symlink WE placed.
         raise HTTPException(403, "path escapes store root")
-    if not f.is_file():
-        raise HTTPException(404, f"no store file {relpath!r}")
-    resp = FileResponse(str(f))
-    resp.headers["Cross-Origin-Resource-Policy"] = "same-origin"
-    # A store's URL is stable (source-path hash) but its CONTENT changes when it's
-    # re-derived (version bump / prep). Without revalidation the browser mixes a
-    # stale .zmetadata with fresh chunks → garbage ("stars"). no-cache = keep it
-    # but revalidate every read (FileResponse's etag/mtime → cheap 304s when
-    # unchanged, fresh bytes after a re-derive).
-    resp.headers["Cache-Control"] = "no-cache"
-    return resp
+
+    _cors = _store_cors(request.headers.get("origin"))
+
+    def _store_headers(resp: Response) -> Response:
+        for k, v in _cors.items():
+            resp.headers[k] = v
+        # A store's URL is stable (source-path hash) but its CONTENT changes when
+        # it's re-derived (version bump / prep). Without revalidation the browser
+        # mixes a stale .zmetadata with fresh chunks → garbage ("stars"). no-cache
+        # = keep it but revalidate every read (FileResponse's etag/mtime → cheap
+        # 304s when unchanged, fresh bytes after a re-derive).
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+    if f.is_file():
+        # LOCAL branch — byte-identical to before (ceiling-guarded).
+        return _store_headers(FileResponse(str(f)))
+
+    # Local miss: a store that lives on a REMOTE site streams its chunks through
+    # the per-chunk cache (misc/range_channel_plan.md Phase 1). No registry hit
+    # (or streaming unavailable) → today's 404. The streaming branch must never
+    # 500 the route.
+    try:
+        from core.viewers.range_cache import serve_remote_chunk
+        out = serve_remote_chunk(pid, relpath)
+    except Exception:  # noqa: BLE001 — degrade to today's 404 on any setup failure
+        out = None
+    if out is not None:
+        if out.status == "ok" and out.path:
+            resp = FileResponse(out.path)
+            for _k, _v in _cors.items():
+                resp.headers[_k] = _v
+            # Content-addressed (ref-arm) chunks are stable under their URL — a
+            # byte change mints a new store_key — so the browser may cache them
+            # as immutable (kills the ~10x per-member revalidation churn).
+            # Run-arm keys survive re-derives → keep the no-cache revalidation.
+            #
+            # `private`, and a day rather than a year: the ref is minted ONCE
+            # over an external home ABA does not own, drift is flag-only and
+            # nothing ever re-mints it, so an in-place regeneration on the site
+            # changes the bytes while the URL stays identical. A year-long pin
+            # is unreachable by any server-side cache wipe; a day still buys
+            # the revalidation win but stays correctable. `private` because
+            # these are project bytes and ABA adds no auth of its own here —
+            # `public` licenses the fronting proxy to store them.
+            resp.headers["Cache-Control"] = (
+                "private, max-age=86400, immutable" if out.immutable
+                else "no-cache")
+            return resp
+        raise HTTPException(out.http, out.detail)
+    raise HTTPException(404, f"no store file {relpath!r}")
 
 
 # ---- pagoda3 copilot proxy: ABA lends its Anthropic credential ----

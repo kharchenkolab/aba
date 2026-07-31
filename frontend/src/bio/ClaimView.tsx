@@ -6,6 +6,7 @@
  */
 import { useState } from 'react'
 import type { Entity } from '../types'
+import EditableTitle from '../components/EditableTitle'
 import './ClaimView.css'
 
 const LADDER = ['preliminary', 'supported', 'validated'] as const
@@ -14,6 +15,7 @@ const SIDE = ['contested', 'refuted'] as const
 interface Caveat { id: string; text: string; source?: string; dismissed?: boolean; rationale?: string }
 interface Alt { id: string; text: string; source?: string; status?: string; rationale?: string; promoted_to?: string }
 interface LogEntry { from: string | null; to: string; reason?: string; actor?: string; at?: string }
+interface Note { id: string; text: string; source?: string; at?: string }
 
 interface Props {
   claim: Entity
@@ -29,6 +31,7 @@ export default function ClaimView({ claim, entities, onFocus, onChange, compact 
   const evidenceIds = (m.evidence_ids as string[]) ?? []
   const caveats = (m.caveats as Caveat[]) ?? []
   const alternatives = (m.alternatives as Alt[]) ?? []
+  const notes = (m.notes as Note[]) ?? []
   const log = (m.status_log as LogEntry[]) ?? []
   const statement = (m.statement as string) ?? claim.title
 
@@ -45,8 +48,8 @@ export default function ClaimView({ claim, entities, onFocus, onChange, compact 
   const [reason, setReason] = useState('')
   const [newCaveat, setNewCaveat] = useState('')
   const [newAlt, setNewAlt] = useState('')
+  const [newNote, setNewNote] = useState('')
   const [addEv, setAddEv] = useState(false)
-  const [editingStmt, setEditingStmt] = useState(false)
 
   const evidence = evidenceIds.map(id => entities.find(e => e.id === id)).filter(Boolean) as Entity[]
   const candidates = entities.filter(e =>
@@ -76,14 +79,11 @@ export default function ClaimView({ claim, entities, onFocus, onChange, compact 
 
   return (
     <div className="claim">
-      {/* statement */}
-      {editingStmt ? (
-        <textarea className="claim__statement-input" defaultValue={statement} autoFocus rows={2}
-          onBlur={e => { setEditingStmt(false); if (e.target.value.trim() !== statement) call('PATCH', '', { statement: e.target.value.trim() }) }}
-          onKeyDown={e => { if (e.key === 'Escape') setEditingStmt(false) }} />
-      ) : (
-        <p className="claim__statement claim__statement--editable" onClick={() => setEditingStmt(true)}>{statement}</p>
-      )}
+      {/* statement — a claim has no separate title, so the statement IS the
+          editable headline. Uses the shared EditableTitle (same hover + in-place
+          edit as every card title). */}
+      <EditableTitle as="p" multiline className="claim__statement" value={statement} ariaLabel="Edit statement"
+        onCommit={t => call('PATCH', '', { statement: t })} />
 
       {/* status ladder */}
       <div className="claim__status">
@@ -160,6 +160,20 @@ export default function ClaimView({ claim, entities, onFocus, onChange, compact 
         ))}
         <input className="claim__input" value={newCaveat} onChange={e => setNewCaveat(e.target.value)} placeholder="+ a caveat"
           onKeyDown={e => { if (e.key === 'Enter' && newCaveat.trim()) { call('POST', '/caveats', { text: newCaveat.trim() }); setNewCaveat('') } }} />
+      </Section>
+
+      {/* notes — free-form thoughts the user (or agent) wants to keep with the claim */}
+      <Section label="Notes">
+        {notes.map(n => (
+          <div key={n.id} className="claim__item">
+            <span className="claim__item-text">{n.text}{n.source && n.source !== 'user' && <em className="claim__src"> · {n.source}</em>}</span>
+            <span className="claim__item-actions">
+              <button title="Remove" onClick={() => call('DELETE', `/notes/${n.id}`)}>×</button>
+            </span>
+          </div>
+        ))}
+        <input className="claim__input" value={newNote} onChange={e => setNewNote(e.target.value)} placeholder="+ add a note"
+          onKeyDown={e => { if (e.key === 'Enter' && newNote.trim()) { call('POST', '/notes', { text: newNote.trim() }); setNewNote('') } }} />
       </Section>
 
       {/* status timeline */}

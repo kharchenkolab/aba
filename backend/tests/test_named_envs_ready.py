@@ -57,7 +57,8 @@ def test_ensure_realized_squashfs_raises_no_raw_prefix(monkeypatch):
     # error (run through weft), NOT the misleading "lock may be unbuildable".
     _stub_compute(monkeypatch)
     monkeypatch.setattr(named_envs, "_ready_prefix", lambda eid: None)
-    monkeypatch.setattr(named_envs, "_run_realize_task", lambda *a, **k: "DONE")
+    # (state, typed_error) — the 2-tuple _run_realize_task actually returns.
+    monkeypatch.setattr(named_envs, "_run_realize_task", lambda *a, **k: ("DONE", None))
     monkeypatch.setattr(named_envs, "_realization_ready", lambda eid: True)
     with pytest.raises(ComputeError) as ei:
         named_envs.ensure_realized("env:v1:x")
@@ -68,7 +69,7 @@ def test_ensure_realized_true_failure_still_realize_failed(monkeypatch):
     # No prefix AND not ready → the genuine failure code is preserved.
     _stub_compute(monkeypatch)
     monkeypatch.setattr(named_envs, "_ready_prefix", lambda eid: None)
-    monkeypatch.setattr(named_envs, "_run_realize_task", lambda *a, **k: "FAILED")
+    monkeypatch.setattr(named_envs, "_run_realize_task", lambda *a, **k: ("FAILED", None))
     monkeypatch.setattr(named_envs, "_realization_ready", lambda eid: False)
     with pytest.raises(ComputeError) as ei:
         named_envs.ensure_realized("env:v1:x")

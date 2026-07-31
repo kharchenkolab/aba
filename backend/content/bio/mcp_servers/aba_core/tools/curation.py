@@ -100,6 +100,7 @@ def register_curation_tools(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def register_dataset(title: str,
+                         origin: str | None = None,
                          path: str | None = None,
                          paths: list[str] | None = None,
                          url: str | None = None,
@@ -137,12 +138,21 @@ def register_curation_tools(mcp: FastMCP) -> None:
         so the dataset's provenance shows the fetch code, environment, and
         source. If omitted, the most recent run in this thread is linked
         automatically; pass it explicitly when the fetch wasn't the run
-        right before this call. Also give a specific `source`
-        (e.g. 'GEO:GSE192391'), not just the provider."""
+        right before this call.
+
+        ALWAYS state `origin` — where this dataset is FROM (url | upload |
+        derived | collaborator | instrument | simulated | public_registry |
+        unknown) — with `source` as the traceable ref for that kind: the
+        URL, the accession/DOI, the producing run or parent dataset id, or
+        who provided it. Only you hold this fact and it is unrecoverable
+        later; a registration without it is marked provenance: unstated.
+        Use origin='unknown' only when the origin genuinely cannot be
+        determined — never omit silently."""
         from core.runtime.tool_ctx import peek_ctx
         from content.bio.tools import register_dataset_tool
         return register_dataset_tool(
-            {"title": title, "path": path, "paths": paths,
+            {"title": title, "origin": origin,
+             "path": path, "paths": paths,
              "url": url, "site": site,
              "summary": summary, "source": source, "organism": organism,
              "exec_id": exec_id, "producing_code": producing_code},

@@ -24,6 +24,7 @@ base until the controller-SIF deploy model lands (W3 re-sequencing, agreed
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import shlex
@@ -139,42 +140,121 @@ def get_active(project_id, lang: str = "python") -> str:
 
 
 def set_active(project_id: str, name: str, lang: str = "python") -> dict:
+    """Bind `name` as the active env for `lang`'s lane. Reserved names
+    ('default', …) reset the pointer to the served stack. A real name must
+    exist and match the slot's language — a silent cross-language binding
+    would point one language's lane at another language's env."""
+    name = (name or "").strip()
+    if not is_reserved_name(name):
+        row = resolve(project_id, name)
+        if row is None:
+            raise ComputeError(
+                "unknown_env", f"no named env {name!r} in this project",
+                stage="aba", hints={"available": list_names(project_id)})
+        row_lang = row.get("language") or "python"
+        if row_lang != lang:
+            raise ComputeError(
+                "env.language_mismatch",
+                f"{name!r} is a {row_lang} env — it cannot be the active "
+                f"{lang} env", stage="aba")
     _update(project_id, lambda data: data["active"].__setitem__(lang, name))
     return {"lang": lang, "active": name}
+
+
+def resolve_env(project_id, language: str, explicit=None) -> Optional[str]:
+    """THE selection policy for "which env runs language-L code in this
+    project" — every execution lane resolves through here (census guard:
+    tests/test_env_resolution.py). Returns a named-env NAME, or None for the
+    default served stack.
+
+    Precedence: an EXPLICIT request wins ('' and reserved names normalize to
+    None; any other string passes through verbatim — existence checks and
+    lane sentinels like 'system' stay with the lane); else the project's
+    ACTIVE pointer for that language; else None. A dangling pointer (names an
+    env that no longer exists — forget() clears pointers itself, so only
+    corruption/manual edits get here) falls back to the default session with
+    a printed warning rather than erroring a bare run that never asked for an
+    env."""
+    if explicit is not None:
+        name = str(explicit).strip()
+        return None if (not name or is_reserved_name(name)) else name
+    if not project_id:
+        return None
+    pid = str(project_id)
+    name = get_active(pid, language)
+    if not name or is_reserved_name(name):
+        return None
+    if resolve(pid, name) is None:
+        print(f"[named_envs] active {language} env {name!r} no longer exists "
+              f"in project {pid} — falling back to the default session",
+              flush=True)
+        return None
+    return name
 
 
 # ── create / extend ──────────────────────────────────────────────────────────
 
 def _spec_for(project_id: str, name: str, language: str,
-              packages: list[str], python_version: Optional[str] = None) -> dict:
-    """A fresh named-env spec. Python envs bake ipykernel so the per-env
-    persistent kernel works without ever installing into the frozen env; R envs
-    get the cran layer for CRAN-style specs. `python_version` (e.g. "3.10")
+              packages: list[str], python_version: Optional[str] = None,
+              conda_packages: Optional[list[str]] = None) -> dict:
+    """A fresh named-env spec. Python envs bake ipykernel and R envs bake
+    r-irkernel so the per-env persistent kernel works without ever installing
+    into the frozen env (an env without its kernel package is one-shot-only —
+    useless for stateful work); R envs also get the cran layer for CRAN-style
+    specs. `python_version` (e.g. "3.10")
     pins the interpreter — the whole point of an isolated env is often a
     DIFFERENT python than the base (an old package that needs <3.11); a fresh
-    env has no frozen base to conflict, so weft picks the matching build."""
+    env has no frozen base to conflict, so weft picks the matching build.
+    `conda_packages` routes wheel-less conda-only deps into the conda layer —
+    the eco passthrough the cold-base lever advertises (a python env's
+    `packages` are pypi; without this a conda-only package could never be
+    provisioned through the isolated lane)."""
     label = f"aba-{project_id}-{name}"
     if language == "r":
         conda = [p for p in packages if p.startswith(("r-", "bioconductor-"))]
         cran = [p for p in packages if not p.startswith(("r-", "bioconductor-"))]
-        deps: dict = {"conda": ["r-base =4.4.*", *conda]}
+        _all_conda = [*conda, *(conda_packages or [])]
+        kern = ([] if any(p.split()[0] == "r-irkernel" for p in _all_conda)
+                else ["r-irkernel"])
+        # r-base: caller-constraint-wins. A caller-PINNED r-base replaces the
+        # baked default (a different R is the point of an isolated env — the
+        # exact analogue of python_version); a bare 'r-base' dedupes away.
+        # Splicing both emitted a duplicate spec, which the substrate now
+        # refuses at intake — truthfully, but with no lever the agent holds.
+        def _is_rbase(p: str) -> bool:
+            return p.split()[0].split("=")[0].strip() == "r-base"
+        _caller_rbase = [p for p in _all_conda if _is_rbase(p)]
+        _all_conda = [p for p in _all_conda if not _is_rbase(p)]
+        _pinned = next((p for p in _caller_rbase if p.strip() != "r-base"), None)
+        _rbase = _pinned or "r-base =4.4.*"
+        deps: dict = {"conda": [_rbase, *kern, *_all_conda]}
         if cran:
             deps["cran"] = cran
         return {"name": label, "deps": deps}
     pyspec = f"python ={python_version}" if python_version else "python =3.12"
     return {"name": label,
-            "deps": {"conda": [pyspec, "ipykernel"],
+            "deps": {"conda": [pyspec, "ipykernel", *(conda_packages or [])],
                      "pypi": list(packages)}}
 
 
 def create(project_id: str, name: str, *, language: str = "python",
            packages: list[str] | None = None,
-           python_version: Optional[str] = None) -> dict:
+           python_version: Optional[str] = None,
+           conda_packages: list[str] | None = None,
+           verify: Optional[dict] = None) -> dict:
     """Solve a fresh named env → EnvID (realization is lazy — first run
     realizes). Raises ComputeError with weft's structured cause (e.g.
-    env.solve_conflict names the minimal conflicting set)."""
+    env.solve_conflict names the minimal conflicting set). `conda_packages`
+    is the eco passthrough for conda-only deps (see _spec_for). `verify` is
+    the caller's authored claim, recorded on the SPEC (weft P2): enforced as
+    a realize postcondition wherever this identity realizes. Callers pass it
+    only with load names they actually know — deriving import names from
+    spec strings is guesswork that would false-fail realizations."""
     name = name.strip()
-    spec = _spec_for(project_id, name, language, packages or [], python_version)
+    spec = _spec_for(project_id, name, language, packages or [], python_version,
+                     conda_packages)
+    if verify:
+        spec["verify"] = dict(verify)
     res = _sync(_adapter.get_compute().env_ensure(spec))     # slow — OUTSIDE the lock
     now = time.time()
     # base_spec/python_version/layers persist HOW the env was built — the
@@ -183,7 +263,8 @@ def create(project_id: str, name: str, *, language: str = "python",
     # 3.12 default) and flattened extend() layering.
     _update(project_id, lambda data: data["envs"].__setitem__(name, {
         "env_id": res["env_id"], "language": language,
-        "packages": list(packages or []), "history": [],
+        "packages": list(packages or []),
+        "conda_packages": list(conda_packages or []), "history": [],
         "python_version": python_version, "base_spec": spec, "layers": [],
         "created_at": now, "updated_at": now,
     }))
@@ -191,32 +272,185 @@ def create(project_id: str, name: str, *, language: str = "python",
             "summary": res.get("summary"), "engine": "weft"}
 
 
-def extend(project_id: str, name: str, packages: list[str]) -> dict:
+def _extend_deps(language: str, packages: list[str],
+                 eco: Optional[str] = None) -> dict:
+    """The deps block for an extend layer. Explicit `eco` routes everything
+    one way (the passthrough for conda-only python deps — the cold-base
+    lever's consumer side); otherwise python → pypi and R splits by the same
+    prefix heuristic create() uses (`r-`/`bioconductor-` → conda, else cran —
+    extend used to force cran, which stranded conda-only R packages)."""
+    if eco:
+        return {eco: list(packages)}
+    if language == "r":
+        conda = [p for p in packages if p.startswith(("r-", "bioconductor-"))]
+        cran = [p for p in packages if not p.startswith(("r-", "bioconductor-"))]
+        deps: dict = {}
+        if conda:
+            deps["conda"] = conda
+        if cran:
+            deps["cran"] = cran
+        return deps
+    return {"pypi": list(packages)}
+
+
+def _layer_deps(layer, language: str) -> dict:
+    """Normalize a recorded layer for re-lock replay: new layers store their
+    full deps block ({'deps': {eco: [...]}}); legacy layers are flat package
+    lists routed to the language default (pypi / cran) — exactly what extend
+    did when they were recorded."""
+    if isinstance(layer, dict):
+        return {k: list(v) for k, v in (layer.get("deps") or {}).items()}
+    return {("cran" if language == "r" else "pypi"): list(layer)}
+
+
+def extend(project_id: str, name: str, packages: list[str], *,
+           eco: Optional[str] = None,
+           verify: Optional[dict] = None) -> dict:
     """Add packages = extends_env over the current EnvID → NEW EnvID, handle
-    moves, old id kept in history (never install into a frozen env)."""
+    moves, old id kept in history (never install into a frozen env). `eco`
+    overrides the ecosystem routing (see _extend_deps).
+
+    Concurrency: the solve is slow and runs OUTSIDE the registry lock, so the
+    handle can move underneath (another extend / platform re-lock landing
+    first). The old code overwrote `env_id` unconditionally — the LAST writer
+    won and the first extend's delta silently vanished from the identity chain
+    (its layer stayed recorded, so a later re-lock resurrected it: identity
+    and record disagreed). Optimistic retry instead: apply only if the parent
+    we solved against is still the tip; otherwise re-solve on the new tip —
+    both deltas end up in the chain, in landing order."""
+    deps_probe = _extend_deps(
+        (resolve(project_id, name) or {}).get("language") or "python",
+        packages, eco)
+    if not deps_probe:
+        raise ComputeError("task.invalid", "nothing to install", stage="aba")
+    for _attempt in range(3):
+        row = resolve(project_id, name)
+        if row is None:
+            raise ComputeError("unknown_env",
+                               f"no named env {name!r} in this project",
+                               stage="aba", hints={"available": list_names(project_id)})
+        # Idempotent re-extend: every requested spec string already recorded →
+        # answer the CURRENT identity with no re-solve. The old behavior minted
+        # a new EnvID (and the tool layer then evicted the env's live kernels)
+        # for a no-op request — a retried/duplicated call was destructive. An
+        # exact-string check only: a changed pin ("pkg==2.0" vs "pkg") is a
+        # REAL change and re-solves.
+        if set(packages) <= set(row.get("packages") or []):
+            return {"env_id": row["env_id"], "status": "cached",
+                    "summary": "all requested packages already recorded — "
+                               "no re-solve", "delta": []}
+        deps = _extend_deps(row["language"], packages, eco)
+        _verb = getattr(_adapter.get_compute(), "ensure_available", None)
+        if _verb is not None:
+            # F-V3b: the env target — one solve through the verb; the claim
+            # rides as verify= (recorded on the minted spec, enforced at every
+            # realization; verify-now when a site= is offered and a ready
+            # realization exists there). The envelope's enforcement facts
+            # (verified / verified_site / note) travel back to the caller.
+            _env_out = _sync(_verb({"env": row["env_id"]}, deps,
+                                   verify=(dict(verify) if verify else None)))
+            res = {"env_id": _env_out.get("env_id"),
+                   "status": ("created" if _env_out.get("changed", True)
+                              else "cached"),
+                   "summary": _env_out.get("note"),
+                   "delta": _env_out.get("attempts") or [],
+                   **{k: _env_out[k] for k in
+                      ("verified", "verified_site", "note")
+                      if _env_out.get(k) is not None}}
+        else:
+            spec = {"name": f"aba-{project_id}-{name}",
+                    "extends_env": row["env_id"], "deps": deps,
+                    # pre-verb path: the claim rides the SPEC (weft P2),
+                    # enforced at realize, composing along the extends chain
+                    **({"verify": dict(verify)} if verify else {})}
+            res = _sync(_adapter.get_compute().env_ensure(spec))  # slow — OUTSIDE the lock
+        applied = {"ok": False}
+
+        def _apply(data):
+            r = data["envs"].get(name)
+            if r is None:   # vanished concurrently — re-seed from the solved id
+                r = {"env_id": row["env_id"], "language": row["language"],
+                     "packages": list(row["packages"]), "history": []}
+                data["envs"][name] = r
+            elif r.get("env_id") != row["env_id"]:
+                return      # tip moved under our solve — retry on the new tip
+            r.setdefault("history", []).append(r["env_id"])
+            r["env_id"] = res["env_id"]
+            r["packages"] = list(dict.fromkeys([*r.get("packages", []), *packages]))
+            # layers carry their FULL deps block so a platform re-lock replays
+            # the same ecosystems (a flat list replayed as pypi would mis-route
+            # a conda layer)
+            r.setdefault("layers", []).append(
+                {"deps": deps, **({"verify": dict(verify)} if verify else {})})
+            r["updated_at"] = time.time()
+            applied["ok"] = True
+        _update(project_id, _apply)
+        if applied["ok"]:
+            return {"env_id": res["env_id"], "status": res.get("status"),
+                    "summary": res.get("summary"), "delta": res.get("delta"),
+                    **{k: res[k] for k in
+                       ("verified", "verified_site", "note")
+                       if res.get(k) is not None}}
+    raise ComputeError(
+        "env.concurrent_extend",
+        f"named env {name!r} kept moving under this extend (3 attempts) — "
+        f"another agent/lane is extending it concurrently; retry when it settles",
+        stage="aba")
+
+
+# ── reclaim / retire ─────────────────────────────────────────────────────────
+
+def evict(project_id: str, name: str, *, site: Optional[str] = None) -> dict:
+    """Reclaim disk held by a named env's realizations (weft ``env_evict``), on a
+    single `site` or every realized site. The env's IDENTITY and lock are kept —
+    it rebuilds transparently from the lock on next use (see ``ensure_realized``).
+    Returns ``{env_id, sites: {site: bytes_freed}, freed_bytes}``."""
     row = resolve(project_id, name)
     if row is None:
         raise ComputeError("unknown_env", f"no named env {name!r} in this project",
                            stage="aba", hints={"available": list_names(project_id)})
-    eco = "cran" if row["language"] == "r" else "pypi"
-    spec = {"name": f"aba-{project_id}-{name}",
-            "extends_env": row["env_id"], "deps": {eco: list(packages)}}
-    res = _sync(_adapter.get_compute().env_ensure(spec))     # slow — OUTSIDE the lock
+    env_id = row["env_id"]
+    st = _sync(_adapter.get_compute().env_status(env_id))
+    per_site: dict = {}
+    for r in st.get("realizations", []):
+        s = r.get("site")
+        if site is not None and s != site:
+            continue
+        if r.get("state") != "ready":     # only a realized site holds disk to free
+            continue
+        # env_evict is a fast store op — the synchronous pass-through the module
+        # reconciler uses (reconciler.py `_evict_pack_env`), not the async solve port.
+        _adapter.get_compute().sync_call("env_evict", env_id, s)
+        per_site[s] = int(r.get("bytes") or 0)
+    return {"env_id": env_id, "sites": per_site,
+            "freed_bytes": sum(per_site.values())}
+
+
+def forget(project_id: str, name: str) -> dict:
+    """Remove a named env's registry row — the name is gone from the project.
+    REFUSED (no partial action) when it is the ACTIVE env; reset with
+    set_active_env('default') first. Disk is not touched here (use ``evict``); a
+    still-realized prefix is simply orphaned from the handle."""
+    pid = str(project_id)
+    row = resolve(pid, name)
+    if row is None:
+        raise ComputeError("unknown_env", f"no named env {name!r} in this project",
+                           stage="aba", hints={"available": list_names(pid)})
+    lang = row.get("language") or "python"
+    if name == get_active(pid, lang):
+        raise ComputeError(
+            "active_env",
+            f"'{name}' is the active {lang} env — call set_active_env('default') "
+            f"before forgetting it", stage="aba")
 
     def _apply(data):
-        r = data["envs"].get(name)
-        if r is None:      # vanished concurrently — re-seed from the solved id
-            r = {"env_id": row["env_id"], "language": row["language"],
-                 "packages": list(row["packages"]), "history": []}
-            data["envs"][name] = r
-        r.setdefault("history", []).append(r["env_id"])
-        r["env_id"] = res["env_id"]
-        r["packages"] = list(dict.fromkeys([*r.get("packages", []), *packages]))
-        r.setdefault("layers", []).append(list(packages))   # for re-lock replay
-        r["updated_at"] = time.time()
-    _update(project_id, _apply)
-    return {"env_id": res["env_id"], "status": res.get("status"),
-            "summary": res.get("summary"), "delta": res.get("delta")}
+        data["envs"].pop(name, None)
+        # defensively clear any active pointer still naming this env
+        for _l, _a in list(data.get("active", {}).items()):
+            if _a == name:
+                data["active"][_l] = "default"
+    _update(pid, _apply)
+    return {"forgotten": name}
 
 
 # ── realization / interpreter ────────────────────────────────────────────────
@@ -274,12 +508,63 @@ def _realize_probe(language: str) -> str:
     return "Rscript -e 'invisible()'" if language == "r" else "python -c pass"
 
 
+def _realize_via_verb(env_id: str, ad, timeout_s: int, site: str):
+    """Realize through weft's `env_realize(env_id, site)` — the honest primitive
+    for this. Returns `_run_realize_task`'s `(state, typed_error)` shape, or None
+    when the substrate predates the verb so the caller falls back.
+
+    Everything the task lane below does to make a PLACEBO behave — a command that
+    genuinely exercises the interpreter, `force=True` to dodge the memo — exists
+    only because running a task was once the only public way to force a
+    realization. The verb needs none of it: ready-and-intact is a no-op, and a
+    missing/demoted/evicted realization rebuilds from the stored lock through the
+    same path task staging uses, minus the task.
+
+    Two properties are preserved DELIBERATELY, because dropping either is silent:
+      * the `timeout_s` bound — the task lane polled to a deadline, and the verb
+        blocks, so a realize that never returns would otherwise hang a kernel
+        start forever. Only this caller is released; weft's work continues, the
+        same as when the poll loop gave up.
+      * the TYPED error. `ensure_ready` is what the kernel lane calls before
+        `kernel_start`, and its `env.platform_mismatch` is what triggers the lazy
+        cross-platform re-lock. Handing the code back in the task lane's dict
+        shape keeps that surface byte-identical either way — flatten it and the
+        kernel lane silently loses every cross-platform site (found live once
+        already, on the aarch64 slurm fixture)."""
+    fn = getattr(ad, "env_realize", None)
+    if fn is None:
+        return None                     # substrate predates the verb
+    try:
+        _sync(asyncio.wait_for(fn(env_id, site), timeout_s))
+        return "DONE", None
+    except asyncio.TimeoutError:
+        return "TIMEOUT", None
+    except ComputeError as e:
+        return "FAILED", {"error": e.code, "detail": e.detail, "hints": e.hints}
+
+
 def _run_realize_task(env_id: str, ad, timeout_s: int, language: str,
                       probe: Optional[str] = None, site: str = "local") -> str:
-    """Submit an env-exercising task; return its terminal state. `probe` overrides
-    the language default (e.g. a JVM CLI tool has neither python nor Rscript — it
-    runs `<tool> --version`); the command MUST exercise the env or weft resolves
-    it from the system PATH and skips materialization (the E1 finding).
+    """Realize the env on `site`; return (terminal state, typed error or None).
+
+    Prefers weft's `env_realize` (see `_realize_via_verb`); the placebo task
+    below is the FALLBACK for a substrate without it — aba also runs against an
+    older weft in cluster-personal installs.
+
+    An EXPLICIT `probe` keeps the task lane even when the verb is available. The
+    verb realizes the env, which is all a plain realization needs — but a caller
+    that names a command is asserting that THAT command must run inside THIS env,
+    and at least one relies on the side effect rather than the exit code:
+    `ensure_tool_env` probes the nextflow env with `nextflow -version`, and
+    nextflow fetches its own distribution JARs on first invocation. Realizing
+    without ever running it would move that download to the first real pipeline.
+    Nothing reads the probe's OUTPUT (only the task's terminal state), so this is
+    about the side effect, not verification.
+
+    `probe` overrides the language default (e.g. a JVM CLI tool has neither python
+    nor Rscript — it runs `<tool> --version`); the command MUST exercise the env or
+    weft resolves it from the system PATH and skips materialization (the E1
+    finding).
 
     `force=True` is LOAD-BEARING: weft memoizes task results by (command, env,
     inputs) hash, so a repeated realize probe (same fixed command + EnvID) would
@@ -288,6 +573,10 @@ def _run_realize_task(env_id: str, ad, timeout_s: int, language: str,
     memo so the task always runs, and weft's runner rebuilds a missing prefix
     from the lock as a side effect (found live: the eviction/repair path silently
     no-op'd for exactly this reason)."""
+    if probe is None:
+        via = _realize_via_verb(env_id, ad, timeout_s, site)
+        if via is not None:
+            return via
     sub = _sync(ad.task_submit({"command": probe or _realize_probe(language),
                                 "env": env_id, "site": site,
                                 "label": f"realize {env_id[:16]}"}, force=True))
@@ -340,6 +629,18 @@ def _realization_ready(env_id: str, site: str = "local") -> bool:
         return False
     return any(r.get("site") == site and r.get("state") == "ready"
                for r in st.get("realizations", []))
+
+
+def realizations(env_id: str) -> list[dict]:
+    """Every site's realization row for `env_id` — ``{site, state, bytes,
+    idle_days}`` — from weft ``env_status``. The full list that
+    ``_realization_ready`` reduces to a single-site bool; the env catalog and
+    footprint surfaces need all of it. Raises on a substrate error (callers that
+    render a catalog degrade per-env rather than fail)."""
+    st = _sync(_adapter.get_compute().env_status(env_id))
+    return [{"site": r.get("site"), "state": r.get("state"),
+             "bytes": r.get("bytes"), "idle_days": r.get("idle_days")}
+            for r in st.get("realizations", [])]
 
 
 def ensure_ready(env_id: str, *, timeout_s: int = 900,
@@ -565,15 +866,35 @@ def ensure_platform(project_id: str, name: str, platform_str: str) -> dict:
     # recorded python pin
     base = dict(row.get("base_spec") or _spec_for(
         project_id, name, language, list(row.get("packages") or []),
-        row.get("python_version")))
+        row.get("python_version"), list(row.get("conda_packages") or []) or None))
     base["platforms"] = plats
     res = _sync(_adapter.get_compute().env_ensure(base, update=True))
     env_id = res["env_id"]
-    eco = "cran" if language == "r" else "pypi"
-    for layer in row.get("layers") or []:
-        lspec = {"name": f"aba-{project_id}-{name}", "extends_env": env_id,
-                 "deps": {eco: list(layer)}, "platforms": plats}
-        res = _sync(_adapter.get_compute().env_ensure(lspec))
+    try:
+        for layer in row.get("layers") or []:
+            lspec = {"name": f"aba-{project_id}-{name}", "extends_env": env_id,
+                     "deps": _layer_deps(layer, language), "platforms": plats}
+            res = _sync(_adapter.get_compute().env_ensure(lspec))
+            env_id = res["env_id"]
+    except ComputeError as e:
+        if getattr(e, "code", "") != "env.layer_conflict":
+            raise
+        # FLATTEN fallback (F-ENV-2, found live): replaying the extension
+        # chain for a new platform re-solves each delta against a re-locked
+        # parent — and a delta that needs base version moves conflicts the
+        # same way it would have at extend time on that platform. The env's
+        # cumulative CONTENT is what the user asked for, not the chain shape:
+        # merge base deps + every layer into ONE spec and solve it fresh for
+        # the target platforms. Same frozen-identity semantics (new EnvID).
+        flat = {k: v for k, v in base.items() if k != "deps"}
+        deps = {k: list(v) for k, v in (base.get("deps") or {}).items()}
+        for layer in row.get("layers") or []:
+            for k, v in _layer_deps(layer, language).items():   # eco-faithful merge
+                cur = deps.setdefault(k, [])
+                cur += [p for p in v if p not in cur]
+        flat["deps"] = deps
+        flat["platforms"] = plats
+        res = _sync(_adapter.get_compute().env_ensure(flat, update=True))
         env_id = res["env_id"]
     now = time.time()
     _update(project_id, lambda data: data["envs"][name].update(

@@ -22,8 +22,27 @@ jobs:
           pip install pytest
           python -m pytest tests/test_project_pinning_coverage.py tests/test_route_table.py -q
 
+  guards:
+    # The behavioral guard suite (shared-agent-input guards, output/env unit
+    # guards, runtime translation). Added 2026-07-21 after 10 days of red CI
+    # hid a route-table drift AND none of the unit guards ran in CI at all.
+    # Per-file execution — see scripts/run_guard_tests.sh for why.
+    name: platform guard suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: install/core/environment-boot.yml
+          cache-environment: true
+      - name: guard tests (hermetic, per-file)
+        shell: bash -el {0}
+        run: |
+          pip install pytest
+          PYTHON=python bash scripts/run_guard_tests.sh
+
   frontend:
-    name: frontend platform purity
+    name: frontend guards (platform purity + full vitest)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,5 +51,19 @@ jobs:
           node-version: '20'
       - run: npm ci
         working-directory: frontend
+      # Platform purity first: it is the cheap structural gate, and a failure
+      # here explains every downstream one.
       - run: npx vitest run src/platform/__platform_imports.test.ts
+        working-directory: frontend
+      # Then the WHOLE suite. Running one file meant the other ~40 files (the
+      # behavioral guards) only ever ran on someone's laptop — a red test file
+      # reached main with CI green, found by hand.
+      - run: npx vitest run
+        working-directory: frontend
+      # Typecheck. package.json defines build as `tsc -b && vite build`, but the
+      # RELEASE build calls `npx vite build` directly (install/sif/build.sh) —
+      # vite strips types without checking them, so a misspelled property
+      # bundles clean and renders undefined at runtime. Nothing on the release
+      # path was catching that; this is the gate.
+      - run: npx tsc -b
         working-directory: frontend

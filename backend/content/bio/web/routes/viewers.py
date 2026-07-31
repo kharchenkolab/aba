@@ -48,31 +48,73 @@ def _resolve_files_node(entity_id: str | None, path: str | None) -> dict:
         e = get_entity(entity_id)
         if not e:
             raise HTTPException(404, f"no entity {entity_id}")
+        md = e.get("metadata") or {}
+        # Match on the FILENAME (basename of artifact_path — or, for a
+        # by-reference entity with no artifact_path, its recorded reference /
+        # home path), not the entity title — viewers_for keys off
+        # `name or artifact_path`, and external viewers (pagoda3:
+        # .h5ad/.lstar.zarr) match by extension, which a title like "GSM…
+        # processed AnnData" lacks. Mirrors the get_viewer_url tool; without
+        # this, the launch link 404s ("no external viewer applies").
+        name_src = (e.get("artifact_path") or md.get("ref_path")
+                    or (md.get("home") or {}).get("path") or "")
         return {
             "entity_id": e["id"],
             "entity_type": e["type"],
-            # Match on the FILENAME (basename of artifact_path), not the entity
-            # title — viewers_for keys off `name or artifact_path`, and external
-            # viewers (pagoda3: .h5ad/.lstar.zarr) match by extension, which a
-            # title like "GSM… processed AnnData" lacks. Mirrors the get_viewer_url
-            # tool; without this, the launch link 404s ("no external viewer applies").
-            "name": Path(e.get("artifact_path") or "").name or e.get("title") or "",
+            "name": Path(name_src.rstrip("/")).name or e.get("title") or "",
             "artifact_path": e.get("artifact_path"),
             "size": None,
         }
     if path:
+        # F4 (server-side) — reverse-lookup a raw path to a registered dataset
+        # BEFORE the tree/probe work (mirrors get_viewer_url): a byte-identical
+        # registered home resolves entity-backed, so the launch page can offer
+        # the (working) mirror lever instead of a path-only dead end. No remote
+        # inventory probe.
+        from content.bio.data_location import entity_for_path
+        match = entity_for_path(path)
+        if match is not None:
+            return _resolve_files_node(match["id"], None)
         # Tolerant resolve: exact tree path, else a basename / path-suffix match
         # (callers — incl. the agent via open_viewer — rarely know the full path).
         from content.bio.files.tree import build_files_tree, find_file_node, list_file_matches
         tree = build_files_tree(include_archived=False)
         n = find_file_node(tree, path)
         if n is not None:
-            return n
+            if not (n.get("run_id") and n.get("rel")):
+                # Entity-backed or disk-addressed nodes are terminal: the
+                # launcher can resolve their bytes. A node with NEITHER a run
+                # key NOR any byte address (a bare grafted folder) is
+                # NON-TERMINAL: returning it starves both launcher arms
+                # (streaming gets no run, materialize gets no path — the
+                # stale-mirror shadow, found live), so fall THROUGH to the
+                # project run-output resolver on the caller's path instead.
+                if n.get("entity_id") or n.get("artifact_path"):
+                    return n     # launcher has its own fallbacks
+            else:
+                # LEDGER-SOURCED run-output node: its artifact_path is a server
+                # URL or None — an address for browsers, never bytes. Returning
+                # it as-is SHADOWED the byte-resolving fallback below (before
+                # the ledger change these files weren't in the tree, so the
+                # fallback always ran) — live regression: an unretained store
+                # output matched here and the launcher had no source. A
+                # locally-addressable node (e.g. an in-store /artifacts copy)
+                # passes through; anything else falls THROUGH to the project
+                # resolver by the ledger's recorded rel — a tree match must
+                # never beat byte resolution.
+                from core.files.materialize import _resolve_artifact_disk_path
+                src = _resolve_artifact_disk_path(n.get("artifact_path"))
+                if src is not None and src.exists():
+                    return n
+                path = n["rel"]
         # Not in the entity-graph tree — a fresh weft Run output (e.g. a `.lstar.zarr` store in
         # the live kernel jobdir). Resolve it directly from the Run's outputs (retained tree /
         # jobdir / sandbox), the same fallback the open_viewer tool uses, so launch/download work
-        # without a prior data_register. resolve_project_run_output is escape-safe (paths stay
-        # under sanctioned Run roots), so an arbitrary `path=` can't reach outside them.
+        # without a prior data_register. This is a LOOKUP: resolve_project_run_output confirms
+        # existence WITHOUT moving bytes — a remote output not yet local comes back as a marker
+        # (`artifact_path` is the logical name, not an on-disk file); the viewer LAUNCH path
+        # fetches it under the size gate. `..`/absolute components are refused at the resolver's
+        # cache/sandbox joins (`_safe_join`), so a crafted `path=` can't read outside the caches.
         from content.bio.lifecycle.runs import resolve_project_run_output
         hit = resolve_project_run_output(path)
         if hit is not None:
@@ -162,7 +204,11 @@ def viewers_launch(body: ViewerLaunchIn, _pid: str = Depends(require_project)):
             "project_id": pid, "set_phase": set_phase,
         })
     job_id = prepare.start(runner, label=v.label or v.id)
-    return {"job_id": job_id, "label": v.label or v.id}
+    # Hand back the resolved entity_id (path→entity reverse-lookup may have found
+    # one even when the caller passed only a path). The launch page adopts it so
+    # a later remote-gate failure can offer the working mirror lever instead of a
+    # path-only dead end (F4).
+    return {"job_id": job_id, "label": v.label or v.id, "entity_id": node.get("entity_id")}
 
 
 @router.get("/api/viewers/launch/status")

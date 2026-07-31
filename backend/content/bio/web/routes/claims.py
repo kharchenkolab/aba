@@ -79,6 +79,11 @@ class AltPatch(BaseModel):
     rationale: str | None = None
 
 
+class NoteRequest(BaseModel):
+    text: str = ""
+    source: str = "user"
+
+
 class StatusRequest(BaseModel):
     to: str
     reason: str = ""
@@ -96,7 +101,7 @@ def claim_create(req: ClaimRequest, _pid: str = Depends(require_project)):
         entity_type="claim", title=stmt[:80],
         derivation=derived_from(list(req.evidence_ids)) if req.evidence_ids else manual(),   # Phase 2C
         metadata={"statement": stmt, "negative": req.negative,
-                  "evidence_ids": list(req.evidence_ids), "caveats": [], "alternatives": [],
+                  "evidence_ids": list(req.evidence_ids), "caveats": [], "alternatives": [], "notes": [],
                   "confidence": "preliminary", "thread_id": tid,
                   "status_log": [{"from": None, "to": "preliminary", "reason": "created",
                                   "actor": "user", "at": _now()}]})
@@ -228,6 +233,25 @@ def claim_del_alt(cid: str, aid: str, _pid: str = Depends(require_project)):
     ent = _claim_or_404(cid)
     alts = [a for a in ((ent.get("metadata") or {}).get("alternatives") or []) if a.get("id") != aid]
     _save_claim(cid, ent, {"alternatives": alts})
+    return {"ok": True}
+
+
+@router.post("/api/claims/{cid}/notes")
+def claim_add_note(cid: str, req: NoteRequest, _pid: str = Depends(require_project)):
+    ent = _claim_or_404(cid)
+    notes = list((ent.get("metadata") or {}).get("notes") or [])
+    note = {"id": gen_entity_id("cnote"), "text": req.text.strip(),
+            "source": req.source, "at": _now()}
+    notes.append(note)
+    _save_claim(cid, ent, {"notes": notes})
+    return note
+
+
+@router.delete("/api/claims/{cid}/notes/{nid}")
+def claim_del_note(cid: str, nid: str, _pid: str = Depends(require_project)):
+    ent = _claim_or_404(cid)
+    notes = [n for n in ((ent.get("metadata") or {}).get("notes") or []) if n.get("id") != nid]
+    _save_claim(cid, ent, {"notes": notes})
     return {"ok": True}
 
 

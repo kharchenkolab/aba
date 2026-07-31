@@ -25,6 +25,7 @@ The YAML contract:
 """
 from __future__ import annotations
 
+import os
 from typing import Any, Callable, Optional
 
 from mcp.server.fastmcp import FastMCP
@@ -331,6 +332,166 @@ def _agent_tools_for(entity_type: str) -> list[str]:
     return list((spec.creation or {}).get("agent_tools") or [])
 
 
+# Inline-view budget for bytes pulled off a site. A figure or a small table is
+# the point; anything larger is a dataset (register + mirror), not a view.
+_REMOTE_VIEW_CAP = 8 * 1024 * 1024
+
+
+def _cache_remote_view(name: str, data: bytes):
+    """Install fetched remote bytes under the project's artifacts area so a
+    re-view is free. Atomic — never a half-written cached view."""
+    from pathlib import Path as _P
+    from core.config import project_artifacts_dir
+    from core.projects import current_project_id
+    dest = _P(project_artifacts_dir(current_project_id())) / "_remote_view" / name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(dest.suffix + f".partial.{os.getpid()}")
+    tmp.write_bytes(data)
+    os.replace(tmp, dest)
+    return dest
+
+
+def _recent_remote_site(thread_id: str | None) -> str | None:
+    """The site of this thread's most recent REMOTE step, or None.
+
+    An absolute path carries no machine, so a bare `/home/u/w/plot.png` is
+    ambiguous on its face. In practice it is never ambiguous in context: the
+    agent is looking at a file the step it JUST ran produced. Reading the site
+    off the thread's own recent execution records turns "which machine?" into a
+    recorded fact rather than a guess, and a caller who knows better passes
+    `site=` explicitly."""
+    if not thread_id:
+        return None
+    try:
+        from core.graph import exec_records
+        rows = exec_records.list_by_thread(str(thread_id)) or []
+        for row in reversed(rows[-25:]):          # newest first
+            rec = exec_records.get(row.get("exec_id") or "") or {}
+            payload = rec.get("payload") or rec
+            site = ((payload.get("compute") or {}).get("site"))
+            if site and site != "local":
+                return str(site)
+    except Exception:  # noqa: BLE001 — inference is best-effort by definition
+        return None
+    return None
+
+
+def _read_remote_abs_file(path: str, site: str):
+    """`(bytes, note)` for an absolute path on `site`, read over the DATA PLANE.
+
+    `register_dataset(path=…, site=…)` already proves the substrate can reach an
+    arbitrary remote path; this is the same route without minting an entity:
+    `data_register(..., ingest=False)` is an identity/lookup op (no copy), then
+    the bytes come back through the ranged reader. Capped at the view budget —
+    anything bigger belongs to a dataset + mirror, not an inline view."""
+    import base64
+    from core.compute import retention
+    from core.compute.adapter import get_compute
+    reg = get_compute().sync_call("data_register", path, site=site, ingest=False)
+    ref = (reg or {}).get("ref")
+    if not ref:
+        return None, f"could not address {path!r} on {site} (no data-plane ref)"
+    size = int((reg or {}).get("bytes") or 0)
+    if size > _REMOTE_VIEW_CAP:
+        return None, (f"it is {size} bytes on {site} — too large for an inline "
+                      f"view (cap {_REMOTE_VIEW_CAP}). Register it as a dataset "
+                      f"and mirror it instead.")
+    buf, offset, stated = bytearray(), 0, None
+    while True:
+        r = retention.data_read_range(ref, offset=offset, site=site)
+        n = int(r.get("nbytes") or 0)
+        _s = r.get("size")
+        if isinstance(_s, int) and _s >= 0:
+            stated = _s
+        if n:
+            buf.extend(base64.b64decode(r.get("bytes_b64") or ""))
+            offset += n
+        if n == 0:
+            break
+        if stated is not None and offset >= stated:
+            break
+        if r.get("eof"):
+            break
+        if not r.get("capped") and stated is None:
+            break
+        if offset > _REMOTE_VIEW_CAP:
+            return None, f"exceeded the inline-view cap while reading from {site}"
+    # Same class as the viewer chunk-cache truncation (2026-07-27): the loop used
+    # to end on the substrate's eof/capped flags alone, so a clamped reply that
+    # omitted `capped` returned a SHORT buffer — and here that buffer is handed
+    # to the agent AS the artifact. A half-read figure or table that looks like
+    # the whole thing is worse than a refusal: the agent reasons about it.
+    want = stated if stated is not None else (size or None)
+    if want is not None and len(buf) != want:
+        return None, (f"short read from {site}: got {len(buf)} of {want} bytes "
+                      f"— not shown rather than shown truncated")
+    return bytes(buf), f"fetched from {site}"
+
+
+def _fetch_remote_view_file(path: str, thread_id: str | None = None,
+                            site: str | None = None):
+    """`(local_Path, note)` for a file that lives on a REMOTE site, or `(None, note)`.
+
+    `view_artifact` needs bytes on THIS filesystem. When local resolution fails,
+    the path may still name a Run output on another machine — the usual case for
+    a figure a remote step just wrote. Resolve it through the Run graph and pull
+    it over the preview channel (`read_run_file` → weft `run_file_read`, base64,
+    8 MB cap), cached under the project's artifacts area so a re-view is free.
+
+    Deliberately the PREVIEW channel, not transport: viewable artifacts are
+    small (figures, tables), and a file too big for it should travel as a
+    dataset (`register_dataset` → mirror), not through a view call. A truncated
+    read is refused rather than rendered — half a PNG is not a figure.
+
+    TWO tiers, cheapest first:
+
+      1. RECORDED RUN OUTPUT — the path names a file a Run produced; read it off
+         that run's target with the preview verb. No site guessing: the run
+         knows where it ran.
+      2. ARBITRARY ABSOLUTE PATH on a site — a file the step wrote somewhere of
+         its own choosing, which is common and until now simply un-viewable
+         (live thr_a1f7f687: five figures in a hand-picked directory, all five
+         refused). Addressed over the data plane with the site taken from
+         `site=` if given, else inferred from this thread's most recent remote
+         step. Tier 1 stays first because it needs no inference at all."""
+    from pathlib import Path as _P
+    if not path:
+        return None, ""
+    try:
+        from content.bio.lifecycle.runs import (read_run_file,
+                                                resolve_project_run_output_located)
+        located = resolve_project_run_output_located(path)
+        if located is None:
+            # ── tier 2: an absolute path on a site we can name ──────────────
+            if not os.path.isabs(path):
+                return None, ""
+            target_site = site or _recent_remote_site(thread_id)
+            if not target_site:
+                return None, ""
+            data, note = _read_remote_abs_file(path, target_site)
+            if data is None:
+                return None, (f"That looks like a path on {target_site}, but "
+                              f"{note}." if note else "")
+            return _cache_remote_view(_P(path).name, data), note
+        run_id, _abs, site_of_run, size, is_remote = located
+        site = site_of_run
+        if not is_remote:
+            return None, ""          # local output the disk resolver already missed
+        rel = _P(path).name
+        data, truncated, total = read_run_file(run_id, rel)
+        if data is None:
+            return None, (f"It resolves to a Run output on {site!r}, but its bytes "
+                          f"could not be read from there (the file may have been "
+                          f"swept). Keep the Run's outputs, or register it as a dataset.")
+        if truncated:
+            return None, (f"It is on {site!r} and is too large for the view channel "
+                          f"({total} bytes > 8 MB). Register it as a dataset and "
+                          f"mirror it instead of viewing it inline.")
+        return _cache_remote_view(rel, data), f"fetched from {site}"
+    except Exception as e:  # noqa: BLE001 — a fetch attempt must not break the tool
+        return None, f"(remote lookup failed: {type(e).__name__})"
+
+
 def _resolve_view_path(path: str):
     """Resolve view_artifact's `path` arg to an EXISTING on-disk Path, or None.
 
@@ -376,6 +537,23 @@ def _resolve_view_path(path: str):
                 return max(hits, key=lambda m: m.stat().st_mtime)
         except OSError:
             pass
+    # …then the ARTIFACT CATALOG, which is where a harvested output's human name
+    # actually survives. The served copy is stored under a generated id and the
+    # originally-named file stays in the execution sandbox (off this filesystem),
+    # so for anything a run produced the two lookups above cannot match — only
+    # `original_name` can. Without this the tool refused names it was itself
+    # serving (live 2026-07-21: three straight "artifact not found" on figures
+    # the agent had just written).
+    try:
+        from core.exec.artifacts import find_by_produced_name
+        from core.web.artifacts import _artifact_url_to_path
+        for a in find_by_produced_name(str(p)):
+            u = a.get("url") or ""
+            d = _artifact_url_to_path(u) if u.startswith("/artifacts/") else None
+            if d and d.exists():
+                return d
+    except Exception:  # noqa: BLE001 — resolution is best-effort, never fatal
+        pass
     return None
 
 
@@ -1005,6 +1183,7 @@ def register_entity_ops_tools(mcp: FastMCP) -> None:
     def view_artifact(entity_id: str | None = None,
                       path: str | None = None,
                       page: int = 1,
+                      site: str | None = None,
                       aba_ctx_id: str | None = None) -> dict:
         """LOOK at an artifact — image, PDF, table, or short text doc —
         so the agent can VERIFY what's actually in it rather than
@@ -1088,11 +1267,25 @@ def register_entity_ops_tools(mcp: FastMCP) -> None:
         else:
             disk = _resolve_view_path(path)
             if disk is None:
-                return {"error": f"artifact not found for path {path!r} "
-                                 f"(looked under the active project's "
-                                 f"work/artifacts/data area; pass an "
-                                 f"/artifacts/<pid>/<name> URL or an absolute "
-                                 f"path for files outside it)"}
+                # Not on THIS filesystem. Before refusing, ask the Run graph —
+                # the file may be a run output sitting on a remote site, which
+                # is the common shape for a figure a remote step just wrote.
+                # This tool had no site-aware branch at all (unlike
+                # get_viewer_url), so it refused such paths outright and the
+                # workaround was submitting a WHOLE EXTRA REMOTE JOB whose only
+                # purpose was to copy the image into the harvest path
+                # (live 2026-07-26, for a 249 KB png).
+                disk, remote_note = _fetch_remote_view_file(
+                    path, thread_id=(peek_ctx(aba_ctx_id) or {}).get("thread_id"),
+                    site=site)
+                if disk is None:
+                    return {"error": f"artifact not found for path {path!r} "
+                                     f"(looked under the active project's "
+                                     f"work/artifacts/data area, and among this "
+                                     f"project's remote Run outputs; pass an "
+                                     f"/artifacts/<pid>/<name> URL or an absolute "
+                                     f"path for files outside it)"
+                                     + (f" {remote_note}" if remote_note else "")}
 
         if not disk.exists():
             return {"error": f"artifact missing on disk: {disk}"}
@@ -1138,7 +1331,7 @@ def register_entity_ops_tools(mcp: FastMCP) -> None:
             extra = (f" (page {idx + 1}/{n_pages})" if n_pages > 1 else "")
             return _vision_envelope(entity_id, ent_type, title, str(ap_url or disk),
                                     ent_meta, disk.name + extra, img_bytes,
-                                    "image/png")
+                                    "image/png", materializable=False)
 
         # ── Tabular branch ──────────────────────────────────────────
         if suffix in (".csv", ".tsv", ".parquet"):
@@ -1182,7 +1375,8 @@ def register_entity_ops_tools(mcp: FastMCP) -> None:
 
 
 def _vision_envelope(entity_id, ent_type, title, ap_str, ent_meta,
-                     display_name, img_bytes, media_type):
+                     display_name, img_bytes, media_type,
+                     materializable=True):
     """Build the standard vision-bearing tool_result envelope."""
     import base64
     img_b64 = base64.b64encode(img_bytes).decode("ascii")
@@ -1205,6 +1399,19 @@ def _vision_envelope(entity_id, ent_type, title, ap_str, ent_meta,
             {"type": "image",
              "source": {"type": "base64", "media_type": media_type, "data": img_b64}},
         ],
+        # ref for durable history — materialized on egress for recent-K only.
+        # BOTH keys: `view_artifact(path=…)` has no entity_id at all (the common
+        # shape — an intermediate a run just wrote), so an entity-only ref
+        # cannot resolve and egress hands the model a bare stub instead of the
+        # image it asked to look at. `_resolve_ref_path` tries `path` first
+        # behind an is_file() check, so an /artifacts/ URL here simply falls
+        # through to the entity lookup.
+        # Minted only when re-reading the ref reproduces what the model saw:
+        # a rasterized PDF page resolves (the .pdf is_file()) but cannot be
+        # re-materialized — resolvable is not reproducible.
+        **({"_vision_ref": {"tool": "view_artifact", "entity_id": entity_id,
+                            "path": ap_str, "media_type": media_type}}
+           if materializable else {}),
     }
 
 

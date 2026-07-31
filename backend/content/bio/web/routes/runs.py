@@ -15,10 +15,11 @@ import mimetypes
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
 
 from core.web.deps import require_project
+from core.web.coalesce import Coalescer
 from core.graph.entities import create_entity, get_entity, update_entity
 from core.graph.edges import add_edge
 
@@ -154,22 +155,53 @@ def run_file(rid: str, rel: str, download: int = 0):
     sandbox sweep. `rel` is relative to the run dir; traversal outside is rejected
     on every base. Images/text render inline; `download=1` forces an attachment."""
     _run_or_404(rid)
-    from content.bio.lifecycle.runs import resolve_run_file, read_run_file
+    from content.bio.lifecycle.runs import resolve_run_file, read_run_file, run_output_site
     name = Path(rel).name
     media = mimetypes.guess_type(name)[0] or "application/octet-stream"
     headers = {"Content-Disposition": f'attachment; filename="{name}"'} if download else {}
-    # Tier 1: a local file (retained tree / scratch) → stream from disk.
+    # Tier 1: a local file (retained tree / scratch), OR a remote output whose bytes
+    # were fetched into the local cache under the transparent gate → stream from disk.
     target = resolve_run_file(rid, rel)
     if target:
         return FileResponse(target, media_type=media, headers=headers)
+    # DIRECTORY store (one collapsed 'store' output row): not a streamable file,
+    # but its advertised href must not dead-link — a user clicking the manifest
+    # row deserves an answer. Serve an honest JSON summary (kind, members, size,
+    # how to open); the store's bytes travel via the viewer / whole-store
+    # materialize path, never this single-file route.
+    from content.bio.lifecycle.runs import locate_run_output
+    loc = locate_run_output(rid, rel, match="exact") or locate_run_output(rid, rel)
+    if loc and loc.get("kind") == "dir":
+        return JSONResponse({
+            "kind": "store", "rel": rel, "locality": loc.get("locality"),
+            "site": loc.get("site"), "size": loc.get("size"),
+            "note": (f"{rel!r} is a directory store — open it with a viewer "
+                     f"(get_viewer_url) or materialize it whole; it does not "
+                     f"stream as a single file."),
+        })
     # Tier 2 (B1b): an IN-SANDBOX file (live/dead kernel jobdir, not local) → capped weft
     # preview read. A truncated result means it's past the preview channel — Keep it.
     data, truncated, total = read_run_file(rid, rel)
     if data is not None and not truncated:
         return Response(content=data, media_type=media, headers=headers)
+    # Tier-1 declined and the preview is truncated → the file is too big to bring
+    # home transparently. Name the site so the message is "on <site>, bring it home
+    # to view" instead of an opaque size error (site lookup is best-effort).
+    site = None
+    try:
+        site = run_output_site(rid, rel)
+    except Exception:  # noqa: BLE001 — an honest message must never 500 the route
+        site = None
     if truncated:
-        raise HTTPException(413, f"{rel!r} is {total} bytes — too large to preview; "
-                                 "Keep it to retain, then download")
+        where = (f" It lives on {site} — bring it home to view it (Keep it, then "
+                 f"download)." if site else " Keep it to retain, then download.")
+        raise HTTPException(413, f"{rel!r} is {total} bytes — too large to preview.{where}")
+    if site:
+        # The retention index places the bytes on a site we can't read right now —
+        # say so; "no file in the run" would be a lie about a kept output.
+        raise HTTPException(404, f"{rel!r} lives on {site} and isn't reachable "
+                                 f"from here right now — try again, or open it "
+                                 f"with a viewer (which fetches it home)")
     raise HTTPException(404, f"no file {rel!r} in the run (retained or sandbox)")
 
 
@@ -223,16 +255,36 @@ def run_archive(rid: str):
                              f'attachment; filename="{rid}-outputs.zip"'})
 
 
+# The durable view is EXPENSIVE relative to every sibling route (it walks the
+# substrate's retention index — many serialized store queries) and it is the
+# one route the UI POLLS per open Run card. Unbounded, those pollers park
+# threadpool workers until the pool starves and every sync route stops (the
+# 2026-07 convoy). Coalesced: same-run pollers share one flight, and durable
+# work can hold at most 2 of the pool's workers, ever. Not a cache — each
+# resolved flight is forgotten; the next poll recomputes.
+_durable_flight = Coalescer(max_concurrent=2)
+
+
 @router.get("/api/runs/{rid}/durable")
-def run_durable(rid: str, flat: int = 0):
+async def run_durable(rid: str, flat: int = 0):
     """The Run's durability view — per-file state (retained / saving / in-store / at-risk /
     in-sandbox / cleared) merged from weft's retained tree + inventory + the live sandbox. Returns a
     TreeNode-compatible tree (root → folders → file nodes with `state`/`badge`) so the
     Files panel renders it directly, plus a `summary`. `?flat=1` returns the flat
     {files, summary} model instead. Backs the sweep-surviving Files listing (§6.2)."""
-    _run_or_404(rid)
-    from content.bio.lifecycle.runs import run_durable_view, run_durable_tree
-    return run_durable_view(rid) if flat else run_durable_tree(rid)
+    from content.bio.lifecycle.runs import run_durable_view, durable_tree_from_view
+
+    def _compute():
+        # sync work (entity read + substrate walk) stays inside the flight —
+        # an async def body runs ON the event loop, where it must not block.
+        # A 404 raised here reaches every awaiter of the flight; same rid →
+        # same answer, so shared failure is as correct as shared success.
+        _run_or_404(rid)
+        return run_durable_view(rid)
+
+    view = await _durable_flight.get(rid, _compute)
+    # view is SHARED across concurrent requests — derive, never mutate.
+    return view if flat else durable_tree_from_view(view)
 
 
 class _KeepBody(BaseModel):
@@ -272,6 +324,31 @@ def run_bring_back(rid: str, force: bool = False, _pid: str = Depends(require_pr
     if out.get("error"):
         raise HTTPException(400, out["error"])
     return out
+
+
+@router.get("/api/runs/{rid}/execs")
+def run_execs(rid: str, limit: int = 200):
+    """The Run's execution records with their PLACEMENT PROVENANCE — exec id,
+    kind, language, status, and the `compute` block (substrate / site / kernel
+    or task identity) each record was stamped with. This is the mechanism-truth
+    surface: it says HOW each step actually ran (which substrate, which
+    machine), independent of what the step produced. Backs provenance display
+    and the regtest transport oracle (a migration's success criterion is
+    mechanism, and outcome-level surfaces cannot see it)."""
+    _run_or_404(rid)
+    from core.graph import exec_records
+    out = []
+    for row in exec_records.list_by_run(rid, limit=limit):
+        rec = exec_records.get(row.get("exec_id")) or {}
+        out.append({"exec_id": row.get("exec_id"),
+                    "status": row.get("status"),
+                    "started_at": row.get("started_at"),
+                    "kind": rec.get("kind"),
+                    "language": rec.get("language"),
+                    "executor": rec.get("executor"),
+                    "compute": rec.get("compute"),
+                    "weft_target": rec.get("weft_target")})
+    return {"execs": out}
 
 
 @router.get("/api/runs/{run_id}/artifacts")

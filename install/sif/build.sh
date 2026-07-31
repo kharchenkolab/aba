@@ -59,6 +59,15 @@ echo "   stage:   $STAGE"
 rm -rf "$STAGE"; mkdir -p "$STAGE"
 cp -a "$REPO_ROOT/backend" "$STAGE/backend"
 cp -a "$REPO_ROOT/frontend/dist" "$STAGE/frontend-dist"
+# Operator scripts (~112 KB) — notably publish_base_packs.py, the ONLY way to build
+# and publish the science env packs. Without these in the image the deployment cannot
+# perform its own §4 step and an operator needs a git checkout, which INSTALL.md's
+# "from an aba checkout or runtime" wrongly implies is optional (live 2026-07-23: had
+# to bind-mount a checkout to publish r-bio). __pycache__ is dropped, not shipped.
+if [ -d "$REPO_ROOT/scripts" ]; then
+  cp -a "$REPO_ROOT/scripts" "$STAGE/scripts"
+  rm -rf "$STAGE/scripts/__pycache__"
+fi
 # The SIF is the OOD/cluster artifact, and OOD serves the SPA under /rnode/<host>/<port>/.
 # The dist must therefore carry the /__OOD_PREFIX__/ base placeholder that script.sh.erb
 # rewrites per session (build the frontend with ABA_OOD_BASE=/__OOD_PREFIX__/). A dist built
@@ -196,6 +205,17 @@ if [ "$PROFILE" = "fat" ] || [ "$PROFILE" = "weft" ]; then
   fi
   echo "-- building conda venv ($ACCEL base, from $ENV_YML) --"
   "$MM" create -y -q --channel-priority strict -p "$STAGE/aba-venv" -f "$ENV_YML"
+  # Bake the squashfs MOUNT tooling into the controller venv. Without squashfuse + mksquashfs
+  # (and /dev/fuse) ON SITE, weft's squashfs_mode() returns None and it falls back to realizing
+  # each published env pack from its lockfile PER USER (slow, unshared) — defeating the whole
+  # point of the published read-only .sqfs packs. On a BeeGFS site with userns (CBE-next) these
+  # three flip squashfs_mode to `userns` (namespace mount, works over parallel FS). conda-forge
+  # builds are self-contained (own libfuse) — unlike the host apptainer libexec binaries, which
+  # link to /cvmfs compat libs and won't run in-image. Lands squashfuse_ll + mksquashfs on
+  # /opt/aba-venv/bin (PATH); /dev/fuse is bound into the session by the OOD launcher.
+  "$MM" install -y -q --channel-priority strict -c conda-forge -p "$STAGE/aba-venv" squashfuse squashfs-tools \
+    && echo "   squashfuse + squashfs-tools baked (weft can MOUNT published env packs, not re-realize)" \
+    || echo "WARNING: squashfuse/squashfs-tools bake failed — weft falls back to per-user env realize"
   # pip-install the weft substrate into the baked venv (W3.4). --no-user is
   # load-bearing on conda pythons (user-site is enabled → a bare pip would divert
   # to ~/.local and a user-site weft would shadow the image's). Non-fatal so a
@@ -247,6 +267,28 @@ DEF="$STAGE/aba-$PROFILE.def"
   echo "        install -m 0755 \"$STAGE/which\" \"\$APPTAINER_ROOTFS/usr/bin/which\""
   echo "        chmod \"\$_m\" \"\$APPTAINER_ROOTFS/usr/bin\""
   echo "    fi"
+  # The conda env(s) are copied HERE rather than via %files, because %files
+  # DEREFERENCES symlinks and this tree is 1332 of them: every
+  # `libfoo.so -> libfoo.so.X.Y`, plus conda-forge python's own
+  # `lib/python3.1 -> python3.12` (a shim for build tools that derive the stdlib
+  # dir as `'python' + sys.version[:3]` — correct through 3.9, "3.1" from 3.10 on).
+  # Dereferenced, those 1332 links materialize 486 MB of duplicate content on top
+  # of an 831 MB env — libopenblas 40M, libicudata 32M, libpython 30M, and
+  # python3.1's entire 321 MB site-packages tree, which is on no sys.path and
+  # referenced by nothing in the image (verified: no pkgconfig, cmake, script or
+  # sysconfigdata hit). squashfs dedups the DATA, so the image barely moved and
+  # this went unnoticed — but the build still writes ~1.3 GB where 831 MB would
+  # do, and every duplicate costs an inode + directory entry.
+  # `cp -a` implies -d, so links stay links, exactly as conda packaged them.
+  # Nothing else staged contains a single symlink, so the rest stays on %files.
+  if [ "$PROFILE" = "fat" ] || [ "$PROFILE" = "weft" ]; then
+    echo "    mkdir -p \"\$APPTAINER_ROOTFS/opt/aba-venv\""
+    echo "    cp -a \"$STAGE/aba-venv/.\" \"\$APPTAINER_ROOTFS/opt/aba-venv/\""
+  fi
+  if [ "$PROFILE" = "fat" ]; then
+    echo "    mkdir -p \"\$APPTAINER_ROOTFS/opt/aba-envs/tools\""
+    echo "    cp -a \"$STAGE/aba-tools/.\" \"\$APPTAINER_ROOTFS/opt/aba-envs/tools/\""
+  fi
   echo ""
   echo "%files"
   echo "    $STAGE/backend /opt/aba/backend"
@@ -257,8 +299,9 @@ DEF="$STAGE/aba-$PROFILE.def"
   [ -d "$STAGE/pagoda3-dist" ] && echo "    $STAGE/pagoda3-dist /opt/aba/vendor/pagoda3/dist"
   [ -f "$STAGE/ca-certificates.crt" ] && echo "    $STAGE/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt"
   [ -d "$STAGE/bin" ] && echo "    $STAGE/bin /opt/aba/bin"
-  { [ "$PROFILE" = "fat" ] || [ "$PROFILE" = "weft" ]; } && echo "    $STAGE/aba-venv /opt/aba-venv"
-  [ "$PROFILE" = "fat" ] && echo "    $STAGE/aba-tools /opt/aba-envs/tools"
+  # %files is an EXPLICIT list — staging a dir above does nothing without a line here.
+  [ -d "$STAGE/scripts" ] && echo "    $STAGE/scripts /opt/aba/scripts"
+  # (aba-venv / aba-tools are copied in %setup above — see the symlink note there.)
   # weft substrate: pixi binaries + the base env packs (weft is baked INTO the venv
   # above, so no separate copy). resolve_pixi() finds /opt/aba/tools/pixi/bin.
   [ -d "$STAGE/pixi/bin" ] && echo "    $STAGE/pixi/bin /opt/aba/tools/pixi/bin"

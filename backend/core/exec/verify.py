@@ -16,7 +16,19 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import threading
 from typing import Optional, Sequence
+
+# Positive-probe memo: {(identity_key, name): True}. POSITIVES ONLY — a
+# verified load is stable for a given identity (sessions key on
+# (session_id, rev): any install bumps rev; frozen envs key on EnvID), while
+# a failure may be transient and must re-derive. In-process by design: a
+# server restart re-pays one probe per identity, never a stale verdict.
+# Field numbers behind this (2026-07-22): 24s post-install probe, 69s on a
+# request that installed nothing. The substrate's verify-first pre-check
+# (~0.4s) replaces this at F-V2; until then this is the consumer stopgap.
+_PROBE_MEMO: dict = {}
+_PROBE_MEMO_LOCK = threading.Lock()
 
 
 def verify_python_imports(
@@ -24,7 +36,9 @@ def verify_python_imports(
     *,
     extra_paths: Optional[Sequence[str]] = None,
     python_exe: Optional[str] = None,
+    argv_builder=None,
     timeout_s: int = 180,
+    memo_key: Optional[tuple] = None,
 ) -> tuple[bool, str]:
     """Actually import each name in a fresh subprocess on the target interpreter.
     Returns ``(ok, detail)``.
@@ -33,15 +47,25 @@ def verify_python_imports(
     missing system lib — i.e. the exact "find_spec says yes, import explodes"
     case. ``detail`` carries the traceback tail for the agent/operator.
 
-    ``python_exe`` is the interpreter to probe (a weft session / named-env python);
-    its own site-packages are authoritative, so ``extra_paths`` defaults to none.
-    Pass ``extra_paths`` to verify against a temp install prefix before merging it
-    (transactional installs).
+    Target selection: ``argv_builder`` (preferred for the DEFAULT env) is a
+    callable ``args -> full argv`` — the topology-blind path
+    (``project_env.exec_argv``): it composes the activation line for envs with
+    no directly-usable prefix (mounted/squashfs bases, lazy sessions) and
+    re-resolves the session runtime per call, so a post-install verify sees the
+    flipped (materialized) session, never the stale base. ``python_exe`` is a
+    bare interpreter path for envs that HAVE one (a named-env prefix). The
+    probed env's own site-packages are authoritative, so ``extra_paths``
+    defaults to none; pass it to verify against a temp install prefix before
+    merging (transactional installs).
     """
     names = [n for n in (import_names or []) if n]
     if not names:
         return True, ""
-    exe = python_exe or sys.executable
+    if memo_key is not None:
+        with _PROBE_MEMO_LOCK:
+            names = [n for n in names if (memo_key, n) not in _PROBE_MEMO]
+        if not names:
+            return True, ""            # every name already proven for this identity
     if extra_paths is None:
         extra_paths = []          # the target interpreter's own site-packages win
     # append (not prepend) so the interpreter's own packages win
@@ -55,15 +79,23 @@ def verify_python_imports(
         "    importlib.import_module(_n)\n"
         "print('ABA_IMPORT_OK')\n"
     )
+    if argv_builder is not None:
+        cmd = list(argv_builder(["-c", script]))
+    else:
+        cmd = [python_exe or sys.executable, "-c", script]
     try:
         proc = subprocess.run(
-            [exe, "-c", script], capture_output=True, text=True, timeout=timeout_s
+            cmd, capture_output=True, text=True, timeout=timeout_s
         )
     except subprocess.TimeoutExpired:
         return False, f"import verification timed out after {timeout_s}s"
     except Exception as e:  # noqa: BLE001
         return False, f"could not launch import verification: {e}"
     if proc.returncode == 0 and "ABA_IMPORT_OK" in (proc.stdout or ""):
+        if memo_key is not None:
+            with _PROBE_MEMO_LOCK:
+                for n in names:
+                    _PROBE_MEMO[(memo_key, n)] = True
         return True, ""
     detail = ((proc.stderr or "") + (proc.stdout or "")).strip()
     return False, detail[-1400:]

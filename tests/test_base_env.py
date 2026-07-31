@@ -125,12 +125,19 @@ def _plant_prefix(with_ipykernel: bool = True) -> Path:
     return d
 
 
+def _direct_runtime(prefix: Path) -> dict:
+    """A direct-exec runtime block over a planted prefix — the default lane's
+    resolution seam (run.py consumes project_env.runtime, not interpreter())."""
+    return {"source": "session", "env_id": None, "prefix": str(prefix),
+            "activation": "true", "ns_wrap": False, "direct_exec": True}
+
+
 def test_run_python_code_uses_pack_interpreter(generic_packs, monkeypatch):
     from core.compute import project_env
     from core.exec.run import run_python_code
     prefix = _plant_prefix()
-    monkeypatch.setattr(project_env, "interpreter",
-                        lambda pid, lang: prefix / "bin" / "python")
+    monkeypatch.setattr(project_env, "runtime",
+                        lambda pid, lang: _direct_runtime(prefix))
 
     pid = projects.create_project("basepy")["id"]
     projects.set_current(pid)
@@ -151,8 +158,8 @@ def test_run_r_code_uses_pack_rscript(generic_packs, monkeypatch):
     rs = prefix / "bin" / "Rscript"
     rs.write_text("#!/bin/sh\nexit 0\n")
     rs.chmod(0o755)
-    monkeypatch.setattr(project_env, "interpreter",
-                        lambda pid, lang: prefix / "bin" / "Rscript")
+    monkeypatch.setattr(project_env, "runtime",
+                        lambda pid, lang: _direct_runtime(prefix))
 
     captured = {}
 
@@ -185,18 +192,9 @@ def test_no_pack_run_errors_never_served_base(no_packs):
     assert not r.get("stdout"), "no-pack run must not execute on a served base"
 
 
-# ── kernel spec content contract ─────────────────────────────────────────────
-
-def test_base_kernelspec_requires_ipykernel(generic_packs, monkeypatch):
-    from core.compute import project_env
-    from core.exec.kernels import jupyter as jk
-    prefix = _plant_prefix()          # bare venv — no ipykernel
-    monkeypatch.setattr(project_env, "ensure",
-                        lambda pid, lang: {"session_id": "ses_test",
-                                           "prefix": prefix,
-                                           "base_env_id": "env:v1:x"})
-    with pytest.raises(RuntimeError, match="ipykernel"):
-        jk._ensure_base_python_kernelspec()
+# (The jupyter-era kernelspec content contract — ipykernel baked into the base
+# pack for `ipykernel install` — retired with that transport: weft kernels run
+# the substrate's own file-block protocol, no kernelspec registration.)
 
 
 # ── LIVE: real weft solve/realize of a tiny generic base (opt-in) ────────────

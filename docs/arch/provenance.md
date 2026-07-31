@@ -186,6 +186,25 @@ is still the live `reproduce_from_exec` check. Design: `misc/provenance2.md`.
   path that isn't a registered dataset, and a full content hash of inputs (that stays deferred
   to `export_bundle`, on demand). So drift-vs-inputs still isn't bit-checkable, but "what
   dataset did this use?" now answers.
+- **Placement provenance (WHERE it ran) is on both lanes.** Both writers stamp a `compute`
+  block: `_write_exec_record_for_job` from the substrate manifest (`weft_submitter._compute_block`
+  — `job_id`, `node`, `env_id`, `placement`), and `_write_exec_record` (interactive/sync) from
+  the live session (`substrate`, `site`, `kernel_id`). So a Result produced by a *synchronous*
+  remote step traces back to its machine from the graph alone, not the ephemeral conversation
+  (a sync remote step previously left only the opaque `weft_target` kernel id — the site was
+  unrecoverable; fixed in the block-4 reassessment, guarded by `mn_provenance_after_chain`).
+- **WHICH INTERPRETER ran it is on both lanes too.** The interactive block also carries
+  `env_id` / `env_name` / `env_grade` (`run_exec._env_identity`, read from the session that already
+  resolved them at start — no extra substrate call). `env_grade` mirrors the job lane's vocabulary:
+  `env` for a realized environment, `node-system` for a REMOTE session running the node's own
+  interpreter (the `env='system'` lever), `local` for a local session. Before this the interactive
+  lane recorded placement but no env identity at all, so most remote steps in a session could not
+  answer "which interpreter ran this" from the graph — the gap that made a silent fallback to a
+  node's system python invisible after the fact ([`envs.md`](envs.md)). `language_version` and
+  `package_versions` on this lane remain best-effort: they are probed **through the block channel**,
+  whose stdout weft can intermittently drop (same known capture issue the lane already warns
+  about), so they can legitimately come back empty; the graded env identity above is the reliable
+  answer. Guarded by `tests/test_env_resolution_honesty.py`.
 - **`execution_records` has no `actor` column.** Run-level attribution rides on `run_id`
   (→ `agent:<run_id>`) and the produced entity's own `actor`; a first-class actor on the
   exec row is deferred.

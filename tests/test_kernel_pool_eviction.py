@@ -5,7 +5,7 @@ import sys, time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 import pytest
-import core.exec.kernels.jupyter as jmod
+import core.exec.kernels.weft as wmod
 from core.exec.kernels.pool import KernelPool, KernelCapacityError
 
 
@@ -20,12 +20,15 @@ class _FakeSession:
         self.shutdown_called = False
     def touch(self): self.last_used = _FakeSession._base + 1e6
     def shutdown(self): self.shutdown_called = True; self.alive = False
-    def kernel_pid(self): return None
 
 
 @pytest.fixture(autouse=True)
 def _fake(monkeypatch):
-    monkeypatch.setattr(jmod, "JupyterKernelSession", _FakeSession)
+    # the pool's ONLY transport seam since the cutover: weft.for_pool
+    monkeypatch.setattr(
+        wmod, "for_pool",
+        lambda scope_key, lang, *, cwd, env_name=None, site="local":
+            _FakeSession(scope_key, lang, cwd=cwd, env_name=env_name))
 
 def _pool(soft, hard):
     return KernelPool(max_live=soft, idle_ttl=10**9, hard_max=hard)

@@ -110,6 +110,70 @@ def dataset_relink(did: str, body: _RelinkBody, _pid: str = Depends(require_proj
     return {"ok": True, "home": out["home"]}
 
 
+@router.post("/api/datasets/{did}/mirror")
+def dataset_mirror(did: str, _pid: str = Depends(require_project)):
+    """The card's "Mirror locally": bring a by-reference dataset's bytes home
+    through the SAME data plane compute uses — guardrailed (an honest 413
+    names size + limit + placement suggestion, never a silent multi-GB
+    transfer) and fingerprint-verified (a drifted/missing home surfaces as
+    409 instead of fetching stale). The durable home stays authoritative;
+    the local copy lands in the project data dir and is recorded as
+    `artifact_path` + `metadata.local_mirror`, so previews and viewers serve
+    without a remote hop."""
+    import shutil
+    import time
+    from core.compute.errors import ComputeError
+    from core.config import project_data_dir
+    from core.graph.entities import patch_metadata
+    from core.projects import current_project_id
+    from core.data.datasets import fetch, explain_data_error
+
+    ent = get_entity(did)
+    if not ent or ent.get("type") != "dataset":
+        raise HTTPException(404, f"no dataset {did}")
+    md = dict(ent.get("metadata") or {})
+    home = md.get("home") or {}
+    if not home.get("path") or (home.get("site") or "local") == "local":
+        raise HTTPException(400, "this dataset already lives on this machine")
+
+    base = Path(home["path"]).name or (ent.get("title") or "dataset")
+    desc = md.get("descriptor") or {}
+    is_dir = (md.get("layout") == "directory"
+              or (desc.get("n_files") or 0) > 1)
+    dest = (_unique_dir_path if is_dir else _unique_path)(
+        Path(str(project_data_dir(current_project_id()))) / base)
+    # A transfer that dies partway (the substrate RAISES; only the guardrail and
+    # ident states come back as dicts) must not leave a half-copied tree behind:
+    # the files tree grafts on-disk folders with a real artifact_path, so an
+    # orphan would then be served LOCAL-FIRST as if it were the whole dataset,
+    # and each retry would strand another `name (2)` copy.
+    try:
+        out = fetch(md, str(dest))
+    except ComputeError as e:
+        shutil.rmtree(dest, ignore_errors=True)
+        Path(dest).unlink(missing_ok=True)          # file-shaped partial
+        # describe() — NOT f"{e}": the diagnosis weft attaches lives in `hints`,
+        # and a stringly render drops it (core/compute/errors.describe).
+        from core.compute.errors import describe as _describe
+        raise HTTPException(409, f"cannot mirror: {_describe(e)}") from e
+    if out.get("error") == "fetch_guardrail":
+        raise HTTPException(
+            413, f"{(out.get('total_bytes') or 0) / 1e9:.1f} GB exceeds the "
+                 f"{out['limit'] / 1e9:.0f} GB transfer gate — "
+                 f"{out.get('suggestion') or 'work where the data lives'}")
+    if out.get("error"):
+        msg = explain_data_error(out) or out.get("state") or out["error"]
+        raise HTTPException(409, f"cannot mirror: {msg}")
+    local = out.get("path") or str(dest)
+    # Single-key patch, NOT the `md` blob read before the transfer: a stamp that
+    # landed during a multi-minute fetch (close_run's drift flags) would be lost
+    # to a whole-blob write. The column still goes through update_entity.
+    patch_metadata(did, {"local_mirror": {"path": local, "at": int(time.time()),
+                                          "ref": out.get("ref")}})
+    update_entity(did, artifact_path=local)
+    return {"ok": True, "path": local}
+
+
 @router.get("/api/datasets/{did}/tree")
 def dataset_tree(did: str):
     """The dataset's subtree from the files tree (its directory contents,
@@ -135,7 +199,19 @@ def dataset_tree(did: str):
         return None
 
     ap = ent.get("artifact_path")
-    is_directory = bool(ap) and Path(ap).is_dir()
+    # For a remote / by-reference home the controller holds no bytes, so a local
+    # `Path(ap).is_dir()` is always False and would lie about shape. Derive it from
+    # the captured descriptor instead (n_files > 1 → directory).
+    md = ent.get("metadata") or {}
+    home_site = (md.get("home") or {}).get("site")
+    if md.get("by_reference") or (home_site and home_site != "local"):
+        desc = md.get("descriptor") or {}
+        fp = md.get("fingerprint") or {}
+        n_files = (desc.get("n_files") or fp.get("n_files")
+                   or len(desc.get("top") or fp.get("top") or []))
+        is_directory = (n_files or 0) > 1
+    else:
+        is_directory = bool(ap) and Path(ap).is_dir()
 
     node = _find(tree)
     if node is None:

@@ -83,6 +83,11 @@ if [ -n "${ABA_SIF:-}" ]; then
   # /cluster/aba, add a --bind for it here.)
   binds=( --bind "${PWD}/dist" )
   [ -d /groups ] && binds+=( --bind /groups )
+  # /dev/fuse: --containall does NOT expose it, but weft needs it to MOUNT published squashfs
+  # env packs read-only (its squashfs_mode probe checks `-e /dev/fuse`). Without it — even with
+  # squashfuse/mksquashfs baked in the image — weft falls back to realizing each pack from its
+  # lockfile PER USER (slow, unshared). Bind the host node's device in (it's world-rw).
+  [ -e /dev/fuse ] && binds+=( --bind /dev/fuse )
   # The share root (site.yaml, image, skeleton, institution bundle + its refs tier).
   # Derived, not hardcoded: a site may root the deployment anywhere its nodes can read.
   _share="${ABA_SHARE:-$(dirname "${ABA_SITE_CONFIG:-/cluster/aba/site.yaml}")}"
@@ -103,6 +108,26 @@ if [ -n "${ABA_SIF:-}" ]; then
   [ -n "${ABA_BASE_DIR:-}" ] && binds+=( --bind "${ABA_BASE_DIR}:/opt/aba-venv" )
   [ -n "${ABA_TOOLS_DIR:-}" ] && [ -d "${ABA_TOOLS_DIR}" ] && binds+=( --bind "${ABA_TOOLS_DIR}:/opt/aba-envs/tools" )
   envs=( --env "ABA_FRONTEND_DIST=${PWD}/dist" --env "ABA_PORT=${port}" )
+  # In-session pip/uv (weft session_install) unpack wheels under $TMPDIR. Under
+  # --containall /tmp is a small (~64MB) in-memory tmpfs, so a scientific-scale add
+  # (pyarrow, polars, torch, scipy) ENOSPCs mid-unpack and surfaces as a confusing
+  # env.solve_conflict "No space left on device". Prefer NODE-LOCAL job scratch
+  # ($SLURM_TMPDIR: fast local disk, purged by Slurm at job end); fall back to a
+  # PER-SESSION dir under the user's runtime tree (real disk via the /groups bind —
+  # parallel-FS, so slower for many-small-file unpacks, and not auto-purged: it is
+  # removed by shutdown() below — the single EXIT handler — so debris can't accrue
+  # against quota across sessions. (A standalone `trap 'rm -rf' EXIT` here would be
+  # silently replaced by the later `trap shutdown … EXIT`, which is why cleanup lives
+  # in shutdown() instead.) The tmpfs /tmp stays for sockets/small files. weft's
+  # LocalAdapter inherits this env when it shells out.
+  if [ -n "${SLURM_TMPDIR:-}" ] && [ -d "${SLURM_TMPDIR}" ]; then
+    _sess_tmp="${SLURM_TMPDIR}"                       # node-local; Slurm purges it
+  else
+    _sess_tmp="${ABA_RUNTIME_DIR}/tmp/session-${SLURM_JOB_ID:-$$}"
+    mkdir -p "$_sess_tmp"
+    _sess_tmp_cleanup="$_sess_tmp"                    # only WE made it → shutdown() rm -rf's it
+  fi
+  envs+=( --env "TMPDIR=${_sess_tmp}" )
   # ABA_SIF + ABA_JOB_WRAP: forwarded so the containerized backend's slurm_submitter
   # can wrap offloaded env-jobs by RE-ENTERING this image (apptainer exec) under a fat
   # deployment (ABA_JOB_WRAP=sif). Unset/bare (slim) → offloaded jobs run bare, as before.
@@ -210,6 +235,9 @@ shutdown() {
   killtree "$UV" TERM
   for _ in $(seq 1 8); do kill -0 "$UV" 2>/dev/null || break; sleep 1; done
   killtree "$UV" KILL
+  # remove the per-session parallel-FS TMPDIR fallback (never $SLURM_TMPDIR — Slurm
+  # owns that). Set only when we created it; the single EXIT trap makes this reliable.
+  [ -n "${_sess_tmp_cleanup:-}" ] && rm -rf "${_sess_tmp_cleanup}"
 }
 trap shutdown TERM INT EXIT
 wait "$UV"

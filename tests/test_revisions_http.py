@@ -24,6 +24,7 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 from core.graph._schema import init_db                  # noqa: E402
 from core.graph import entities, exec_records, edges    # noqa: E402
+from _substrate_gate import skip_without_substrate  # tests/ is on sys.path (pytest prepend + standalone)
 
 _failures: list[str] = []
 
@@ -32,6 +33,8 @@ def check(label, cond, detail=""):
     print(f"  [{'PASS' if cond else 'FAIL'}] {label}" + (f" — {detail}" if detail else ""))
     if not cond:
         _failures.append(label)
+        raise AssertionError(  # armed: pytest sees check() failures
+            f"{label}" + (f" — {detail}" if detail else ""))
 
 
 def _mount_app():
@@ -83,6 +86,8 @@ def test_revisions_unknown_id_404():
 
 
 def test_revisions_single_entity():
+    if skip_without_substrate():
+        return
     print("\n[2] GET /revisions on a fresh figure → chain of 1")
     client = _mount_app()
     fig_id = _make_seed_figure(thread_id="thr_http_a")
@@ -99,6 +104,8 @@ def test_revisions_single_entity():
 
 
 def test_make_revision_then_revisions():
+    if skip_without_substrate():
+        return
     print("\n[3] POST /make_revision → GET /revisions returns chain of 2")
     client = _mount_app()
     fig_id = _make_seed_figure(thread_id="thr_http_b")
@@ -133,6 +140,8 @@ def test_make_revision_then_revisions():
 
 
 def test_make_revision_400_on_bad_inputs():
+    if skip_without_substrate():
+        return
     print("\n[4] /make_revision returns 400 on empty code")
     client = _mount_app()
     fig_id = _make_seed_figure(thread_id="thr_http_c")
@@ -151,6 +160,8 @@ def test_make_revision_400_on_bad_inputs():
 
 
 def test_reproduce():
+    if skip_without_substrate():
+        return
     print("\n[5] POST /reproduce returns reproduction summary")
     client = _mount_app()
     fig_id = _make_seed_figure(thread_id="thr_http_d")

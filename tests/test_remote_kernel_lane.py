@@ -40,9 +40,18 @@ _failures: list[str] = []
 
 
 def check(label, cond, detail=""):
+    """Assert, loudly, on BOTH runners.
+
+    This used to only append to `_failures` — a list read exclusively by the
+    standalone `_run()` at the bottom of this file. Under pytest (how the guard
+    script actually executes this file) a failing check printed "FAIL" and the
+    test still PASSED, so every guard here was vacuous: a deliberately false
+    check was verified to report `1 passed`. Raising satisfies both runners —
+    `_run()` already catches per-test exceptions and counts them."""
     print(f"  [{'PASS' if cond else 'FAIL'}] {label}" + (f" — {detail}" if detail and not cond else ""))
     if not cond:
         _failures.append(label)
+        raise AssertionError(f"{label}" + (f" — {detail}" if detail else ""))
 
 
 class FakeWeft:
@@ -52,12 +61,30 @@ class FakeWeft:
         self.kernel_starts: list[dict] = []
         self.execs: list[str] = []
         self.sandbox: dict[str, bytes] = {}     # rel -> content
+        self.mtimes: dict[str, float] = {}      # rel -> its OWN mtime
+        # (a single global mtime made every entry look modified on every
+        #  poll — the harvest diff then had nothing to diff)
         self._mtime = 100.0
         self.fail_start = False
         self.walltime_cap = None      # slurm-style cap, e.g. "1:00:00"
         self.partitions_hint = None   # override the violation's partition list
         self._block = 0
         self._block_out: dict[int, str] = {}
+
+    # A REAL weft kernel jobdir is never empty: the driver's own machinery is
+    # there from the moment it starts, in the SAME directory a block's bare
+    # relative writes land in. The fake used to start with an empty sandbox, so
+    # aba's harvest filter was never once exercised against a real listing —
+    # which is how `current_block` (a 3-byte heartbeat) shipped as a Run's only
+    # recorded output. This is the verbatim listing from the live incident.
+    _MACHINERY = ("activate.sh", "blocks", "cmd.sh", "current_block", "log",
+                  "node", "pid", "pid.epoch", "pid.real", "runner.sh", "rusage")
+
+    def _seed_machinery(self, lang: str) -> None:
+        for rel in (*self._MACHINERY, "driver.R" if lang == "r" else "driver.py",
+                    "blocks/0000.code"):
+            self.sandbox.setdefault(rel, b"x")
+            self.mtimes.setdefault(rel, 100.0)
 
     def sync_call(self, name, *a, **kw):
         if name == "kernel_start":
@@ -80,18 +107,47 @@ class FakeWeft:
                                  "max_walltime": self.walltime_cap},
                                 {"name": "short", "max_walltime": "1:00"}]}})
             self.kernel_starts.append({"site": a[0], "lang": a[1], **kw})
+            self._seed_machinery(a[1])
             return {"kernel_id": "krn_test1"}
         if name == "kernel_exec":
             self.execs.append(a[1])
+            # FIDELITY: a real weft kernel's block protocol reads/writes
+            # `blocks/NNNN.*` RELATIVE to its cwd, so a chdir orphans the
+            # protocol and the process dies on its next write
+            # (`writeLines -> file(con, "w") : cannot open the connection`,
+            # exit 1). The fake used to accept any code and answer "ok", which
+            # BLESSED exactly that bug: a remote kernel was sent
+            # `setwd(<controller path>)` and every assertion still passed while
+            # real kernels died in a loop on mendel. Model the constraint, so
+            # the class of bug cannot pass here again.
+            _code = a[1] or ""
+            if ("setwd(" in _code or "_os.chdir(" in _code
+                    or "os.chdir(" in _code):
+                raise AssertionError(
+                    "a weft kernel was told to chdir — this kills the real "
+                    f"kernel's block protocol; code was: {_code[:120]!r}")
             self._block += 1
+            # the driver rewrites its heartbeat on every block (driver.py:112)
+            self._mtime += 1
+            self.sandbox["current_block"] = str(self._block).encode()
+            self.mtimes["current_block"] = self._mtime
             # "run" the code: a marker line as output; a code containing
-            # WRITE:<name>:<size> drops a sandbox file
-            out = f"ok block {self._block}"
+            # WRITE:<name>:<size> drops a sandbox file, and a bare SILENT line
+            # makes the block produce NO stdout at all.
+            # SILENT exists because a real block often prints nothing — it only
+            # assigned, or its last value was invisible/None — and this fake
+            # answered "ok block N" unconditionally, so the empty-stdout lane
+            # was never once reachable here. That is the lane the silent-block
+            # note speaks for, which is how the note's claim about the driver
+            # drifted out of date with CI green.
+            out = "" if any(l.strip() == "SILENT" for l in a[1].splitlines()) \
+                else f"ok block {self._block}"
             for line in a[1].splitlines():
                 if line.startswith("WRITE:"):
                     _, rel, size = line.split(":")
-                    self.sandbox[rel] = b"x" * int(size)
                     self._mtime += 1
+                    self.sandbox[rel] = b"x" * int(size)
+                    self.mtimes[rel] = self._mtime
             self._block_out[self._block] = out
             return {"block": self._block}
         if name == "kernel_peek":
@@ -106,7 +162,8 @@ class FakeWeft:
         if name == "kernel_stop":
             return {}
         if name == "run_inventory":
-            return {"entries": [{"path": rel, "bytes": len(b), "mtime": self._mtime}
+            return {"entries": [{"path": rel, "bytes": len(b),
+                                 "mtime": self.mtimes.get(rel, 100.0)}
                                 for rel, b in self.sandbox.items()], "live": True}
         if name == "run_file_stat":
             rel = a[1]
@@ -208,6 +265,37 @@ def test_run_remote_kernel_state_persists_and_fetches():
         fetched += [os.path.join(root, f) for f in fns if f == "result.txt"]
     check("new sandbox file fetched over the data plane", len(fetched) >= 1,
           str(fetched))
+
+
+def test_directory_store_not_fetched_piecemeal_kept_whole():
+    """A directory-shaped store (a `.zarr` chunk tree) must NOT be brought back
+    file-by-file into the per-turn scratch dir: the per-file cap drops its
+    lexicographically-last root metadata file and a per-turn delta dir
+    never re-lands a root written earlier, so the copy would have subtrees but
+    no root — and that incomplete copy shadows the resolver's correct
+    whole-store bring-back. It must be SKIPPED here (kept-addressable) while a
+    plain sibling file is still fetched (live 2026-07-21, BRINGBACK-DROPS)."""
+    ctx = {"thread_id": "thrZ"}
+    code = ("WRITE:out/m.zarr/c/0/0:128\n"
+            "WRITE:out/m.zarr/c/0/1:128\n"
+            "WRITE:out/m.zarr/zarr.json:64\n"       # sorts LAST — the dropped root
+            "WRITE:plain.csv:32\nprint('ok')")
+    r = rex._run_remote_kernel({"code": code}, ctx, _PID, "thrZ", "mendel")
+    assert r is not None and r.get("returncode") == 0, str(r)[:200]
+    # no store member landed on disk anywhere under the runtime tree
+    store_files = []
+    plain_files = []
+    for root, _d, fns in os.walk(_TMP):
+        for f in fns:
+            p = os.path.join(root, f)
+            if ".zarr" in p and "thrZ" in p.replace(_TMP, ""):
+                store_files.append(p)
+            if f == "plain.csv":
+                plain_files.append(p)
+    assert store_files == [], f"store members were fetched piecemeal: {store_files}"
+    assert plain_files, "the plain sibling file should still be fetched for harvest"
+    # the store is surfaced as staying on the site (brought back whole on open)
+    assert "out/m.zarr" in (r.get("note") or ""), (r or {}).get("note", "")[:300]
 
 
 def test_oversized_output_stays_remote_but_is_reported():
@@ -353,6 +441,60 @@ def test_snapshot_platform_mismatch_relocks_base_pack():
             base_env.ensure_platform = orig_plat
 
 
+def test_layer_conflict_cross_platform_relocks_named_env():
+    """F-ENV-2 (found live): an EXTENDED named env fails to realize on a
+    DIFFERENT-platform site with env.layer_conflict (the delta was solved
+    against the controller-platform parent) — the kernel lane must treat that
+    like a platform mismatch and re-lock via ensure_platform (which re-solves
+    base + layers for the site's platform), not fall back to one-shot."""
+    import core.compute.named_envs as ne
+    from core.compute.errors import ComputeError
+    calls = []
+    orig_resolve, orig_ready = ne.resolve, ne.ensure_ready
+    orig_plat = getattr(ne, "ensure_platform", None)
+
+    def fake_ready(eid, **k):
+        calls.append(("ready", eid))
+        if eid == "env_chain_osx":
+            raise ComputeError(
+                "env.layer_conflict",
+                "the delta does not fit on this parent without moving base "
+                "package versions", stage="solve")
+
+    ne.resolve = lambda pid, name: ({"env_id": "env_chain_osx",
+                                     "language": "python"}
+                                    if name == "chained" else None)
+    ne.ensure_ready = fake_ready
+    ne.ensure_platform = lambda pid, name, plat: (
+        calls.append(("relock", name, plat)) or {"env_id": "env_chain_linux"})
+
+    # the fixture site reports a linux capability set (cross-platform vs the
+    # darwin controller this test runs on)
+    orig_sync = FAKE.sync_call
+
+    def sync_with_describe(nm, *a, **kw):
+        if nm == "sites_describe":
+            return {"capabilities": {"os": "linux", "arch": "aarch64"}}
+        return orig_sync(nm, *a, **kw)
+
+    FAKE.sync_call = sync_with_describe
+    try:
+        pool = poolm.KernelPool()
+        s = pool.get_or_start("thr_layer@hpc", "python", cwd=_TMP,
+                              env_name="chained", site="hpc")
+        check("layer_conflict on a cross-platform site triggered the re-lock",
+              ("relock", "chained", "linux-aarch64") in calls, str(calls))
+        check("session started on the RE-LOCKED env id",
+              FAKE.kernel_starts[-1].get("env_id") == "env_chain_linux",
+              str(FAKE.kernel_starts[-1]))
+        s.shutdown()
+    finally:
+        FAKE.sync_call = orig_sync
+        ne.resolve, ne.ensure_ready = orig_resolve, orig_ready
+        if orig_plat is not None:
+            ne.ensure_platform = orig_plat
+
+
 def test_walltime_clamped_to_partition_cap():
     """Capped partitions (PartitionTimeLimit fence): kernel_start refusing
     the default 8h ask must trigger ONE retry clamped to the roomiest
@@ -425,11 +567,235 @@ def test_walltime_explicit_default_flag_wins():
         FAKE.partitions_hint = None
 
 
+def test_remote_kernel_r_lang_starts_an_r_session():
+    """Parity: _run_remote_kernel(lang='r') stands up a PERSISTENT R session
+    on the site (the pool/setup are language-generic; only the run_r dispatch
+    used to skip this lane, forcing fresh-process-per-call — the shape that
+    drove cwd-escapes)."""
+    starts0 = len(FAKE.kernel_starts)
+    r = rex._run_remote_kernel({"code": "y <- 1"}, {"thread_id": "thrR"},
+                               _PID, "thrR", "mendel", lang="r")
+    assert r is not None and r.get("returncode") == 0, str(r)[:200]
+    st = FAKE.kernel_starts[starts0]
+    assert st["lang"] == "r", f"kernel must start as R: {st}"
+    assert st["site"] == "mendel"
+    assert r["execution_mode"] == "remote-session"
+    assert "run_r(site=" in r["note"], r["note"]
+
+
+def test_run_r_sync_site_prefers_the_persistent_kernel(monkeypatch):
+    """Dispatch wiring: run_r with site= and no background enters the
+    persistent-kernel lane (lang='r'), NOT the fresh-process sync lane."""
+    seen = {}
+
+    def _rk(*a, **k):
+        seen["kernel"] = (a, k)
+        return {"status": "ok", "execution_mode": "remote-session"}
+
+    def _rs(*a, **k):
+        seen["sync"] = True
+        return {"status": "ok"}
+    monkeypatch.setattr(rex, "_run_remote_kernel", _rk)
+    monkeypatch.setattr(rex, "_run_remote_sync", _rs)
+    out = rex.run_r({"code": "z <- 2", "site": "mendel"},
+                    {"thread_id": "thrRD"})
+    assert out.get("execution_mode") == "remote-session"
+    assert "kernel" in seen and "sync" not in seen, seen
+    assert seen["kernel"][1].get("lang") == "r", seen["kernel"]
+
+
+def test_run_r_sync_site_falls_back_to_one_shot_when_kernel_declines(monkeypatch):
+    """Same fallback contract as run_python: a kernel that can't start drops
+    to the fresh-process sync lane — never to local."""
+    seen = {}
+
+    def _rs(*a, **k):
+        seen["sync_lang"] = a[-1]
+        return {"status": "ok", "execution_mode": "remote-sync"}
+    monkeypatch.setattr(rex, "_run_remote_kernel", lambda *a, **k: None)
+    monkeypatch.setattr(rex, "_run_remote_sync", _rs)
+    out = rex.run_r({"code": "z <- 2", "site": "mendel"},
+                    {"thread_id": "thrRF"})
+    assert out.get("execution_mode") == "remote-sync"
+    assert seen.get("sync_lang") == "run_r", seen
+
+
+def test_run_r_catalog_exposes_and_forwards_fresh():
+    """Docs-vs-contract guard: the run_r catalog surface advertises a clean
+    one-shot process (fresh=true), so it MUST both EXPOSE a `fresh` param and
+    FORWARD it into the impl input — mirroring run_python, whose signature and
+    _impl({...}) dict already carry it. Armed for the mismatch where the
+    docstring promised fresh but the signature/forwarding dropped it: red if the
+    param is removed OR the forwarding is removed."""
+    import inspect
+    from mcp.server.fastmcp import FastMCP
+    from content.bio.mcp_servers.aba_core.tools.run_exec import (
+        register_run_exec_tools)
+    import content.bio.tools as bt
+
+    mcp = FastMCP("aba_core")
+    register_run_exec_tools(mcp)
+    mgr = getattr(mcp, "_tool_manager", None) or getattr(mcp, "_tools", None)
+    tools = mgr._tools if hasattr(mgr, "_tools") else mgr
+    fn = tools["run_r"].fn
+
+    # 1) SIGNATURE exposes `fresh` (defaulting False, plain like run_python) —
+    #    fails if the param is dropped from run_r's signature.
+    sig = inspect.signature(fn)
+    assert "fresh" in sig.parameters, \
+        f"run_r catalog signature omits `fresh`: {list(sig.parameters)}"
+    assert sig.parameters["fresh"].default is False, \
+        f"`fresh` should default False like run_python: {sig.parameters['fresh']}"
+
+    # 2) FORWARDING: calling run_r(fresh=True) must reach the impl input as
+    #    fresh=True — fails if the _impl({...}) dict drops "fresh".
+    seen: dict = {}
+    orig = bt.run_r
+    bt.run_r = lambda input_, ctx=None: (seen.update(input_), {"status": "ok"})[1]
+    try:
+        fn(code="z <- 1", fresh=True)
+    finally:
+        bt.run_r = orig
+    assert seen.get("fresh") is True, \
+        f"run_r did not forward fresh into the impl input: fresh={seen.get('fresh')!r}"
+
+
+def test_fresh_remote_kernel_gets_orientation_and_an_honest_note():
+    """A brand-new REMOTE kernel must render the workspace-orientation preamble
+    and must NOT claim variables persist from before it existed.
+
+    Live friction (2026-07-26): only the two LOCAL lanes called
+    _ensure_kernel_cwd, so a remote kernel born mid-turn produced a bare
+    "object not found" while the note said "variables persist" — the agent hunted
+    a variable that had never existed. ARMED: asserts the FRESH sentinel was
+    actually set (a run where the kernel was already warm proves nothing), and
+    the second call pins the other side — no repeated banner, persistence note
+    restored."""
+    ctx = {"thread_id": "thrFRESH"}
+    r1 = rex._run_remote_kernel({"code": "b = 1"}, ctx, _PID, "thrFRESH", "mendel")
+    check("fresh remote call ok", r1 is not None and r1.get("returncode") == 0,
+          str(r1)[:200])
+    note1 = r1.get("note") or ""
+    check("fresh remote kernel says state started HERE",
+          "NEW persistent session" in note1 and "nothing was in memory" in note1,
+          note1[:200])
+    check("fresh note does not claim backwards persistence",
+          "— variables persist" not in note1, note1[:200])
+    # THE load-bearing assertion, and the one originally missing: the point of
+    # calling _ensure_kernel_cwd here is to fire the banner WITHOUT chdir'ing.
+    # The first version asserted only the banner — which the buggy code produced
+    # too, via the chdir branch — so the test verified the OUTPUT while the
+    # FORBIDDEN ACTION went unchecked, and remote kernels died in production.
+    check("no chdir was ever sent to the remote kernel",
+          not any(("setwd(" in c or "chdir(" in c) for c in FAKE.execs),
+          f"execs={[c[:60] for c in FAKE.execs]}")
+    check("orientation preamble rendered on the fresh remote kernel",
+          "Fresh kernel" in (r1.get("stdout") or "")
+          or "orientation" in (r1.get("stdout") or "").lower(),
+          (r1.get("stdout") or "")[:300])
+
+    # second call on the SAME kernel: warm — banner gone, persistence honest
+    r2 = rex._run_remote_kernel({"code": "b + 1"}, ctx, _PID, "thrFRESH", "mendel")
+    note2 = r2.get("note") or ""
+    check("warm remote kernel keeps the persistence note",
+          "variables persist" in note2 and "NEW persistent session" not in note2,
+          note2[:200])
+    check("orientation banner does not repeat on a warm kernel",
+          "Fresh kernel" not in (r2.get("stdout") or ""),
+          (r2.get("stdout") or "")[:200])
+
+
+def test_silent_block_note_makes_no_claim_about_driver_echo():
+    """A silent rc=0 block is called out — WITHOUT describing how the driver
+    treats a bare top-level expression.
+
+    This note has been wrong twice, in opposite directions, because it restates
+    substrate behaviour from memory instead of relaying it. First it accused
+    weft of a stdout CAPTURE RACE and told the agent to write results to a file
+    (three remote round trips for one directory listing). The replacement swung
+    to "the kernel does not echo a bare top-level expression the way a console
+    or notebook cell does" — true when written, false one weft commit later:
+    01fb968 compiles the last Expr in `single` mode through sys.displayhook
+    (python) and uses withVisible + print (R), so bare expressions DO echo.
+    Neither wording had a test, so both shipped and the second went stale with
+    CI green.
+
+    The load-bearing assertions are therefore NEGATIVE (failure mode (a): the
+    forbidden ACTION, not the output). What the note may say is what is true of
+    any driver — the block ran, it printed nothing — plus the escape hatch,
+    which is the only part that has been right the whole time. Anything that
+    names the substrate's display semantics belongs in weft, which is the only
+    layer that can know them; ABA's other substrate-facing text already relays
+    rather than restates (discovery.py: "keys SOLELY on the substrate's typed
+    discrimination")."""
+    ctx = {"thread_id": "thrSILENT"}
+    r = rex._run_remote_kernel({"code": "SILENT\nb = 1"}, ctx, _PID,
+                               "thrSILENT", "mendel")
+    check("silent block still succeeded", r is not None and r.get("returncode") == 0,
+          str(r)[:200])
+    note = r.get("note") or ""
+    # ARMED: if the note never fired, every assertion below is vacuous.
+    check("the silent-block note actually fired", "no stdout" in note, note[:300])
+    for stale in ("does not echo", "bare top-level expression",
+                  "capture race", "capture issue", "notebook cell"):
+        check(f"note makes no substrate-display claim: {stale!r}",
+              stale not in note, note[:400])
+    check("escape hatch for a genuine capture fault survives",
+          "capture fault" in note, note[:400])
+    # WIDE — the R lane renders the same note from the same branch.
+    r_r = rex._run_remote_kernel({"code": "SILENT\nb <- 1"}, ctx, _PID,
+                                 "thrSILENT", "mendel", lang="r")
+    note_r = r_r.get("note") or ""
+    check("R lane note fired too", "no stdout" in note_r, note_r[:300])
+    for stale in ("does not echo", "bare top-level expression", "notebook cell"):
+        check(f"R note makes no substrate-display claim: {stale!r}",
+              stale not in note_r, note_r[:400])
+
+
+def test_driver_machinery_never_harvested_from_a_real_jobdir():
+    """END TO END over a REALISTIC sandbox: the kernel jobdir carries the
+    driver's own machinery (activate.sh, current_block, pid, log, …) in the same
+    directory a block's bare relative writes land in, and the heartbeat's mtime
+    changes on EVERY block. So the harvest diff sees it as new/changed every
+    time and must filter it.
+
+    ARMED on the heartbeat specifically: `current_block` is rewritten per block
+    (the fake mirrors driver.py:112), so this cannot pass by the file simply not
+    changing. Live consequence of the missing filter: an ssh timeout left one
+    behind and it became a Run card's ONLY recorded output."""
+    ctx = {"thread_id": "thrMACH"}
+    out = rex._run_remote_kernel({"code": "WRITE:real_output.csv:32\nprint(1)"},
+                                 ctx, _PID, "thrMACH", "mendel")
+    check("block ran", out is not None and out.get("returncode") == 0, str(out)[:160])
+    # harvest classifies by kind: png→plots, csv→tables, other→files. Check the
+    # union, or a filter bug can hide behind the wrong bucket.
+    o = out or {}
+    names = [f.get("original_name") or f.get("name")
+             for f in (o.get("files") or []) + (o.get("tables") or [])
+             + (o.get("plots") or [])]
+    check("the REAL output is harvested", "real_output.csv" in names, str(names))
+    for junk in ("current_block", "activate.sh", "pid", "log", "runner.sh",
+                 "rusage", "driver.R", "cmd.sh", "node"):
+        check(f"driver machinery {junk!r} is NOT an output", junk not in names,
+              str(names))
+
+
 def _run():
+    import inspect
     import traceback
     fails = 0
     for name, fn in sorted(globals().items()):
         if not (name.startswith("test_") and callable(fn)):
+            continue
+        # Tests that take a pytest fixture (monkeypatch) cannot run here — this
+        # runner has no fixture machinery, and calling them bare raised a
+        # TypeError that counted as a real failure. They are covered by the
+        # pytest run (the guard suite's execution mode); say so rather than
+        # reporting a fake failure or silently skipping.
+        needs = [p for p in inspect.signature(fn).parameters
+                 if p in ("monkeypatch", "tmp_path", "capsys")]
+        if needs:
+            print(f"  [SKIP] {name} — pytest-only (needs {', '.join(needs)})")
             continue
         try:
             fn()

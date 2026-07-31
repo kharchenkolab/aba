@@ -59,6 +59,8 @@ def check(label, cond, detail=""):
           + (f" — {detail}" if (detail and not cond) else ""))
     if not cond:
         _failures.append(label)
+        raise AssertionError(  # armed: pytest sees check() failures
+            f"{label}" + (f" — {detail}" if detail else ""))
 
 
 class FakeSess:
@@ -203,3 +205,79 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def test_r_banner_marks_the_tool_namespace_boundary():
+    """Live thr_ee54c469 (2026-07-23): the R kernel banner advertised
+    `ensure_capability(name)` in bare call syntax while the agent was
+    composing R — it inlined it into the R cell (rc=1). The two namespaces
+    collide exactly there: in the R lane the banner must NAME the boundary
+    (it is a platform tool, never an R function); bare `tool(name)` syntax
+    with no marker is forbidden in the R banner."""
+    import inspect
+    from content.bio.tools import run_exec
+    src = inspect.getsource(run_exec)
+    # find the R-lane banner line mentioning ensure_capability
+    banner = next((ln for ln in src.splitlines()
+                   if "ensure_capability" in ln and "Need a" in ln), "")
+    assert banner, "the R capability banner is gone — update this guard"
+    assert "tool" in banner.lower(), (
+        f"the R banner does not name the tool boundary: {banner!r}")
+    assert "ensure_capability(name)" not in banner, (
+        "bare call syntax in the R banner reads as an R function")
+    assert "not" in banner.lower() and "R" in banner, (
+        f"the banner must say it is NOT callable from R code: {banner!r}")
+
+
+def test_cwd_banner_states_ephemerality_and_the_keep_lane():
+    """Live x4: agents wrote 'kept' files into the sandbox and durably kept
+    nothing (or minted a Dataset for a scratch file). The nudge belongs at
+    the moment of writing — the cwd line — and must route to the RETENTION
+    lane, naming the dataset boundary."""
+    import inspect
+    from content.bio.tools import run_exec
+    src = inspect.getsource(run_exec)
+    ln = next((l for l in src.splitlines() if '"cwd: ' in l or "f\"cwd: " in l), "")
+    blk = src[src.index("cwd: {cwd}"):src.index("cwd: {cwd}") + 500]
+    assert "EPHEMERAL" in blk and "keep_outputs" in blk, blk[:200]
+    assert "register_dataset is only" in blk, (
+        "the dataset boundary must be stated, or keeps mint Datasets again")
+
+
+def test_remote_kernel_banner_says_where_to_write():
+    """The guidance a remote kernel never got.
+
+    Live (thr_a1f7f687): a long analysis wrote every output to a hand-picked
+    absolute dir on the site, so NOTHING was harvested — the Run card recorded
+    zero produced outputs, view_artifact refused all five figures, and every
+    viewer link needed a manual register_dataset. The banner had listed remote
+    dataset paths (which the agent imitated) plus CONTROLLER-local scratch dirs
+    that do not exist on the site, and said nothing about outputs at all:
+    zero occurrences of 'output', 'sandbox' or 'track'."""
+    from content.bio.tools.run_exec import _prior_run_files_preamble
+    out = _prior_run_files_preamble("p1", "t1", current_run_id=None,
+                                    fresh_kernel=True, remote_site="siteA")
+    low = out.lower()
+    assert "bare relative" in low, out
+    assert "sandbox" in low and "harvest" in low
+    assert "not tracked" in low
+    assert "register_dataset" in out and 'site="siteA"' in out
+    # controller-local scratch paths must NOT be advertised to a remote kernel
+    assert "shared-scratch" not in low
+
+
+def test_local_kernel_banner_is_unchanged():
+    """CEILING: a local session's outputs already land where the harvester
+    reads, so it must not get the remote write-guidance."""
+    from content.bio.tools.run_exec import _prior_run_files_preamble
+    out = _prior_run_files_preamble("p1", "t1", current_run_id=None,
+                                    fresh_kernel=True, remote_site=None)
+    assert "bare relative" not in out.lower()
+    assert "register_dataset" not in out
+
+
+def test_remote_site_helper_only_fires_for_remote():
+    from content.bio.tools.run_exec import _remote_site_of
+    assert _remote_site_of(type("S", (), {"site": "mendel"})()) == "mendel"
+    assert _remote_site_of(type("S", (), {"site": "local"})()) is None
+    assert _remote_site_of(type("S", (), {})()) is None

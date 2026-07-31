@@ -37,6 +37,14 @@ spec:
                               # (r_bio ships r-irkernel for the same reason).
       - "numpy <2.5"          # numba (via scanpy/scvi) needs numpy<2.5
       - pandas
+      - pyarrow               # pandas' parquet ENGINE. pandas alone raises
+                              # "Unable to find a usable engine" on read_parquet
+                              # /to_parquet, and parquet is what an agent reaches
+                              # for to hand a table between languages or to a
+                              # background job. Live 2026-07-27 (orbtest): three
+                              # consecutive failures — two kernel blocks and a
+                              # job — before the agent fell back to CSV. Having
+                              # pandas without an engine is a trap, not a saving.
       - scipy
       - matplotlib-base
       - scikit-learn

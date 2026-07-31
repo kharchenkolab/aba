@@ -9,7 +9,7 @@ provisioning layer with layered libraries via `.libPaths()`:
     install.packages / BiocManager / remotes) into a project-scoped library
     that stacks ahead of the base.
 
-The persistent IRkernel (kernels/jupyter.py) runs the same conda tools-env R,
+The persistent R kernel (the weft transport, kernels/weft.py) runs the same R,
 with the project lib prepended to `.libPaths()`. Decision policy is mechanical:
 in the library path → use it; else → project-native install. The shared base is
 never mutated per request (curation only).

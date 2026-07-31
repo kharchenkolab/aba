@@ -657,8 +657,14 @@ _BLOCKS: tuple[_Block, ...] = (
     # needed. Highlighting still renders on focused-figure turns below.
     _Block("behavior",     None,                   None,             _behavior_block),
     _Block("promotion",    frozenset({"primary"}), None,             _rule("promotion.md")),
+    # dynamic=True is a CACHING requirement, not a style choice: the gate is
+    # per-TURN state (focus/highlight), so rendering this into the stable block
+    # would change the cached system prefix on every focus flip and re-bill the
+    # whole conversation (the sidebar bug class — see core.llm.place_volatile_tail).
+    # Per-turn-gated blocks must ride the dynamic tail; only deployment-constant
+    # gates (config, tool set) may sit in stable.
     _Block("highlighting", frozenset({"primary"}), None,             _rule("highlighting.md"),
-           gate=_highlight_relevant),
+           dynamic=True, gate=_highlight_relevant),
     _Block("conventions",  None,                   None,             _conventions),
     # Figure-style directive — clean layout, one panel by default, ggplot2 in R,
     # alpha-blending on dense scatters. Primary only (advisors don't draw figures).

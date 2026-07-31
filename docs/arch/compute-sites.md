@@ -135,7 +135,17 @@ in exactly one of safe / at_risk / changed / unknown) and `site_holdings(site)`
 the `data_safety_summary` Guide tool, the LedgerStrip (Data/Results heads,
 self-quieting), the ComputeTab consequence previews (Disconnect /
 durable-uncheck / Free up) and the 3-class storage meter. It renders from
-RECORDED state only — never probes sites. Tests: `tests/test_data_ledger.py`
+RECORDED state only — never probes sites, with ONE bounded exception: for a
+dataset registered on THIS machine (no recorded site) it stats its own
+`artifact_path` once. That is not a site probe or a fingerprint (no round trip,
+no hashing, no directory walk), and without it the ledger asserted "safe: bytes
+live in the workspace data folder" purely because an `artifact_path` existed as
+a STRING — so a dataset whose file had been deleted out of band kept reporting
+safe while its entity stayed active pointing at nothing. A remote home is never
+stat'ed (it would read as missing for every by-reference dataset), a recorded
+`source_missing`/`source_changed` stamp keeps precedence, and a stat ERROR
+resolves to present — the failure being closed is a false *safe*, and a false
+alarm is its own dishonesty. Tests: `tests/test_data_ledger.py`
 (incl. the local-only quiescence contract), `frontend .../LedgerStrip.test.tsx`
 (the UI snapshot half).
 

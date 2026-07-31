@@ -260,11 +260,29 @@ def _build_focus_trailer(focus_entity_id: str) -> str | None:
 # per turn), adjusted as we learn from real sessions.
 _PRIORITY_TOOLS: tuple[str, ...] = (
     "run_python", "run_r",
-    "Skill", "search_skills",
-    "present_plan", "ask_clarification",
-    "register_dataset", "list_data_files", "find_files",
-    "ensure_capability", "describe_tool",
+    "Skill",
+    "present_plan",
+    "register_dataset",
+    "ensure_capability",
+    # describe_tool demoted 2026-07-22 (budget: make_isolated_env grew a
+    # conda_packages param): the tool that RECOVERS full prose is the one
+    # whose own summary suffices — its name is its contract.
+    # search_skills demoted 2026-07-24 (budget: the <system-reminder>-is-
+    # ambient behavior rule landed in behavior_slim): a search box's name IS
+    # its contract, and its results carry their own teaching; Skill keeps
+    # full prose — invocation is the part small models get wrong.
+    # list_data_files + ask_clarification demoted 2026-07-25 (budget: the
+    # figures no-markdown-image rule grew figures.md — SECOND ceiling trip in
+    # two days at <60-token slack, so this pair buys ~185 tokens of headroom):
+    # a lister's name is its contract and its RESULT rows teach the shape
+    # better than prose; ask_clarification's summary keeps the when-to-use
+    # line, and plan_first.md carries the don't-interrupt discipline anyway.
 )
+# find_files rides summary-rendering: its full docstring is the catalog's
+# largest and list_data_files covers the common case; full prose stays one
+# describe_tool away. This set is the budget lever for the lean half-window
+# ceiling (tests/test_lean_summary_budget.py) — trim HERE, never the
+# tool_allowlist (full-surface parity is guarded).
 
 
 def _assemble_active_tools(tools_all: list, spec) -> list:
@@ -520,11 +538,12 @@ def _assemble_turn_history(*, user_text, attachments, focus_entity_id, store_tid
 def _build_system_prompt(prompts, active_tools, spec, guide_role, eff_intent,
                          prompt_ctx, sidebar_text, focus_text, thread_text):
     """Assemble the turn's system prompt (Item 2B). Returns (system, dynamic_sys):
-    `system` = project sidebar + focus + thread preambles + the pack's STABLE system
-    block (sent at the transport layer with cache_control: ephemeral); `dynamic_sys` =
-    the pack's per-turn tail (the BM25 recipes slice) plus the live compute-env line
-    (mode + node capacity + Slurm landscape). The two-block split (CC-convergence
-    Phase 4) keeps per-turn intent changes from invalidating the ~26K stable prefix."""
+    `system` = the pack's STABLE system block ALONE (sent at the transport layer with
+    cache_control: ephemeral); `dynamic_sys` = everything that varies per turn — the
+    project sidebar, focus + thread preambles, the pack's BM25 recipes slice and the
+    live compute-env line (mode + node capacity + Slurm landscape). The split is a
+    CACHING contract, not a formatting one: `system` must be byte-identical across
+    turns or the messages breakpoint misses too (see core.llm.place_volatile_tail)."""
     import time as _time
     _debug_timing = config.settings.debug_timing.get()
     _t0 = _time.perf_counter()
@@ -543,8 +562,20 @@ def _build_system_prompt(prompts, active_tools, spec, guide_role, eff_intent,
             dynamic_sys = (dynamic_sys + "\n\n" if dynamic_sys else "") + _cl
     except Exception:  # noqa: BLE001
         pass
-    system = sidebar_text + focus_text + thread_text + stable_sys
-    return system, dynamic_sys
+    # The project sidebar, focus preamble and thread preamble are per-turn STATE —
+    # the sidebar is by construction an "always-fresh snapshot" that moves the moment
+    # a dataset/run/figure is created. They used to be concatenated onto the FRONT of
+    # the cached system block, which made the "stable" prefix change on the very turns
+    # the session was productive; the cache prefix runs tools → system → messages, so
+    # each such change re-sent the whole conversation as fresh input. They ride the
+    # volatile tail now (delivered at the END of the prompt by place_volatile_tail),
+    # ahead of the recipe slice and compute-env line to keep their relative order.
+    volatile = sidebar_text + focus_text + thread_text
+    if volatile and dynamic_sys:
+        dynamic_sys = volatile + "\n\n" + dynamic_sys
+    else:
+        dynamic_sys = volatile + dynamic_sys
+    return stable_sys, dynamic_sys
 
 
 async def stream_response(
@@ -589,6 +620,27 @@ async def stream_response(
     # Wave 2 A.3: the content pack is the single seam to bio. Cache the
     # accessors per-turn — calling pack methods is cheap but the dict
     # lookup beats re-fetching.
+    # The turn's PROJECT, captured ONCE here and threaded into every tool ctx
+    # (thread_id already travels that way; project_id did not). Tools that read
+    # projects.current() instead were reading a value that a concurrent
+    # create_project / project switch can move MID-CALL: on 2026-07-27 a remote
+    # exec resolved its output dir under the right project at second 19 and
+    # wrote its index row into a different one at second 27, because another
+    # sweep created a project at second 25. Capturing at the turn boundary —
+    # before any tool runs, and inside the turn's own binding — makes every tool
+    # in the turn agree on one project no matter what the ambient does after.
+    from core import projects as _projects_turn
+    _turn_pid = _projects_turn.current()
+    # An UNBOUND turn is a defect condition, not a style issue: with no binding
+    # in this context every ambient read inside the turn resolves to the
+    # process-global, which any concurrent project switch moves. The turn still
+    # runs (it has _turn_pid), but the ~78 ambient reads deeper in do not, so say
+    # so once per turn rather than letting the drift show up as misfiled rows.
+    if _projects_turn._active_pid.get() is None and not _projects_turn._single():
+        print(f"[turn] WARNING no project binding in this context "
+              f"(project={_turn_pid} resolved from the process-global) — ambient "
+              f"reads inside this turn can drift if another project is touched",
+              flush=True)
     pack = active_pack()
     _prompts = pack.prompts()
     _tools_all = pack.tools()
@@ -774,6 +826,13 @@ async def stream_response(
                     (spec.summary_tail_keep    if spec else None),
                 )
             )
+            # Inflate recent-K image_refs into real vision blocks HERE —
+            # before the [llm-prep] hash and before any runtime — so all
+            # three lanes see one shape and the wire tripwire stays green
+            # (materializing later, per-runtime, would make prep/sent
+            # hashes differ on every image-bearing turn).
+            from content.bio.vision_refs import materialize_image_refs
+            llm_history = materialize_image_refs(llm_history)
             # Dump the EFFECTIVE context (post-Tier-1 prune + Tier-2
             # summary substitution) once per turn. Earlier code dumped
             # the raw `history` before this point, which silently
@@ -806,20 +865,20 @@ async def stream_response(
             # (cache_control breakpoints are stripped before hashing so they
             # don't cause spurious mismatches).
             try:
-                import hashlib as _h, json as _j
-                _canon = _j.dumps(
-                    [{"role": m["role"],
-                      "content": [{k: v for k, v in b.items() if k != "cache_control"}
-                                  if isinstance(b, dict) else b
-                                  for b in m["content"]] if isinstance(m["content"], list) else m["content"]}
-                     for m in llm_history],
-                    sort_keys=True, default=str,
-                ).encode("utf-8")
-                _hist_sha = _h.sha256(_canon).hexdigest()[:12]
+                import hashlib as _h
+                # SAME boundary as the send side: prep_wire_hash applies the
+                # api_messages transform before hashing. Hashing raw history
+                # here made every attachment-bearing or halt-shaped thread
+                # mismatch on every request — the tripwire sat red through
+                # normal operation and a real wire mutation was invisible.
+                from core.llm import prep_wire_hash
+                _hist_sha = prep_wire_hash(llm_history)
                 _sys_sha = _h.sha256((system or "").encode("utf-8")).hexdigest()[:12]
                 print(f"[llm-prep] run={turn.run_id} sys_sha={_sys_sha} "
                       f"hist_sha={_hist_sha} n_raw={len(history)} n_eff={len(llm_history)}",
                       flush=True)
+                from core.llm import _RECENT_PREP_SHAS
+                _RECENT_PREP_SHAS.append(_hist_sha)   # arms the wire tripwire
             except Exception:  # noqa: BLE001
                 pass
 
@@ -915,6 +974,18 @@ async def stream_response(
                         "plan_orientation_preamble", str(_pid), str(store_tid), default="")
                     _note = ("Plan shown to the user with Go/Adjust controls. "
                              "Wait for their decision before executing.")
+                    # Placement lint (location-surfacing census 2026-07-26):
+                    # registered data on a remote site + a plan that never
+                    # mentions that site → the ack says so, so execution can
+                    # follow the data even when the plan text didn't.
+                    try:
+                        from content.bio.data_location import plan_placement_note
+                        import json as _pl_json
+                        _pnote = plan_placement_note(_pl_json.dumps(plan.to_dict()))
+                    except Exception:  # noqa: BLE001 — advisory, never blocks
+                        _pnote = None
+                    if _pnote:
+                        _note += "\n\n" + _pnote
                     if _orient:
                         _note += ("\n\nWhen you resume, your first run_python runs in the "
                                   "new Run's working dir — use these canonical paths verbatim "
@@ -1015,8 +1086,8 @@ async def stream_response(
                     # job's frozen env — W3.4).
                     import functools as _ft
                     try:
-                        job = await asyncio.get_running_loop().run_in_executor(
-                            None, _ft.partial(
+                        job = await _projects.in_thread(
+                            _ft.partial(
                                 submit_python_job,
                                 code=tool_input.get("code", ""),
                                 title=tool_input.get("title") or "Background analysis",
@@ -1053,6 +1124,7 @@ async def stream_response(
                 tool_ctx = {**ctx,
                             "active_tools": active_tools,
                             "thread_id": store_tid,
+                            "project_id": _turn_pid,
                             "focus_entity_id": focus_entity_id,
                             "session_id": session_id,
                             "recipe_ctx": recipe_ctx,
@@ -1060,9 +1132,14 @@ async def stream_response(
                             "cancel_token": cancel_token}
                 import datetime as _dt
                 _t_start = _dt.datetime.now(_dt.timezone.utc)
-                _loop = asyncio.get_running_loop()
-                result_str = await _loop.run_in_executor(
-                    None, _exec_tool, name, tool_input, tool_ctx)
+                # projects.in_thread, NOT run_in_executor: the tool body writes
+                # exec records, harvests outputs and registers entities, and the
+                # bare executor hop drops the project binding — those writes then
+                # land in whatever project is the process-global. See
+                # projects.in_thread for the live incident.
+                from core import projects as _projects_mod
+                result_str = await _projects_mod.in_thread(
+                    _exec_tool, name, tool_input, tool_ctx)
                 _t_end = _dt.datetime.now(_dt.timezone.utc)
                 result_obj = json.loads(result_str)
                 # Telemetry record (best-effort; mirrors legacy path).
@@ -1322,14 +1399,19 @@ async def stream_response(
                         pass
                     yield sse(wire.tool_result(name=ev.tool_name, result=_envelope,
                                                tool_use_id=ev.tool_use_id))
-                    # Vision-blocks envelope (view_figure, etc.):
-                    # passthrough as the tool_result's `content`.
+                    # Vision-blocks envelope (view_figure, etc.): durable
+                    # history stores the REF, not the base64 payload — the
+                    # SSE above already delivered the full envelope to the
+                    # UI; the model gets the bytes via recent-K egress
+                    # materialization (content.bio.vision_refs).
                     if (isinstance(_envelope, dict)
                             and isinstance(_envelope.get("_vision_blocks"), list)):
+                        from content.bio.vision_refs import pack_tool_result_content
                         _tool_result_blocks.append({
                             "type": "tool_result",
                             "tool_use_id": ev.tool_use_id,
-                            "content": _envelope["_vision_blocks"],
+                            "content": pack_tool_result_content(_envelope)
+                            or _envelope["_vision_blocks"],
                         })
                     else:
                         _tool_result_blocks.append({

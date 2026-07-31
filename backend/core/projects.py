@@ -22,7 +22,7 @@ from pathlib import Path
 
 from core.graph import _schema as _schema_mod
 from core.graph._schema import init_db
-from core.graph.entities import update_entity
+from core.graph.entities import update_entity, get_entity
 
 # Per-project state is consolidated under PROJECTS_DIR/<pid>/ (data, work,
 # artifacts, project.db) — see core.config.project_root() and friends.
@@ -33,7 +33,23 @@ from core.config import PROJECTS_DIR, _LazyDir  # noqa: E402 — kept here so le
 # runtime swaps) is honored — these resolve PROJECTS_DIR live on every use.
 REGISTRY = _LazyDir(lambda: PROJECTS_DIR / "registry.json")
 SCRATCH = _LazyDir(lambda: PROJECTS_DIR / "_scratch.db")   # parked here when no project is active
-SINGLE = bool(config.settings.db_path.get())
+def _single() -> bool:
+    """SINGLE (one-DB, test/single-user) mode — computed LAZILY per access.
+    This was a module constant frozen at first import, which under pytest
+    bound from the COLLECTION-TIME env (the conftest imports the backend
+    before any test module's env setup runs) — so a module that set
+    ABA_DB_PATH at its own top level still ran multi-project, its files
+    landing under 'single' while resolution looked in '_workspace' (the
+    hidden red in the per-project registration tests). Lazy matches the
+    lazy-core.config doctrine the rest of the runtime follows; external
+    consumers read `projects.SINGLE` via module __getattr__ unchanged."""
+    return bool(config.settings.db_path.get())
+
+
+def __getattr__(name: str):
+    if name == "SINGLE":
+        return _single()
+    raise AttributeError(name)
 
 _state = {"current": None}
 
@@ -168,14 +184,30 @@ def init() -> None:
     doing DB work. If a request arrives without project_id and the global is
     None, the handler can refuse loudly instead of writing to a misleading
     default."""
-    if SINGLE:
+    if _single():
         init_db()
         return
     _park_scratch()
 
 
+def _heal_workspace_title(pid: str) -> None:
+    """Sync the in-project 'workspace' entity title (what the project-view header
+    reads) to the registry name — heals drift from a rename that landed while
+    this project wasn't current. Caller must have pid's DB bound. Best-effort;
+    never raises. Cheap: called only on first-open per pid per process."""
+    try:
+        nm = next((p.get("name") for p in _load() if p.get("id") == pid), None)
+        if not nm:
+            return
+        ws = get_entity("workspace")
+        if ws and ws.get("title") != nm:
+            update_entity("workspace", title=nm)
+    except Exception:  # noqa: BLE001 — a title-sync hiccup must never block a project open
+        pass
+
+
 def set_current(pid: str) -> None:
-    if SINGLE:
+    if _single():
         return
     _schema_mod.set_db_path(_db_file(pid))
     _state["current"] = pid
@@ -205,6 +237,7 @@ def set_current(pid: str) -> None:
             dispatch("on_project_first_open", {"pid": pid})
         except Exception:  # noqa: BLE001
             pass
+        _heal_workspace_title(pid)
     # Content-side project-open hooks (display-path backfill, etc.) run
     # via the hook dispatcher. Errors are swallowed by dispatch() — one
     # bad hook must not block a project switch.
@@ -216,7 +249,7 @@ def set_current(pid: str) -> None:
 
 
 def current() -> str | None:
-    if SINGLE:
+    if _single():
         return "single"
     pid = _active_pid.get()
     if pid is not None:
@@ -245,7 +278,7 @@ def ensure_opened(pid: str) -> None:
     the project's tables and reap its previous-process stale turns (#14's
     first-open memo). Subsequent calls are a set-membership check — this is the
     request hot path, so it must stay cheap. No-op in SINGLE mode."""
-    if SINGLE or not pid or pid in _opened_pids:
+    if _single() or not pid or pid in _opened_pids:
         return
     _opened_pids.add(pid)
     init_db()
@@ -257,6 +290,7 @@ def ensure_opened(pid: str) -> None:
             dispatch("on_project_first_open", {"pid": pid})
         except Exception:  # noqa: BLE001
             pass
+        _heal_workspace_title(pid)
     # Phase 2 (modularity_audit2 §2D): backfill typed derivations for
     # pre-provenance entities so old results show their origin when the scientist
     # returns. Here (not set_current): this runs inside `with bind(pid)`, so
@@ -285,7 +319,7 @@ def bind(pid: str | None):
 
     No-op in SINGLE/test-harness mode (the harness owns DB_PATH) or when `pid`
     is falsy (no project to bind — leave the global fallback in place)."""
-    if SINGLE or not pid:
+    if _single() or not pid:
         yield pid
         return
     tok_pid = _active_pid.set(pid)
@@ -295,6 +329,67 @@ def bind(pid: str | None):
     finally:
         _schema_mod.reset_active_db(tok_db)
         _active_pid.reset(tok_pid)
+
+
+# ── crossing a thread boundary without losing the project ───────────────────
+#
+# bind() binds the project for the CURRENT execution context. A worker thread
+# is a different execution context, and `loop.run_in_executor(None, fn, ...)`
+# does NOT carry contextvars into it — so inside that thread `current()` and
+# `active_db_path()` silently fall back to the PROCESS-GLOBAL project: whatever
+# project some other request most recently touched.
+#
+# Live (2026-07-27, orbtest sweep): the tool-dispatch hop in guide.py used the
+# bare form, so a remote run's exec records, its harvest directory and its
+# registered artifacts were all written into a DIFFERENT project that happened
+# to be the global at that instant — while the messages, written on the loop,
+# went to the right one. The producing project ended up with zero provenance for
+# a run it really performed, and a bystander project gained a file it never
+# produced. Same class as the 2026-06 history corruption bind() was introduced
+# for; the executor hop was the hole left in it.
+#
+# Use these three, never a bare run_in_executor, for anything that touches the
+# graph. The context copy is a SNAPSHOT, so a fire-and-forget task launched
+# inside `with bind(pid)` keeps `pid` after the block exits — which is exactly
+# what the background advisors want.
+
+def _bound(fn, args, kwargs):
+    """`fn(*args, **kwargs)` as a zero-arg callable that restores the CALLER's
+    context (project binding + active DB) inside whatever thread runs it."""
+    import functools as _functools
+    ctx = contextvars.copy_context()
+    return _functools.partial(ctx.run, _functools.partial(fn, *args, **kwargs))
+
+
+async def in_thread(fn, /, *args, **kwargs):
+    """Await a blocking `fn` in a worker thread, project binding intact.
+    (`asyncio.to_thread` copies the context; that is the whole difference.)"""
+    import asyncio as _asyncio
+    return await _asyncio.to_thread(fn, *args, **kwargs)
+
+
+def in_pool(pool, fn, /, *args, **kwargs):
+    """Same guarantee against a CUSTOM executor — to_thread only uses the
+    default one. Returns the run_in_executor future."""
+    import asyncio as _asyncio
+    return _asyncio.get_running_loop().run_in_executor(pool, _bound(fn, args, kwargs))
+
+
+def spawn(fn, /, *args, **kwargs):
+    """Fire-and-forget `fn` in a worker thread, project binding intact.
+
+    With no running loop (a *sync* FastAPI route, which anyio already runs in a
+    context-propagating threadpool) it runs INLINE — correct, and bound, which
+    is why every callsite's bespoke `except RuntimeError: fn()` fallback belongs
+    here instead of at the callsite."""
+    import asyncio as _asyncio
+    call = _bound(fn, args, kwargs)
+    try:
+        loop = _asyncio.get_running_loop()
+    except RuntimeError:
+        call()
+        return None
+    return loop.run_in_executor(None, call)
 
 
 def _touch(pid: str) -> None:
@@ -318,7 +413,7 @@ def _db_mtime_iso(pid: str) -> str | None:
 
 
 def list_projects() -> list:
-    if SINGLE:
+    if _single():
         return [{"id": "single", "name": "Project", "created_at": _now(),
                  "last_touched": _now(), "current": True, "counts": _counts(_schema_mod.DB_PATH)}]
     cur = _state["current"]
@@ -336,7 +431,7 @@ def list_projects() -> list:
 
 
 def create_project(name: str) -> dict:
-    if SINGLE:
+    if _single():
         return list_projects()[0]
     pid = "prj_" + uuid.uuid4().hex[:8]
     entry = {"id": pid, "name": (name or "Untitled project").strip()[:80],
@@ -350,12 +445,26 @@ def create_project(name: str) -> dict:
 
 
 def rename_project(pid: str, name: str) -> None:
-    if SINGLE:
+    if _single():
         return
+    clean = ""
     with _locked_registry() as reg:
         for p in reg:
             if p["id"] == pid:
-                p["name"] = (name or p["name"]).strip()[:80]
+                clean = (name or p["name"]).strip()[:80]
+                p["name"] = clean
+    # Keep the in-project title (the "workspace" entity — what the project-view
+    # header reads) in sync with the registry name, so renaming from the Home
+    # screen doesn't leave the open project showing its old name. update_entity
+    # writes the CURRENT project's store, so this reaches pid only when it's
+    # current; a non-current project heals on its next first-open (set_current).
+    if clean and pid == current():
+        try:
+            ws = get_entity("workspace")
+            if ws and ws.get("title") != clean:
+                update_entity("workspace", title=clean)
+        except Exception:  # noqa: BLE001 — a rename must not fail on a title-sync hiccup
+            pass
     _emit_project_meta(pid)
 
 
@@ -364,7 +473,7 @@ def project_model(pid: str) -> str:
     none. Stored on the registry entry; the chat loop resolves it via
     config.current_model_for_project(). SINGLE mode has no registry → "" (falls
     through to the global/bundle default)."""
-    if SINGLE or not pid:
+    if _single() or not pid:
         return ""
     for p in _load():
         if p.get("id") == pid:
@@ -375,7 +484,7 @@ def project_model(pid: str) -> str:
 def set_project_model(pid: str, model: str) -> None:
     """Pin (or clear, if `model` is falsy) the project's LLM model on its
     registry entry. Takes effect on the next turn (resolution is live)."""
-    if SINGLE:
+    if _single():
         return
     with _locked_registry() as reg:
         for p in reg:
@@ -389,7 +498,7 @@ def set_project_model(pid: str, model: str) -> None:
 
 
 def delete_project(pid: str) -> None:
-    if SINGLE:
+    if _single():
         return
     with _locked_registry() as reg:
         reg[:] = [p for p in reg if p["id"] != pid]

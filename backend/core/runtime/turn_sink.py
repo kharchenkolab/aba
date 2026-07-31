@@ -154,8 +154,30 @@ class TurnSink:
         return seq
 
     def subscribe(self) -> asyncio.Queue:
+        """A subscriber queue, already carrying the sentinel if the turn is
+        OVER.
+
+        close() delivers the sentinel to the subscribers that exist AT THAT
+        MOMENT, so a subscriber attaching afterwards used to wait on a queue
+        nothing would ever push to — its stream heartbeated forever and the
+        client never learned the turn had finished.
+
+        The window is between start_turn() and the response generator's first
+        step, which is small for one turn and widens sharply under load. Live
+        (2026-07-27, three concurrent turns per lane): every turn completed and
+        wrote its messages, and all six SSE connections stayed ESTABLISHED and
+        idle for the full client timeout.
+
+        Enqueuing here closes the race for good: the flag is read and the
+        sentinel queued in the same event-loop step, so no close() can land in
+        between."""
         q: asyncio.Queue = asyncio.Queue(maxsize=SUB_QUEUE_MAX)
         self._subs.add(q)
+        if self._closed:
+            try:
+                q.put_nowait((self._seq, None))
+            except asyncio.QueueFull:      # unreachable on a fresh queue
+                pass
         return q
 
     def unsubscribe(self, q: asyncio.Queue) -> None:

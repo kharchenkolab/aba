@@ -53,32 +53,121 @@ _STATUS_INTERVAL_S = 1.0
 _CANCEL_GRACE_S = config.settings.kernel_cancel_grace_s.get()
 
 
+def _reticulate_pin_r(remote: bool = False) -> str:
+    """Pin reticulate to a REAL interpreter in every LOCAL R kernel.
+
+    REMOTE kernels get NOTHING (`remote=True` → ""), because every candidate
+    below is a CONTROLLER path. Pinning one on another machine is worse than not
+    pinning: `/Users/…/.aba/env/bin/python` does not exist on a Linux node, so
+    reticulate is aimed at a missing binary and the failure names a path from a
+    machine the user never touched. Verified live on mendel — the R setup block
+    carried `Sys.setenv(RETICULATE_PYTHON='/Users/peter.kharchenko/.aba/env/bin/
+    python')`. The DATA_DIR/ARTIFACTS_DIR lines beside it were already
+    remote-aware; this pin was added later (2026-07-21) and never audited for
+    the remote case — the same class as the controller-`setwd` incident.
+
+    Leaving it unset on a remote kernel restores the pre-pin behaviour there
+    (reticulate may bootstrap its own interpreter). That is the honest trade: a
+    site's own Python is the site's business, and we have no way to name it from
+    here. A remote R step that needs Python should use `run_python(site=…)`.
+
+    Left unset, `library(reticulate); import(...)` finds no configured Python and
+    bootstraps its own: it downloads `uv`, then an interpreter, then packages —
+    an unbounded network install inside a session that is supposed to be
+    provisioned. Live 2026-07-21 that hung an R turn for 3.7 minutes on
+    "Downloading uv" until the user killed it, with no output and no timeout.
+
+    Pinned, reticulate binds to the interpreter we name and never downloads one.
+    Preference: the project's own Python session when its prefix is directly
+    execable, else the controller interpreter — which is always present and, on a
+    mount-scoped base, is the only Python path that even RESOLVES from inside the
+    R session's namespace (the two sessions have different mounts). The fallback
+    won't carry the project's packages, so `import()` fails immediately and
+    honestly instead of hanging — which is the point: this makes the failure
+    fast and legible, it does not make reticulate a supported bridge.
+    """
+    import sys as _sys
+    from pathlib import Path
+    if remote:
+        return ""
+    py = None
+    try:
+        from core.compute import base_env, project_env
+        from core import projects
+        if base_env.active("python"):
+            _pid = str(projects.current() or "_none")
+            _rt = project_env.runtime(_pid, "python")
+            if _rt.get("direct_exec") and _rt.get("prefix"):
+                py = str(Path(_rt["prefix"]) / "bin" / "python")
+    except Exception:  # noqa: BLE001 — never break kernel startup over this
+        py = None
+    py = py or _sys.executable
+    if not py:
+        return ""
+    # RETICULATE_PYTHON is the documented, long-stable knob; setting it to an
+    # existing binary is what suppresses the managed-venv/uv bootstrap.
+    return f"Sys.setenv(RETICULATE_PYTHON={str(py)!r})\n"
+
+
 def _weft_setup_code(lang: str, remote: bool = False) -> str:
-    """The kernel's first-block setup: DATA_DIR + harvest helpers, WORK_DIR bound
-    to the kernel's OWN cwd (its sandbox), and NO chdir.
+    """The kernel's first-block setup: DATA_DIR / ARTIFACTS_DIR / WORK_DIR — each as
+    a VARIABLE *and* an env var — plus harvest helpers, WORK_DIR bound to the kernel's
+    OWN cwd (its sandbox), and NO chdir.
+
+    Both forms on purpose: agents reach for the bare name (`DATA_DIR/…`) AND for
+    `os.environ['DATA_DIR']` / `Sys.getenv('DATA_DIR')` interchangeably, and the
+    one-shot lane (core/exec/run.py) already provides both — so the interactive
+    kernel must too, or code that probes the env form dies with a bare KeyError
+    (observed live 2026-07-21: agent did `os.environ['DATA_DIR']`, got KeyError,
+    fell back to a hardcoded path). ARTIFACTS_DIR was previously absent entirely.
 
     A weft kernel must keep its sandbox as cwd — the file-block protocol reads/writes
     `blocks/NNNN.*` and `kernel.stop` RELATIVE to cwd, so chdir'ing away orphans the
     protocol and the kernel dies. So the sandbox IS the work dir; aba harvests from
     there. WORK_DIR is set from `getcwd()` at runtime (the kernel knows its own
-    sandbox; the controller doesn't know the id until kernel_start returns).
+    sandbox; the controller doesn't know the id until kernel_start returns); the
+    run_exec cwd snippet re-points WORK_DIR (both forms) on a cwd change.
 
-    `remote=True`: the controller's project data dir does not exist on the
-    kernel's machine — bind DATA_DIR to the sandbox too, so writes stay
+    `remote=True`: the controller's project data/artifacts dirs do not exist on the
+    kernel's machine — bind DATA_DIR/ARTIFACTS_DIR to the sandbox too, so writes stay
     (run,rel)-addressable there instead of failing on a foreign path."""
-    from core.exec.kernels import jupyter as _j
+    from core.exec.kernels import setup_helpers as _j
+    data, artifacts = _j._project_data_artifacts()
     if lang == "r":
         from core.exec.r import cran_repo, _ppm_ua_expr
         repoline = f'options(repos=c(CRAN={cran_repo()!r})); {_ppm_ua_expr()}\n'
-        data_line = ("DATA_DIR <- getwd()\n" if remote else
-                     f"DATA_DIR <- {str(_j._project_data_artifacts()[0])!r}\n")
-        return (f"{repoline}{data_line}WORK_DIR <- getwd()\n"
+        dirs = ("DATA_DIR <- getwd(); ARTIFACTS_DIR <- getwd()\n" if remote else
+                f"DATA_DIR <- {str(data)!r}; ARTIFACTS_DIR <- {str(artifacts)!r}\n")
+        return (f"{repoline}{dirs}WORK_DIR <- getwd()\n"
+                "Sys.setenv(DATA_DIR=DATA_DIR, ARTIFACTS_DIR=ARTIFACTS_DIR, WORK_DIR=WORK_DIR)\n"
+                + _reticulate_pin_r(remote=remote)
                 + _j._harvest_helpers_r())
-    data_line = ("DATA_DIR = _os.getcwd()\n" if remote else
-                 f"DATA_DIR = {str(_j._project_data_artifacts()[0])!r}\n")
+    dirs = ("DATA_DIR = ARTIFACTS_DIR = _os.getcwd()\n" if remote else
+            f"DATA_DIR = {str(data)!r}\nARTIFACTS_DIR = {str(artifacts)!r}\n")
     return ("import os as _os\n_os.environ.setdefault('MPLBACKEND', 'Agg')\n"
-            f"{data_line}WORK_DIR = _os.getcwd()\n"
+            f"{dirs}WORK_DIR = _os.getcwd()\n"
+            "_os.environ['DATA_DIR'] = DATA_DIR\n"
+            "_os.environ['ARTIFACTS_DIR'] = ARTIFACTS_DIR\n"
+            "_os.environ['WORK_DIR'] = WORK_DIR\n"
             + _j._harvest_helpers_py())
+
+
+def _site_platform(site: str) -> str | None:
+    """The site's conda platform string (linux-aarch64, osx-arm64, …) from its
+    registered capabilities (os + arch). None when the site can't say — the
+    caller then skips the cross-platform re-lock rather than guessing."""
+    try:
+        from core.compute import adapter as _ad
+        desc = _ad.get_compute().sync_call("sites_describe", site) or {}
+        caps = desc.get("capabilities") or {}
+        os_, arch = caps.get("os"), caps.get("arch")
+        if not (os_ and arch):
+            return None
+        if os_ == "darwin":
+            return f"osx-{'arm64' if arch in ('arm64', 'aarch64') else '64'}"
+        return f"linux-{'64' if arch in ('x86_64', 'amd64') else arch}"
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _slurm_time_s(t: str) -> int | None:
@@ -140,10 +229,31 @@ def _fit_walltime(e) -> str | None:
     return f"{h:02d}:{rem // 60:02d}:{rem % 60:02d}"
 
 
+_TRANSPORT_CODES = ("site.", "infra.")
+_SUBMIT_RETRY_BACKOFF_S = 2.0
+
+
+def _is_transport_error(e) -> bool:
+    """Did this failure happen BETWEEN us and the node, rather than AT the node?
+
+    A transport failure says nothing about the kernel's health; a kernel-side
+    error does. The two must not share a consequence — one is worth a retry and
+    costs a round trip, the other means the session really is gone.
+    """
+    code = str(getattr(e, "code", "") or "")
+    if code.startswith(_TRANSPORT_CODES):
+        return True
+    # weft marks what it considers safe to re-attempt, and a retryable error by
+    # definition did not leave the far side in a decided state.
+    return bool(getattr(e, "retryable", False))
+
+
 def for_pool(scope_key: str, lang: str, *, cwd: str, env_name: str | None,
              site: str = _LOCAL_SITE):
-    """Build a WeftKernelSession for the pool, or return None to fall back to the
-    jupyter transport. Three lanes: ISOLATED (a frozen named EnvID, W-K1a),
+    """Build a WeftKernelSession for the pool, or raise a TYPED `env.unknown`
+    for a named env this project does not have (typed so the run tool refuses
+    rather than relocating the step to the node's interpreter — there is no
+    other kernel transport). Three lanes: ISOLATED (a frozen named EnvID, W-K1a),
     DEFAULT (env_name=None → a live project session, W-K1b), and BARE
     (env_name='system' → no env at all, the machine's own interpreter). A
     named env is realized by the caller before the pool lock.
@@ -181,7 +291,24 @@ def for_pool(scope_key: str, lang: str, *, cwd: str, env_name: str | None,
         if env_name:
             row = named_envs.resolve(pid, env_name)
             if row is None:
-                return None            # unknown env — caller surfaces the error
+                # TYPED, so the caller REFUSES instead of relocating the step.
+                # Returning None raised a bare RuntimeError one level up, which
+                # is_env_resolution_failure(untyped_is_env=False) reads as "no
+                # kernel here" — so a step that asked for env=<name> quietly ran
+                # on the node's own interpreter instead. Live (2026-07-27,
+                # mendel): "unknown env 'cap-<pkg>'? … falling back to one-shot".
+                # The env existed; this lookup resolves `pid` from AMBIENT state,
+                # so a drifted binding makes a real env look unknown — the two
+                # defects compounded into a silent environment swap.
+                raise ComputeError(
+                    "env.unknown",
+                    f"no environment named {env_name!r} in project {pid} "
+                    f"(inspect_env() lists this project's envs)",
+                    hints={"suggestion": (
+                        "check the name with inspect_env(), or create it with "
+                        "make_isolated_env(name=..., language=..., packages=[...])"
+                        " — or pass env='system' to use the node's own "
+                        "interpreter on purpose")})
             env_id = row["env_id"]
         else:
             from core.compute import base_env, project_env
@@ -210,6 +337,19 @@ def for_pool(scope_key: str, lang: str, *, cwd: str, env_name: str | None,
             # ran while the session lane failed and fell back).
             from core.jobs.weft_submitter import _mismatch_platform
             plat = _mismatch_platform(e)
+            if not plat and getattr(e, "code", "") == "env.layer_conflict":
+                # An EXTENDED env's layer chain can fail to realize on a
+                # DIFFERENT-platform site with layer_conflict (the delta was
+                # solved against the controller-platform parent) — same root
+                # as platform_mismatch, different error shape (found live:
+                # extended env on the linux fixture from a mac controller,
+                # F-ENV-2). ensure_platform re-solves base + layers for the
+                # site's platform. Only cross-platform: a SAME-platform
+                # layer_conflict is a genuine solve failure — re-locking
+                # would just repeat it.
+                sp = _site_platform(site)
+                if sp and sp != named_envs.controller_platform():
+                    plat = sp
             if plat:
                 if env_name:
                     relock = named_envs.ensure_platform(pid, env_name, plat)
@@ -327,6 +467,30 @@ class WeftKernelSession:
 
     # -- KernelSession interface ----------------------------------------------
 
+    def _submit_block(self, code: str):
+        """Submit one block, retrying ONCE on a transport failure.
+
+        Retrying is sound HERE and nowhere else in this method: submit is
+        `wait=False`, so a failure means the block never started and re-sending
+        cannot double-execute it. A timeout mid-execution is the opposite case —
+        the block may well be running — which is why that path still surfaces
+        rather than retries.
+
+        Live (2026-07-27): three concurrent threads on one ssh site contended,
+        weft returned `site.unreachable` ("ssh timed out after 30s"), and the
+        blocks were reported as failures although nothing had run yet.
+        """
+        from core.compute.errors import ComputeError
+        try:
+            return self._call("kernel_exec", self.kernel_id, code, wait=False)
+        except ComputeError as e:
+            if not _is_transport_error(e):
+                raise
+            time.sleep(_SUBMIT_RETRY_BACKOFF_S)
+            print(f"[kernel] block submit hit {getattr(e, 'code', '?')} on "
+                  f"{self.site} — retrying once (nothing ran yet)", flush=True)
+            return self._call("kernel_exec", self.kernel_id, code, wait=False)
+
     def touch(self) -> None:
         self.last_used = time.time()
 
@@ -390,12 +554,26 @@ class WeftKernelSession:
         self.busy = True
         self.touch()
         try:
-            sub = self._call("kernel_exec", self.kernel_id, code, wait=False)
+            sub = self._submit_block(code)
         except ComputeError as e:
             self.busy = False
-            self.alive = False
+            # A TRANSPORT failure did not reach the kernel, so the kernel is very
+            # likely still there holding the session. Marking it dead for that
+            # throws away everything the user has in memory — variables, loaded
+            # libraries — and the next call silently starts a fresh one.
+            #
+            # Live (2026-07-27, three concurrent threads on one ssh site): the
+            # contended transport returned `site.unreachable` ("ssh timed out
+            # after 30s"), all three kernels were declared dead, and every lane
+            # lost its state. The site was fine seconds later.
+            #
+            # So: keep the session on a transport error and let the NEXT call
+            # find out (one wasted round trip if the site really is gone, versus
+            # discarding a live session). Kernel-side errors still kill it.
+            self.alive = not _is_transport_error(e)
+            from core.compute.errors import describe
             return ExecResult(returncode=1, stdout="",
-                              stderr=f"[kernel] block submit failed: {e}",
+                              stderr=f"[kernel] block submit failed: {describe(e)}",
                               cancelled=False, timed_out=False)
         block = int(sub.get("block", 0))
         out_off = err_off = 0
@@ -529,6 +707,11 @@ class WeftKernelSession:
             msg = (died_msg or "".join(stderr)).strip() or (
                 "The compute kernel died mid-execution (killed, crashed, or out "
                 "of memory / walltime). Rerun the cell — the session will restart.")
+            from core.exec.kernels.cwd_guard import cwd_drift_diagnosis
+            hint = cwd_drift_diagnosis(msg, "".join(stderr), code,
+                                       getattr(self, "lang", "python"))
+            if hint:
+                msg = f"{msg}\n\n{hint}"
             return ExecResult(returncode=1, stdout="".join(stdout), stderr=msg,
                               cancelled=False, timed_out=False)
         if cancelled:

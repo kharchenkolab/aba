@@ -44,7 +44,8 @@ manifest_role: primary
 #       lean_small prompt_mode).
 #   (c) Catalog rendering follows the same compact policy as `lean`.
 prompt_mode: lean_small
-# Full reach — all tools visible to the model.
+# Full reach — the ENTIRE tool catalog is visible to the model (the standing
+# decision, all tiers alike; guard: tests/test_tool_allowlist.py).
 tool_allowlist: ['*']
 # Same budget as lean_guide. Small models don't benefit from a
 # larger summarization budget; if anything they suffer more.

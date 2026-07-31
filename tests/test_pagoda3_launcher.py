@@ -91,7 +91,7 @@ def test_convert_any_sets_lstar_rscript_env(monkeypatch, tmp_path):
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    monkeypatch.setattr(pagoda3, "_rscript", lambda: sys.executable)
+    monkeypatch.setattr(pagoda3, "_rscript", lambda pid=None: sys.executable)
     pagoda3._convert_any(tmp_path / "x.rds", tmp_path / "o.building")
     assert seen["env"].get("LSTAR_RSCRIPT") == sys.executable   # bridge points at R
 

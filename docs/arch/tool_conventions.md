@@ -28,6 +28,8 @@ One prefix per intent; boundaries are crisp so there's exactly one right verb.
 | `inspect_` | probe **by running** something (import a pkg, sniff a file, diagnose env) | `inspect_package`, `inspect_env`, `inspect_upload` |
 | `create_` / `register_` / `open_` / `make_` / `propose_` | create a new entity/thing | `create_finding`, `register_dataset`, `open_run`, `make_revision`, `propose_capability` |
 | `update_` / `set_` | modify existing state | `update_entity_fields`, `set_active_env`, `set_current_revision` |
+| `keep_` | mark existing outputs for durable retention | `keep_outputs` |
+| `evict_` | reclaim a materialized copy; identity survives, rebuilds on next use | `evict_env` |
 | `run_` | execute code/a pipeline | `run_python`, `run_r`, `run_nextflow` |
 | `fetch_` | download external data into the workspace/store | `fetch_url`, `fetch_ensembl`, `fetch_reference` |
 | `view_` | inject visual/vision content into context | `view_artifact`, `view_file` |

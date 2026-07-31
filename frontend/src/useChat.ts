@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { DisplayMessage, Block, SSEEvent, ManifestSnapshot, PendingClarification, PendingApproval, LogEntry, JobInfo, Attachment } from './types'
+import type { DisplayMessage, Block, SSEEvent, ManifestSnapshot, PendingClarification, PendingApproval, JobInfo, Attachment } from './types'
 import { getActiveMember } from './bio/activeMemberRef'
+import { noteTurnEvent } from './console'
 // W2-#4 phase 2: the SSE reader loop lives in a small reusable helper.
 // Pulls ~50 LOC out of runStream and makes the terminal-event / premature-
 // close / cancellation behavior unit-testable in isolation.
@@ -47,7 +48,7 @@ function asSteps(x: unknown): string[] {
   return []
 }
 
-function blocksFromContent(content: Record<string, unknown>[]): Block[] {
+export function blocksFromContent(content: Record<string, unknown>[]): Block[] {
   const blocks: Block[] = []
   for (const block of content) {
     if (block.type === 'text') {
@@ -107,12 +108,30 @@ function blocksFromContent(content: Record<string, unknown>[]): Block[] {
         blocks.push({ type: 'tool_result', name: '(result)',
                       result: txt ? { stdout: txt } : {} })
         for (const x of arr) {
-          if (!x || x.type !== 'image') continue
-          const src = x.source as { type?: string; media_type?: string; data?: string } | undefined
-          if (src && src.type === 'base64' && src.data) {
-            blocks.push({ type: 'image',
-                          url: `data:${src.media_type || 'image/png'};base64,${src.data}`,
-                          alt: 'viewed artifact' })
+          if (!x) continue
+          if (x.type === 'image') {
+            const src = x.source as { type?: string; media_type?: string; data?: string } | undefined
+            if (src && src.type === 'base64' && src.data) {
+              blocks.push({ type: 'image',
+                            url: `data:${src.media_type || 'image/png'};base64,${src.data}`,
+                            alt: 'viewed artifact' })
+            }
+          } else if (x.type === 'image_ref') {
+            // Durable history stores a lightweight reference instead of the
+            // base64 payload (vision_refs). On reload, an entity-backed ref
+            // rehydrates through the served artifact; a path-only ref gets a
+            // labeled placeholder — never a silent drop of a viewed image.
+            const eid = typeof x.entity_id === 'string' ? x.entity_id : ''
+            const p = typeof x.path === 'string' ? x.path : ''
+            if (eid) {
+              blocks.push({ type: 'image',
+                            url: `/api/entities/${encodeURIComponent(eid)}/download`,
+                            alt: 'viewed artifact' })
+            } else {
+              const name = p ? (p.split('/').pop() || p) : 'image'
+              blocks.push({ type: 'tool_result', name: '(result)',
+                            result: { stdout: `[image: ${name} — view again to re-render]` } })
+            }
           }
         }
         continue
@@ -208,39 +227,9 @@ function optimisticUserBlocks(text: string, attachments?: Attachment[]): Block[]
   return blocks
 }
 
-// Observability Console: map an SSE event to a log entry (or null to skip —
-// `delta` is the chat text, not worth logging). `level` gates it in the
-// detail-level selector (1=progress, 2=tools, 3=debug).
-function _summInput(o: Record<string, unknown>): string {
-  try {
-    return Object.entries(o || {}).map(([k, v]) => `${k}=${String(v).slice(0, 30)}`).join(' ').slice(0, 90)
-  } catch { return '' }
-}
-function logFor(ev: SSEEvent): LogEntry | null {
-  const t = Date.now()
-  switch (ev.type) {
-    case 'delta': return null
-    case 'tool_progress': return { t, type: ev.type, label: ev.message ?? '', level: 1 }
-    case 'tool_chunk':    return { t, type: ev.type, label: `${ev.stream}+${ev.text.length}B (${(ev.bytes_total/1024).toFixed(1)}KB total)`, level: 3 }
-    case 'plan': return { t, type: ev.type, label: ev.title || 'plan', level: 1 }
-    case 'notice': return { t, type: ev.type, label: ev.text, level: 1 }
-    case 'error': return { t, type: ev.type, label: ev.text, level: 1 }
-    case 'cancelled': return { t, type: ev.type, label: ev.reason || 'cancelled', level: 1 }
-    case 'done': return { t, type: ev.type, label: 'turn done', level: 1 }
-    case 'tool_start': return { t, type: ev.type, label: `${ev.name} ${_summInput(ev.input)}`, level: 2 }
-    case 'tool_result': {
-      const st = (ev.result as Record<string, unknown>)?.status
-      return { t, type: ev.type, label: ev.name + (st ? ` · ${st}` : ''), level: 2 }
-    }
-    case 'job_submitted': return { t, type: ev.type, label: `job ${ev.job.id} ${ev.job.status || ''}`, level: 2 }
-    case 'entity_registered': return { t, type: ev.type, label: `${ev.entity.type}: ${ev.entity.title}`, level: 2 }
-    case 'clarification_pending': return { t, type: ev.type, label: ev.question, level: 2 }
-    case 'approval_pending': return { t, type: ev.type, label: `approve ${ev.tool_name}`, level: 2 }
-    case 'deferred_tool_pending': return { t, type: ev.type, label: `${ev.tool_name} → queued (${ev.deferred_id})`, level: 2 }
-    case 'manifest': return { t, type: ev.type, label: `turn ${ev.manifest.turn_index}`, level: 3 }
-    default: return { t, type: (ev as { type: string }).type, label: '', level: 3 }
-  }
-}
+// Observability Console: every SSE event folds into the shared console feed
+// store (frontend/src/console.ts) — structured rows, tool calls grouped by
+// tool_use_id, ring-capped there.
 
 export function useChat(
   focusEntityId: string,
@@ -259,10 +248,8 @@ export function useChat(
   const [loading, setLoading] = useState(false)   // fetching a thread's history
   const [streamMsg, setStreamMsg] = useState<DisplayMessage | null>(null)
   const [manifest, setManifest] = useState<ManifestSnapshot | null>(null)
-  // Observability panel: a bounded tail of SSE events (Console tab) and the
-  // last-known state of background jobs (Jobs tab). Client-side views over the
-  // stream we already consume — no extra server cost.
-  const [eventLog, setEventLog] = useState<LogEntry[]>([])
+  // Observability panel: the Console tab reads the shared feed store
+  // (console.ts) directly; this hook only keeps the Jobs tab's state.
   const [jobs, setJobs] = useState<JobInfo[]>([])
   // Phase A — poll /api/jobs every 5s to keep the (i) drawer's Jobs tab
   // honest. Before this, jobs were only mutated by SSE 'job_submitted'
@@ -603,20 +590,8 @@ export function useChat(
               }
             }
 
-            // Observability Console: capture every event (except chat-text
-            // deltas) into a bounded tail.
-            const _le = logFor(ev)
-            if (_le) setEventLog(prev => {
-              const capped = prev.length > 400 ? prev.slice(-400) : prev
-              // Coalesce a run of progress ticks into a single updating line —
-              // a long download stays legible without flooding the capped buffer
-              // or evicting the surrounding tool_start/result history.
-              const last = capped[capped.length - 1]
-              if (_le.type === 'tool_progress' && last && last.type === 'tool_progress') {
-                return [...capped.slice(0, -1), _le]
-              }
-              return capped.concat(_le)
-            })
+            // Observability Console: fold the event into the shared feed.
+            noteTurnEvent(ev)
 
             if (ev.type === 'job_submitted') {
               // Jobs tab: upsert by id.
@@ -876,16 +851,35 @@ export function useChat(
         // Aborted by a thread/project switch, or superseded — drop it silently
         // so nothing leaks into the new thread.
         if (ac.signal.aborted || !live()) return
-        setStreamMsg(null)
         setStreaming(false)
+        // COMMIT the work before reporting the failure. The live turn renders
+        // from `streamMsg`, so clearing it (as this used to, before appending
+        // the error) threw away everything the turn had produced — text, plots,
+        // tool steps, the lot. A backend restart mid-turn therefore left the
+        // user staring at their own opening message and a bare "network error",
+        // with a long multi-step analysis apparently erased (live 2026-07-26).
+        // The same shape as `done`: fold streamingBlocks into `messages`, then
+        // append the error AFTER it so the failure reads as the end of the turn
+        // rather than a replacement for it. `retryLast` (already wired to the
+        // error surface) continues from here.
         setMessages(prev => [
           ...prev,
+          ...(streamingBlocks.length
+            ? [{ id: assistantId, role: 'assistant' as const,
+                 blocks: [...streamingBlocks] }]
+            : []),
           {
             id: `err-${Date.now()}`,
             role: 'assistant',
             blocks: [{ type: 'error', text: "Couldn't reach the server.", detail: String(e) }],
           },
         ])
+        setStreamMsg(null)
+        // Deliberately NOT re-reading the thread here. `loadMessages` REPLACES
+        // `messages`, so a reload would wipe the error we just appended and
+        // could double-render the partial turn. The commit above already keeps
+        // the record whole for this view, and the server's copy is what a manual
+        // reload or the next turn will read anyway.
       }
     },
     // projectId MUST be in deps — without it the closure captures whatever
@@ -1072,7 +1066,7 @@ export function useChat(
     pendingApproval, respondApproval,
     stopTurn,
     queuedMessages, enqueue, dropQueue, dropQueueAt, steer,
-    eventLog, jobs,
+    jobs,
     // #334 Phase 2 — passed to <Message> → <ToolStep> so an orphan tool_start
     // (cancelled run, completed-but-tab-refreshed) can rehydrate its live
     // output via GET /api/turns/{currentRunId}/tool_stream/{tool_use_id}.

@@ -289,7 +289,7 @@ def run_nextflow(input_: dict, ctx: dict | None = None) -> dict:
     cancel_token = (ctx or {}).get("cancel_token")
     from core import projects
     from core.data.workspace import scratch_dir
-    project_id = projects.current() or "default"
+    project_id = (ctx or {}).get("project_id") or projects.current() or "default"
     run_id = (ctx or {}).get("run_id") or uuid.uuid4().hex
     scratch = scratch_dir(str(project_id), f"nf-{run_id}")
     outdir = input_.get("outdir") or str(Path(scratch) / "results")
@@ -328,7 +328,10 @@ def run_nextflow(input_: dict, ctx: dict | None = None) -> dict:
     plots, tables, files, out_files = [], [], [], []
     op = Path(outdir)
     if op.exists():
-        plots, tables, files, _warns = harvest_artifacts(op)
+        # project_id EXPLICITLY (same reason as the run_* lanes): the ambient
+        # project can move mid-call under a concurrent turn, and the copies would
+        # be bucketed under whichever project won.
+        plots, tables, files, _warns = harvest_artifacts(op, project_id=project_id)
         out_files = sorted(str(p.relative_to(op)) for p in op.rglob("*") if p.is_file())[:100]
     from core.exec.output_cap import snip_middle
     cmd_str = " ".join(cmd)

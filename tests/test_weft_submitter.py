@@ -201,3 +201,30 @@ def test_finalize_writes_compute_block_into_exec_record():
     rec = er.get(res["exec_id"])
     assert rec["compute"]["placement"]["node"] == "testnode"
     assert rec["compute"]["substrate"] == "weft"
+
+
+def test_relock_platform_decision(monkeypatch):
+    """F-ENV-2 parity helper (shared by the detached-submit + poll lanes, and
+    mirroring the kernel lane): a cross-platform env.layer_conflict for a NAMED
+    env yields the site's platform to re-lock for; a same-platform conflict,
+    an unnamed env, or a different error yields None."""
+    import core.jobs.weft_submitter as ws
+
+    class _Cap:
+        def sync_call(self, name, arg=None, *a, **k):
+            if name == "sites_describe":
+                return {"capabilities": {"os": "linux", "arch": "aarch64"}}
+            return {}
+    monkeypatch.setattr(ws, "_adapter", lambda: _Cap())
+    monkeypatch.setattr(ws, "_controller_platform", lambda: "osx-arm64")
+
+    # cross-platform layer_conflict for a named env → re-lock target
+    assert ws._relock_platform("env.layer_conflict", "grown", "hpc") == "linux-aarch64"
+    # unnamed env (default snapshot) → never re-locks here
+    assert ws._relock_platform("env.layer_conflict", None, "hpc") is None
+    # a different error → None (that's the platform_mismatch lane's job)
+    assert ws._relock_platform("env.solve_conflict", "grown", "hpc") is None
+
+    # SAME-platform layer_conflict → None (genuine solve failure, not platform)
+    monkeypatch.setattr(ws, "_controller_platform", lambda: "linux-aarch64")
+    assert ws._relock_platform("env.layer_conflict", "grown", "hpc") is None

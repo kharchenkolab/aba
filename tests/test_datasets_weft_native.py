@@ -219,3 +219,18 @@ def test_produced_dataset_records_run_key(pid):
     md = get_entity(out["dataset_id"])["metadata"]
     assert md["run_key"]["run"] == live[0]["kernel_id"]
     assert md["run_key"]["rel"] == "rk.bin"
+
+
+def test_paths_set_registration_dedups_on_retry(pid):
+    """The SET shape had no dedup at all: a retried acquisition (re-run fetch,
+    resumed session, second thread over the same files) minted a duplicate
+    entity + bundle with no backstop — and the register-on-landing rule
+    funnels agents onto exactly this shape. A set is its sorted member paths,
+    order-free."""
+    a = _jobdir_file("set_m1.bin", b"A" * 128)
+    b = _jobdir_file("set_m2.bin", b"B" * 128)
+    r1 = register_dataset_tool({"title": "Set", "paths": [a, b]}, {})
+    assert r1.get("dataset_id") and not r1.get("already_registered"), r1
+    r2 = register_dataset_tool({"title": "Set again", "paths": [b, a]}, {})
+    assert r2.get("already_registered") is True, r2
+    assert r2["dataset_id"] == r1["dataset_id"]

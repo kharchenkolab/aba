@@ -58,3 +58,58 @@ def test_phase_updates_before_completion():
 
 def test_unknown_job_is_none():
     assert prepare.status("nope") is None
+
+
+def test_job_thread_inherits_caller_context():
+    """The worker runs under a COPY of the caller's context: contextvars do
+    not propagate into raw threads, and the project binding is a contextvar —
+    without propagation, any runner that reads the project graph resolves
+    against the DEFAULT project (live failure: the streaming ref arm and the
+    source-not-found honesty bridge both silently degraded inside the job)."""
+    import contextvars
+    v = contextvars.ContextVar("prepare_probe", default="unset")
+    v.set("caller-context")
+    seen = {}
+    jid = prepare.start(lambda set_phase: (seen.__setitem__("v", v.get()), _Res("/u/"))[1])
+    s = _wait(jid, "ready")
+    assert s["status"] == "ready"
+    assert seen["v"] == "caller-context", \
+        f"job thread must see the caller's context, saw {seen['v']!r}"
+
+
+def test_prepare_emits_console_events(monkeypatch):
+    """Instrumentation guard (ARMED): a finished prepare job emits exactly one
+    `console` event (serve / viewer prepare) with status+duration; a failed
+    job emits severity=error carrying the message. Red-proven by removing the
+    obs.emit calls in _work."""
+    from core.runtime import notifications
+    got = []
+    monkeypatch.setattr(notifications, "broadcast", got.append)
+    def _events(n, timeout=2.0):
+        # status flips inside the lock; the emit follows on the job thread —
+        # poll the bus capture rather than racing it.
+        end = time.time() + timeout
+        while time.time() < end:
+            evs = [e for e in got if e.get("type") == "console"]
+            if len(evs) >= n:
+                return evs
+            time.sleep(0.01)
+        return [e for e in got if e.get("type") == "console"]
+
+    jid = prepare.start(lambda set_phase: _Res("/u/"), label="Explore")
+    assert _wait(jid, "ready")["status"] == "ready"
+    evs = _events(1)
+    assert len(evs) == 1, "one job = one event"
+    ev = evs[0]
+    assert ev["category"] == "serve" and ev["verb"] == "viewer prepare"
+    assert ev["status"] == "ok" and ev["ref"] == jid
+    assert ev["summary"] == "Explore" and ev["dur_ms"] >= 0
+
+    got.clear()
+    def boom(set_phase):
+        raise ValueError("store shape unusable")
+    jid2 = prepare.start(boom)
+    assert _wait(jid2, "error")["status"] == "error"
+    evs = _events(1)
+    assert len(evs) == 1 and evs[0]["severity"] == "error"
+    assert "store shape unusable" in evs[0]["status"]

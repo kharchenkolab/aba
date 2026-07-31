@@ -657,17 +657,11 @@ KERNEL_ENABLED = setting(
     doc="Master switch for the interactive kernel lane; off → stateless one-shot exec.",
 ).get()
 
-# W-K1 (kernels_to_weft.md): route the interactive kernel through weft's native
-# kernel_* (WeftKernelSession) instead of the jupyter_client transport. Default
-# OFF — the cutover is incremental (W-K1a isolated-env lane, then W-K1b default
-# lane on session-kernels) and rollback is flipping this back. When off, the pool
-# keeps building JupyterKernelSession.
-WEFT_KERNELS = setting(
-    "weft_kernels", env="ABA_WEFT_KERNELS", type="bool", default=False,
-    category="behavior", branches=True, weft_fate="keep",
-    doc="Route the interactive kernel through weft kernel_* (WeftKernelSession) "
-        "instead of jupyter_client.",
-).get()
+# Retired (kernel-transport cutover): weft_kernels (ABA_WEFT_KERNELS). The weft
+# kernel transport is now the ONLY interactive transport — the legacy
+# jupyter_client lane, its silent fallback, and this gate are gone. A deployment
+# still exporting the var gets the standard "unrecognized ABA_* var" startup
+# warning; it does nothing.
 KERNEL_IDLE_TTL_S = setting(
     "kernel_idle_ttl_s", env="ABA_KERNEL_IDLE_TTL_S", type="int", default=3600,
     category="tuning", weft_fate="revisit", reduction="merge:kernel",
@@ -708,6 +702,14 @@ HISTORY_K_TEXT_KEEP = setting(
     "history_k_text_keep", env="ABA_HISTORY_K_TEXT_KEEP", type="int", default=12,
     category="tuning", weft_fate="keep", reduction="merge:history",
     doc="Layer-A window: number of recent text turns kept verbatim.",
+).get()
+HISTORY_K_IMAGE_KEEP = setting(
+    "history_k_image_keep", env="ABA_HISTORY_K_IMAGE_KEEP", type="int", default=4,
+    category="tuning", weft_fate="keep", reduction="merge:history",
+    doc="Vision payloads: number of recent tool_result blocks whose image "
+        "blocks stay verbatim; older ones demote to a re-view stub (a vision "
+        "payload is consumed once but bills full base64 weight per request "
+        "while retained). Tune up for vision-heavy deployments.",
 ).get()
 HISTORY_SUMMARY_THRESHOLD_CHARS = setting(
     "history_summary_threshold_chars", env="ABA_HISTORY_SUMMARY_THRESHOLD_CHARS",
@@ -971,6 +973,17 @@ setting("runtime_override", env="ABA_RUNTIME_OVERRIDE", type="str", default=None
 setting("disabled_tools", env="ABA_DISABLED_TOOLS", type="csv", default=(),
         category="mode", branches=True, weft_fate="keep",
         doc="Comma-separated global tool kill-switch (layered under agent allowlists).")
+setting("store_allowed_origins", env="ABA_STORE_ALLOWED_ORIGINS", type="csv",
+        default=(), category="deploy", weft_fate="keep",
+        doc="Origins allowed to read viewer stores (/pagoda3-store/*) "
+            "CROSS-ORIGIN, e.g. https://pagoda3.example.org. Empty (the default) "
+            "means same-origin only. These are the project's own bytes and the "
+            "route adds no auth of its own, so same-origin is the access "
+            "boundary — an explicit allowlist widens it deliberately, and '*' is "
+            "never accepted (it would let any page the user visits read their "
+            "data). An allowed origin also gets Access-Control-Expose-Headers "
+            "for Content-Range/Content-Length/Accept-Ranges, without which a "
+            "cross-origin reader cannot verify the size of what it got.")
 setting("version", env="ABA_VERSION", type="str", default="dev", category="mode",
         weft_fate="keep", doc="Deployed ABA version label (provenance stamp).")
 setting("settings_strict", env="ABA_SETTINGS_STRICT", type="bool", default=False,

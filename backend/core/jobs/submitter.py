@@ -3,14 +3,16 @@
 ABA's background jobs (run_python/run_r with background=True) are dispatched
 through a BatchSubmitter so the placement is swappable:
 
-  - ``LocalSubmitter`` (default): the in-process async worker on THIS node —
-    today's behavior, unchanged.
-  - ``SlurmSubmitter``: ``sbatch`` onto the cluster, with a shared-filesystem
-    sentinel for completion (no callbacks/webhooks). ABA itself runs as a Slurm
-    job on a compute node and submits further jobs from there.
+  - the LOCAL weft lane (default): a bare weft task on this node — durable
+    across restarts, placement-bearing exec records.
+  - the CLUSTER weft lane (``slurm``): a weft task on the deployment's
+    slurm-kind site.
 
 Selection: ``ABA_BATCH_SUBMITTER=local|slurm`` (default ``local``); the OOD
-``before.sh`` sets ``slurm`` on a cluster deployment.
+``before.sh`` sets ``slurm`` on a cluster deployment. Every lane is a weft
+task — the legacy in-process worker and sbatch lanes are retired; a substrate
+outage refuses the submit with its typed cause rather than silently running
+somewhere else.
 
 The job ROW (core/graph/jobs) is created the same way for every submitter; the
 submitter only decides how it RUNS and how its status/cancel/monitoring resolve.
@@ -50,17 +52,13 @@ def submitter_name() -> str:
 
 
 def _local_lane() -> "BatchSubmitter":
-    """The local background lane (weft rewrite W2): a bare weft task when the
-    compute substrate is up — durable across restarts, placement-bearing exec
-    records — else the legacy in-process worker, loudly (transparent
-    degradation, never silent)."""
-    from core.jobs.weft_submitter import WeftSubmitter, weft_available
-    if weft_available():
-        return WeftSubmitter()
-    print("[jobs] compute substrate offline — background job falls back to the "
-          "in-process worker (no durable state across restarts)")
-    from core.jobs.runner import LocalSubmitter
-    return LocalSubmitter()
+    """The local background lane (weft rewrite W2): a bare weft task — durable
+    across restarts, placement-bearing exec records. With the substrate offline
+    the submit fails with the substrate's own typed error (an honest refusal:
+    science jobs cannot run without their envs anyway) — the legacy silent
+    fall-back to the in-process worker is retired with the cutover."""
+    from core.jobs.weft_submitter import WeftSubmitter
+    return WeftSubmitter()
 
 
 def _slurm_lane(kind: str | None = None) -> "BatchSubmitter":
@@ -93,9 +91,8 @@ def get_submitter(kind: str | None = None) -> "BatchSubmitter":
     name = submitter_name()
     if name == "slurm":
         return _slurm_lane(kind)
-    if name == "worker":     # explicit legacy escape hatch (in-process worker)
-        from core.jobs.runner import LocalSubmitter
-        return LocalSubmitter()
+    # ("worker" — the legacy in-process escape hatch — retired with the cutover;
+    # an unknown value falls through to the weft local lane.)
     return _local_lane()
 
 

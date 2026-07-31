@@ -25,7 +25,7 @@ VERB_PREFIXES = ("search_", "list_", "get_", "read_", "describe_", "inspect_",
                  "resolve_", "promote_", "pin_", "reproduce_", "rebuild_",
                  "diff_", "export_", "restart_", "check_", "cancel_",
                  "present_", "ask_", "build_", "write_", "edit_", "find_",
-                 "ensure_", "import_", "lookup_")
+                 "ensure_", "import_", "lookup_", "keep_", "evict_")
 # Deliberate exceptions (keep-list) — not required to match any rule.
 KEEP = {"Skill", "run_python", "run_r", "present_plan", "ask_clarification",
         "view_artifact", "view_file", "describe_tool"}

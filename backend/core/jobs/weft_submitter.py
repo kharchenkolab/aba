@@ -23,6 +23,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+from core.compute.errors import ComputeError, describe
 from core.data.workspace import scratch_dir
 
 _TERMINAL = {"DONE", "FAILED", "CANCELLED"}
@@ -33,6 +34,66 @@ _RESULT_READ_RETRIES = 5
 # controller-side fetch cap for detached results — matches the harvest
 # per-file cap; bigger files stay on the node (kept, (run,rel)-addressable)
 _DETACHED_FETCH_BYTES = 50 * 1024 * 1024
+
+
+# Substrate error code → the lever an ABA AGENT actually has. Keep this small
+# and only for codes whose weft-side hint names a verb the agent cannot reach;
+# everything else falls through to the substrate's own (usually good) hint.
+_ABA_LEVERS = {
+    "env.platform_mismatch":
+        "the project environment is locked for other platforms and cannot be "
+        "used on this site. Build an isolated env for it — "
+        "make_isolated_env(name='<name>', language='python'|'r', packages=[...]) "
+        "— then submit with env='<name>'; an isolated env re-locks for the "
+        "site's platform automatically. (The project's DEFAULT env does not.)",
+    "env.solve_conflict":
+        "the environment could not be solved as pinned. Put the conflicting "
+        "package in an isolated env (make_isolated_env) rather than the "
+        "project's default session, which must stay solvable for every other "
+        "remote step.",
+}
+
+
+def _typed_task_error(raw) -> Optional[str]:
+    """Render weft's task-row error payload as an agent-facing message, or None.
+
+    The payload is `{error, detail, hints, stage}` (sometimes a JSON string).
+    Rendering it beats the caller's generic "infra failure?" guess in every case
+    where it exists: the code names the CLASS and the hints usually name the
+    FIX. Returns None for an absent/unparseable payload so the caller keeps its
+    own wording rather than printing an empty verdict."""
+    if not raw:
+        return None
+    payload = raw
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except Exception:  # noqa: BLE001 — a bare string is still better than nothing
+            return payload[:400] or None
+    if not isinstance(payload, dict) or not payload.get("error"):
+        return None
+    code = payload.get("error")
+    detail = (payload.get("detail") or "").strip()
+    msg = f"the job failed on the compute substrate: {code}"
+    if detail:
+        msg += f" — {detail}"
+    # Substrate hints are written for a WEFT caller and name WEFT verbs. Where
+    # aba has its own lever for a known code, prefer it: telling an agent to
+    # "env_ensure again" points at a verb it cannot call, so a correct diagnosis
+    # still dead-ends. Observed live — the agent read the platform_mismatch
+    # correctly and then had no action available to it.
+    aba_lever = _ABA_LEVERS.get(str(code))
+    if aba_lever:
+        return f"{msg} Fix: {aba_lever}"
+    hints = payload.get("hints")
+    if isinstance(hints, dict):
+        # no aba lever for this code → the substrate's own hint is the best
+        # available, even if it speaks weft's vocabulary
+        for key in ("suggestion", "fix", "remedy", "levers"):
+            if hints.get(key):
+                msg += f" Fix: {hints[key]}"
+                break
+    return msg
 
 
 def _mismatch_platform(e) -> Optional[str]:
@@ -64,6 +125,44 @@ def _row_mismatch_platform(task_err) -> Optional[str]:
             or re.search(r"is ([a-z0-9_]+-[a-z0-9_]+)", task_err)
         return m.group(1) if m else None
     return None
+
+
+def _controller_platform() -> str:
+    from core.compute.named_envs import controller_platform
+    return controller_platform()
+
+
+def _site_platform_for(site: str) -> Optional[str]:
+    """A site's conda platform (linux-aarch64, osx-arm64, …) from its registered
+    capabilities — for the cross-platform layer_conflict re-lock (F-ENV-2).
+    None when the site can't say; the caller then skips the re-lock."""
+    try:
+        desc = _adapter().sync_call("sites_describe", site) or {}
+        caps = desc.get("capabilities") or {}
+        os_, arch = caps.get("os"), caps.get("arch")
+        if not (os_ and arch):
+            return None
+        if os_ == "darwin":
+            return f"osx-{'arm64' if arch in ('arm64', 'aarch64') else '64'}"
+        return f"linux-{'64' if arch in ('x86_64', 'amd64') else arch}"
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _relock_platform(code: str, env_name: Optional[str], site: str) -> Optional[str]:
+    """The platform to re-lock a NAMED env for, or None. Two triggers, unified
+    across every submit lane (kernel: weft.py; detached-submit + poll: here):
+      * env.platform_mismatch — weft names the site's platform in the error
+        (handled by _mismatch_platform/_row_mismatch_platform at the call site);
+      * env.layer_conflict on a CROSS-platform site — an EXTENDED env's delta was
+        solved against the controller-platform parent and won't fit on a
+        different platform (F-ENV-2); we look the platform up from the site's
+        caps. A SAME-platform layer_conflict is a genuine solve failure → None.
+    Only NAMED envs re-lock (the default snapshot has no per-project handle)."""
+    if not env_name or code != "env.layer_conflict":
+        return None
+    sp = _site_platform_for(site)
+    return sp if (sp and sp != _controller_platform()) else None
 
 
 def _adapter():
@@ -190,6 +289,50 @@ class WeftSubmitter:
         pid = (job.get("params") or {}).get("project_id") or "default"
         return scratch_dir(str(pid), job["id"])
 
+    @staticmethod
+    def _cancelled_note(params: dict) -> str:
+        """Why did this task end CANCELLED — the user, or the cluster?
+
+        Both look identical to the substrate, and both used to render as
+        "cancelled on the compute substrate" — so a walltime kill read like
+        something the user did. The row settles it: cancel_job persists
+        `cancel_requested` BEFORE stopping execution, so its presence means the
+        user asked and its absence means the scheduler ended it. The two imply
+        opposite next actions (don't resubmit vs resubmit with more walltime),
+        which is the whole reason to tell them apart.
+        """
+        where = params.get("weft_site") or params.get("site") or "local"
+        if params.get("cancel_requested"):
+            return f"cancelled at your request (stopped on {where})"
+        return (f"ended by the scheduler on {where}, not by you — typically a "
+                f"walltime limit, an out-of-memory kill or a node failure. "
+                f"Nothing here was cancelled from ABA. Check the node log for "
+                f"the reason; if it was walltime, re-submit with a longer "
+                f"estimated runtime.")
+
+    def _detached_result_present(self, job: dict, params: dict) -> bool:
+        """Has the entry written result.json — on whichever side actually holds it?
+
+        Shared-fs / local: `_run_dir` is the real directory, so a plain exists().
+        DETACHED: the file is on the NODE and travels over the data plane, so ask
+        the substrate. Without this the frozen-state recovery is local-only, and a
+        remote job's finished result stays invisible until its walltime lapses.
+        A substrate hiccup answers "not yet" — the walltime rule then applies, so
+        a transient error can only delay the verdict, never fabricate one.
+        """
+        if (self._run_dir(job) / "result.json").exists():
+            return True
+        site = params.get("weft_site") or params.get("site")
+        if not site or site == "local":
+            return False
+        try:
+            from core.compute import retention
+            out = retention.file_read(params.get("weft_id"), "result.json",
+                                      max_bytes=1 << 20)
+            return bool((out or {}).get("bytes_b64"))
+        except Exception:  # noqa: BLE001 — unreadable == not there YET
+            return False
+
     # ── submit ────────────────────────────────────────────────────────────
     def submit(self, job: dict) -> None:
         # DETACHED sites (no shared FS with this controller — a personal remote
@@ -291,6 +434,18 @@ class WeftSubmitter:
         self._record_run_target(params, r["job_id"])
 
     # ── detached transport (misc/detached_compute.md) ─────────────────────
+    def _job_site(self, params: dict) -> str:
+        """The site this JOB targets — not `self.site`, which is the submitter's
+        own default and is 'local' for every remote job routed through it.
+
+        ONE resolution, because a second copy went stale: the platform-mismatch
+        failure message read "this env is not available for LOCAL's platform
+        (linux-aarch64)" for a job that ran on a remote arm64 site. Internally
+        contradictory (local is not aarch64), and it pointed the agent at the
+        wrong machine while the real site name sat one dict key away.
+        """
+        return str(params.get("weft_site") or params.get("site") or self.site)
+
     def _site_kind(self, site: Optional[str] = None) -> Optional[str]:
         name = site or self.site
         for s in declared_compute_sites():
@@ -312,16 +467,50 @@ class WeftSubmitter:
             from core.compute import named_envs
             row = named_envs.resolve(str(pid), params["env"])
             if row is None:
-                print(f"[jobs.weft] unknown isolated env {params['env']!r} — "
-                      f"detached job runs on the node's system runtime")
-                return None, None
+                # A named env the caller asked for and we cannot find is a
+                # REFUSAL, not a licence to run somewhere else (this used to
+                # print and quietly fall through to the node's interpreter).
+                raise ComputeError(
+                    "env.unknown",
+                    f"no isolated env {params['env']!r} in project {pid}",
+                    stage="aba",
+                    hints={"fix": f"create it with make_isolated_env("
+                                  f"name={params['env']!r}), or omit env= to "
+                                  f"use the project environment"})
             return row["env_id"], params["env"]
+        from core.compute import base_env, project_env
+        from core.compute.errors import is_env_resolution_failure
         try:
-            from core.compute import base_env, project_env
             base_env.require(lang)
             return project_env.snapshot(str(pid), lang), None
-        except Exception:  # noqa: BLE001 — env-less, honestly graded
-            return None, None
+        except Exception as e:  # noqa: BLE001 — classified, never degraded
+            if not is_env_resolution_failure(e):
+                raise
+            # The declared env could not be resolved. FAIL — do not relocate the
+            # step to the node's PATH interpreter (see errors.py policy note).
+            # weft's diagnosis (solver_message / stderr_tail) rides along, and
+            # since weft now writes solve/<hash>/solve.err plus a solve event,
+            # the cause survives even if a future caller swallows this.
+            raise ComputeError(
+                "env.unresolved",
+                f"the project's {lang} environment could not be resolved for a "
+                f"step on site {self.site!r}: {describe(e, limit=400)}",
+                stage="aba",
+                hints={
+                    "cause": getattr(e, "code", type(e).__name__),
+                    **({"substrate_hints": e.hints} if getattr(e, "hints", None) else {}),
+                    "why_not_degraded": "running this on the node's own "
+                                        "interpreter would silently swap the "
+                                        "project's environment for an "
+                                        "arbitrary one",
+                    "levers": [
+                        "make_isolated_env(...) + env=<name> — an env you control",
+                        "env='system' — deliberately the node's bare "
+                        "interpreter (no packages)",
+                        "repair the project environment if an addition made it "
+                        "unsolvable (inspect_env shows the conflict)",
+                    ],
+                }) from e
 
     def _build_detached_task(self, job: dict, params: dict,
                              env_id: Optional[str],
@@ -402,7 +591,8 @@ class WeftSubmitter:
         try:
             r = comp.sync_call("task_submit", task)
         except ComputeError as e:
-            plat = _mismatch_platform(e)
+            plat = _mismatch_platform(e) or _relock_platform(
+                getattr(e, "code", ""), env_name, self.site)
             if plat and env_name:
                 # lazy re-lock (design §Environments): add the site's platform
                 # to the env's lock and retry ONCE
@@ -467,7 +657,7 @@ class WeftSubmitter:
         from core.compute import retention
         if state == "CANCELLED":
             res: dict = {"status": "cancelled",
-                         "note": "cancelled on the compute substrate"}
+                         "note": self._cancelled_note(params)}
             res.setdefault("compute", self._compute_block(wid, state))
             return res
 
@@ -522,6 +712,11 @@ class WeftSubmitter:
             # recorded spec; the DEFAULT env re-locks its BASE PACK (the
             # session snapshot's extras don't travel — recorded on the job).
             plat = _row_mismatch_platform(task_err)
+            if not plat and params.get("env") and isinstance(task_err, dict):
+                # F-ENV-2 parity: a cross-platform layer_conflict for an
+                # EXTENDED named env surfaces here at realize too.
+                plat = _relock_platform(str(task_err.get("error") or ""),
+                                        params.get("env"), self._job_site(params))
             if plat and not params.get("platform_relocked") and \
                     (params.get("env") or params.get("env_id")):
                 try:
@@ -538,8 +733,7 @@ class WeftSubmitter:
                         extra["env_note"] = (
                             "re-locked BASE pack for the site platform — "
                             "session-installed extras are not in this env")
-                    job_site = params.get("weft_site") or params.get("site") \
-                        or self.site
+                    job_site = self._job_site(params)
                     task = self._build_detached_task(job, params,
                                                      relock["env_id"],
                                                      site=job_site)
@@ -568,7 +762,8 @@ class WeftSubmitter:
                     res["error_detail"] = str(task_err)
                 elif plat:
                     res["error"] = (
-                        f"this env is not available for {self.site}'s platform "
+                        f"this env is not available for "
+                        f"{self._job_site(params)}'s platform "
                         f"({plat}) — the re-lock failed or wasn't possible; "
                         f"see error_detail")
                     res["error_detail"] = str(task_err)
@@ -616,6 +811,18 @@ class WeftSubmitter:
                             "files": files, "warnings": warnings})
             except Exception:  # noqa: BLE001 — files still in run dir/Files panel
                 pass
+        # cwd escape (harvest honesty): the node harness reports where the
+        # script ENDED. Files written outside the node jobdir are structurally
+        # invisible to output collection — the live case that showed 2 of 6
+        # outputs on a Run card. Say so instead of showing nothing.
+        try:
+            from core.exec.run import cwd_escape_warning
+            _esc = cwd_escape_warning(node.get("start_cwd"),
+                                      node.get("final_cwd"))
+            if _esc:
+                res["warnings"] = [*(res.get("warnings") or []), _esc]
+        except Exception:  # noqa: BLE001 — warning must never break a poll
+            pass
         if node.get("status") != "error":
             # REMOTE-ONLY outputs (too large to come home) still enter
             # PROVENANCE: a produced row with no url, so the exec record /
@@ -680,7 +887,14 @@ class WeftSubmitter:
             oat = params.get("local_orphan_at")
             if not oat:
                 return None
-            if (self._run_dir(job) / "result.json").exists():
+            # WHERE result.json lives depends on the lane, and _run_dir is a
+            # CONTROLLER path. A detached job writes it on the NODE and it comes
+            # home over the data plane, so the local check can never see it —
+            # a stamped remote row would wait out its walltime and fail with the
+            # answer sitting on the node. Measured after a real kill -9 on the
+            # docker slurm fixture: exit_code 0, result.json present there,
+            # weft's state frozen at RUNNING, and the row failed anyway.
+            if self._detached_result_present(job, params):
                 state = "DONE"          # the entry finished; fall through
             else:
                 import time as _t
@@ -692,11 +906,12 @@ class WeftSubmitter:
                                          why="restart orphan past walltime")
                 except Exception:  # noqa: BLE001
                     pass
+                _where = params.get("weft_site") or params.get("site") or "local"
                 res = {"error": (
-                    "the backend restarted while this local job was running "
-                    "and the job wrote no result within its walltime after "
-                    "the restart — it was orphaned by the restart and has "
-                    "been stopped; re-run it if the outputs are needed")}
+                    f"the backend restarted while this job was running on "
+                    f"{_where} and it wrote no result within its walltime "
+                    f"after the restart — it was orphaned by the restart and "
+                    f"has been stopped; re-run it if the outputs are needed")}
                 res.setdefault("compute", self._compute_block(wid, state))
                 return res
         # Finalization decisions come from the PERSISTED row, never the
@@ -720,7 +935,7 @@ class WeftSubmitter:
             # transport is a property of the SITE, not of who asks: a
             # detached-contract site can never satisfy a controller-local
             # result.json check, whatever the row happens to say
-            site = params.get("weft_site") or params.get("site") or self.site
+            site = self._job_site(params)
             try:
                 detached = bool(site) and site != "local" \
                     and site_contract(str(site)) == "detached"
@@ -740,7 +955,7 @@ class WeftSubmitter:
             except Exception:  # noqa: BLE001
                 res = {"error": f"result.json unreadable for weft job {wid}"}
         elif state == "CANCELLED":
-            res = {"status": "cancelled", "note": "cancelled on the compute substrate"}
+            res = {"status": "cancelled", "note": self._cancelled_note(params)}
         elif state == "DONE":
             # Terminal SUCCESS with no result file yet: shared-fs writes can
             # lag (close-to-open consistency). "Terminal, result not yet
@@ -772,14 +987,31 @@ class WeftSubmitter:
             # data-plane failures get the plain-language translation
             # (misc/datasets2.md S3): staging is async, so a drifted/vanished
             # durable home lands HERE as a failed job, not at submit
+            raw_err = (rows[0] or {}).get("error")
             try:
                 from core.data.datasets import explain_data_error
-                friendly = explain_data_error((rows[0] or {}).get("error"))
+                friendly = explain_data_error(raw_err)
                 if friendly:
                     res["error"] = friendly
-                    res["error_detail"] = (rows[0] or {}).get("error")
+                    res["error_detail"] = raw_err
             except Exception:  # noqa: BLE001 — translation must never mask the failure
                 pass
+            else:
+                # NOT a data error → surface the substrate's OWN TYPED verdict
+                # instead of the generic guess above. The task row carries weft's
+                # error payload {error, detail, hints}; discarding it turned an
+                # actionable `env.platform_mismatch: env is locked for
+                # ['linux-64','osx-arm64'] but site X is linux-aarch64` (fix: use
+                # an isolated env, which re-locks) into "infra failure before the
+                # entry ran?" — so the agent blamed the site and re-submitted the
+                # identical job, which failed identically (live, 2026-07-27 on an
+                # arm64 slurm node). Same class as the env-resolution swallow:
+                # a typed diagnosis replaced by a generic one.
+                if not friendly:
+                    typed = _typed_task_error(raw_err)
+                    if typed:
+                        res["error"] = typed
+                        res["error_detail"] = raw_err
         comp = self._compute_block(wid, state)
         # the entry copies spec env_id into the result — a bare task's weft
         # manifest has none, but the SNAPSHOT identity is real (W3.4)

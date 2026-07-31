@@ -120,6 +120,21 @@ It is a two-tier funnel and **operates on a copy** — the durable message log i
   `budget_summary.py:137`) so it can't inherit the chat model's rate-limit budget. `_TIER2_DIAG`
   counters (`budget_summary.py:163`) make a non-firing Tier 2 diagnosable.
 
+**Image payloads take a third, egress-side path** (`content/bio/vision_refs.py`):
+durable history never stores the base64 — producers pack a small `image_ref` block
+(path + entity id; URL-shaped `/artifacts/…` locations resolve through the canonical
+URL→path mapping), and prompt assembly materializes the most recent K refs back into
+real vision blocks upstream of the prep hash and every runtime; older or unresolvable
+refs degrade to an honest re-view stub, and no `image_ref` ever reaches the API.
+Refs are minted only where re-reading the source reproduces what the model saw — a
+rasterized PDF page keeps its inline payload (Tier 1 ages it out via `k_image_keep`),
+and the pack backstop refuses a ref that cannot deliver at mint time. This mechanism
+is disjoint from Tier 1's inline-image demotion: refs live outside the `type=="image"`
+population Tier 1 counts, so with both present a thread can carry up to 2×K images —
+one budget per mechanism, no shared invariant (see Known gaps). The UI transcript
+rehydrates refs on reload (entity-backed → served image; path-only → labeled
+placeholder). Guards: `tests/test_vision_refs.py`, `frontend/src/imageRefRehydrate.test.ts`.
+
 The `lean` primary spec passes a tighter `budget_chars` + `tail_keep` to demand much earlier
 Tier-2 summarization inside a small vLLM window; `None` preserves production behavior
 bit-for-bit. Budget precedence (`guide._summary_budget`): the dedicated override
@@ -202,6 +217,18 @@ demand with `read_memory`.
   capability, workspace) never enter the cross-thread snapshot — the agent learns of them only
   by focusing one or calling `list_entities` explicitly. Counts are registry-opt-in, but
   *detailed* surfacing is still hardcoded to two types.
+- **Two image budgets, no shared invariant.** Tier 1's `k_image_keep` counts inline
+  images; the vision-ref materializer keeps the last K refs. The populations are
+  disjoint (PDF pages and backstop-refused envelopes inline, the rest refs), so they
+  never fight over one block — but a thread carrying both holds up to 2×K images, and
+  the ref window is un-quantized (a new ref can flip the (K+1)-th ref image→stub
+  arbitrarily deep in cached history — a one-time re-bill per ref, monotonic, but
+  unbounded radius in the sparse-image regime).
+- **Ref materialization re-reads the file per generation.** A work-dir file
+  overwritten between views (the iterate-on-a-plot loop) re-materializes as its NEW
+  bytes next to the model's remarks about the old ones, and re-bills the prefix at
+  that depth once per overwrite. Content-addressed artifact copies are immune; bare
+  work paths are not.
 - **Typed memory lives outside the recovery archive.** The scribe mirrors entities, edges,
   messages, and exec records; it does *not* enqueue `projects/<pid>/memory/*.md`. On same-host
   recovery this is harmless (the files sit in the project dir), but a cross-host import that

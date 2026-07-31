@@ -62,12 +62,14 @@
   max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .canvas-back:hover { background: var(--tree-active-bg); color: var(--text); }
+/* Thread-overview button — icon-only, rendered bare like the bug button beside it. */
 .canvas-inventory {
-  display: inline-flex; align-items: center; gap: 5px;
-  border: 1px solid var(--border); background: var(--bg); color: var(--text-3);
-  font-size: 12px; padding: 4px 11px; border-radius: 9999px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; padding: 0;
+  border: 1px solid transparent; background: transparent; color: var(--text-4);
+  border-radius: 9999px; cursor: pointer; transition: color .12s, background .12s, border-color .12s;
 }
-.canvas-inventory:hover { background: var(--tree-active-bg); color: var(--text); }
+.canvas-inventory:hover { background: var(--tree-active-bg); color: var(--text-2); border-color: var(--border); }
 /* Unobtrusive bug-report button (icon-only) — sits in the canvas actions. */
 .canvas-bug {
   display: inline-flex; align-items: center; justify-content: center;

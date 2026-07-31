@@ -136,6 +136,93 @@ def test_url_preflight_405_head_refused_falls_through(monkeypatch):
 
 # ── 3. add_to_dataset on a remote-home dataset → named refusal ───────────────
 
+def test_remote_lane_mints_and_records_ref(monkeypatch):
+    # A remote-site path registration (durable home — bytes never touch this
+    # machine) EAGERLY mints the data-plane content ref under the synchronous
+    # byte-work budget and RECORDS it in the entity metadata: the recorded ref
+    # is what lets the range channel's ref arm stream the dataset later with
+    # no resolvable run. This lane used to drop the ref outright (found live:
+    # a by-reference remote store whose producing run was deleted could not
+    # stream because its registration recorded ref_path but no ref).
+    class _Port:
+        def __init__(self):
+            self.calls = []
+
+        def sync_call(self, name, *a, **kw):
+            self.calls.append((name, a, kw))
+            if name == "data_fingerprint":
+                return {"entries": [
+                    {"path": ".zattrs", "bytes": 100, "mtime": 1},
+                    {"path": "c/0.0", "bytes": 900, "mtime": 2}],
+                    "truncated": False}
+            if name == "data_register":
+                return {"ref": "sha256:eager", "bytes": 1000, "files": 2}
+            raise AssertionError(f"unexpected verb {name}")
+
+    port = _Port()
+    import core.compute.adapter as ad
+    monkeypatch.setattr(ad, "get_compute", lambda: port)
+    captured = {}
+    import core.graph.entities as ent
+    monkeypatch.setattr(ent, "create_entity",
+                        lambda **k: captured.update(k) or "ds_new")
+    monkeypatch.setattr(ent, "update_entity", lambda *a, **k: None)
+    monkeypatch.setattr(ent, "find_entities", lambda **k: [])
+    import content.bio.lifecycle.runs as runsmod
+    monkeypatch.setattr(runsmod, "agent_actor_for_thread", lambda tid: "agent")
+    monkeypatch.setattr(cur, "_resolve_dataset_path",
+                        lambda p, ctx, _remote_out=None: str(p))
+    monkeypatch.setattr(cur, "_capture_run_key", lambda *a, **k: None)
+    monkeypatch.setattr(cur, "_producing_exec_id", lambda *a, **k: None)
+    r = cur.register_dataset_tool({"title": "external tree",
+                                   "path": "/ext/data.store", "site": "siteA",
+                                   "origin": "collaborator"})
+    assert r.get("status") == "ok", r
+    md = captured["metadata"]
+    assert md["ref"] == "sha256:eager", md          # recorded identity
+    assert md["home"] == {"site": "siteA", "path": "/ext/data.store"}
+    assert md["by_reference"] is True
+    # minted with the registration-lane call shape (reference-in-place)
+    reg = [c for c in port.calls if c[0] == "data_register"]
+    assert len(reg) == 1, port.calls
+    assert reg[0][1] == ("/ext/data.store",)
+    assert reg[0][2] == {"site": "siteA", "ingest": False}
+
+
+def test_remote_lane_mint_failure_still_registers(monkeypatch):
+    # Best-effort ceiling: the mint failing (site hiccup mid-registration)
+    # leaves ref ABSENT from metadata — the registration itself succeeds
+    # unchanged (the launch-time lazy mint covers the gap later).
+    class _Port:
+        def sync_call(self, name, *a, **kw):
+            if name == "data_fingerprint":
+                return {"entries": [{"path": "a", "bytes": 10, "mtime": 1},
+                                    {"path": "b", "bytes": 10, "mtime": 2}],
+                        "truncated": False}
+            raise RuntimeError("site hiccup")
+    import core.compute.adapter as ad
+    monkeypatch.setattr(ad, "get_compute", lambda: _Port())
+    captured = {}
+    import core.graph.entities as ent
+    monkeypatch.setattr(ent, "create_entity",
+                        lambda **k: captured.update(k) or "ds_new2")
+    monkeypatch.setattr(ent, "update_entity", lambda *a, **k: None)
+    monkeypatch.setattr(ent, "find_entities", lambda **k: [])
+    import content.bio.lifecycle.runs as runsmod
+    monkeypatch.setattr(runsmod, "agent_actor_for_thread", lambda tid: "agent")
+    monkeypatch.setattr(cur, "_resolve_dataset_path",
+                        lambda p, ctx, _remote_out=None: str(p))
+    monkeypatch.setattr(cur, "_capture_run_key", lambda *a, **k: None)
+    monkeypatch.setattr(cur, "_producing_exec_id", lambda *a, **k: None)
+    r = cur.register_dataset_tool({"title": "external tree 2",
+                                   "path": "/ext/data2.store", "site": "siteA",
+                                   "origin": "collaborator"})
+    assert r.get("status") == "ok", r
+    md = captured["metadata"]
+    assert "ref" not in md, md                     # absent, not ref:None junk
+    assert md["home"]["site"] == "siteA"           # the record stands
+
+
 def test_add_to_remote_home_dataset_refused(monkeypatch):
     def _get(dsid):
         return {"id": dsid, "type": "dataset", "artifact_path": "/groups/x/bundle",

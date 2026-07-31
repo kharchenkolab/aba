@@ -16,6 +16,63 @@ from core.web.deps import require_project_context
 router = APIRouter()
 
 
+def _run_backed_path(node: dict) -> Path | None:
+    """Local bytes for a LEDGER-SOURCED run output node (`run_id` + `rel`,
+    grafted by tree._graft_run_outputs). Resolved through the canonical run
+    resolver — retained tree first, then live sandbox — because these files
+    live in the kernel workspace, where the node's `artifact_path` is a
+    SERVER URL, not a disk path. None when the bytes aren't local (remote
+    in-place keep, swept sandbox) — callers say where they live instead of
+    404ing blind (the node carries `site`)."""
+    rid, rel = node.get("run_id"), node.get("rel")
+    if not rid or not rel:
+        return None
+    from content.bio.lifecycle.runs import resolve_run_file
+    try:
+        p = resolve_run_file(rid, rel)
+    except Exception:  # noqa: BLE001
+        return None
+    return Path(p) if p else None
+
+
+def _node_not_local_detail(node: dict, path: str) -> str:
+    site = node.get("site")
+    if node.get("run_id") and site and site != "local":
+        return (f"{path!r} lives on {site} — open it from its Run card "
+                f"(which fetches remote bytes), or Keep it here first")
+    return f"file content missing on disk: {node.get('artifact_path')}"
+
+
+def _entity_disk_fallback(node: dict) -> Path | None:
+    """When a tree node's `artifact_path` is dangling (the /artifacts copy is a
+    size-capped serving CACHE, not the durable tier), resolve the backing
+    entity's own reference through the canonical Run resolver — bringing a
+    REMOTE-produced file home under the request-blocking gate. None when the
+    node isn't entity-backed or the bytes can't be served from here; raises an
+    honest site-naming 413 for a remote file past the gate (never a silent
+    404 while the bytes durably exist)."""
+    eid = node.get("entity_id")
+    if not eid:
+        return None
+    from content.bio.lifecycle.runs import resolve_entity_output, materialize_run_output
+    from core.exec.run import _MAX_HARVEST_BYTES
+    info = resolve_entity_output(eid)
+    if not info or info.get("kind") != "file":
+        return None
+    p = info.get("local_path") or materialize_run_output(
+        info, max_bytes=_MAX_HARVEST_BYTES)
+    if p:
+        return Path(p)
+    if info.get("locality") == "remote":
+        size = info.get("size")
+        sz = f" ({size / 1e6:.0f} MB)" if size else ""
+        raise HTTPException(
+            413, f"this file lives on {info.get('site')}{sz} — too large to "
+                 f"serve through the controller; open it with a viewer, or "
+                 f"Keep it and place it here first")
+    return None
+
+
 @router.get("/api/files/tree")
 def files_tree(include_archived: bool = False, project_id: str | None = None):
     require_project_context(project_id)
@@ -78,7 +135,13 @@ def files_download_zip(path: str = ""):
             src = _resolve_artifact_disk_path(node["artifact_path"])
             if src and src.exists():
                 return FileResponse(str(src), filename=name, media_type=None)
-        raise HTTPException(404, f"file at {path!r} is not on disk")
+        src = _run_backed_path(node)               # ledger-sourced run output
+        if src and src.exists():
+            return FileResponse(str(src), filename=name, media_type=None)
+        src = _entity_disk_fallback(node)          # canonical resolver (remote-aware)
+        if src and src.exists():
+            return FileResponse(str(src), filename=name, media_type=None)
+        raise HTTPException(404, _node_not_local_detail(node, path))
 
     leaves = iter_files(node)
     if not leaves:
@@ -88,15 +151,26 @@ def files_download_zip(path: str = ""):
     # controller (the sibling read routes are capped; this aggregate wasn't)
     from core.data.datasets import FETCH_GUARDRAIL_BYTES
 
-    def _leaf_bytes(leaf) -> int:
-        if leaf.get("artifact_path"):
-            src = _resolve_artifact_disk_path(leaf["artifact_path"])
-            try:
-                return src.stat().st_size if src and src.exists() else 0
-            except OSError:
-                return 0
-        return len(leaf.get("content") or leaf.get("synthesized_content") or "")
-    total = sum(_leaf_bytes(x) for x in leaves)
+    def _leaf_src(leaf) -> Path | None:
+        src = _resolve_artifact_disk_path(leaf.get("artifact_path"))
+        if src and src.exists():
+            return src
+        src = _run_backed_path(leaf)               # ledger-sourced run output
+        return src if src and src.exists() else None
+
+    # resolve ONCE per leaf (the run-backed lookup does real work), reuse for
+    # both the size gate and the zip pass
+    resolved = [(leaf, None if (leaf["kind"] == "readme" or leaf.get("synthesized"))
+                 else _leaf_src(leaf)) for leaf in leaves]
+
+    def _leaf_bytes(leaf, src) -> int:
+        if leaf["kind"] == "readme" or leaf.get("synthesized"):
+            return len(leaf.get("content") or leaf.get("synthesized_content") or "")
+        try:
+            return src.stat().st_size if src else 0
+        except OSError:
+            return 0
+    total = sum(_leaf_bytes(leaf, src) for leaf, src in resolved)
     if total > FETCH_GUARDRAIL_BYTES:
         raise HTTPException(413, f"files under {path!r} total {total / 1e9:.1f} GB "
                                  f"— too large for a single archive; download "
@@ -106,18 +180,26 @@ def files_download_zip(path: str = ""):
     base_prefix_len = len(base) + 1 if base else 0
 
     buf = io.BytesIO()
+    skipped: list[str] = []
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for leaf in leaves:
+        for leaf, src in resolved:
             arcname = leaf["path"][base_prefix_len:] if base_prefix_len else leaf["path"]
             mtime = leaf.get("mtime")
             if leaf["kind"] == "readme":
                 _write_zip_text(zf, arcname, leaf.get("content", ""), mtime)
             elif leaf.get("synthesized"):
                 _write_zip_text(zf, arcname, leaf.get("synthesized_content") or "", mtime)
-            elif leaf.get("artifact_path"):
-                src = _resolve_artifact_disk_path(leaf["artifact_path"])
-                if src and src.exists():
-                    zf.write(src, arcname=arcname)  # preserves source mtime
+            elif src is not None:
+                zf.write(src, arcname=arcname)      # preserves source mtime
+            else:
+                # honesty parity with /api/runs/{rid}/archive: a file the tree
+                # LISTS but this machine can't serve is NAMED in the zip, not
+                # silently omitted (remote in-place keeps, swept sandboxes)
+                where = f" (on {leaf['site']})" if leaf.get("site") else ""
+                skipped.append(f"{arcname} — not available from this machine{where}")
+        if skipped:
+            zf.writestr("SKIPPED-FILES.txt",
+                        "Not included in this archive:\n" + "\n".join(skipped) + "\n")
     buf.seek(0)
     fname = (base.rsplit("/", 1)[-1] or "files") + ".zip"
     return StreamingResponse(
@@ -153,10 +235,11 @@ def files_promote(path: str, title: str = ""):
     if not node or node.get("kind") != "file" or not node.get("ephemeral"):
         raise HTTPException(400, "not a promotable working file")
     ap = node.get("artifact_path")
-    if not ap or not Path(ap).exists():
+    src = Path(ap) if ap and Path(ap).exists() else _run_backed_path(node)
+    if src is None or not src.exists():
         raise HTTPException(404, "working file is no longer on disk")
     res = register_dataset_tool({
-        "path": ap,
+        "path": str(src),
         "title": (title or node.get("name") or Path(ap).name).strip(),
         "summary": "Promoted from the working/scratch tier.",
         "source": "promoted-from-working",
@@ -181,9 +264,16 @@ def files_content(path: str, download: int = 0):
     node = find_node(tree, path)
     if node is None:
         raise HTTPException(404, f"no node at {path!r}")
+    # `.is_file()`, not `.exists()`: disk-grafted FOLDER nodes now carry a real
+    # artifact_path, and a directory satisfies exists() — FileResponse would
+    # then blow up mid-response instead of falling through to the honest 404.
     src = _resolve_artifact_disk_path(node.get("artifact_path"))
-    if src is None or not src.exists():
-        raise HTTPException(404, f"file content missing on disk: {node.get('artifact_path')}")
+    if src is None or not src.is_file():
+        src = _run_backed_path(node)               # ledger-sourced run output
+    if src is None or not src.is_file():
+        src = _entity_disk_fallback(node)          # canonical resolver (remote-aware)
+    if src is None or not src.is_file():
+        raise HTTPException(404, _node_not_local_detail(node, path))
     media = mimetypes.guess_type(src.name)[0] or "application/octet-stream"
     headers = {"Content-Disposition": f'attachment; filename="{src.name}"'} if download else {}
     return FileResponse(str(src), media_type=media, headers=headers)
@@ -223,8 +313,14 @@ def files_raw(path: str, offset: int = 0, max_lines: int = 200):
 
     artifact = node.get("artifact_path")
     src = _resolve_artifact_disk_path(artifact)
-    if src is None or not src.exists():
-        raise HTTPException(404, f"file content missing on disk: {artifact}")
+    # `.is_file()` for the same reason as the content route above: a grafted
+    # folder node carries a real artifact_path and would otherwise be opened.
+    if src is None or not src.is_file():
+        src = _run_backed_path(node)               # ledger-sourced run output
+    if src is None or not src.is_file():
+        src = _entity_disk_fallback(node)          # canonical resolver (remote-aware)
+    if src is None or not src.is_file():
+        raise HTTPException(404, _node_not_local_detail(node, path))
 
     # Hard cap: refuse pulls > 256 KB of text. Lines may run long.
     cap_chars = 256 * 1024

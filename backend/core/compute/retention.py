@@ -93,12 +93,188 @@ def file_stat(target: str, rel: str) -> dict:
     return _call("run_file_stat", target, rel)
 
 
+# Version-skew memo for the batched verb forms (weft bd6ae6e): a substrate
+# that predates them refuses the kwarg ONCE per process, then we emulate.
+_BATCH_REFUSED: set = set()
+# Emulation is per-file round-trips — the exact amplifier the batch removes —
+# so it keeps the pre-batch budget; rels beyond it stay UNANSWERED (absent
+# from the reply = not-checked, which callers must never read as "absent on
+# disk").
+_EMULATE_CAP = 50
+
+
+def _predates_batch(e: BaseException) -> bool:
+    """True only for 'this substrate doesn't know the batched form' — an
+    in-process old signature (TypeError) or a dispatcher kwarg refusal. Real
+    failures (site down, bad path) must propagate, not silently degrade to
+    N round-trips."""
+    if isinstance(e, TypeError):
+        return "unexpected keyword" in str(e)
+    return (getattr(e, "code", "") == "task.invalid"
+            and ("keyword" in getattr(e, "detail", "")
+                 or "unknown" in getattr(e, "detail", "")))
+
+
+def file_stats(target: str, rels: list) -> dict:
+    """Batched `run_file_stat(target, rels=[...])`: one target resolution, one
+    keep lookup, ONE stat invocation → `{"files": {rel: answer}}` with the
+    single-call per-file shape and sandbox→keep precedence preserved in-batch
+    (weft bd6ae6e — a polling panel was paying 2N store queries + N subprocess
+    spawns, serialized; this is the O(1) form). Weft guarantees per-path
+    positive markers: a partially-run probe raises retryable internal.error
+    rather than reporting a file absent."""
+    rels = list(rels)
+    if not rels:
+        return {"files": {}}
+    if "run_file_stat" not in _BATCH_REFUSED:
+        try:
+            return _call("run_file_stat", target, rels=rels)
+        except Exception as e:  # noqa: BLE001
+            if not _predates_batch(e):
+                raise
+            _BATCH_REFUSED.add("run_file_stat")
+    out: dict = {}
+    for rel in rels[:_EMULATE_CAP]:
+        try:
+            out[rel] = file_stat(target, rel)
+        except Exception:  # noqa: BLE001 — per-file trouble = unanswered
+            continue
+    return {"files": out}
+
+
+def inventories(targets: list) -> dict:
+    """Batched `run_inventory(targets=[...])` → `{"inventories": {target:
+    result | typed-error dict}}` — one absent receipt never fails the batch
+    (its entry carries the error; discriminate with `is_error_payload`).
+    Recorded receipts only (live=True stays per-run, per weft's contract)."""
+    targets = list(targets)
+    if not targets:
+        return {"inventories": {}}
+    if "run_inventory" not in _BATCH_REFUSED:
+        try:
+            return _call("run_inventory", targets=targets)
+        except Exception as e:  # noqa: BLE001
+            if not _predates_batch(e):
+                raise
+            _BATCH_REFUSED.add("run_inventory")
+    from core.compute.errors import ComputeError
+    out: dict = {}
+    for t in targets:
+        try:
+            out[t] = inventory(t)
+        except ComputeError as e:
+            out[t] = e.to_payload()
+        except Exception as e:  # noqa: BLE001
+            out[t] = {"error": "internal.error", "stage": "aba",
+                      "detail": str(e), "retryable": True}
+    return {"inventories": out}
+
+
 def file_read(target: str, rel: str, max_bytes: int = 1 << 20) -> dict:
     """Size-capped base64 PREVIEW read from a target's sandbox (weft `run_file_read`): live
     or dead, path confined to the jobdir, hard-capped at 8 MB (`data.missing` on a swept
     file). A preview channel, NOT transport — big files travel via
     `data_register(path, site=) → data_fetch` (which also mints the run:<target> lineage)."""
     return _call("run_file_read", target, rel, max_bytes=max_bytes)
+
+
+# ── ranged read (chunk-streaming backhaul) ───────────────────────────────────
+# weft's per-call ranged-read clamp; a caller loops for the remainder when the
+# reply is `capped`. Two doorways share this clamp and envelope: the run-keyed
+# `file_read_range` (run/kernel jobdir addressing) and the ref-addressed
+# `data_read_range` (data-plane content ref addressing — the ref arm).
+RANGE_CAP = 16 * 1024 * 1024
+_RANGE_VERB = "run_file_read_range"
+DATA_RANGE_VERB = "data_read_range"
+# Per-verb availability, probed once each and cached. A deployment may expose
+# the run verb but NOT the ref verb (a substrate that shipped run streaming
+# before the ref arm) — so each verb is probed independently, and a caller for
+# the ref arm never assumes the run verb's answer.
+_verb_available: dict = {}
+
+
+def range_read_available(verb: str = _RANGE_VERB) -> bool:
+    """Whether the DEPLOYED substrate exposes a ranged-read `verb` — the
+    run-keyed `run_file_read_range` (default) or the ref-addressed
+    `data_read_range` (`DATA_RANGE_VERB`). An older weft simply lacks one or
+    both; each is probed once PER VERB (no round-trip; just whether the adapter
+    would dispatch it) and cached, so every caller degrades to today's
+    whole-fetch path uniformly. A substrate with the run verb but not the ref
+    arm answers True for the former and False for the latter. False when the
+    substrate is offline. Never raises."""
+    cached = _verb_available.get(verb)
+    if cached is None:
+        try:
+            weft = _adapter.get_compute().raw_controller()
+            fn = getattr(type(weft), verb, None)
+            cached = bool(fn is not None and getattr(fn, "_weft_tool", False))
+        except Exception:  # noqa: BLE001 — offline / unwired → degrade
+            cached = False
+        _verb_available[verb] = cached
+    return cached
+
+
+def file_read_range(target: str, rel: Optional[str] = None, *, offset: int = 0,
+                    length: Optional[int] = None,
+                    rels: Optional[list] = None) -> dict:
+    """One ranged read from a target's sandbox/keep — the chunk-streaming
+    backhaul doorway (mirrors `file_read`, run-keyed addressing). Returns
+    `{target, path, at, offset, nbytes, size, eof, capped, bytes_b64}` (`at` in
+    {"sandbox","retained"}; `bytes_b64` "" when nbytes==0). An out-of-range
+    offset is NOT an error → nbytes=0, eof=True, size present (derive 416/404
+    from it). An over-cap `length` clamps with capped=True → loop for the
+    remainder (cap default `RANGE_CAP`). Typed errors surface as ComputeError:
+    `data.missing` (missing file / swept sandbox / vanish-race — RETRYABLE; also
+    returned when bytes were expected but the file vanished, so key a streamer on
+    THIS, never on nbytes==0), `task.invalid` (containment escape / bad intake).
+    Raises AttributeError when the verb is ABSENT (older substrate) — probe
+    `range_read_available()` first and degrade. A singular call costs ~1 app
+    round-trip over a WAN (one-shot absence-or-read since weft shim v9); the
+    per-chunk cache is what makes that fine.
+
+    `rels=[...]` batches WHOLE members in ONE remote invocation (mutually
+    exclusive with rel/offset/length): returns `{"files": {rel: entry |
+    {"error": <code>}}, "not_read": [rels deferred at the call budget —
+    loop, never silently truncated]}`. Old substrates without the batch
+    raise TypeError (unexpected kwarg) — callers degrade to singular."""
+    if rels is not None:
+        return _call(_RANGE_VERB, target, rels=rels)
+    return _call(_RANGE_VERB, target, rel, offset=offset, length=length)
+
+
+def data_read_range(ref: str, rel: Optional[str] = None, *, offset: int = 0,
+                    length: Optional[int] = None, site: Optional[str] = None,
+                    rels: Optional[list] = None) -> dict:
+    """One ranged read addressed by a DATA-PLANE content `ref` — the ref-arm
+    sibling of `file_read_range` over ONE shared weft engine, with the IDENTICAL
+    envelope + semantics. Returns `{ref, at, via, offset, nbytes, size, eof,
+    capped, bytes_b64}` — additionally to `file_read_range`, `at` names where it
+    was read (`"workspace"` or a site name) and `via` how (`"external-home"` or
+    `"site-cas"`). A TREE ref takes `rel` (a member path within the tree — our
+    per-chunk store shape); a FILE ref takes NO `rel` (both misuses refuse
+    loudly). Resolution prefers a local workspace CAS copy (free pread) then
+    registered locations; `site=` scopes where to read.
+
+    Same past-EOF (out-of-range offset → nbytes=0, eof=True, size present),
+    over-cap clamp (`capped=True` → loop for the remainder, cap `RANGE_CAP`),
+    base64 payload (`bytes_b64` "" when nbytes==0), and TYPED errors as
+    `file_read_range`: `data.missing` (ref vanished / GC'd — RETRYABLE; key a
+    streamer on THIS, never on nbytes==0), `task.invalid` (rel-on-FILE,
+    no-rel-on-TREE, containment/intake). Raises AttributeError when the verb is
+    ABSENT — a deployment may have the run verb but NOT this one, so probe
+    `range_read_available(DATA_RANGE_VERB)` (a distinct per-verb cache) first and
+    degrade. A singular call costs ~1 app round-trip over a WAN (one-shot
+    absence-or-read since weft shim v9); the per-chunk cache is what makes that
+    fine.
+
+    `rels=[...]` batches WHOLE tree members in ONE remote invocation (mutually
+    exclusive with rel/offset/length): `{"files": {rel: entry | {"error":
+    <code>}}, "not_read": [...]}` with the remainder deferred EXPLICITLY at the
+    call budget. Old substrates raise TypeError — degrade to singular."""
+    if rels is not None:
+        return _call(DATA_RANGE_VERB, ref, rels=rels, site=site)
+    return _call(DATA_RANGE_VERB, ref, rel=rel, offset=offset, length=length,
+                 site=site)
 
 
 def location_path(obj) -> Optional[str]:

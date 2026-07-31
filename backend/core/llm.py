@@ -53,16 +53,19 @@ def _strip_cc(content):
     return out
 
 
-def build_cached_blocks(system: str, dynamic_system: str, tools: list, *, cc_marker: bool):
+def build_cached_blocks(system: str, tools: list, *, cc_marker: bool):
     """Assemble the system + tools API blocks with prompt-cache breakpoints:
-    `cache_control` on the STABLE system prefix and on the LAST tool (which caches the
-    whole tool catalog array). The dynamic system tail (BM25 recipes) and the OAuth CC
-    marker stay UNCACHED, so per-turn dynamic content never busts the catalog/system
-    cache. Pure + side-effect-free so the tool_use a2 guard test can assert the cache
-    structure (and its invariance across turns) without opening a live stream."""
+    `cache_control` on the system block and on the LAST tool (which caches the whole
+    tool catalog array). Only the OAuth CC marker stays uncached. Pure +
+    side-effect-free so the cache guard test can assert the structure — and its
+    invariance across turns — without opening a live stream.
+
+    `system` must carry NOTHING that varies per turn. Prompt caching is PREFIX-based
+    over the order tools → system → messages, so a volatile byte anywhere in `system`
+    invalidates the MESSAGES breakpoint too and the entire conversation is re-sent as
+    fresh input every turn it changes. Per-turn context therefore rides the last
+    message instead — see `place_volatile_tail`."""
     sys_blocks = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
-    if dynamic_system:
-        sys_blocks.append({"type": "text", "text": dynamic_system})   # uncached tail
     if cc_marker:
         sys_blocks = [_CC_MARKER_BLOCK, *sys_blocks]                  # uncached marker, first
     _INTERNAL_KEYS = {"approval_policy"}
@@ -73,23 +76,132 @@ def build_cached_blocks(system: str, dynamic_system: str, tools: list, *, cc_mar
     return sys_blocks, tool_blocks
 
 
-def _mark_last_block_cached(messages: list) -> list:
-    """Set cache_control on the last message's last block — the 3rd caching breakpoint —
-    UNLESS that block is an EMPTY text block. Anthropic 400s on cache_control over an
-    empty text block ("cache_control cannot be set for empty text blocks"), which the
-    last message can end in after an ask_clarification / plan halt+resume (a bare text
-    block). Skipping the marker there is harmless (one fewer cache breakpoint that turn);
-    sending it is a hard request failure. Returns messages (tail replaced in place)."""
-    if not (messages and isinstance(messages[-1].get("content"), list) and messages[-1]["content"]):
-        return messages
-    c = messages[-1]["content"]
+# ── Wire tripwire (prep/sent hash parity) ────────────────────────────────────
+# guide.py hashes the effective history at prep ([llm-prep]); _RealStream hashes
+# the SAME boundary (pre-tail, cache-marks stripped) at send ([llm-sent]). Any
+# unsanctioned mutation between them makes the sent hash miss the recent-prep
+# set. Counted here — and EXPOSED via /api/admin (a tripwire nobody watches is
+# decoration: this one sat red for 73 straight requests once, detected only by
+# hand). Deque membership (not last-value equality) keeps concurrent threads'
+# interleaved prep/sent pairs from counting as false mismatches.
+from collections import deque as _deque
+_RECENT_PREP_SHAS: "_deque[str]" = _deque(maxlen=64)
+_WIRE_DIAG: dict = {"hash_match": 0, "hash_mismatch": 0, "last_mismatch": "",
+                    "sends_scored": 0}
+
+
+def wire_hash(messages) -> str:
+    """THE canonical envelope hash both ends of the wire compare — one
+    function, or the two sides drift and the tripwire cries wolf.
+    cache_control is stripped (caching metadata, not input semantics)."""
+    import hashlib as _h
+    import json as _j
+    canon = _j.dumps(
+        [{"role": m.get("role"), "content": _strip_cc(m.get("content"))}
+         for m in messages],
+        sort_keys=True, default=str).encode("utf-8")
+    return _h.sha256(canon).hexdigest()[:12]
+
+
+def prep_wire_hash(llm_history) -> str:
+    """What guide scores BEFORE send: the SAME boundary as the send side.
+    The send path hashes messages after the api_messages transform (chip
+    blocks stripped, empty text dropped, emptied messages substituted), so
+    the prep side must apply that transform too — hashing the raw history
+    made every attachment-bearing or halt-shaped thread mismatch on every
+    request, and the tripwire sat red through normal operation."""
+    from core.runtime.history_prep import api_messages
+    return wire_hash(api_messages(llm_history))
+
+
+def _note_wire_hash(sent_sha: str) -> None:
+    """Score one sent-side hash against the recent prep-side set. Unarmed
+    sends (no prep hash yet — runtimes that bypass guide) don't score, but
+    they DO count: sends_scored is the armed-ness signal that lets a reader
+    tell frozen zeros from no traffic."""
+    _WIRE_DIAG["sends_scored"] += 1
+    if not _RECENT_PREP_SHAS:
+        return
+    if sent_sha in _RECENT_PREP_SHAS:
+        _WIRE_DIAG["hash_match"] += 1
+    else:
+        _WIRE_DIAG["hash_mismatch"] += 1
+        _WIRE_DIAG["last_mismatch"] = sent_sha
+
+
+def place_volatile_tail(messages: list, tail: str) -> tuple[list, bool]:
+    """Deliver the turn's VOLATILE context (project snapshot, focus/thread preambles,
+    the intent-sliced recipe catalog, the live compute-env line) as a trailing block on
+    the LAST message — i.e. after every cache breakpoint — instead of in the system
+    array. Returns (messages, placed).
+
+    Why placement, not content, is the performance lever: the cache prefix runs
+    tools → system → messages, so anything volatile in `system` sits in the prefix of
+    the messages breakpoint and re-sends the WHOLE conversation as fresh input on every
+    turn it changes. Measured live on a Slurm deployment (2026-07-21, four turns):
+    cache_read pinned at the tools+system size (27,989 both later turns) while
+    cache_write tracked the growing history (43k → 17k → 38k → 58k) — per-turn cost
+    grew with the conversation instead of staying flat. The compute-env line alone
+    (20s TTL, node/queue state) guaranteed a miss on essentially every turn.
+
+    Call this LAST, after `_mark_history_cached`, so the tail lands AFTER the marked
+    block and stays outside the cached prefix. Appended only to a `user` message — a
+    tail on an assistant message would fabricate model output — so the caller keeps it
+    in the system array on that (rare) shape rather than dropping it.
+
+    The tail is wrapped in <system-reminder> tags: it rides a user message, and
+    without the wrapper the model reads harness-injected state as something the
+    USER typed (and could be spoofed by content that merely looks like it). The
+    SDK runtime delivers the same tail with the same wrapper — keep them aligned."""
+    if not tail:
+        return messages, True                      # nothing to place
+    if not (messages and messages[-1].get("role") == "user"
+            and isinstance(messages[-1].get("content"), list)):
+        return messages, False                     # caller falls back to the system array
+    last = messages[-1]
+    wrapped = f"<system-reminder>\n{tail}\n</system-reminder>"
+    messages = [*messages[:-1],
+                {**last, "content": [*last["content"], {"type": "text", "text": wrapped}]}]
+    return messages, True
+
+
+def _mark_message_tail_cached(messages: list, idx: int) -> None:
+    """Set cache_control on message idx's last block, UNLESS that block is an EMPTY
+    text block. Anthropic 400s on cache_control over an empty text block
+    ("cache_control cannot be set for empty text blocks"), which a message can end
+    in after an ask_clarification / plan halt+resume (a bare text block). Skipping
+    the marker there is harmless; sending it is a hard request failure. Mutates the
+    list entry (callers pass a fresh list of fresh dicts)."""
+    m = messages[idx]
+    if not (isinstance(m.get("content"), list) and m["content"]):
+        return
+    c = m["content"]
     last = c[-1]
     if not isinstance(last, dict):
-        return messages
+        return
     if last.get("type") == "text" and not (last.get("text") or "").strip():
-        return messages                                   # empty text block → don't mark
-    messages[-1] = {**messages[-1], "content": [*c[:-1], {**last, "cache_control": {"type": "ephemeral"}}]}
-    return messages
+        return                                            # empty text block → don't mark
+    messages[idx] = {**m, "content": [*c[:-1], {**last, "cache_control": {"type": "ephemeral"}}]}
+
+
+def _mark_history_cached(messages: list) -> list:
+    """Place the MESSAGE-side cache breakpoints: the last block of the last TWO
+    user messages (2 marks; with the system + last-tool marks that totals the
+    API's maximum of 4 breakpoints).
+
+    Why two, not one: a breakpoint only walks BACK 20 content blocks to find a
+    prior cache entry. A single sliding mark on the newest user message misses
+    whenever one agentic turn appends >20 blocks (10+ tool_use/tool_result pairs)
+    — the whole history re-bills, silently. The second mark re-anchors the
+    PREVIOUS request's breakpoint position, which always has a cache entry, so
+    the prefix up to there reads from cache no matter how many blocks the current
+    turn added; only the oversized delta bills fresh."""
+    out = list(messages)
+    user_idxs = [i for i in range(len(out) - 1, -1, -1)
+                 if out[i].get("role") == "user"][:2]
+    for i in user_idxs:
+        _mark_message_tail_cached(out, i)
+    return out
 
 
 # ---------- Real provider ----------
@@ -113,15 +225,16 @@ class _RealStream:
         self._stream = None
 
     async def __aenter__(self):
-        # Prompt caching: stable prefix (cache_control) + dynamic tail (no cache).
-        # Up to 4 breakpoints total: stable system, tools, last-message — 3 used.
-        # cache_control on the stable system + last tool; the dynamic system tail and
-        # the OAuth CC marker stay uncached (see build_cached_blocks). oauth_cc mode:
+        # Prompt caching: everything stable sits in the cached prefix, everything
+        # per-turn rides the very end. All 4 breakpoints used: system, last tool,
+        # and the last TWO user messages (see _mark_history_cached — the second
+        # anchor covers >20-block turns the lookback window would miss). Only
+        # the OAuth CC marker stays uncached (see build_cached_blocks). oauth_cc mode:
         # the server gates non-Haiku on OAuth by a byte-exact first-system-block CC
         # marker check — so the marker is first, its own block, and uncached.
         # approval_policy etc. are stripped (API rejects unknown tool keys).
         system, tools = build_cached_blocks(
-            self._system, self._dynamic_system, self._tools, cc_marker=_wants_cc_marker())
+            self._system, self._tools, cc_marker=_wants_cc_marker())
         # THE single history→API transform: {role, content} with UI-only blocks
         # (e.g. the `attachments` chip block) stripped. Anything that reaches the
         # Anthropic SDK passes through here, so the validity guard test
@@ -129,12 +242,22 @@ class _RealStream:
         # allow-list — that's the regression that would have caught the live 400.
         from core.runtime.history_prep import api_messages
         messages = api_messages(self._history)
-        # Cache_control on the last message's last block — the third (of
-        # three) caching breakpoint. Done BEFORE the dump so the persisted
-        # payload reflects what the API actually sees (was previously
-        # written without this marker, which made the dump misleading
-        # about caching behavior).
-        messages = _mark_last_block_cached(messages)
+        # Message-side breakpoints (last two user messages). Done BEFORE the
+        # dump so the persisted payload reflects what the API actually sees
+        # (was previously written without this marker, which made the dump
+        # misleading about caching behavior).
+        messages = _mark_history_cached(messages)
+        # Tripwire reference: the guide's [llm-prep] hash is taken BEFORE the
+        # volatile tail is appended (a sanctioned post-prep transform, like the
+        # cache marks _strip_cc removes). Hash the same boundary here, or the
+        # prep/sent pair differs on every request and the tripwire is dead.
+        _pre_tail_messages = messages
+        # …then the per-turn volatile context AFTER that mark, so it sits outside
+        # every cached prefix. Only a non-user last message (rare) sends it back to
+        # the system array, where it costs a cache miss but is never dropped.
+        messages, _placed = place_volatile_tail(messages, self._dynamic_system)
+        if not _placed:
+            system = [*system, {"type": "text", "text": self._dynamic_system}]
         # max_tokens caps a single assistant turn's output. 4096 was too tight:
         # when the agent emits a tool_use with large `code` content (e.g.
         # writing a multi-KB markdown recipe via run_python), the stream cuts
@@ -152,6 +275,16 @@ class _RealStream:
         # / "0" / "" disables.
         import os as _os, hashlib as _hashlib, time as _time
         import json as _json
+        # Score the wire hash UNCONDITIONALLY — the tripwire is a production
+        # instrument, not a debug feature. It used to live inside the dump
+        # block below, so ABA_RAW_REQUEST_DIR=off (or an unwritable dir)
+        # silently disarmed it: frozen zeros indistinguishable from no
+        # traffic, the dead-diagnostic class the armed convention forbids.
+        try:
+            _hist_sha = wire_hash(_pre_tail_messages)
+            _note_wire_hash(_hist_sha)
+        except Exception:  # noqa: BLE001 — diagnostics must never break a turn
+            _hist_sha = "?"
         _rawdir = config.settings.raw_request_dir.get()
         if _rawdir and _rawdir.lower() not in ("off", "0", "false", ""):
             try:
@@ -163,17 +296,13 @@ class _RealStream:
                 with open(_fn, "w") as _f:
                     _json.dump(_payload, _f, default=str)
                 # Compact one-line summary on stdout so you can spot mismatches
-                # without parsing JSONs. Logs the SHA-256 of the message envelope
-                # (canonicalized, cache_control stripped — that's metadata, not
-                # input semantics) so it's directly comparable to the same hash
-                # computed from the dumped turn_context JSON.
-                _canon = _json.dumps(
-                    [{"role": m["role"], "content": _strip_cc(m.get("content"))} for m in messages],
-                    sort_keys=True, default=str,
-                ).encode("utf-8")
-                _hist_sha = _hashlib.sha256(_canon).hexdigest()[:12]
+                # without parsing JSONs; the sha is the shared wire_hash, so it's
+                # directly comparable to [llm-prep]'s.
                 _full_sys = (self._system or "") + (self._dynamic_system or "")
-                _sys_sha = _hashlib.sha256(_full_sys.encode("utf-8")).hexdigest()[:12]
+                # sys_sha over the STABLE block alone — same boundary as
+                # [llm-prep]'s (the dynamic tail is per-turn by design; its size
+                # is reported separately below).
+                _sys_sha = _hashlib.sha256((self._system or "").encode("utf-8")).hexdigest()[:12]
                 print(f"[llm-sent] model={self._model} sys_sha={_sys_sha} "
                       f"hist_sha={_hist_sha} n_msgs={len(messages)} "
                       f"sys_chars={len(_full_sys)}"

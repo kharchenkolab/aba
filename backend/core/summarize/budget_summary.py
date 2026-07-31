@@ -164,6 +164,13 @@ _TIER2_DIAG: dict = {
     "ok":               0,    # synth returned non-empty wrapped text
     "skipped_no_prompt": 0,   # `thread_summary` registration absent
     "raised":           0,    # any Exception path
+    "reused":           0,    # stored summary served verbatim — NO LLM call
+    "reused_on_fail":   0,    # synth failed; stored summary served (not the cliff)
+    "saturated":        0,    # budget unsatisfiable at ANY boundary; served stored
+                              # verbatim. A nonzero rate here is the live tell that
+                              # something oversized (e.g. a vision block) is being
+                              # retained verbatim in history — the upstream cap's
+                              # problem, not this module's.
     "last_error":       "",
 }
 
@@ -270,32 +277,100 @@ def maybe_summarize(thread_id: Optional[str], messages: list[dict],
         # Not enough room to collapse meaningfully — bail.
         return messages
 
-    to_cover_n = len(messages) - eff_tail
-    old_block = messages[:to_cover_n]
-    tail = messages[to_cover_n:]
-
+    # The boundary derives from the STORE, not from the current length.
+    # Prompt caching is prefix-matched: if each call re-picked the boundary
+    # from `len(messages) - eff_tail`, the head would slide +2 every
+    # generation and the summary (message 0) would be re-synthesized over a
+    # different block each time — nothing before the tail would ever match,
+    # so a long turn re-billed its entire retained history per generation
+    # (measured live: 411k cache_write tokens in one turn) and paid an extra
+    # synchronous LLM call per generation. Instead: REUSE the stored
+    # (covered_until, summary) verbatim while the uncovered remainder still
+    # fits the budget — output stays a prefix-extension of the previous
+    # generation's — and ADVANCE the boundary (monotonically, re-synthesizing
+    # with the prior as seed) only when the remainder alone re-exceeds it.
     existing = _load(thread_id)
-    prior = existing[1] if existing else None
+    if existing:
+        cov_n, prior = existing
+        if 0 < cov_n <= len(messages) - 1:
+            remainder = messages[cov_n:]
+            # Reuse tolerates OVERSHOOT up to a slack quantum. Without it there
+            # is a third regime between headroom and saturation — the MARGINAL
+            # band, where the tail fits the budget but the post-advance
+            # remainder (tail + summary) sits just under it, so one
+            # generation's growth re-crosses the line and the code
+            # re-synthesizes EVERY generation (full prefix break + a
+            # synchronous LLM call each time; measured 30/39 divergences at a
+            # 12k budget with a 20-message tail). Advancing further can't help
+            # — the advance is already maximal (the tail floor) — so the
+            # quantum goes on THIS check, in char space: serve the stored
+            # summary while overshoot < slack, fold once per slack's worth of
+            # growth. Bounded over-budget (≤ slack), epochs instead of churn.
+            _slack = min(8_000, max(1_500, _threshold(budget_chars) // 4))
+            # Measure what we RETURN, not the raw summary text: the returned
+            # list carries `_summary_message(prior)`, whose handoff framing adds
+            # ~216 chars that `len(prior)` doesn't see. Budgeting the unwrapped
+            # text made the "over-budget by at most `slack`" claim false by that
+            # constant (measured 3,134 overshoot against a 3,000 slack) — small
+            # here, but it is a CONSTANT, so it grows as a share of the bound
+            # whenever slack approaches its 1,500 floor.
+            _candidate = [_summary_message(prior), *remainder]
+            if _message_chars(_candidate) <= _threshold(budget_chars) + _slack:
+                _TIER2_DIAG["reused"] += 1
+                return _candidate
+        else:
+            cov_n, prior = 0, None      # store stale/misaligned → full re-derive
+    else:
+        cov_n, prior = 0, None
+
+    # SATURATION rule: if even MAXIMUM coverage cannot fit — the tail alone
+    # (plus the summary) exceeds the budget, which one oversized message inside
+    # tail_keep guarantees — then re-synthesizing achieves nothing but a broken
+    # prefix and a synchronous LLM roundtrip, every generation (the regime the
+    # live incident was in: a ~MB vision block riding the tail for ~tail_keep/2
+    # generations, 30/30 divergences measured). Serve the stored summary
+    # verbatim instead: over-budget but byte-STABLE, so the request is a
+    # prefix-extension and bills only its delta. Advance anyway once the
+    # uncovered gap exceeds a quantum (bounds coverage staleness at one
+    # sanctioned rewrite per epoch, same idiom as Tier-1's batches).
+    desired = len(messages) - eff_tail
+    if cov_n and prior:
+        tail_chars = _message_chars(messages[desired:])
+        if tail_chars + len(prior) > _threshold(budget_chars) \
+                and (desired - cov_n) < max(16, 4 * eff_tail):
+            _TIER2_DIAG["saturated"] += 1
+            return [_summary_message(prior), *messages[cov_n:]]
+
+    to_cover_n = max(desired, cov_n)                    # never move backwards
+    old_block = messages[cov_n:to_cover_n] if cov_n else messages[:to_cover_n]
+    tail = messages[to_cover_n:]
 
     summary_text = _synthesize(thread_id, old_block, prior_summary=prior)
     if not summary_text:
-        return messages   # synth failed; keep full pruned list
+        # Degrade to the STORED summary when one exists: stale-but-stable beats
+        # the bail-out cliff (dumping the full un-summarized history was the
+        # single largest cache_write of the measured run).
+        if prior and cov_n:
+            _TIER2_DIAG["reused_on_fail"] += 1
+            return [_summary_message(prior), *messages[cov_n:]]
+        return messages   # no store yet; keep full pruned list
 
     _save(thread_id, to_cover_n, summary_text)
 
-    # Single user-role message carries the summary, prefixed with the same
-    # handoff framing Claude Code uses on its own continuing-session injection
-    # ("This session is being continued from a previous conversation…").
-    # Pattern: the model has been trained on CC's transcripts where this
-    # exact framing appears at the start of a continued session — using it
-    # primes the model to read what follows as meta-context, not user request.
+    return [_summary_message(summary_text)] + tail
+
+
+def _summary_message(summary_text: str) -> dict:
+    """Single user-role message carrying the summary, prefixed with the same
+    handoff framing Claude Code uses on its own continuing-session injection
+    ("This session is being continued from a previous conversation…") — the
+    model reads it as meta-context, not user request. Byte-DETERMINISTIC for a
+    given summary text: this message is message 0 of every request while the
+    summary is live, so any variation here re-bills the whole history."""
     handoff = (
         "This session is being continued from a previous conversation that "
         "ran out of context. The summary below covers the earlier portion of "
         "the conversation.\n\n"
     )
-    summary_msg = {
-        "role": "user",
-        "content": [{"type": "text", "text": handoff + summary_text}],
-    }
-    return [summary_msg] + tail
+    return {"role": "user",
+            "content": [{"type": "text", "text": handoff + summary_text}]}

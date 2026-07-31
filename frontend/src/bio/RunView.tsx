@@ -13,6 +13,7 @@ import { useUnpinConfirm } from '../lib/useUnpinConfirm'
 import FileBrowser, { type TreeNode } from './FileBrowser'
 import FileCanvas from '../viewers/FileCanvas'
 import EntityMenu from './EntityMenu'
+import EditableTitle from '../components/EditableTitle'
 import type { FileNode } from '../viewers/types'
 import './RunView.css'
 
@@ -78,8 +79,6 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onPre
   const remoteSites = Array.from(new Set((m.sites ?? []).filter(s => s && s !== 'local')))
   const hpc = remoteSites.length > 0 || m.executor === 'remote-hpc'
   const active = status === 'running' || status === 'queued'
-  const [editing, setEditing] = useState(false)
-  const [title, setTitle] = useState(run.title)
   const [panel, setPanel] = useState<'command' | 'log' | 'details' | null>(
     status === 'failed' || status === 'running' ? 'log' : null)
   // Re-run verbs live in a quiet ⋯ overflow — rarely used, they shouldn't
@@ -109,24 +108,51 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onPre
   // the live sandbox — so the panel survives the sandbox sweep instead of going empty.
   const runOpen = (run.metadata as { run_state?: string } | undefined)?.run_state === 'open'
   const pollRef = useRef<number | undefined>(undefined)
+  const failsRef = useRef(0)
   const loadDurable = useCallback(() => {
+    // clear FIRST: manual refreshes (keep flow) must not stack timers
+    if (pollRef.current) { window.clearTimeout(pollRef.current); pollRef.current = undefined }
     fetch(`/api/runs/${encodeURIComponent(run.id)}/durable`)
-      .then(r => r.ok ? r.json() : null)
+      .then(r => { if (!r.ok) throw new Error(`durable ${r.status}`); return r.json() })
       .then(d => {
+        failsRef.current = 0
         setRunTree(d as TreeNode | null)
         setDuraSummary((d && (d as { summary?: Record<string, number> }).summary) || null)
-        // Re-poll while the Run is still ACTIVE (open) — so a run-in-progress picks up
-        // newly-harvested files without a manual reload — OR while anything is settling
-        // (weft `saving` → flips to `retained` when weft captures at kernel stop). /durable is
-        // live-accurate per call. Stops once the Run is closed and nothing is saving.
-        if (pollRef.current) { window.clearTimeout(pollRef.current); pollRef.current = undefined }
-        if (runOpen || (d && treeHasPending(d as TreeNode))) pollRef.current = window.setTimeout(loadDurable, 6000)
+        // Cadence by STATE, not existence (convoy discipline — every open Run
+        // card used to poll at 6s forever, and the pollers × an expensive
+        // route parked the server's worker pool): 6s only while something is
+        // actually settling (weft `saving` → `retained` at capture); a
+        // merely-open run re-checks at 30s (newly-harvested files are
+        // additive, not urgent); closed and settled never polls. A hidden tab
+        // schedules nothing — the visibilitychange listener refreshes on
+        // return. /durable is live-accurate per call.
+        const pending = !!d && treeHasPending(d as TreeNode)
+        const delay = pending ? 6000 : runOpen ? 30000 : 0
+        if (delay && !document.hidden) pollRef.current = window.setTimeout(loadDurable, delay)
       })
-      .catch(() => setRunTree(null))
+      .catch(() => {
+        // Keep the last-good tree — blanking the panel on one failed poll
+        // lied "no files"; the OLD loop also stopped rescheduling entirely,
+        // so a single blip silently killed the panel until remount. Retry
+        // with backoff (10s→60s): failing pollers must slow down during
+        // exactly the overload that makes them fail. Reset on next success.
+        failsRef.current += 1
+        const delay = Math.min(10_000 * 2 ** (failsRef.current - 1), 60_000)
+        if (!document.hidden) pollRef.current = window.setTimeout(loadDurable, delay)
+      })
   }, [run.id, runOpen])
   useEffect(() => {
     loadDurable()
-    return () => { if (pollRef.current) window.clearTimeout(pollRef.current) }
+    const onVis = () => {
+      if (document.hidden) {
+        if (pollRef.current) { window.clearTimeout(pollRef.current); pollRef.current = undefined }
+      } else loadDurable()
+    }
+    document.addEventListener('visibilitychange', onVis)
+    return () => {
+      document.removeEventListener('visibilitychange', onVis)
+      if (pollRef.current) window.clearTimeout(pollRef.current)
+    }
   }, [loadDurable])
 
   // Esc closes the file-preview modal.
@@ -295,7 +321,6 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onPre
     }).catch(() => {})
     onChange()
   }
-  const saveTitle = () => { setEditing(false); if (title.trim() && title.trim() !== run.title) patch({ title: title.trim() }) }
   async function cancel() {
     await fetch(`/api/runs/${encodeURIComponent(run.id)}/cancel`, { method: 'POST' }).catch(() => {})
     onChange()
@@ -443,13 +468,9 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onPre
     <div className="runview">
       {/* Title — status pill sits to its right */}
       <div className="runview__titlerow">
-        {editing ? (
-          <input className="runview__title-input" autoFocus value={title}
-                 onChange={e => setTitle(e.target.value)} onBlur={saveTitle}
-                 onKeyDown={e => { if (e.key === 'Enter') saveTitle(); if (e.key === 'Escape') { setTitle(run.title); setEditing(false) } }} />
-        ) : (
-          <h1 className="runview__title" onClick={() => setEditing(true)} title="Click to rename">{run.title}</h1>
-        )}
+        <EditableTitle as="h1" className="runview__title" value={run.title} ariaLabel="Rename run"
+          aiSuggested={(run.metadata as { title_origin?: string } | undefined)?.title_origin === 'ai'}
+          onCommit={t => patch({ title: t })} />
         {pill}
         {failChip}
         <EntityMenu entity={run} onChange={onChange} />

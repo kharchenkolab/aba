@@ -5,8 +5,9 @@ the cascade (e.g. included by a second Result) is preserved; the
 inbound includes/supports/wasDerivedFrom edges from the deleted Result
 are detached so the visible Result row disappears cleanly.
 
-Without cascade=members the original blocking behavior stays in place
-(refuses with 409 + a `references` list).
+Deleting a MEMBER that a live Result still includes refuses (409 +
+`references` + `can_override` — dependents block; see
+tests/test_delete_blockers.py for the full blocker semantics).
 
 Run: .venv/bin/python tests/test_result_delete_cascade.py
 """
@@ -90,13 +91,18 @@ def test_cascade_deletes_result_plus_member_plus_chain():
     check("chain has 3 entries before delete", len(chain) == 3,
           f"got {[e['id'] for e in chain]}")
 
-    # Plain hard-delete (no cascade): should still REFUSE (current behavior)
-    r = client.delete(f"/api/entities/{rid}?hard=true")
-    check("non-cascade hard-delete refused", r.status_code == 409,
+    # Hard-deleting a MEMBER the live Result still includes: REFUSE — the
+    # Result depends on it (inbound includes). The refusal is actionable:
+    # it names the dependent and advertises the force override.
+    r = client.delete(f"/api/entities/{anchor}?hard=true")
+    check("member hard-delete refused (live dependent)", r.status_code == 409,
           f"got {r.status_code}: {r.text[:160]}")
-    refs = r.json().get("detail", {}).get("references") or []
-    check("refusal lists the figure as a reference", any(b["id"] == anchor for b in refs),
+    detail = r.json().get("detail", {}) if r.status_code == 409 else {}
+    refs = detail.get("references") or []
+    check("refusal lists the Result as the dependent", any(b["id"] == rid for b in refs),
           f"refs={refs}")
+    check("refusal advertises the force override", detail.get("can_override") is True,
+          f"detail={detail}")
 
     # cascade=members: should succeed
     r = client.delete(f"/api/entities/{rid}?hard=true&cascade=members")

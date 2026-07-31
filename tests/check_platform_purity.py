@@ -36,11 +36,11 @@ PLATFORM_TESTS = [
     "tests/p0_integration.py",
     "tests/p0_spine.py",
     "tests/p_resume_dedup.py",
-    "tests/k1_kernels.py",
+    # k1_kernels.py + d13_kernelspec_hygiene.py were retired with the
+    # kernel-transport cutover (96c72435) — jupyter lane gone, nothing to guard.
     "tests/repro_plan_resume_dup.py",
     "tests/d11_conversation_integrity.py",
     "tests/d12_plan_robustness.py",
-    "tests/d13_kernelspec_hygiene.py",
     "tests/d18_stream_coalesce.py",
     "tests/d18c_tool_stream_buffer.py",
     "tests/d18d_tool_stream_replay.py",

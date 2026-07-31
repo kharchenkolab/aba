@@ -133,10 +133,14 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
           user an output is "kept" or "safe" before a keep/retain has
           actually recorded it.
 
-        ENVIRONMENT: omit `env` (or `env='default'`) for the project's
-        normal environment. Pass `env='name'` to run inside an isolated
-        environment you created with `make_isolated_env(name='name')` —
-        used when a package conflicts with the base. `env` combines with
+        ENVIRONMENT: omit `env` to follow the project's ACTIVE environment
+        — the normal stack, or the env promoted with set_active_env
+        (`env='default'` forces the normal stack for one call). Pass
+        `env='name'` to run inside an isolated environment you created with
+        `make_isolated_env(name='name')` — used when a package conflicts
+        with the base. Existing named envs appear in the per-turn compute
+        line and via inspect_env(). `env`
+        combines with
         `background=True`: a long job runs IN that env (its own python),
         as a Slurm job on a compute node when on a cluster. On a REMOTE
         step (`site=`), `env='system'` runs on the node's own interpreter
@@ -187,6 +191,7 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
               est_cores: Annotated[int | None, Field(description=_D_EST_CORES)] = None,
               est_mem_gb: Annotated[int | None, Field(description=_D_EST_MEM)] = None,
               est_gpu: Annotated[bool, Field(description=_D_EST_GPU)] = False,
+              fresh: bool = False,
               title: str | None = None,
               env: str | None = None,
               execution: Annotated[str | None, Field(description=_D_EXECUTION)] = None,
@@ -197,10 +202,16 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
         files off (CSV/Parquet/RDS). For Bioconductor / DESeq2 /
         edgeR / limma / Seurat work.
 
-        ENVIRONMENT: omit `env` for the project's normal R library
-        (which already overrides the base). Pass `env='name'` only for a
-        fully isolated R library you made with
-        `make_isolated_env(name='name', language='r')`.
+        ENVIRONMENT: omit `env` to follow the project's ACTIVE R
+        environment — the normal R library, or an isolated R env promoted
+        with set_active_env(name, language='r') (`env='default'` forces
+        the normal library for one call). Pass `env='name'` for an
+        isolated R env made with `make_isolated_env(name='name',
+        language='r')` — the route when a package needs SYSTEM libraries
+        the base lacks (the project library layers R packages only; a
+        full solve can carry system deps). Promote it with set_active_env
+        so bare run_r uses it. Existing named envs appear in the per-turn
+        compute line and via inspect_env().
 
         INSTALLING PACKAGES: to use an R package that isn't loaded, call
         `ensure_capability(name)` FIRST — NEVER `install.packages()`,
@@ -224,7 +235,10 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
         Rscript via `run_python(subprocess.run(['Rscript', ...]))` —
         background=True IS the supported path for long R work. `site` runs the
         step ON a declared remote machine — same rules as run_python's `site`
-        (alone = synchronous fresh process there; + background for long steps).
+        (alone = synchronous, in a PERSISTENT session there: variables and
+        loaded objects survive between your site= calls, so multi-step remote
+        work needs no reload-from-disk each step; fresh=true for a clean
+        one-shot; + background for long steps).
 
         ROUTING NOTE: When the goal is a MODIFIED VERSION of an existing
         focused figure/table (cairo_pdf of a current figure, ggsave with
@@ -245,5 +259,5 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
                           "site": site,
                           "estimated_runtime_min": estimated_runtime_min,
                           "est_cores": est_cores, "est_mem_gb": est_mem_gb,
-                          "est_gpu": est_gpu,
+                          "est_gpu": est_gpu, "fresh": fresh,
                           "title": title, "env": env}, ctx)

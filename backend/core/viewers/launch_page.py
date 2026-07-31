@@ -88,8 +88,20 @@ _HTML = r"""<!doctype html>
         <div><div class="vl-title">Couldn't open the viewer</div>
              <div class="vl-sub" id="vl-errsub">Preparing the dataset failed.</div></div></div>
       <div class="vl-err-detail" id="vl-errdetail"></div>
+      <!-- Revealed for a PATH-backed (no entity) remote failure: a raw path can't
+           be mirrored, so retry would fail identically. Point at the fix that
+           does exist — open the file via its registered dataset entity. -->
+      <div class="vl-sub vl-hidden" id="vl-remote-guidance">
+        This file lives on a remote site. A raw-path link can't mirror it — open it
+        through its registered dataset entity in ABA to enable the one-click mirror,
+        or mirror the dataset from its card, then reopen.
+      </div>
       <div class="vl-actions">
         <button class="vl-btn vl-btn--primary" id="vl-retry">Try again</button>
+        <!-- Revealed only for entity-backed sources whose error says the
+             bytes live on another machine: offers the FIX (the dataset
+             mirror route), not just a retry that would fail identically. -->
+        <button class="vl-btn vl-hidden" id="vl-mirror">Mirror the data here &amp; retry</button>
         <button class="vl-btn" id="vl-report">Report to the ABA team</button>
       </div>
     </div>
@@ -124,7 +136,36 @@ _HTML = r"""<!doctype html>
       if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
       $("vl-loading").classList.add("vl-hidden");
       $("vl-errdetail").textContent = msg || "Unknown error.";
+      // A "the bytes live elsewhere" failure has a one-click fix WHEN the source
+      // is entity-backed: mirror the dataset home (size-gated, verified), then
+      // relaunch — retry alone would fail identically. Without an entity there is
+      // no lever to offer, so name the honest path forward instead of only Retry.
+      var remoteish = /lives on|bring it home|not on this machine|remote site/i.test(msg || "");
+      $("vl-mirror").classList.toggle("vl-hidden", !(remoteish && params.entity_id));
+      $("vl-remote-guidance").classList.toggle("vl-hidden", !(remoteish && !params.entity_id));
       $("vl-error").classList.remove("vl-hidden");
+    }
+
+    function mirrorAndRetry() {
+      var btn = $("vl-mirror");
+      btn.disabled = true; btn.textContent = "Mirroring…";
+      fetch(api("/datasets/" + encodeURIComponent(params.entity_id) + "/mirror"), {
+        method: "POST", headers: { "X-Project-Id": project },
+      })
+        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+        .then(function (res) {
+          btn.disabled = false; btn.textContent = "Mirror the data here & retry";
+          if (!res.ok) {
+            showError(typeof (res.d && res.d.detail) === "string"
+                      ? res.d.detail : "Mirror failed.");
+            return;
+          }
+          launch();
+        })
+        .catch(function (e) {
+          btn.disabled = false; btn.textContent = "Mirror the data here & retry";
+          showError(String(e && e.message || e));
+        });
     }
 
     function tick() {
@@ -181,12 +222,17 @@ _HTML = r"""<!doctype html>
         .then(function (res) {
           if (!res.ok) { showError(res.d && res.d.detail || "Launch failed."); return; }
           if (res.d.label) { label = res.d.label; $("vl-title").textContent = verb + " " + label + "…"; }
+          // The launch route may have reverse-looked-up a raw path to a dataset
+          // entity — adopt it so a later remote-gate failure can offer the
+          // working mirror lever instead of the path-only dead end (F4).
+          if (res.d.entity_id && !params.entity_id) { params.entity_id = res.d.entity_id; }
           poll(res.d.job_id);
         })
         .catch(function (e) { showError(String(e && e.message || e)); });
     }
 
     $("vl-retry").addEventListener("click", launch);
+    $("vl-mirror").addEventListener("click", mirrorAndRetry);
     $("vl-report").addEventListener("click", function () {
       var ctx = { where: "viewer-launch", viewer: label || params.viewer_id,
                   file: params.path || params.entity_id, project: project,

@@ -1,6 +1,13 @@
-/* §1 safety ledger strip — quiet, one line; absent entirely when all-safe-local. */
-.ledger { margin: 4px 0 6px; font-size: 12px; color: var(--text-3); }
+/* §1 safety ledger strip — absent entirely when all is safe; when it does
+   speak, it renders as a soft attention card matching the tree's card
+   language (was: bare full-width plaintext with no margins). */
+.ledger {
+  margin: 2px 10px 8px; padding: 6px 10px;
+  background: var(--bg-soft); border: 1px solid var(--border);
+  border-radius: 8px; font-size: 12px; color: var(--text-3);
+}
 .ledger__line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ledger__lead { font-weight: 600; color: var(--text-2); }
 .ledger__flag {
   font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 9999px;
   background: var(--surface-3); color: var(--text-3); border: 1px solid var(--border);

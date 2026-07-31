@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import type { ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -6,7 +7,7 @@ import { prepareAssistantText } from '../markdown/prepareAssistantText'
 import { withBasePath } from '../oodBase'
 import type { DisplayMessage, Block, Entity } from '../types'
 import { AgentAvatar } from '../components/icons'
-import { HILITE, captureHighlight, type Pt } from '../components/highlightTools'
+import { HILITE, captureHighlight, nextAnnotToken, type Pt } from '../components/highlightTools'
 import './Message.css'
 
 interface Annotation { image: string; note: string }
@@ -536,8 +537,13 @@ function renderBlocks(blocks: Block[], collapseTools: boolean, onRetry?: () => v
   // Markdown overrides. Always present so the `img`/`a` rewrites apply even
   // when fileMap is empty.
   const mdComponents = {
+    // A stray markdown image (the agent occasionally re-emits a figure as
+    // `![](…)` despite the steering) used to render as a bare, unscaled <img>
+    // that overflowed the column and had no lightbox. Route it through the same
+    // ZoomableImg wrapper as tool-result figures so it scales (.msg-text img)
+    // and gets click-to-zoom. No pin — a markdown image carries no entity.
     img: (props: { src?: string; alt?: string }) => (
-      <img src={fixFileUrl(props.src)} alt={props.alt ?? ''} />
+      <ZoomableImg src={fixFileUrl(props.src)} alt={props.alt ?? ''} />
     ),
     a: (props: { href?: string; children?: React.ReactNode; title?: string }) => {
       const href = fixFileUrl(props.href)
@@ -767,11 +773,13 @@ function ZoomableImg({ src, alt, pinSlot }: {
         onError={() => { if (cors) setCors(false) }}
         style={{ cursor: 'zoom-in' }} title="Click to view full size"
         onClick={() => setOpen(true)} />
-      {open && (
+      {open && createPortal(
         <div className="lightbox" role="dialog" aria-modal="true" onClick={() => setOpen(false)}>
           {/* Frame shrinks to the image's rendered size; toolbar sits
               above its left edge — same idea as the Run-view modal's
-              header bar but without the box chrome. */}
+              header bar but without the box chrome. Portaled to <body> so a
+              markdown-image caller (the mdComponents img override renders
+              inside a <p>) doesn't nest this block <div> in a paragraph. */}
           <div className="lightbox__frame" onClick={e => e.stopPropagation()}>
             <div className="lightbox__tools">
               {pinSlot}
@@ -780,7 +788,8 @@ function ZoomableImg({ src, alt, pinSlot }: {
             <img className="lightbox__img" src={src} alt={alt}
               crossOrigin={cors ? 'anonymous' : undefined} />
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   )
@@ -1013,8 +1022,10 @@ interface Props {
   currentRunId?: string | null
   /** Collapse (hide) tool indicators — used on non-latest messages. */
   collapseTools?: boolean
-  /** Attach a highlighted region from a chat figure to the next message. */
-  onAnnotate?: (a: Annotation) => void
+  /** Attach a highlighted region from a chat figure to the next message.
+   *  `ownerId` (a fresh token per capture) lets App track which cell owns the
+   *  pinned mark so it can keep this cell's overlay frozen until dismissed. */
+  onAnnotate?: (a: Annotation, ownerId?: string) => void
   /** Global highlight mode (toggled in the chat header) — show a draw surface. */
   highlighting?: boolean
   /** True while any cell has a drag in progress — suppresses the hover surface
@@ -1026,6 +1037,10 @@ interface Props {
   onHighlightDone?: () => void
   /** Increment to erase a drawn mark on chat figures. */
   annotClear?: number
+  /** Token of the cell that currently owns the pinned highlight (App state).
+   *  This cell keeps its captured mark "frozen" only while hlOwner === its own
+   *  capture token; a newer highlight (or clearing the chip) retires it. */
+  hlOwner?: string | null
   /** Regenerate this (failed) turn — shown as a retry button on error blocks. */
   onRetry?: () => void
   /** Entities (to resolve chat figures) + pin toggle for the capture gesture. */
@@ -1060,7 +1075,7 @@ function msgKey(s: string): string {
   return 'm' + (h >>> 0).toString(36)
 }
 
-export default function Message({ message, isStreaming, collapseTools, onAnnotate, highlighting, anyDrawing, onDrawingChange, onHighlightDone, onRetry, entities, onPin, onArtifactPinned, pinnedFigureIds, keptKeys, onKeepMessage, planActive, onPlanGo, onPlanAdjust, fileMap, currentRunId }: Props) {
+export default function Message({ message, isStreaming, collapseTools, onAnnotate, highlighting, anyDrawing, onDrawingChange, onHighlightDone, hlOwner, onRetry, entities, onPin, onArtifactPinned, pinnedFigureIds, keptKeys, onKeepMessage, planActive, onPlanGo, onPlanAdjust, fileMap, currentRunId }: Props) {
   const isUser = message.role === 'user'
   const [showSteps, setShowSteps] = useState(false)
   // a cancelled/interrupted turn can checkpoint a message with NO blocks —
@@ -1140,6 +1155,16 @@ export default function Message({ message, isStreaming, collapseTools, onAnnotat
   const canHighlight = !!onAnnotate && !isStreaming
   const showSurface = highlighting && canHighlight && ((hovered && !anyDrawing) || drawing)
   useEffect(() => { if (!highlighting) { setStroke([]); strokeRef.current = []; setHovered(false) } }, [highlighting])
+  // A captured mark stays "frozen" on this cell after the snapshot is taken —
+  // visible until a newer highlight supersedes it or the composer chip is
+  // dismissed. App arbitrates ownership via hlOwner (this cell's live capture
+  // token); kept separate from the in-progress `stroke` so re-entering highlight
+  // mode never disturbs the pinned mark. (No "invalidate on move" trigger: the
+  // overlay is absolutely positioned to the cell and the stroke is stored as
+  // [0,1] fractions, so it rides the cell through scroll/reflow.)
+  const [frozen, setFrozen] = useState<Pt[] | null>(null)
+  const myToken = useRef<string | null>(null)
+  useEffect(() => { if (hlOwner !== myToken.current) setFrozen(null) }, [hlOwner])
 
   // Normalize (and CLAMP) to this cell's box — so the user can drag past the
   // cell edge without the stroke stopping, while the mark stays inside the
@@ -1185,12 +1210,20 @@ export default function Message({ message, isStreaming, collapseTools, onAnnotat
         cellText: msgText,
         onlyImage,
       })
-      if (result) onAnnotate?.(result)
+      if (result) {
+        const token = nextAnnotToken()
+        myToken.current = token
+        setFrozen([...pts])          // keep the mark on the cell until dismissed
+        onAnnotate?.(result, token)
+      }
     } catch { /* rasterize failed — drop the mark */ }
     finally { setBusy(false); onHighlightDone?.(); setStroke([]); strokeRef.current = [] }
   }
 
   const strokePts = stroke.map(p => `${p.x * 100},${p.y * 100}`).join(' ')
+  // Show the frozen mark only while this cell still owns the pinned highlight.
+  const frozenActive = !!frozen && frozen.length > 1 && hlOwner != null && hlOwner === myToken.current
+  const frozenPts = frozen ? frozen.map(p => `${p.x * 100},${p.y * 100}`).join(' ') : ''
 
   return (
     <div className={`msg ${isUser ? 'msg--user' : 'msg--guide'} ${isContinuation ? 'msg--continuation' : ''} ${isStreaming ? 'msg--streaming' : ''}`}>
@@ -1210,7 +1243,7 @@ export default function Message({ message, isStreaming, collapseTools, onAnnotat
         <div className="msg__content" ref={contentRef}>
           {rendered}
         </div>
-        {showSurface && (
+        {showSurface ? (
           <div className="msg__hl" onMouseDown={hlDown}>
             {stroke.length > 1 && (
               <svg className="msg__hl-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
@@ -1220,7 +1253,16 @@ export default function Message({ message, isStreaming, collapseTools, onAnnotat
             )}
             <div className="msg__hl-hint">{busy ? 'capturing…' : 'draw to highlight'}</div>
           </div>
-        )}
+        ) : frozenActive ? (
+          // Pinned mark: no draw handler, no hint, click-through so the cell
+          // stays interactive. Persists until superseded or the chip is cleared.
+          <div className="msg__hl msg__hl--frozen" aria-hidden>
+            <svg className="msg__hl-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+              <polyline points={frozenPts} fill="none" stroke={HILITE} strokeWidth="16"
+                        strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+            </svg>
+          </div>
+        ) : null}
       </div>
 
       {/* Per-message toolbar: steps eye + pin. Highlight is a global toggle in

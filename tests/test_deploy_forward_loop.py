@@ -27,7 +27,7 @@ ERB = (Path(__file__).resolve().parent.parent
 
 # Vars the launcher forwards that are NOT backend settings (launcher runtime /
 # third-party scheduler contract). Not part of the registry surface.
-LAUNCHER_ONLY = {"ABA_PORT", "SLURM_CONF", "LD_LIBRARY_PATH"}
+LAUNCHER_ONLY = {"ABA_PORT", "SLURM_CONF", "LD_LIBRARY_PATH", "TMPDIR"}
 
 
 def _forwarded_env_vars(text: str) -> set[str]:

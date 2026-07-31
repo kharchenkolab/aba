@@ -83,32 +83,101 @@ def inspect_env(input_: dict, ctx: dict | None = None) -> dict:
                                    if (pid and _bev.active("r")) else None)
             except Exception:  # noqa: BLE001 — overview must not fail on R
                 ov["r_session"] = None
-        return {"status": "ok", "scope": "overview", "language": "r" if is_r else "python",
-                "tiers": ov}
+        # The project's named-env catalog — what exists, what's in each, where it
+        # is realized and how much disk it holds. env_status is per-env, but this
+        # tool is on-demand (unlike the per-turn compute line), so substrate calls
+        # are fine; a per-env substrate error degrades to "unavailable", never fails.
+        from core.compute import named_envs as _ne
+        try:
+            _names = _ne.list_names(pid) if pid else []
+        except Exception:  # noqa: BLE001 — no registry / unreadable → empty catalog
+            _names = []
+        _active = {"python": _ne.get_active(pid, "python") if pid else "default",
+                   "r": _ne.get_active(pid, "r") if pid else "default"}
+        catalog = []
+        for _n in _names:
+            _row = _ne.resolve(pid, _n) or {}
+            _lang = _row.get("language") or "python"
+            try:
+                _reals = _ne.realizations(_row["env_id"])
+            except Exception:  # noqa: BLE001 — substrate hiccup on ONE env only
+                _reals = "unavailable"
+            catalog.append({
+                "name": _n, "language": _lang,
+                "packages": list(_row.get("packages") or []),
+                "active": (_n == _active.get(_lang)),
+                "env_id": _row.get("env_id"),
+                "created_at": _row.get("created_at"),
+                "realizations": _reals,
+            })
+        # Can the default session still be FROZEN? Every remote/background step
+        # depends on it (a snapshot is how the default env travels to another
+        # machine), and nothing used to ask until a step needed it — so a
+        # project could sit with a broken remote lane for hours. Reported here
+        # so the state is VISIBLE, with the repair lever named.
+        _health = None
+        if pid:
+            from core.compute import project_env as _pe
+            try:
+                _health = _pe.snapshot_health(str(pid), "r" if is_r else "python")
+            except Exception:  # noqa: BLE001 — diagnosis must not fail the tool
+                _health = None
+        out = {"status": "ok", "scope": "overview",
+               "language": "r" if is_r else "python",
+               "tiers": ov, "named_envs": catalog}
+        if _health is not None:
+            out["default_session"] = _health
+            if _health.get("ok") is False:
+                out["warning"] = (
+                    "The project's default environment cannot be FROZEN, so "
+                    "remote and background steps in this project cannot run in "
+                    "it. See default_session.error and default_session.fix.")
+        return out
 
     if is_r:
-        # Probe the project's weft R SESSION (base pack + additions); its own
-        # .libPaths() is authoritative, so there is no project-lib overlay to
-        # stack. requireNamespace = real load; packageVersion + find.package give
-        # version/location. No R pack declared → the R lane is unavailable here.
+        # Probe the runtime bare run_r actually uses: the project's ACTIVE R
+        # env when one is promoted (standalone — no base pack needed), else
+        # the weft R SESSION (base pack + additions; its own .libPaths() is
+        # authoritative). requireNamespace = real load; packageVersion +
+        # find.package give version/location.
         import subprocess
-        from core.compute import base_env as _bev, project_env as _penv
+        from core.compute import base_env as _bev, named_envs as _ne, \
+            project_env as _penv
         from core.compute.errors import ComputeError
+        expr = (f"ok <- requireNamespace({name!r}, quietly=TRUE); "
+                + f"cat('ABA_LOADS=', isTRUE(ok), '\\n', sep=''); "
+                + f"if (isTRUE(ok)) {{ cat('ABA_VER=', as.character(packageVersion({name!r})), '\\n', sep=''); "
+                + f"cat('ABA_LOC=', find.package({name!r}), '\\n', sep='') }}")
+        _envname = _ne.resolve_env(str(pid or ""), "r")
+        if _envname:
+            r = _ne.run_in(str(pid), _envname, expr, timeout_s=120)
+            _nout = r.get("stdout") or ""
+
+            def _pick_n(key):
+                for ln in _nout.splitlines():
+                    if ln.startswith(key):
+                        return ln[len(key):].strip()
+                return None
+            _loads = (_pick_n("ABA_LOADS=") == "TRUE")
+            return {"status": "ok", "name": name, "language": "r",
+                    "loads": _loads, "env": _envname,
+                    "version": _pick_n("ABA_VER="), "location": _pick_n("ABA_LOC="),
+                    "tier": ("isolated" if _loads else "unknown"),
+                    "error": None if _loads else (r.get("stderr") or _nout)[-600:]}
         if not _bev.active("r"):
             return {"status": "unavailable", "name": name, "language": "r",
                     "loads": False,
                     "error": "no R environment pack is declared for this deployment"}
         try:
-            _rs = str(_penv.interpreter(str(pid or "_none"), "r"))
+            # topology-blind: probes a lazy session against its base
+            # realization; a mount-scoped prefix through its activation
+            _argv = _penv.exec_argv(str(pid or "_none"), "r", ["-e", expr])
         except (ComputeError, RuntimeError) as e:
+            from core.compute.errors import describe
             return {"status": "error", "name": name, "language": "r",
-                    "loads": False, "error": f"R session unavailable: {e}"}
-        expr = (f"ok <- requireNamespace({name!r}, quietly=TRUE); "
-                + f"cat('ABA_LOADS=', isTRUE(ok), '\\n', sep=''); "
-                + f"if (isTRUE(ok)) {{ cat('ABA_VER=', as.character(packageVersion({name!r})), '\\n', sep=''); "
-                + f"cat('ABA_LOC=', find.package({name!r}), '\\n', sep='') }}")
+                    "loads": False, "error": f"R session unavailable: {describe(e)}"}
         try:
-            proc = subprocess.run([_rs, "-e", expr], capture_output=True,
+            proc = subprocess.run(_argv, capture_output=True,
                                   text=True, timeout=120)
             out, err = proc.stdout or "", proc.stderr or ""
         except Exception as e:  # noqa: BLE001
@@ -136,8 +205,11 @@ def make_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
     or with language='r' a standalone R env) with FULL version control. USE THIS
     when a package conflicts with the base (a different numpy, tensorflow, an
     ABI-incompatible wheel) or you need to resolve a dependency conflict your own
-    way — the shared base is never touched. Run code in it with
-    run_in_isolated_env. Returns {status, name, language, engine, env_id,
+    way — the shared base is never touched. Python packages are pypi by default;
+    prefix a package with `conda:` (e.g. "conda:samtools") to route it into the
+    conda layer of the solve — for conda-only (wheel-less) packages. R packages
+    route automatically (r-*/bioconductor-* → conda, else CRAN). Run code in it
+    with run_in_isolated_env. Returns {status, name, language, engine, env_id,
     installed, verified, error}."""
     from core.compute import named_envs
     from core.compute.errors import ComputeError
@@ -153,17 +225,44 @@ def make_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
     label = "R" if is_r else "Python"
     lang = "r" if is_r else "python"
     packages = list(input_.get("packages") or [])
+    # eco passthrough (the cold-base lever's consumer side): the explicit
+    # `conda_packages` list routes deps into the conda layer of the solve —
+    # the only way to provision a system library / wheel-less conda-only dep
+    # through the isolated lane (D1: 'zlib' in packages went to the wrong
+    # registry with no agent-reachable correction). The legacy `conda:`
+    # prefix inside `packages` still works.
+    conda_pkgs = [p[len("conda:"):] for p in packages
+                  if isinstance(p, str) and p.startswith("conda:")]
+    conda_pkgs += [str(p) for p in (input_.get("conda_packages") or [])]
+    pip_pkgs = [p for p in packages
+                if not (isinstance(p, str) and p.startswith("conda:"))]
     pid = str(projects.current() or "default")
     try:
         # Existing env + packages → layer on (extends_env; the env is never
         # mutated in place). Fresh name → solve a new env. Solving is eager so
         # conflicts surface NOW with weft's structured cause; realization is
         # lazy — the first run materializes the prefix.
-        if named_envs.resolve(pid, name) is not None and packages:
-            res = named_envs.extend(pid, name, packages)
+        if named_envs.resolve(pid, name) is not None and (packages or conda_pkgs):
+            _pre_id = (named_envs.resolve(pid, name) or {}).get("env_id")
+            if conda_pkgs:
+                res = named_envs.extend(pid, name, conda_pkgs, eco="conda")
+            if pip_pkgs or not conda_pkgs:
+                res = named_envs.extend(pid, name, pip_pkgs)
+            # Extension mints a NEW frozen EnvID — a kernel already running on
+            # the old realization would never see the new packages (found live:
+            # in-session imports kept failing after a successful extend). Shut
+            # the env's live sessions down; the next step re-attaches to the
+            # new identity. In-kernel state is gone by design — say so below.
+            # IDEMPOTENT case: identity unchanged (all packages already
+            # recorded — extend answered "cached") → nothing to re-attach,
+            # do NOT kill the user's live kernels for a no-op.
+            _restarted = (_evict_env_kernels(name)
+                          if res["env_id"] != _pre_id else 0)
         else:
-            res = named_envs.create(pid, name, language=lang, packages=packages,
+            res = named_envs.create(pid, name, language=lang, packages=pip_pkgs,
+                                    conda_packages=(conda_pkgs or None),
                                     python_version=(input_.get("python_version") or None))
+            _restarted = 0
     except ComputeError as e:
         return {"status": "error", "name": name, "language": lang,
                 "error": e.to_payload(),
@@ -172,6 +271,18 @@ def make_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
         return {"status": "error", "name": name, "note": f"could not create env: {e}"}
     out = {"status": "ok", "name": name, "language": lang, "engine": "weft",
            "env_id": res["env_id"], "installed": packages}
+    # `env_id` is the identity AS SOLVED NOW — for the controller's platform. The
+    # first run on a site with a different platform re-locks the env and mints a
+    # DIFFERENT EnvID (env.platform_mismatch → ensure_platform), so an id handed
+    # out here can be obsolete by the time it is used: live 2026-07-26, this
+    # returned env:v1:2e4e9e33… while the env that was recorded and realized was
+    # env:v1:0837c1b2…. Say which handle is stable rather than letting a caller
+    # store the wrong one; inspect_env() reads the registry and is always current.
+    _plats = (named_envs.resolve(pid, name) or {}).get("platforms")
+    if _plats:
+        out["platforms"] = list(_plats)
+    out["env_id_is_platform_scoped"] = True
+    out["stable_handle"] = name
     verify = input_.get("verify_imports")
     if packages and verify:
         ok, err = named_envs.verify_imports(pid, name, list(verify))
@@ -182,8 +293,27 @@ def make_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
     _run = "run_r" if is_r else "run_python"
     out["note"] = (f"Isolated {label} env {name!r} solved; run code in it with "
                    f"{_run}(env={name!r}, code=…) — the first run materializes it. "
-                   f"Calling make_isolated_env again with more packages LAYERS them on.")
+                   f"Calling make_isolated_env again with more packages LAYERS them on. "
+                   f"Listed in inspect_env(); survives across threads. "
+                   f"Refer to this env by NAME ({name!r}) — the returned env_id is "
+                   f"the solve for this controller's platform and CHANGES when the "
+                   f"first run on a different-platform site re-locks it; "
+                   f"inspect_env() always shows the current id.")
+    if _restarted:
+        out["note"] += (f" NOTE: the env's running session was restarted to pick "
+                        f"up the new packages — in-memory objects from earlier "
+                        f"steps in this env are gone; reload what you need.")
     return out
+
+
+def _evict_env_kernels(env_name: str) -> int:
+    """Shut down live kernel sessions attached to a named env (identity change
+    or disk evict). Best-effort — a pool failure must not fail the env op."""
+    try:
+        from core.exec.kernels import get_pool
+        return get_pool().evict_env_sessions(env_name)
+    except Exception:  # noqa: BLE001
+        return 0
 
 
 def run_in_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
@@ -211,26 +341,95 @@ def run_in_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
 
 
 def set_active_env(input_: dict, ctx: dict | None = None) -> dict:
-    """§11.2 — set the project's ACTIVE python env; bare run_python uses it until
-    changed. name='default' resets to the normal served stack. (Python only — R's
-    per-project lib already overrides the base, so run_r has no active pointer.)"""
+    """§11.2 — set the project's ACTIVE env for a language: bare run_python /
+    run_r (no env=) run in it until changed, and capability installs land in
+    it. name='default' resets to the normal served stack. language defaults to
+    python; language='r' promotes an isolated R env — the way a package that
+    needs SYSTEM libraries the base lacks becomes ambient (the session overlay
+    carries packages only, never system libraries)."""
     from core.compute import named_envs
+    from core.compute.errors import ComputeError
     from core import projects
     name = (input_.get("name") or "").strip()
     if not name:
         return {"status": "error", "note": "set_active_env needs a `name` (or 'default')."}
+    language = (input_.get("language") or "python").strip().lower()
+    if language not in ("python", "r"):
+        return {"status": "error",
+                "note": f"language must be 'python' or 'r' (got {language!r})."}
     pid = str(projects.current() or "default")
-    if name.lower() != "default" and named_envs.resolve(pid, name) is None:
+    try:
+        named_envs.set_active(pid, name, language)
+    except ComputeError as e:
+        from core.compute.errors import describe
+        return {"status": "error", "name": name, "language": language,
+                "note": f"{describe(e)} — call inspect_env() for the "
+                        f"named-env catalog, or make_isolated_env to create it."}
+    runner = "run_r" if language == "r" else "run_python"
+    out: dict = {"status": "ok", "language": language}
+    reset = named_envs.is_reserved_name(name)
+    out["active_env"] = "default" if reset else name
+    if language == "python":                     # legacy response key, kept
+        out["active_python_env"] = out["active_env"]
+    out["note"] = (
+        f"Bare {runner} now uses the default served stack." if reset else
+        f"Bare {runner} now runs in '{name}'. Use env='default' for a one-off "
+        f"in the normal stack, or set_active_env('default'"
+        + (", language='r'" if language == "r" else "") + ") to switch back.")
+    return out
+
+
+def evict_env(input_: dict, ctx: dict | None = None) -> dict:
+    """Reclaim the disk a named env's realizations hold on a machine — or retire
+    the env entirely. Wraps weft's evict over the env's realizations: eviction
+    keeps the env's identity + lock, so it rebuilds transparently on next use;
+    `forget=True` additionally removes the project's registry row."""
+    from core.compute import named_envs
+    from core.compute.errors import ComputeError
+    from core import projects
+    name = (input_.get("name") or "").strip()
+    if not name:
+        return {"status": "error", "note": "evict_env needs a `name`."}
+    site = (input_.get("site") or "").strip() or None
+    forget = bool(input_.get("forget"))
+    pid = str(projects.current() or "default")
+    if named_envs.resolve(pid, name) is None:
         return {"status": "error", "name": name,
-                "note": f"No isolated python env '{name}'. Create it with make_isolated_env, "
-                        "or pass 'default' to use the normal environment."}
-    named_envs.set_active(pid, name, "python")
-    if name.lower() == "default":
-        return {"status": "ok", "active_python_env": "default",
-                "note": "Bare run_python now uses the default served stack."}
-    return {"status": "ok", "active_python_env": name,
-            "note": f"Bare run_python now runs in '{name}'. Use env='default' for a one-off "
-                    f"in the normal stack, or set_active_env('default') to switch back."}
+                "note": f"No named env '{name}' in this project. Call inspect_env() to see "
+                        f"the project's named-env catalog."}
+    # forget=True is evict-and-forget in one call — but a still-active env is
+    # refused BEFORE any eviction, so there is no partial action.
+    if forget and name == named_envs.get_active(pid,
+                            (named_envs.resolve(pid, name) or {}).get("language") or "python"):
+        return {"status": "error", "name": name,
+                "note": f"'{name}' is the active env — call set_active_env('default') before "
+                        f"forgetting it (no disk was evicted)."}
+    # A live kernel session holds its realization's prefix open — shut the
+    # env's sessions down BEFORE evicting the bytes underneath them.
+    _evict_env_kernels(name)
+    try:
+        freed = named_envs.evict(pid, name, site=site)
+    except ComputeError as e:
+        from core.compute.errors import describe
+        return {"status": "error", "name": name,
+                "note": f"could not evict '{name}': {describe(e)}"}
+    except Exception as e:  # noqa: BLE001
+        return {"status": "error", "name": name, "note": f"could not evict '{name}': {e}"}
+    scope = f"site '{site}'" if site else "all sites"
+    out = {"status": "ok", "name": name, "site": site,
+           "sites": freed["sites"], "freed_bytes": freed["freed_bytes"],
+           "note": (f"Evicted {name!r} on {scope}: {freed['freed_bytes']} bytes freed. "
+                    f"The env rebuilds from its lock on next use — nothing is lost but time.")}
+    if forget:
+        try:
+            named_envs.forget(pid, name)
+        except ComputeError as e:
+            from core.compute.errors import describe
+            return {**out, "status": "error",
+                    "note": out["note"] + f" BUT forget failed: {describe(e)}"}
+        out["forgotten"] = True
+        out["note"] += f" '{name}' is now gone from the project's named-env registry."
+    return out
 
 
 def _is_constraint_conflict(msg: str) -> bool:
@@ -783,115 +982,745 @@ def _r_module_block() -> dict | None:
     return None
 
 
-def _default_probe_python() -> str | None:
-    """The project's weft SESSION python that import-probes + installs run
-    against, or None when NO python base pack is declared (a python-less
-    deployment — the caller degrades). A weft error when a pack IS declared but
-    the session won't realize PROPAGATES (it is NOT swallowed into None): the
-    old swallow silently diverted installs onto the served-base/micromamba path
-    on a transient weft hiccup — the exact hybrid-revival bug W3.5 removes."""
+def _default_probe_argv():
+    """A topology-blind COMMAND BUILDER (`args -> argv`) for probing the
+    project's default python session, or None when NO python base pack is
+    declared (a python-less deployment — the caller degrades). Replaces the
+    raw-interpreter-path helper: a mounted/squashfs base has no path outside
+    its activation, so probes must compose through the session runtime
+    (`project_env.exec_argv`), exactly like the exec lane. The builder
+    re-resolves the runtime PER CALL — a post-install verify must see the
+    flipped (materialized) session, not the pre-install base. A weft error
+    when a pack IS declared but the session won't resolve PROPAGATES (it is
+    NOT swallowed into None): the old swallow silently diverted installs onto
+    the served-base/micromamba path on a transient weft hiccup — the exact
+    hybrid-revival bug W3.5 removes."""
     from core import projects
     from core.compute import base_env, project_env
     if not base_env.active("python"):
         return None
-    return str(project_env.interpreter(str(projects.current() or "_none"), "python"))
+    pid = str(projects.current() or "_none")
+    project_env.runtime(pid, "python")   # resolve NOW so unavailability raises here
+    return lambda args: project_env.exec_argv(
+        str(projects.current() or "_none"), "python", args)
 
 
 
 def _r_version_in_session(pid: str, libname: str) -> str | None:
-    """packageVersion() against the PROJECT SESSION's R (pack mode)."""
+    """packageVersion() against the PROJECT SESSION's R (pack mode) — via the
+    topology-blind argv builder (works for lazy and activation-only sessions)."""
     import subprocess
     from core.compute import project_env
     try:
-        rs = project_env.interpreter(str(pid), "r")
-        r = subprocess.run([str(rs), "-e",
-                            f'cat(as.character(packageVersion("{libname}")))'],
-                           capture_output=True, text=True, timeout=120)
+        argv = project_env.exec_argv(
+            str(pid), "r",
+            ["-e", f'cat(as.character(packageVersion("{libname}")))'])
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=120)
         v = (r.stdout or "").strip()
         return v if r.returncode == 0 and v else None
     except Exception:  # noqa: BLE001
         return None
 
 
+def _BIOC_RELEASE() -> str:
+    """Bioconductor release to pull from. Overridable per deployment; the default
+    tracks the release the R base pack is built against."""
+    import os
+    return (os.getenv("ABA_BIOC_RELEASE") or "3.20").strip()
+
+
+def _cran_repo() -> str:
+    """The CRAN mirror the FALLBACK installer lane must set explicitly.
+
+    `Rscript -e 'install.packages("x")'` with no `repos=` dies with "trying to
+    use CRAN without setting a mirror" — a non-interactive R has no mirror and
+    cannot prompt. That error then becomes the LEAD clause of the agent-facing
+    note, burying the real cause behind a red herring about mirror config
+    (live 2026-07-22, RNetCDF: the actual failure was a missing netcdf.h).
+    Matches the substrate cran lane's own default."""
+    import os
+    return (os.getenv("ABA_CRAN_REPO") or "https://cloud.r-project.org").strip()
+
+
+def _bioc_repos() -> list:
+    """Bioconductor's repository URLs, in the order BiocManager itself uses.
+    Handed to the cran lane as `cran_repos` so a Bioc package resolves as an
+    ordinary repository package — no BiocManager, no writable base."""
+    rel = _BIOC_RELEASE()
+    return [f"https://bioconductor.org/packages/{rel}/bioc",
+            f"https://bioconductor.org/packages/{rel}/data/annotation",
+            f"https://bioconductor.org/packages/{rel}/data/experiment"]
+
+
+def _cran_lane(pid: str, spec: str, *, repos: "list | None" = None,
+               verify: "dict | None" = None) -> "tuple[bool, str | None, dict]":
+    """Try the substrate's cran layer for one R spec. Returns
+    ``(landed, rendered_error, info)`` — the decline reason travels WITH the
+    request as a return value, never through shared state (a module-global
+    "last lane error" attributed one request's diagnosis to another under
+    concurrent tool calls, and a stale decline from an earlier request to a
+    later unrelated failure).
+
+    ``info`` carries the lane's TYPED facts for the caller's remedy logic:
+    on success it is the substrate's install result — ``resolved`` holds the
+    DESCRIPTION names weft read at install time for github refs (the load
+    name when it differs from the repo tail); on decline it holds the failure
+    ``code`` (weft discriminates dead-index / not-in-repo / broken-build), so
+    the way-out classifier can trust the substrate over text matching.
+
+    `spec` is the substrate's own vocabulary — a plain name, `name ==X.Y.Z`, or
+    `owner/repo@ref`. We deliberately do NOT pre-parse it into a bespoke
+    `install_github(...)` command: the cran lane composes the session rlib
+    delta-only over a read-only base and its record is the spec string, so the
+    snapshot's solve pins the ref and the frozen env still overlay-realizes.
+    A bespoke installer gets neither (it refuses on a cold base, and where it
+    does run it forces a FULL realize).
+
+    False (not an exception) on failure so the caller can fall back — an older
+    substrate won't recognize a git spec here."""
+    from core.compute import project_env
+    try:
+        res = project_env.install(pid, "r", [spec], eco="cran",
+                                  **({"cran_repos": list(repos)} if repos else {}),
+                                  **({"verify": verify} if verify else {}))
+        return True, None, (res if isinstance(res, dict) else {})
+    except Exception as e:  # noqa: BLE001 — caller falls back
+        from core.compute.errors import describe
+        err = describe(e)
+        print(f"[capability] cran lane declined {spec!r}: {err}", flush=True)
+        _code = getattr(e, "code", None)
+        _h = getattr(e, "hints", None) or {}
+        return False, err, {k: v for k, v in
+                            (("code", _code),
+                             ("failure_class", _h.get("failure_class")),
+                             ("missing_system", _h.get("missing_system")))
+                            if v}
+
+
+def _card_hint(requested: str) -> str:
+    """On a FAILED install, quote the matching capability card's headline.
+
+    Live thr_ee54c469 (2026-07-23): the agent tried a prefixed conda spelling
+    of a name whose capability card exists — and says the package is bundled,
+    not installable from any registry. The card was only read AFTER two
+    failed installs. The system knew the answer and didn't say it: a failed
+    ensure must check whether a card exists under the requested name or its
+    prefix-stripped form and surface the headline + the tool that reads it."""
+    try:
+        from core.catalog import resolve_capability
+        seen = set()
+        for cand in (requested,
+                     requested[2:] if requested.startswith("r-") else None,
+                     requested[len("bioconductor-"):]
+                     if requested.startswith("bioconductor-") else None):
+            c = (cand or "").strip().lower()
+            if not c or c in seen:
+                continue
+            seen.add(c)
+            cap = resolve_capability(c)
+            if cap:
+                head = str(cap.get("summary") or cap.get("description")
+                           or "").strip().splitlines()[0][:200]
+                nm = cap.get("name") or c
+                return (f" | NOTE: a capability card exists for '{nm}'"
+                        + (f": {head}" if head else "")
+                        + f" — read_capability('{nm}') before retrying.")
+    except Exception:  # noqa: BLE001 — a hint must never break the error path
+        pass
+    return ""
+
+
+def _landed_or_fail(libname: str) -> str:
+    """R postlude that turns a SILENT install failure into a real exit code.
+
+    `Rscript -e 'install.packages("x")'` exits 0 even when the build died —
+    install.packages reports "ERROR: configuration failed" on stderr and
+    returns normally. The installer lane then reports success, the capability
+    is checked separately and the agent gets "Installed, but library(x) is not
+    loadable — NOT marking ready": 89 chars, no cause, no remedy, and the build
+    log discarded (live 2026-07-22, once a missing `repos=` stopped masking it
+    with an unrelated mirror error). Asserting the postcondition IN the
+    installer keeps the failure attached to the output that explains it."""
+    return (f'if (!requireNamespace("{libname}", quietly=TRUE)) '
+            f'{{ cat("ABA: install reported success but {libname} is not '
+            f'loadable\\n", file=stderr()); quit(status=1) }}')
+
+
+def _syslib_way_out(libname: str, pkg: str,
+                    failure_class: "str | None" = None,
+                    missing_system: "dict | None" = None) -> str:
+    """The NEXT STEP to append when a build died for a missing SYSTEM library.
+
+    Keys SOLELY on the substrate's typed discrimination
+    (`hints.failure_class == "missing_system_lib"`, weft 13fd7aa) — the
+    consumer-side text taxonomy this replaced (_SYSLIB_SIGNS, stage gates,
+    code gates) is deleted: the substrate scans the build log at the layer
+    that owns it, under a pinned locale, and only ever ADDS the tag to an
+    already-realize_failed verdict, so typo'd names, 404s, exec failures and
+    quoted build fragments in fused notes can no longer misfire the remedy.
+
+    The note carries the class tag + the callable lever; the full doctrine
+    (why a session overlay can't carry system libs, the viewer/base-pack
+    caveat) lives in the env-failures playbook rule."""
+    if failure_class != "missing_system_lib":
+        return ""
+    _base = (libname or (pkg or "pkg").split("/")[-1]).lower()
+    env_name = f"{_base}-env"
+    _named = ""
+    if missing_system:
+        _what = next(iter(missing_system.values()), "")
+        if _what:
+            _named = f" (missing: {_what})"
+    return (f" || NEXT STEP — the substrate classified this as a missing "
+            f"SYSTEM library{_named}, not a missing R package; retrying in "
+            f"the project session will fail the same way (see the "
+            f"env-failures playbook). Route: "
+            f"make_isolated_env(name='{env_name}', language='r', "
+            f"packages=['r-{_base}']), then "
+            f"set_active_env('{env_name}', language='r') — the solver pulls "
+            f"C libraries transitively.")
+
+
 def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
-                          name: str) -> dict:
+                          name: str, req=None) -> dict:
     """W3.4 pack mode: R capability into the PROJECT's session over the R base
     pack. conda-first (binary r-*/bioconductor-* into the session — live, no
     compile); github/source via the CAPTURED session installer (rides
     snapshots as a portable post_install step). The shared pack is never
-    mutated — additions live in the project session."""
+    mutated — additions live in the project session.
+
+    Merged request fields come from `req` (cap_request.build_cap_request —
+    the ONE merge owner; `library` is agent-facing there: the load-verify
+    name when it differs from the package/repo name). Direct callers that
+    pass no req get one built from their inputs — same rule, same result."""
     from core import projects
     from core.compute import project_env
     from core.exec import r as rexec
+    if req is None:
+        from content.bio.tools.cap_request import build_cap_request
+        req = build_cap_request(input_, cap, ctx, name=name, language="r")
     pid = str(projects.current() or "default")
-    rp = dict((cap.get("provisioning") or {}).get("r") or {})
-    for _k in ("ref", "source", "package"):
-        if input_.get(_k):
-            rp[_k] = input_[_k]
-    _src = rp.get("source", "cran")
-    _pkg = rp.get("package") or cap.get("name")
-    libname = rp.get("library") or (
+    _src = req.source
+    _pkg = req.package or cap.get("name")
+    libname = req.library or (
         _pkg.split("/")[-1] if _src == "github"
         else (_pkg[2:] if _src == "conda" and _pkg.startswith("r-") else _pkg))
-    min_version = (str(input_.get("min_version") or rp.get("min_version") or "").strip() or None)
-    force = bool(input_.get("force")) or any(input_.get(_k) for _k in ("ref", "source", "package"))
+    min_version = req.min_version
+    # an explicit source/ref/package/subdir override is an implicit force —
+    # the caller is steering the install, not asking "is it there"
+    force = req.force or bool(set(req.explicit_overrides)
+                              & {"ref", "source", "package", "subdir"})
     installed = _r_version_in_session(pid, libname)
+    _requires = ({"package": libname, "min_version": min_version}
+                 if min_version else None)
     if installed and not force and (not min_version or rexec.version_ge(installed, min_version)):
         return {"status": "ready", "name": cap.get("name"), "archetype": "r_package",
                 "library": libname, "version": installed,
+                **({"requires": _requires} if _requires else {}),
                 "note": f"Already available — library({libname}) {installed} works in run_r."}
+    _lane_err: "str | None" = None      # this REQUEST's cran-lane decline, if any
+    _lane_info: dict = {}               # its typed facts (code / resolved names)
+    # the request's claim, in the substrate's one verify grammar (weft V1):
+    # passed down every lane so verification runs inside the install and
+    # record-gating holds below the API — the lane's own recheck stays as
+    # belt-and-suspenders until F-V1 soak completes.
+    from content.bio.tools.cap_request import verify_block
+    _vblock = verify_block(req, libname=libname)
     try:
         if _src in ("cran", "bioconductor", "conda"):
-            conda_name = _pkg if _pkg.startswith(("r-", "bioconductor-")) else (
+            # F-V3a: cran/conda sources go RANKED — one verb call, the
+            # caller's lane order (conda binary first, cran layer second),
+            # dialect spellings derived below the API (the consumer-side
+            # r-<lowercase> translation retires), verify inside the loop,
+            # typed attempts back. Bioconductor stays on the legacy cascade
+            # (its extra repositories aren't in the ranked vocabulary yet);
+            # a pre-verb substrate returns None → same legacy cascade.
+            _rk = None
+            _erk = getattr(project_env, "ensure_ranked", None)
+            if _erk is not None:
+                # bioconductor rides ranked too now: its repositories go as
+                # cran_repos (weft 13fd7aa) — attempts record them, and the
+                # cran probe answers unknown-not-false under extra repos
+                _reg_name = libname if _src == "conda" else _pkg
+                _rk = _erk(pid, "r", [_reg_name], lanes=["conda", "cran"],
+                           verify=_vblock,
+                           **({"cran_repos": _bioc_repos()}
+                              if _src == "bioconductor" else {}))
+            if _rk is not None:
+                _lane_info = {k: _rk[k] for k in
+                              ("attempts", "verified", "resolved")
+                              if _rk.get(k)}
+            else:
+              conda_name = _pkg if _pkg.startswith(("r-", "bioconductor-")) else (
                 f"bioconductor-{_pkg.lower()}" if _src == "bioconductor" else f"r-{_pkg.lower()}")
-            try:
-                project_env.install(pid, "r", [conda_name], eco="conda")
-            except Exception:  # noqa: BLE001 — no conda build → captured source install
-                _cmd = (f"Rscript -e 'if (!requireNamespace(\"BiocManager\", quietly=TRUE)) "
-                        f"install.packages(\"BiocManager\"); BiocManager::install(\"{_pkg}\", "
-                        f"update=FALSE, ask=FALSE)'" if _src == "bioconductor" else
-                        f"Rscript -e 'install.packages(\"{_pkg}\")'")
-                project_env.run_installer(pid, "r", _cmd,
-                                          note=f"{_src} install of {_pkg} (no conda binary)")
+              try:
+                project_env.install(pid, "r", [conda_name], eco="conda",
+                                    verify=_vblock)
+              except Exception:  # noqa: BLE001 — no conda build / cold base
+                # Second lane: the substrate's cran layer (session rlib riding
+                # the base — delta-only, works on ANY base incl. adopted
+                # read-only mounts, where conda adds AND bespoke installers
+                # refuse with session.cold_base).
+                # Bioconductor is just a secondary repository — the cran lane
+                # takes it via `cran_repos` (weft d51f9fc), so it layers on an
+                # adopted base like any CRAN package instead of needing
+                # BiocManager and a writable prefix.
+                # `package` under source='conda' is a CONDA name (r-rnetcdf).
+                # Handing that to a CRAN repo asks for a package that cannot
+                # exist there, and the agent gets "'r-rnetcdf' is not available
+                # for this version of R" — a diagnosis about the wrong
+                # ecosystem, with no hint that the conda lane is what actually
+                # refused (live 2026-07-22). The CRAN name is the library name.
+                _cran_name = libname if _src == "conda" else _pkg
+                _done, _lane_err, _lane_info = _cran_lane(
+                    pid, _cran_name,
+                    repos=_bioc_repos() if _src == "bioconductor" else None,
+                    verify=_vblock)
+                if not _done:
+                    _repo = _cran_repo()
+                    _cmd = (f"Rscript -e 'options(repos=c(CRAN=\"{_repo}\")); "
+                            f"if (!requireNamespace(\"BiocManager\", quietly=TRUE)) "
+                            f"install.packages(\"BiocManager\"); BiocManager::install(\"{_cran_name}\", "
+                            f"update=FALSE, ask=FALSE); {_landed_or_fail(libname)}'"
+                            if _src == "bioconductor" else
+                            f"Rscript -e 'install.packages(\"{_cran_name}\", repos=\"{_repo}\"); "
+                            f"{_landed_or_fail(libname)}'")
+                    project_env.run_installer(pid, "r", _cmd, writes_to="rlib",
+                                              verify=_vblock,
+                                              note=f"{_src} install of {_cran_name} (no conda binary)")
         elif _src == "github":
-            _ref = f', ref="{rp.get("ref")}"' if rp.get("ref") else ""
-            project_env.run_installer(
-                pid, "r",
-                f"Rscript -e 'if (!requireNamespace(\"remotes\", quietly=TRUE)) "
-                f"install.packages(\"remotes\"); remotes::install_github(\"{_pkg}\"{_ref}, "
-                f"upgrade=\"never\", force={str(force).upper()})'",
-                note=f"github install of {_pkg}")
+            # The cran lane speaks the whole spec vocabulary — `owner/repo@ref`
+            # is a first-class source there (weft d51f9fc), composed into the
+            # same session rlib and SHA-pinned by the snapshot's solve. Routing
+            # it to the bespoke installer instead made every GitHub R package
+            # uninstallable on an adopted base, which is where this deployment
+            # lives (live 2026-07-21: session.cold_base, "a bespoke installer
+            # needs a writable clone of the base").
+            # remotes' GitHub grammar is owner/repo[/subdir][@ref]. A subdir is
+            # NOT exotic: a polyglot monorepo keeps the R package under e.g. R/,
+            # so there is no DESCRIPTION at the repo root and install_github 404s
+            # on it (live 2026-07-21 — read as "repo missing").
+            _ref, _sub = req.ref, (req.subdir or "").strip("/")
+            _spec = _pkg + (f"/{_sub}" if _sub else "") + (f"@{_ref}" if _ref else "")
+            _ok, _lane_err, _lane_info = _cran_lane(pid, _spec, verify=_vblock)
+            if _ok and not req.library:
+                # weft read the package's DESCRIPTION at install time and
+                # returns its name as `resolved` (63b6199) — THAT is the load
+                # name. The repo tail is a heuristic that breaks on monorepos
+                # and renamed packages, where verifying under it reported a
+                # SUCCESSFUL install as "not loadable" unless the agent
+                # happened to pass library=. An explicit library= still wins.
+                _resolved = [str(n) for n in (_lane_info.get("resolved") or [])
+                             if n]
+                if _resolved:
+                    libname = _resolved[0]
+            if not _ok:
+                # Substrate predates the vocabulary → the old lane, which still
+                # works wherever the base is writable. It takes `_spec`, not
+                # `_pkg` + a separate ref= : remotes' own grammar already
+                # carries subdir AND ref, and passing _pkg here silently DROPS
+                # the subdir — the exact live failure this branch exists to
+                # survive, reintroduced on the fallback path.
+                project_env.run_installer(
+                    pid, "r",
+                    f"Rscript -e 'options(repos=c(CRAN=\"{_cran_repo()}\")); "
+                    f"if (!requireNamespace(\"remotes\", quietly=TRUE)) "
+                    f"install.packages(\"remotes\"); remotes::install_github(\"{_spec}\", "
+                    f"upgrade=\"never\", force={str(force).upper()}); "
+                    f"{_landed_or_fail(libname)}'",
+                    writes_to="rlib", verify=_vblock,
+                    note=f"github install of {_spec}")
         else:
             return {"status": "error", "name": name,
                     "note": f"unknown R source {_src!r} (cran|bioconductor|conda|github)"}
     except Exception as e:  # noqa: BLE001
+        from core.compute.errors import describe
+        # describe(), not f"{e}": the substrate's hints ARE the diagnosis (which
+        # URL 404'd, the rc, the script it ran). Without them the agent gets
+        # "session installer failed" and guesses — live 2026-07-21 it concluded
+        # the GitHub repo did not exist when the package was simply in a subdir.
+        _note = f"R install into the project env failed: {describe(e)}"
+        if _lane_err and _lane_err not in _note:
+            _note += f" | cran lane: {_lane_err}"
+        if getattr(e, "retryable", False):
+            # the substrate's own verdict: transient repository/network
+            # trouble, not a package problem — without this the agent reads a
+            # dead index as "the package is missing" and rewrites the request
+            _note += (" | The substrate marks this failure RETRYABLE — "
+                      "transient repository/network trouble; retry once "
+                      "before changing the request.")
+        # ranked exhaustion: the typed attempts ARE the diagnosis — thread
+        # them to the result, and gate the remedy on the ATTEMPTS' codes
+        # (env.unavailable_in_lanes itself is an aggregate, not a class)
+        _h_atts = (getattr(e, "hints", None) or {}).get("attempts")
+        if _h_atts and not _lane_info.get("attempts"):
+            _lane_info["attempts"] = _h_atts
+        # the remedy keys on the substrate's typed class — from the raised
+        # error's hints, or any attempt's error hints (ranked exhaustion)
+        _eh = getattr(e, "hints", None) or {}
+        _fc, _ms = _eh.get("failure_class"), _eh.get("missing_system")
+        if not _fc:
+            for _a in _lane_info.get("attempts") or []:
+                _ah = ((_a.get("error") or {}).get("hints")) or {}
+                if _ah.get("failure_class"):
+                    _fc, _ms = _ah["failure_class"], _ah.get("missing_system")
+                    break
+        _note += _syslib_way_out(libname, _pkg, failure_class=_fc,
+                                 missing_system=_ms)
+        _note += _card_hint(str(_pkg or name))
+        _atts = _lane_info.get("attempts")
         return {"status": "error", "name": name, "archetype": "r_package",
-                "note": f"R install into the project env failed: {e}"}
+                **({"attempts": _atts} if _atts else {}),
+                "note": _note}
     new_ver = _r_version_in_session(pid, libname)
     if not new_ver:
+        # "Installed but not loadable" is what a SILENT install failure looks
+        # like from here, and on its own it is 89 chars of nothing: no cause,
+        # no remedy, and the build log — which said `netcdf.h was not
+        # compiled` — thrown away. Carry the lane's own error and the way out,
+        # exactly as the raising path does.
+        _note = (f"Installed, but library({libname}) is not loadable in the "
+                 f"project R env — NOT marking ready. This is what a build that "
+                 f"reported success while producing nothing looks like.")
+        if _lane_err and _lane_err not in _note:
+            _note += f" | cran lane: {_lane_err}"
+        _note += _syslib_way_out(libname, _pkg,
+                                 failure_class=_lane_info.get("failure_class"),
+                                 missing_system=_lane_info.get("missing_system"))
+        _atts = _lane_info.get("attempts")
         return {"status": "error", "name": name, "archetype": "r_package",
-                "library": libname,
-                "note": f"Installed, but library({libname}) is not loadable in the "
-                        f"project R env — NOT marking ready."}
+                **({"attempts": _atts} if _atts else {}),
+                "library": libname, "note": _note}
+    if min_version and not rexec.version_ge(new_ver, min_version):
+        # The postcondition must be the REQUEST's, not "something loads": an
+        # upgrade whose build died leaves the OLD version loadable, and
+        # asserting loadability alone reports the upgrade as ready.
+        _note = (f"Installed, but library({libname}) is {new_ver} while "
+                 f">= {min_version} was requested — the upgrade did NOT land; "
+                 f"NOT marking ready.")
+        if _lane_err and _lane_err not in _note:
+            _note += f" | cran lane: {_lane_err}"
+        _note += _syslib_way_out(libname, _pkg,
+                                 failure_class=_lane_info.get("failure_class"),
+                                 missing_system=_lane_info.get("missing_system"))
+        _atts = _lane_info.get("attempts")
+        return {"status": "error", "name": name, "archetype": "r_package",
+                **({"attempts": _atts} if _atts else {}),
+                "library": libname, "version": new_ver, "note": _note}
     # a stale loaded namespace in the running R kernel can pin the old build
     rexec.r_unload_namespace(libname, (ctx or {}).get("thread_id"))
     return {"status": "ready", "name": cap.get("name"), "archetype": "r_package",
             "library": libname, "version": new_ver,
+            **({"requires": _requires} if _requires else {}),
             "note": f"Installed into the project R env; library({libname}) {new_ver} "
                     f"is usable in run_r now."}
 
 
+def _session_probe_memo_key(pid: str, language: str) -> "tuple | None":
+    """Identity key for memoizing default-session import probes:
+    (session_id, rev) — any install bumps rev, a rebuilt session gets a new
+    id, so a stale positive is unrepresentable. None (no session row yet) →
+    no memoization: absent identity always probes."""
+    try:
+        from core.compute import project_env
+        row = project_env.get(pid, language)
+        if row and row.get("session_id") is not None:
+            return ("session", row["session_id"], int(row.get("rev") or 0))
+    except Exception:  # noqa: BLE001 — memoization is an optimization, never a gate
+        pass
+    return None
+
+
+def _probe_target_name(packages: list[str], cap: dict, req) -> str:
+    """The load name to verify: the request's override, then the record's
+    import/library name, then the first spec's base (grammar composition is
+    stage C — this is the best available name until then)."""
+    import re
+    if req is not None and req.library:
+        return req.library
+    for k in ("import_name", "library"):
+        if (cap or {}).get(k):
+            return str(cap[k])
+    if req is not None and req.package:
+        # a github spec's PATH tail is the subdir, not the package — the load
+        # name is the repo tail (until the substrate's resolved names, V3)
+        return req.package.split("/")[-1]
+    if packages:
+        base = re.split(r"[=<>!\s\[@]", str(packages[0]))[0]
+        return base.split("/")[-1] or str(packages[0])
+    return str((cap or {}).get("name") or "")
+
+
+def _extend_into_named_env(env_name: str, packages: list[str], cap: dict,
+                           req=None, eco: "str | None" = None) -> dict:
+    """Layer `packages` into a named isolated env via extends_env (frozen
+    identities: a new EnvID is minted, the old id kept in history). The env's
+    language picks the ecosystem (pypi | cran).
+
+    `req` (cap_request.CapRequest) carries the request's merged fields to
+    this door. Readiness is the REQUEST's postcondition, not the solver's:
+    every exit — freshly extended or cached — passes the load/version probe
+    in the target env, or refuses ready (D4/F4). A cached answer is a
+    statement about a recorded SOLVE; what the agent asked is whether the
+    package LOADS."""
+    from core.compute import named_envs
+    from core.compute.errors import ComputeError
+    from core import projects
+    pid = str(projects.current() or "default")
+    _pre_id = (named_envs.resolve(pid, env_name) or {}).get("env_id")
+    try:
+        if req is not None and req.conda_packages:
+            # the explicit conda-eco passthrough (D1's extend-door sibling):
+            # system libraries / conda-only deps land via their own conda
+            # layer — never through a registry-name heuristic
+            named_envs.extend(pid, env_name, list(req.conda_packages),
+                              eco="conda")
+        # the request's claim rides the env SPEC too (weft P2 / F-V1): the
+        # capability path knows its load name precisely, so the substrate
+        # enforces this claim at every future realization of the identity —
+        # the consumer probe below covers only the here-and-now
+        # ALWAYS composed — enforce-at-realize readiness is only honest if a
+        # claim rides the identity; a direct caller with no request object
+        # still gets a minimal loads-claim for the best-known name
+        from content.bio.tools.cap_request import CapRequest, verify_block
+        _lang0 = ((named_envs.resolve(pid, env_name) or {}).get("language")
+                  or "python")
+        _nm = _probe_target_name(packages, cap, req)
+        _req0 = req if req is not None else CapRequest(
+            name=str((cap or {}).get("name") or _nm), language=_lang0,
+            project=pid)
+        _vb = (verify_block(_req0, libname=_nm) if _lang0 == "r"
+               else verify_block(_req0, import_name=_nm))
+        res = named_envs.extend(pid, env_name, list(packages),
+                                **({"eco": eco} if eco else {}),
+                                **({"verify": _vb} if _vb else {}))
+    except ComputeError as e:
+        return {"status": "error", "name": cap.get("name"), "env": env_name,
+                "error": e.to_payload(),
+                "note": f"could not extend env '{env_name}': {e.detail or e.code}"}
+    except Exception as e:  # noqa: BLE001
+        return {"status": "error", "name": cap.get("name"), "env": env_name,
+                "note": f"could not extend env '{env_name}': {e}"}
+    # Restart live sessions ONLY when the identity actually moved: an extension
+    # that mints a new EnvID leaves a kernel on the OLD realization where the
+    # new packages never appear (found live). But an already-satisfied request
+    # returns the SAME id ("cached") — evicting there would destroy the user's
+    # in-memory state for a genuine no-op (the destructive-retry bug 60ad6ad2
+    # fixed in make_isolated_env, surviving here in the sibling entry point).
+    changed = res.get("env_id") != _pre_id
+    restarted = _evict_env_kernels(env_name) if changed else 0
+    _lang = ((named_envs.resolve(pid, env_name) or {}).get("language")
+             or "python")
+    _run_fn = "run_r" if _lang == "r" else "run_python"
+    _probe_name = _probe_target_name(packages, cap, req)
+    _minv = getattr(req, "min_version", None) if req is not None else None
+    _requires = ({"package": _probe_name, "min_version": _minv}
+                 if _minv else None)
+    # F-V3b: enforcement facts come from the SUBSTRATE (the claim rode the
+    # extend as verify=). Two honest outcomes, relayed as a branchable field —
+    # never flattened to a bare "ready", never a consumer probe (which forced
+    # the env's first realization at install time — minutes on a cold env):
+    #   verified_now — a ready realization existed and the claim was proven
+    #                  against it live;
+    #   deferred     — the claim is recorded on the identity and enforced at
+    #                  every realization (a broken build surfaces at first
+    #                  use as a typed failure naming the claim).
+    _ver = res.get("verified") or {}
+    if _ver and all((v or {}).get("status") == "passed" for v in _ver.values()):
+        _vsite = res.get("verified_site") or "site"
+        _got = ", ".join(f"{k} {(v or {}).get('got', '')}".strip()
+                         for k, v in _ver.items())
+        _enf = ("verified_now",
+                f"verified now on {_vsite} ({_got})")
+    elif _ver:
+        # a populated-but-not-passed verified without a raised error is a
+        # substrate contract violation — refuse ready defensively
+        return {"status": "error", "name": cap.get("name"), "env": env_name,
+                "env_id": res["env_id"], "verified": _ver,
+                **({"requires": _requires} if _requires else {}),
+                "note": (f"Extended env '{env_name}', but the verification "
+                         f"report is not clean — NOT marking ready: {_ver}")}
+    else:
+        _enf = ("deferred",
+                "claim recorded on the env — enforced at every realization "
+                "(a broken build will surface at first use, typed)")
+    if not changed:
+        note = (f"{', '.join(packages)} already present in isolated env "
+                f"'{env_name}' (env_id {res['env_id']}) — {_enf[1]}; the "
+                f"running session was left intact. Run in it with "
+                f"{_run_fn}(env='{env_name}', …).")
+        return {"status": "ready", "name": cap.get("name"), "env": env_name,
+                "env_id": res["env_id"], "installed": [],
+                "verification": _enf[0],
+                **({"verified": _ver} if _ver else {}),
+                **({"requires": _requires} if _requires else {}),
+                "note": note}
+    note = (f"Installed {', '.join(packages)} into isolated env '{env_name}' "
+            f"(new env_id {res['env_id']}) — {_enf[1]}. Frozen identities: "
+            f"extending mints a new id; history kept. "
+            f"Run in it with {_run_fn}(env='{env_name}', …).")
+    if restarted:
+        note += (" NOTE: the env's running session was restarted to pick up the "
+                 "new packages — in-memory objects from earlier steps in this "
+                 "env are gone; reload what you need.")
+    return {"status": "ready", "name": cap.get("name"), "env": env_name,
+            "env_id": res["env_id"], "installed": list(packages),
+            "verification": _enf[0],
+            **({"verified": _ver} if _ver else {}),
+            **({"requires": _requires} if _requires else {}),
+            "note": note}
+
+
+def _infer_language(ctx: dict | None) -> str | None:
+    """Best-effort language for a request that didn't state one: if exactly ONE
+    language has a live kernel session in this thread, that's the working
+    context. Both (or neither) live → None — the caller must decide whether
+    ambiguity matters for its branch (inference may DECLINE, never guess)."""
+    try:
+        from core.exec.kernels import get_pool
+        tid = str((ctx or {}).get("thread_id") or "")
+        if not tid:
+            return None
+        live = [lang for lang in ("python", "r")
+                if get_pool().peek(tid, lang) is not None]
+        return live[0] if len(live) == 1 else None
+    except Exception:  # noqa: BLE001 — inference is advisory, never fatal
+        return None
+
+
+def _pointer_env(pid: str, language: "str | None") -> "tuple[str, str] | None":
+    """The active-pointer env this capability request should target, as
+    (env_name, language) — or None for the default session. A known language
+    consults ITS slot only; an ambiguous request lets a single set slot decide
+    (and fix the language); two set slots stay ambiguous — never guess."""
+    from core.compute import named_envs as _ne
+    if language:
+        name = _ne.resolve_env(pid, language)
+        return (name, language) if name else None
+    hits = [(lang, _ne.resolve_env(pid, lang)) for lang in ("python", "r")]
+    hits = [(lang, n) for lang, n in hits if n]
+    return (hits[0][1], hits[0][0]) if len(hits) == 1 else None
+
+
 def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
-    """Materialize a catalogued capability on demand (P1). Python libraries go
-    into the wipeable overlay so the next run_python can import them; non-pip
-    CLI tools (conda) are reported as deferred. A long install is cancellable
-    (Stop) via the turn's cancel_token, and streams phase progress."""
+    """Materialize a catalogued capability on demand (P1). Python libraries
+    install live into the project's default weft session — or into the ACTIVE
+    named env when one is promoted (set_active_env) or targeted (env=), so the
+    install lands where bare runs execute; non-pip CLI tools (conda) are
+    reported as deferred. A long install is cancellable (Stop) via the turn's
+    cancel_token, and streams phase progress.
+
+    `language` scopes readiness: a capability is only "ready" IN a runtime, so
+    the answer must be about the runtime the caller works in. Explicit param
+    wins; else the env= target's recorded language; else the single live
+    kernel's; else unscoped (the historical behavior). Success responses carry
+    `ready_in` so the scope is a branchable field, not prose."""
     name = (input_.get("name") or input_.get("capability") or "").strip()
     if not name:
         return {"error": "name is required"}
+    language = (input_.get("language") or "").strip().lower() or None
+    if language not in (None, "python", "r"):
+        return {"error": f"language must be 'python' or 'r' (got {language!r})"}
+    # env= targets a named ISOLATED env instead of the default session; a package
+    # install extends it (new EnvID, history kept). Validate up front — an unknown
+    # name never silently falls back to the default env.
+    env = (input_.get("env") or "").strip() or None
+    if env is not None:
+        from core.compute import named_envs as _ne
+        from core import projects as _proj
+        _row = _ne.resolve(str(_proj.current() or "default"), env)
+        if _row is None:
+            return {"status": "error", "name": name, "env": env,
+                    "note": f"No named env '{env}' in this project. Call inspect_env() to "
+                            f"see the named-env catalog, or make_isolated_env to create it."}
+        _env_lang = (_row.get("language") or "python").lower()
+        if language is not None and language != _env_lang:
+            # The two scopes CONTRADICT — installing "for r" into a python env
+            # answers neither request. Refuse, don't pick (the same-name-
+            # different-ecosystem "cached" bug was this conflict resolved
+            # silently).
+            return {"status": "error", "name": name, "env": env,
+                    "note": f"env '{env}' is a {_env_lang} env but language="
+                            f"'{language}' was requested — these conflict. Drop "
+                            f"one: omit language to target the env, or omit env "
+                            f"to install for {language}."}
+        language = _env_lang                       # env target fixes the scope
+    if language is None:
+        language = _infer_language(ctx)            # may stay None (ambiguous)
+    if env is None:
+        # No explicit target → the project's ACTIVE env (set_active_env) is
+        # where bare runs execute, so a capability request without env= must
+        # land THERE. Installing into the default session while user code runs
+        # in the promoted env made the installer verify its own success in an
+        # env the user's code never enters — ready reported, symptom persists.
+        from core import projects as _proj
+        _hit = _pointer_env(str(_proj.current() or "default"), language)
+        if _hit is not None:
+            env, language = _hit
     _ct = (ctx or {}).get("cancel_token")
     from core.catalog import resolve_capability
     cap = resolve_capability(name)
+    # Language-scope check: the catalog is keyed by NAME alone, so a hit may be
+    # the same name in the WRONG ecosystem (foo-on-PyPI vs foo-on-CRAN). A
+    # confident "ready" for a runtime the caller isn't in is worse than a miss —
+    # so on a mismatch, treat the name as UNCATALOGUED for the requested
+    # language: an exact registry hit there re-routes to that ecosystem's
+    # install (synthesized cap through the normal dispatch); no hit falls
+    # through to the honest candidates/not_found paths below.
+    if cap is not None and language is not None:
+        from content.bio.tools.cap_request import classify_language
+        # ONE classification owner (cap_request.classify_language): notably a
+        # cli/tool cap with conda provisioning is language-NEUTRAL, not python
+        # — the inline heuristic here sent tools into the wrong-ecosystem
+        # mismatch reroute (M6).
+        _cap_lang = classify_language(cap)
+        if _cap_lang is not None and _cap_lang != language:
+            _mismatch_note = (f"NOTE: '{name}' is catalogued for {_cap_lang}; you asked "
+                              f"for {language}. ")
+            if language == "r":
+                _hit = _cran_exact(name)
+                if _hit:
+                    cap = {"name": name, "archetype": "r_package",
+                           "provisioning": {"r": {"source": _hit.get("source", "cran"),
+                                                  "package": _hit.get("package") or name}}}
+                else:
+                    cap = None                     # → uncatalogued path, python probe gated off
+            else:
+                cap = None                         # python route: pip-by-name via uncatalogued path
+        else:
+            _mismatch_note = ""
+    else:
+        _mismatch_note = ""
+    # The request, normalized ONCE (env_refi2 stage A): built after the
+    # mismatch handling so it reflects the FINAL capability record, and
+    # threaded to every provisioning door — a door may read merged fields
+    # only from here, never re-pluck raw inputs (fidelity: fields the agent
+    # sent must survive to whichever door serves the request).
+    from content.bio.tools.cap_request import build_cap_request
+    req = build_cap_request(input_, cap, ctx, name=name, language=language)
+    # env= is an UNAMBIGUOUS "install this package INTO env X" — handle it EARLY,
+    # before the default-env machinery (already-importable probe, pack-provider
+    # recognition, cluster modules). Those all answer "is it available in the
+    # DEFAULT stack / how do I get it there", which is the wrong question for a
+    # named target: a package present in the default env would short-circuit and
+    # env X would never gain it (found live: ensure_capability(env='nptools',
+    # 'pandas') returned ready while nptools stayed numpy-only). The specs and
+    # ecosystem come from the ONE composer (compile_extend): the github grammar
+    # (owner/repo[/subdir][@ref]) survives to the extend lane instead of
+    # flattening to a bare same-named registry package, and the eco is explicit
+    # rather than prefix-derived. A NON-package capability keeps env='s note.
+    if env is not None:
+        from content.bio.tools.cap_request import compile_extend
+        _plan = compile_extend(req, cap, language or "python")
+        if _plan is not None:
+            _pkgs, _eco = _plan
+            return _extend_into_named_env(env, _pkgs, cap or {"name": name},
+                                          req=req, eco=_eco)
+        # a non-package capability (MCP server, reference): fall through, note it
+        _env_scope_note = (f" (env={env!r} applies to PACKAGE installs only; this "
+                           f"capability is not a package — provisioned normally.)")
+    else:
+        _env_scope_note = ""
     # Cluster module provider (prefer:first, job-path scope): does a cluster module
     # satisfy this tool by exact name? ONLY for CLI/binary tools — NEVER for a pip
     # library. `resolve()` matches any exact-name Lmod module, and on some clusters a
@@ -943,7 +1772,10 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         # plausible identifier — a pip name like `scikit-learn` isn't one) PLUS
         # any import aliases the env packs declare for it (#11: asked by package
         # name, probed by real import name).
-        _probes = [name] if name.isidentifier() else []
+        # The import probe answers "does `import X` work in run_PYTHON" — for an
+        # R-scoped request that is the wrong question in the exact way this
+        # parameter exists to prevent, so gate it off.
+        _probes = ([name] if name.isidentifier() and language != "r" else [])
         try:
             from core.compute import env_packs as _ep
             _probes += [a for a in _ep.import_names_for_package(name)
@@ -953,15 +1785,21 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         if _probes:
             from core.exec.verify import verify_python_imports
             try:
-                _probe_py = _default_probe_python()
+                _probe_cmd = _default_probe_argv()
             except Exception:  # noqa: BLE001 — no realizable session → skip the shortcut
-                _probe_py = None
-            if _probe_py is not None:
+                _probe_cmd = None
+            if _probe_cmd is not None:
+                from core import projects as _prj0
+                _mkey = _session_probe_memo_key(
+                    str(_prj0.current() or "default"), "python")
                 for _p in _probes:
-                    _ok, _ = verify_python_imports([_p], python_exe=_probe_py)
+                    _ok, _ = verify_python_imports([_p], argv_builder=_probe_cmd,
+                                                   memo_key=_mkey)
                     if _ok:
                         return {"status": "ready", "name": name, "import_name": _p,
-                                "note": f"Already available — `import {_p}` works in run_python "
+                                "ready_in": "python",
+                                "note": _mismatch_note +
+                                        f"Already available — `import {_p}` works in run_python "
                                         f"(provided by the base env or a prior install); no install needed."}
         # (B) Declared by an env pack? (#11 already-provided recognition.) The
         # bundle's env packs declare base contents + import aliases; if a pack
@@ -989,7 +1827,7 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         # instead of pointing at list_capabilities (which would also be
         # empty for an uncatalogued name). Returns suggestions shaped for
         # direct copy into propose_capability.
-        suggestions = _search_external_for_name(name)
+        suggestions = _search_external_for_name(name, language=language)
         if suggestions:
             return {
                 "status": "candidates",
@@ -1038,6 +1876,10 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
     from core.catalog import capability_role
     _role = capability_role(cap)
     _role_note = ""
+    # Set when env= was passed for a NON-package capability (below): env applies
+    # to package installs only, so the capability is provisioned normally and this
+    # note tells the agent why the env target was ignored.
+    _env_scope_note = ""
     if _role == "viewer":
         _vb = cap.get("viewer") or {}
         _opens = ", ".join(list(_vb.get("extensions") or []) +
@@ -1054,13 +1896,26 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
 
     def _ready(payload: dict) -> dict:
         payload.setdefault("role", _role)
-        if _role_note and payload.get("status") == "ready":
-            payload["note"] = (payload.get("note") or "") + _role_note
+        if payload.get("status") == "ready":
+            # ready-WHERE as a branchable field, not prose: derived from the
+            # route that actually ran, not from the request.
+            payload.setdefault("ready_in",
+                               "r" if payload.get("archetype") == "r_package"
+                               else "python")
+            if _role_note:
+                payload["note"] = (payload.get("note") or "") + _role_note
+        if _mismatch_note:
+            payload["note"] = _mismatch_note + (payload.get("note") or "")
+        if _env_scope_note:
+            payload["note"] = (payload.get("note") or "") + _env_scope_note
         return payload
 
     from core.runtime import progress
     progress.emit(f"Materializing '{cap.get('name')}'…", phase="ensure")
     prov = cap.get("provisioning") or {}
+    # env= for a PACKAGE was already handled early (before the default-env
+    # machinery). Only a NON-package env= capability reaches here; `_env_scope_note`
+    # (set above) is appended to its result so the agent learns env= was ignored.
     if prov.get("pip"):
         # Already importable? Then ensuring is a no-op. Two cases, both keyed on
         # the seed's explicit import_name (so we never short-circuit a package
@@ -1078,16 +1933,21 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         from core import projects as _projects
         from core.compute import project_env as _penv
         try:
-            _probe_py = _default_probe_python()
+            _probe_cmd = _default_probe_argv()
         except (ComputeError, RuntimeError) as ce:
+            from core.compute.errors import describe
             return {"status": "error", "name": name,
-                    "note": f"the python environment pack is not available: {ce}"}
-        if _probe_py is None:
+                    "note": f"the python environment pack is not available: "
+                            f"{describe(ce)}"}
+        if _probe_cmd is None:
             return {"status": "error", "name": name,
                     "note": "no python environment pack is declared for this deployment"}
         _imp0 = cap.get("import_name")
         if _imp0:
-            _ok, _ = verify_python_imports([_imp0], python_exe=_probe_py)
+            _ok, _ = verify_python_imports(
+                [_imp0], argv_builder=_probe_cmd,
+                memo_key=_session_probe_memo_key(
+                    str(_projects.current() or "default"), "python"))
             if _ok:
                 return _ready({"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
                         "archetype": cap.get("archetype"), "import_name": _imp0,
@@ -1097,8 +1957,18 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
             # (session_install) — the running kernel imports it after the cache
             # invalidation below (no restart); the next background job's snapshot
             # picks it up as a frozen EnvID.
-            _penv.install(str(_projects.current() or "_none"), "python",
-                          list(prov["pip"]), eco="pypi")
+            # solve_at_add: this is the AGENT-FACING install, so correctness
+            # beats the seconds a full solve costs. Without it the substrate
+            # defers the conflict check to snapshot time, where a
+            # base-contradicting leaf has already shadowed a pinned dep in the
+            # pip overlay — the install reports ready, and the project's remote
+            # python lane is left un-snapshottable (live incident 2026-07-26).
+            # With it, such a leaf raises env.solve_conflict HERE, nothing
+            # installed or recorded, and _is_constraint_conflict routes it to an
+            # isolated env below.
+            _res = _penv.install(str(_projects.current() or "_none"), "python",
+                                 list(prov["pip"]), eco="pypi",
+                                 solve_at_add=True)
         except Exception as e:  # noqa: BLE001
             # Solve-driven placement (env_refactor.md): if the constrained install
             # is UNSAT against the pinned base (the package needs versions the
@@ -1111,14 +1981,25 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
             # from the agent-facing note. Log it for the server console.
             import traceback as _tb
             print(f"[ensure_capability] materialize failed for {name!r}:\n{_tb.format_exc()}", flush=True)
-            return {"status": "error", "name": name, "note": f"materialization failed: {e}"}
+            from core.compute.errors import describe
+            return {"status": "error", "name": name,
+                    "note": f"materialization failed: {describe(e)}"}
         # Authoritatively resolve the import name (seed override → auto-detect),
         # so the agent never guesses `import <pipname>` and thrashes.
         imp = cap.get("import_name") or _detect_import_name(list(prov["pip"]))
         # Verify the install actually LOADS before claiming ready — no more
         # "ready"-lies for ABI-broken / partial installs.
         if imp:
-            _ok, _detail = verify_python_imports([imp], python_exe=_probe_py)
+            # argv_builder re-resolves the runtime: after the install the lazy
+            # session has FLIPPED to its own clone — probing the stale
+            # pre-install runtime would import-check the base and miss it
+            # post-install: the install itself bumped the session rev, so this
+            # key is FRESH — the probe runs (verifying THIS install), and its
+            # positive memoizes for every later request against the same rev
+            _ok, _detail = verify_python_imports(
+                [imp], argv_builder=_probe_cmd,
+                memo_key=_session_probe_memo_key(
+                    str(_projects.current() or "default"), "python"))
             if not _ok:
                 return {"status": "error", "name": name, "import_name": imp,
                         "note": (f"Installed, but `import {imp}` fails to load — likely an ABI "
@@ -1126,6 +2007,15 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
                                  f"or a missing system library. NOT marking ready."),
                         "detail": _detail}
         note = "Installed into the project's weft session; importable from run_python now."
+        # The overlay shadowed base-pinned packages: the install stands, but the
+        # agent must know the stack it is now running is NOT the base's pinned
+        # one (this is the signal that used to be dropped entirely).
+        _shadow = (_res or {}).get("shadows_base") if isinstance(_res, dict) else None
+        if _shadow:
+            note += (f" NOTE: this add SHADOWS base-pinned package(s) in the "
+                     f"session overlay ({_shadow}) — versions differ from the "
+                     f"pinned base. If results depend on those versions, use "
+                     f"make_isolated_env instead.")
         if imp:
             note += f" Import it with `import {imp}`."
         else:
@@ -1163,10 +2053,12 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
                     "module": _mod, "note": f"Provided by cluster module '{_mod}' "
                     f"(loaded in background Slurm jobs); the local conda install {reason}."})
         try:
-            _probe_py = _default_probe_python()
+            # availability GATE only (the install itself rides session_install);
+            # the builder form works on prefix-less (mounted-base) topologies
+            _probe_cmd = _default_probe_argv()
         except Exception:  # noqa: BLE001 — no realizable session; handled below
-            _probe_py = None
-        if _probe_py is None:
+            _probe_cmd = None
+        if _probe_cmd is None:
             if _mod:
                 return _mod_covered("isn't needed there (no local python pack)")
             return {"status": "error", "name": name,
@@ -1180,9 +2072,28 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
                           [_spec] if isinstance(_spec, str) else list(_spec),
                           eco="conda")
         except Exception as e:  # noqa: BLE001
+            from core.compute.errors import describe
             if _mod:
-                return _mod_covered(f"isn't needed there and failed: {e}")
-            return {"status": "error", "name": name, "note": f"conda install failed: {e}"}
+                return _mod_covered(f"isn't needed there and failed: {describe(e)}")
+            from core.compute.errors import ComputeError as _CE
+            if isinstance(e, _CE) and e.code == "session.cold_base":
+                # refusal-with-lever: on an adopted/mounted (cold-cache) base a
+                # conda add would re-download the whole base. ABA's lever is the
+                # isolated-env lane (a delta env over the base — only the
+                # missing closure is fetched); relay the substrate's own levers
+                # alongside it.
+                return {"status": "error", "name": name, "error": e.to_payload(),
+                        "note": (f"conda install into the default env is refused on this "
+                                 f"deployment: the base env is an adopted read-only mount "
+                                 f"(cold package cache) — a writable clone would re-download "
+                                 f"the entire base. Use an ISOLATED env instead: "
+                                 f"make_isolated_env(name=..., packages=['conda:<pkg>', ...]) "
+                                 f"— the conda: prefix routes it into the conda layer of the "
+                                 f"solve; then ensure_capability(..., env=name). The isolated "
+                                 f"env solves as a delta over the base and fetches only "
+                                 f"what's missing.")}
+            return {"status": "error", "name": name,
+                    "note": f"conda install failed: {describe(e)}"}
         _note = ("Installed into the project's weft session; the binary is on PATH — "
                  "invoke it from run_python via subprocess.")
         if _mod:
@@ -1252,9 +2163,11 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         try:
             _bev.require("r")
         except (ComputeError, RuntimeError) as ce:
+            from core.compute.errors import describe
             return {"status": "error", "name": name,
-                    "note": f"the R environment pack is not available: {ce}"}
-        return _ready(_ensure_r_via_session(cap, input_, ctx, name))
+                    "note": f"the R environment pack is not available: "
+                            f"{describe(ce)}"}
+        return _ready(_ensure_r_via_session(cap, input_, ctx, name, req=req))
     return {"status": "error", "name": name, "note": "capability has no recognized provisioning."}
 
 
@@ -1389,38 +2302,81 @@ def propose_capability_tool(input_: dict) -> dict:
     return {"status": "approved", "name": name, "archetype": archetype, "note": note}
 
 
+# FTP tree hosts that also serve the SAME paths over HTTPS. ftp:// transfers
+# truncate SILENTLY on many HPC compute nodes (no error, a short/partial file that
+# later fails as "corrupt gzip") and urllib's ftp handler usually can't report a
+# Content-Length, so the truncation is undetectable. HTTPS gives a verifiable
+# Content-Length and is reliable on the same nodes. (Live 2026-07-21: an ftp://
+# GEO download truncated; the https:// mirror of the identical path was clean.)
+_FTP_TO_HTTPS_HOSTS = {"ftp.ncbi.nlm.nih.gov", "ftp.ensembl.org", "ftp.ebi.ac.uk"}
+
+
+def _prefer_https(url: str) -> str:
+    """Rewrite ftp:// → https:// for hosts that mirror the same tree over HTTPS."""
+    from urllib.parse import urlsplit
+    p = urlsplit(url)
+    if p.scheme == "ftp" and (p.hostname in _FTP_TO_HTTPS_HOSTS):
+        rest = p.path + (f"?{p.query}" if p.query else "")
+        return f"https://{p.hostname}{rest}"
+    return url
+
+
 def fetch_url(input_: dict, ctx: dict | None = None) -> dict:
-    """Download a URL into the project's fetch scratch (P4). Size-gated + audited."""
+    """Download a URL into the project's fetch scratch (P4). Size-gated + audited.
+    Prefers HTTPS over FTP and verifies the full Content-Length, retrying a
+    truncated transfer instead of returning a short file that later reads as
+    corrupt (the silent-FTP-truncation failure, live 2026-07-21)."""
     import urllib.request
     from core.data.workspace import scratch_dir
     from core.graph.audit import log_event
     from core import projects
 
-    url = (input_.get("url") or "").strip()
+    url = _prefer_https((input_.get("url") or "").strip())
     if not url:
         return {"error": "url is required"}
     filename = input_.get("filename") or url.split("?")[0].rstrip("/").split("/")[-1] or "download"
-    project_id = projects.current() or "default"
+    project_id = (ctx or {}).get("project_id") or projects.current() or "default"
     dest = scratch_dir(str(project_id), "fetch") / filename
     threshold = 5 * 1024 ** 3
     mode = config.settings.capability_approval.get()
     # Some hosts (e.g. Bioconductor) 403 the default urllib user-agent.
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (ABA)"})
+    headers = {"User-Agent": "Mozilla/5.0 (ABA)"}
+    last_err = None
+    for _attempt in range(3):
+        try:
+            with urllib.request.urlopen(
+                    urllib.request.Request(url, headers=headers), timeout=120) as resp:
+                clen = int(resp.headers.get("Content-Length") or 0)
+                if clen > threshold and mode == "ask":
+                    return {"status": "needs_approval", "url": url, "bytes": clen,
+                            "note": f"Download is ~{clen} bytes (over threshold); approval required in ask mode."}
+                total = 0
+                with open(dest, "wb") as f:
+                    for chunk in iter(lambda: resp.read(1 << 20), b""):
+                        f.write(chunk)
+                        total += len(chunk)
+        except Exception as e:  # noqa: BLE001
+            last_err = f"fetch failed: {e}"
+            continue
+        # A known Content-Length we didn't fully receive = a truncated transfer
+        # (the exact silent-corruption case). Retry rather than hand back a short file.
+        if clen and total < clen:
+            last_err = f"truncated: received {total} of {clen} bytes"
+            continue
+        log_event("data_fetched", title=filename,
+                  detail={"url": url, "bytes": total, "path": str(dest)})
+        return {"status": "ok", "path": str(dest), "filename": filename,
+                "bytes": total, "verified": bool(clen)}
+    # All attempts failed: a truncated/short file may be sitting at `dest` (each
+    # attempt reopens 'wb', so only the LAST attempt's partial survives). Remove
+    # it — the whole point was to never hand back a short file that later reads
+    # as corrupt; leaving it on disk for a caller that globs the scratch dir, or
+    # ignores the error, reintroduces exactly that.
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            clen = int(resp.headers.get("Content-Length") or 0)
-            if clen > threshold and mode == "ask":
-                return {"status": "needs_approval", "url": url, "bytes": clen,
-                        "note": f"Download is ~{clen} bytes (over threshold); approval required in ask mode."}
-            total = 0
-            with open(dest, "wb") as f:
-                for chunk in iter(lambda: resp.read(1 << 20), b""):
-                    f.write(chunk)
-                    total += len(chunk)
-    except Exception as e:  # noqa: BLE001
-        return {"error": f"fetch failed: {e}"}
-    log_event("data_fetched", title=filename, detail={"url": url, "bytes": total, "path": str(dest)})
-    return {"status": "ok", "path": str(dest), "filename": filename, "bytes": total}
+        dest.unlink()
+    except OSError:
+        pass
+    return {"error": last_err or "fetch failed", "url": url}
 
 
 def lookup_sra_runinfo(input_: dict, ctx: dict | None = None) -> dict:

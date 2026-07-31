@@ -1,0 +1,107 @@
+/* Console tab — dense structured event feed (see Console.tsx header).
+   Layout rules for a ~320px column: no fixed columns; each row is a wrapped
+   paragraph with a hanging indent so continuation lines tuck under the text,
+   not under the glyph. */
+
+.console { display: flex; flex-direction: column; gap: 6px; min-height: 0; flex: 1; position: relative; }
+
+/* ── facet bar ── */
+.console__facets { display: flex; flex-wrap: wrap; gap: 3px; align-items: center; }
+.console__chip {
+  font-size: 10px; font-family: var(--mono); line-height: 1;
+  padding: 3px 6px; border-radius: 9999px; cursor: pointer;
+  border: 1px solid var(--border); background: none; color: var(--text-3);
+}
+.console__chip:hover { background: var(--tree-active-bg); }
+.console__chip.is-on {
+  background: var(--tree-active-bg); border-color: var(--text-4);
+  color: var(--text); font-weight: 600;
+}
+.console__chip--err.is-on { color: #c0392b; border-color: #c0392b; }
+.console__search {
+  flex: 1 1 60px; min-width: 50px; font-size: 11px; font-family: var(--mono);
+  padding: 3px 6px; border: 1px solid var(--border); border-radius: 5px;
+  background: var(--bg); color: var(--text-2); outline: none;
+}
+.console__search:focus { border-color: var(--text-4); }
+
+.console__clip { font-size: 10px; color: var(--text-4); font-style: italic; }
+
+/* ── log ── */
+.console__log {
+  flex: 1; min-height: 0; overflow-y: auto;
+  font-family: var(--mono); font-size: 11px; line-height: 1.45;
+}
+.console__gap {
+  color: var(--text-4); text-align: center; font-size: 10px;
+  padding: 3px 0; user-select: none; opacity: .75;
+}
+
+/* ── rows: hanging indent, everything is content ── */
+.crow { padding: 1px 0; }
+.crow__line {
+  cursor: pointer; word-break: break-word;
+  padding-left: 14px; text-indent: -14px;   /* hanging indent under the glyph */
+}
+.crow__line:hover { background: var(--tree-active-bg); border-radius: 3px; }
+.crow__glyph { display: inline-block; width: 12px; text-indent: 0; color: var(--text-4); }
+.crow__site {
+  display: inline-block; text-indent: 0;
+  font-size: 9.5px; font-weight: 600; line-height: 1.3;
+  padding: 0 5px; margin-right: 4px; border-radius: 9999px;
+  border: 1px solid; vertical-align: 1px;
+}
+.crow__verb { color: var(--text-2); font-weight: 600; }
+.crow__sum { color: var(--text-3); }
+.crow__facts { color: var(--text-4); }
+.crow__status { color: var(--text-3); font-style: italic; }
+/* Duration emphasis — amber only, NEVER the severity red (#c0392b). "This took
+   real time" and "this failed" must not look the same: red on a 12s kernel start
+   read as an error on perfectly healthy work. */
+.crow__dur.is-slow1 { color: #b9770e; }
+.crow__dur.is-slow2 { color: #a35c00; font-weight: 600; }
+
+/* category tints the glyph; severity overrides the whole line's accents */
+.crow__line--agent  .crow__glyph { color: var(--accent, #c0392b); opacity: .7; }
+.crow__line--tool   .crow__glyph { color: var(--text-3); }
+.crow__line--run    .crow__glyph { color: #2874a6; }
+.crow__line--data   .crow__glyph { color: #1e8449; }
+.crow__line--env    .crow__glyph { color: #7d6608; }
+.crow__line--compute .crow__glyph { color: #6c3483; }
+.crow__line--serve  .crow__glyph { color: #148f77; }
+
+.crow--warn  .crow__verb { color: #b9770e; }
+.crow--error .crow__verb,
+.crow--error .crow__glyph { color: #c0392b; font-weight: 700; }
+.crow--error .crow__status { color: #c0392b; }
+
+.crow--live .crow__glyph { animation: crow-pulse 1.2s ease-in-out infinite; }
+@keyframes crow-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+
+/* ── expanded detail ── */
+.crow__detail {
+  margin: 2px 0 4px 14px; border-left: 2px solid var(--border);
+  padding: 4px 6px; background: var(--tree-active-bg); border-radius: 0 4px 4px 0;
+}
+.crow__detail-head {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 10px; color: var(--text-4); margin-bottom: 2px;
+}
+.crow__copy {
+  font-size: 10px; border: 1px solid var(--border); border-radius: 4px;
+  background: none; color: var(--text-3); cursor: pointer; padding: 0 5px;
+}
+.crow__copy:hover { background: var(--bg); }
+.crow__detail pre {
+  margin: 0; font-size: 10px; line-height: 1.35; white-space: pre-wrap;
+  word-break: break-word; max-height: 240px; overflow-y: auto;
+}
+
+/* ── follow-tail pill ── */
+.console__new {
+  position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%);
+  font-size: 10.5px; font-weight: 600; padding: 3px 10px; border-radius: 9999px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text-2);
+  cursor: pointer; box-shadow: 0 1px 4px rgba(0, 0, 0, .15);
+}
+.console__new:hover { background: var(--tree-active-bg); }

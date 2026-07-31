@@ -34,17 +34,6 @@ def python_package_status(name: str, *, project_id: Optional[str] = None,
     if project_id is None:
         from core import projects
         project_id = projects.current()
-    # Probe the project's weft SESSION python (its site-packages are authoritative);
-    # fall back to the aba runtime interpreter when no python pack is declared.
-    probe_py = sys.executable
-    from_session = False
-    try:
-        from core.compute import base_env as _bev, project_env as _penv
-        if _bev.active("python"):
-            probe_py = str(_penv.interpreter(str(project_id or "_none"), "python"))
-            from_session = True
-    except Exception:  # noqa: BLE001 — no realizable session → runtime interpreter
-        pass
     appends = "".join(f"sys.path.append({str(p)!r})\n" for p in (extra_paths or []))
     script = (
         "import sys, json, importlib\n"
@@ -65,8 +54,43 @@ def python_package_status(name: str, *, project_id: Optional[str] = None,
         "    o['error'] = traceback.format_exc()[-1000:]\n"
         "print('ABA_JSON=' + json.dumps(o))\n"
     )
+    # The runtime bare run_python actually uses: the project's ACTIVE named
+    # env when one is promoted (probe THERE — an isolated env is standalone),
+    # else the weft session below.
+    from core.compute import named_envs as _ne
+    _envname = _ne.resolve_env(str(project_id or ""), "python")
+    if _envname:
+        import json as _json
+        r = _ne.run_in(str(project_id), _envname, script, timeout_s=timeout_s)
+        for ln in (r.get("stdout") or "").splitlines():
+            if ln.startswith("ABA_JSON="):
+                try:
+                    out.update(_json.loads(ln[len("ABA_JSON="):]))
+                except Exception:  # noqa: BLE001
+                    pass
+                break
+        out["tier"] = "isolated" if out.get("loads") else "unknown"
+        out["env"] = _envname
+        if not out.get("loads") and not out.get("error"):
+            out["error"] = (r.get("stderr") or "").strip()[-600:] or None
+        return out
+    # Probe the project's weft SESSION python (its site-packages are
+    # authoritative) via the topology-blind argv builder — a lazy session's
+    # probe runs against its base realization (content-identical), a
+    # mount-scoped one through its activation. Fall back to the aba runtime
+    # interpreter when no python pack is declared.
+    probe_argv = [sys.executable, "-c", script]
+    from_session = False
     try:
-        proc = subprocess.run([probe_py, "-c", script],
+        from core.compute import base_env as _bev, project_env as _penv
+        if _bev.active("python"):
+            probe_argv = _penv.exec_argv(str(project_id or "_none"), "python",
+                                         ["-c", script])
+            from_session = True
+    except Exception:  # noqa: BLE001 — no realizable session → runtime interpreter
+        pass
+    try:
+        proc = subprocess.run(probe_argv,
                               capture_output=True, text=True, timeout=timeout_s)
     except Exception as e:  # noqa: BLE001
         out["error"] = f"could not run diagnostic: {e}"
@@ -87,22 +111,40 @@ def python_package_status(name: str, *, project_id: Optional[str] = None,
 def env_overview(project_id: Optional[str] = None) -> dict:
     """A map of the Python env — the no-package 'where am I' view: the project's
     weft SESSION python (base pack + session_install additions) and the aba
-    runtime interpreter. (The served-base pip overlays + base lock are gone —
-    W3.5; weft owns environment realization.)"""
+    runtime interpreter. The session block reports the RUNTIME truth — a lazy
+    session that runs from its base realization is `active` with
+    `materialized: False` (the old prefix-derived `active` read a healthy lazy
+    session as absent), and a mutated session's identity is honestly "unhashed
+    scratch" until snapshot."""
     from core.compute import base_env as _bev, project_env as _penv
     if project_id is None:
         from core import projects
         project_id = projects.current()
-    session = None
+    session: dict = {"project_id": project_id, "active": False, "prefix": None,
+                     "materialized": None, "source": None, "identity": None}
     if project_id and _bev.active("python"):
         try:
-            session = str(_penv.prefix(str(project_id), "python"))
+            info = _penv.ensure(str(project_id), "python")
+            rt = info["runtime"]
+            session.update({
+                "active": True,
+                "prefix": str(info["prefix"]) if info["prefix"] else None,
+                "materialized": info["materialized"],
+                "source": rt.get("source"),
+                # weft contract: env_id is NULL once mutated (a clone OR a
+                # cold-base pylib overlay) — scratch has no identity until
+                # snapshot; unmutated sessions carry the base's identity
+                "identity": (rt.get("env_id") or
+                             "unhashed scratch — snapshot before recording results"),
+            })
+            _ovl = {k: rt[k] for k in ("pylib", "rlib") if rt.get(k)}
+            if _ovl:
+                session["overlays"] = _ovl   # additive layers riding the base
         except Exception:  # noqa: BLE001 — session not realizable
-            session = None
+            pass
     return {
         "python": sys.executable,          # the aba runtime interpreter
-        "session": {"project_id": project_id, "prefix": session,
-                    "active": session is not None},
+        "session": session,
     }
 
 
@@ -163,6 +205,22 @@ def _r_packages_by_lib(lib_paths: Sequence, rscript: Optional[str] = None) -> di
     return by
 
 
+def _rlib_package_names(rlib: "Path") -> list[str]:
+    """Installed R package names in a flat R_LIBS overlay dir (the cran-layer
+    riding a base). A real package dir carries a DESCRIPTION at its root — gate
+    on it so the installer's transient `00LOCK-<pkg>` lock dirs and `file<hex>`
+    staging dirs (left in an R_LIBS tree during/after an interrupted install)
+    don't surface as phantom packages. Missing dir → []."""
+    if not rlib.exists():
+        return []
+    try:
+        return sorted(p.name for p in rlib.iterdir()
+                      if p.is_dir() and not p.name.startswith("00LOCK-")
+                      and (p / "DESCRIPTION").is_file())
+    except OSError:
+        return []
+
+
 def env_layers(project_id: Optional[str] = None) -> dict:
     """The layered Python + R environments with their packages — the data behind
     the (i) drawer's Env tab. Python via dist-info scan (fast); R via one
@@ -182,11 +240,25 @@ def env_layers(project_id: Optional[str] = None) -> dict:
     py_layers = []
     if project_id and _bev.active("python"):
         try:
-            py_sess = _penv.prefix(str(project_id), "python")
-            py_layers.append(
-                {"tier": "session", "scope": "project", "project_id": project_id,
-                 "delivery": "weft", "mutable": True, "path": str(py_sess),
-                 "packages": _py_packages([str(p) for p in _site_paths(py_sess)])})
+            _info = _penv.ensure(str(project_id), "python")
+            _rt = _info["runtime"]
+            if _rt.get("pylib"):
+                # cold-base session: the session's own layer is a PYLIB overlay
+                # over the mounted base (a flat --target dir; dist-info scans
+                # directly) — the base itself is below it, read-only
+                py_layers.append(
+                    {"tier": "session", "scope": "project", "project_id": project_id,
+                     "delivery": "weft", "mutable": True, "mode": "pylib-overlay",
+                     "path": str(_rt["pylib"]),
+                     "packages": _py_packages([str(_rt["pylib"])])})
+            elif _rt.get("direct_exec") and _info["prefix"] is not None:
+                py_sess = _info["prefix"]
+                py_layers.append(
+                    {"tier": "session", "scope": "project", "project_id": project_id,
+                     "delivery": "weft", "mutable": True, "path": str(py_sess),
+                     "packages": _py_packages([str(p) for p in _site_paths(py_sess)])})
+            # else: activation-only with no scannable dir — no session layer
+            # (the runtime truth still shows in env_overview)
         except Exception:  # noqa: BLE001 — session not realizable → no session layer
             pass
     for name in iso_names:
@@ -206,13 +278,26 @@ def env_layers(project_id: Optional[str] = None) -> dict:
     from core.compute import base_env as _bev, project_env as _penv
     if project_id and _bev.active("r"):
         try:
-            r_sess = _penv.prefix(str(project_id), "r")
-            r_sess_lib = r_sess / "lib" / "R" / "library"
-            r_rscript = str(r_sess / "bin" / "Rscript")
-            by = _r_packages_by_lib([r_sess_lib], rscript=r_rscript)
-            r_layers.append({"tier": "session", "scope": "project", "project_id": project_id,
-                             "delivery": "weft", "mutable": True, "path": str(r_sess_lib),
-                             "packages": by.get(os.path.realpath(str(r_sess_lib)), [])})
+            _rinfo = _penv.ensure(str(project_id), "r")
+            _rrt = _rinfo["runtime"]
+            if _rrt.get("rlib"):
+                # cran layer riding the base (weft 80e609d): a session-owned
+                # R_LIBS dir — package dirs enumerate directly, no Rscript
+                _names = _rlib_package_names(Path(_rrt["rlib"]))
+                r_layers.append({"tier": "session", "scope": "project",
+                                 "project_id": project_id, "delivery": "weft",
+                                 "mutable": True, "mode": "rlib-overlay",
+                                 "path": str(_rrt["rlib"]),
+                                 "packages": [{"name": n, "version": ""} for n in _names]})
+            elif _rrt.get("direct_exec") and _rinfo["prefix"] is not None:
+                r_sess = _rinfo["prefix"]
+                r_sess_lib = r_sess / "lib" / "R" / "library"
+                r_rscript = str(r_sess / "bin" / "Rscript")
+                by = _r_packages_by_lib([r_sess_lib], rscript=r_rscript)
+                r_layers.append({"tier": "session", "scope": "project", "project_id": project_id,
+                                 "delivery": "weft", "mutable": True, "path": str(r_sess_lib),
+                                 "packages": by.get(os.path.realpath(str(r_sess_lib)), [])})
+            # else: activation-only with no scannable dir — no session layer
         except Exception:  # noqa: BLE001 — R session not realizable → no session layer
             pass
     # Named (weft) R envs — full standalone envs, rendered from the handle.

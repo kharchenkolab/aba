@@ -226,3 +226,66 @@ if __name__ == "__main__":
         print(f"\n{fails}/{len(TESTS)} FAILED")
         sys.exit(1)
     print(f"\nall {len(TESTS)} tests passed")
+
+
+# ── who stopped a cancelled job decides what the agent is told ───────────────
+#
+# The cancelled branch was hardcoded to "The user cancelled the background job you
+# submitted", for BOTH causes. So a job the SCHEDULER killed — walltime, OOM, node
+# failure — was reported to the agent as something the user did, and the agent
+# would then ask the user how to proceed with a cancellation they never made.
+#
+# The row can tell them apart: cancel_job persists `cancel_requested` BEFORE it
+# stops execution, so its presence means the user asked and its absence means the
+# scheduler ended it. The two need opposite next moves — acknowledge and stop, or
+# explain the limit and offer a longer runtime.
+#
+# Found by regtest mn_restart_scheduler_kill_unwatched on the docker slurm fixture.
+
+def _cancel_text(params: dict) -> str:
+    from core.jobs.continuation import _continuation_message_text
+    return _continuation_message_text(
+        {"id": "job_x", "title": "t", "status": "cancelled", "params": params})
+
+
+def test_a_user_cancel_still_blames_the_user():
+    """CEILING: the case that already worked. A deliberate cancel SHOULD say the
+    user did it — removing that would be its own misattribution."""
+    txt = _cancel_text({"cancel_requested": True})
+    assert "user cancelled" in txt.lower()
+    assert "scheduler" not in txt.lower()
+
+
+def test_a_scheduler_kill_does_NOT_blame_the_user():
+    """THE regression."""
+    txt = _cancel_text({"weft_site": "hpc"})
+    assert "user cancelled" not in txt.lower(), txt
+    assert "scheduler" in txt.lower()
+
+
+def test_a_scheduler_kill_names_the_likely_causes_and_the_fix():
+    """A diagnosis the agent cannot act on is only half useful: name walltime and
+    offer the longer runtime, since that is the actionable case."""
+    txt = _cancel_text({"weft_site": "hpc"}).lower()
+    assert "walltime" in txt and "memory" in txt
+    assert "re-submit" in txt or "resubmit" in txt
+
+
+def test_a_scheduler_kill_names_the_site():
+    txt = _cancel_text({"weft_site": "hpc"})
+    assert "hpc" in txt
+
+
+def test_no_site_key_still_produces_a_usable_message():
+    """WIDE — the degenerate shape: a row with no site at all must not render a
+    None into the sentence."""
+    txt = _cancel_text({})
+    assert "None" not in txt and "scheduler" in txt.lower()
+
+
+def test_neither_branch_tells_the_agent_to_continue_the_plan():
+    """Both outcomes are 'stop', for different reasons. An agent that carries on
+    as if the job succeeded is the failure both texts exist to prevent."""
+    for params in ({"cancel_requested": True}, {"weft_site": "hpc"}):
+        txt = _cancel_text(params).lower()
+        assert "do not continue the plan" in txt, params

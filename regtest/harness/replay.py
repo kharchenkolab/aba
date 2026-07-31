@@ -83,14 +83,8 @@ def _isolate_runtime(name: str) -> Path:
     for k in ("ABA_PROJECTS_DIR", "DATA_DIR", "ARTIFACTS_DIR", "ABA_WORK_DIR",
               "ABA_REFS_DIR"):
         os.environ.pop(k, None)
-    # run_python only takes the WEFT kernel path (and so records a weft target on
-    # the Run, which retention needs) when ABA_WEFT_KERNELS is on — the dev
-    # config.env sets it, but an isolated replay runtime doesn't source that.
-    # Without it the pool falls back to a jupyter kernel: outputs still harvest,
-    # but there's no target, so retention is a silent no-op and the whole point
-    # of the replay (catalog state) is untestable. Default it on; a caller can
-    # still override by pre-setting it.
-    os.environ.setdefault("ABA_WEFT_KERNELS", "1")
+    # (The weft kernel transport is the only one since the cutover — no
+    # ABA_WEFT_KERNELS opt-in needed; every kernel records a weft target.)
     backend = str(ROOT / "backend")
     if backend not in sys.path:
         sys.path.insert(0, backend)

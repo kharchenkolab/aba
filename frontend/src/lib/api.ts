@@ -54,6 +54,22 @@ export const apiPost = <T = unknown>(path: string, body?: unknown) => apiSend<T>
 export const apiPatch = <T = unknown>(path: string, body?: unknown) => apiSend<T>(path, 'PATCH', body)
 export const apiDelete = <T = unknown>(path: string) => apiSend<T>(path, 'DELETE')
 
+/** Rename an entity. Threads have their own route; every other entity is a
+ *  generic PATCH. (Projects go through renameProject — they are not entities.) */
+export function renameEntity(id: string, type: string, title: string): Promise<unknown> {
+  const path = type === 'thread'
+    ? `/api/threads/${encodeURIComponent(id)}`
+    : `/api/entities/${encodeURIComponent(id)}`
+  return apiPatch(path, { title })
+}
+
+/** Rename the project. The backend syncs BOTH the registry entry (the Home
+ *  project list) AND the in-project workspace-entity title (what the header
+ *  shows), so the two never diverge regardless of where the rename came from. */
+export function renameProject(pid: string, name: string): Promise<unknown> {
+  return apiPatch(`/api/projects/${encodeURIComponent(pid)}`, { name })
+}
+
 /** Multipart POST — send a FormData body (the browser sets the multipart
  *  boundary; no Content-Type header). For file uploads / chat attachments.
  *  Throws ApiError on a non-2xx; returns the parsed JSON. */

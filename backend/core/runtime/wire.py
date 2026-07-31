@@ -76,7 +76,7 @@ EVENTS: dict[str, EventSpec] = {s.name: s for s in [
         {"tool_use_id": "string", "stream": "'stdout' | 'stderr'", "text": "string",
          "bytes_total": "number", "elapsed_s": "number"}),
     _ev("tool_result", "turn", "A finished tool call's result envelope.",
-        {"name": "string", "result": "Record<string, unknown>", "tool_use_id": "string"}),
+        {"name": "string", "result": "Record<string, unknown>", "tool_use_id": "string"}),  # noqa: seam — wire field name, not the entity type
     _ev("entity_registered", "turn",
         "A new entity was minted during the turn (artifact registrar / create_scenario).",
         {"entity": "Entity"}),
@@ -139,6 +139,17 @@ EVENTS: dict[str, EventSpec] = {s.name: s for s in [
         "connect/disconnect.",
         {"site": "string", "phase": "string"},
         {"step": "string | null", "note": "string | null", "ok": "boolean | null"}),
+    _ev("console", "notify",
+        "Structured observability event for the Console drawer: platform and "
+        "substrate activity (transfers, jobs, kernels, env ops, chunk streaming) "
+        "normalized to one envelope. `category` drives the facet filter "
+        "(run/data/env/compute/serve/system), `verb` is the action name, "
+        "`detail` carries the raw payload for row expansion.",
+        {"category": "string", "verb": "string"},
+        {"site": "string | null", "severity": "'info' | 'warn' | 'error'",
+         "summary": "string | null", "dur_ms": "number | null",
+         "bytes": "number | null", "status": "string | null",
+         "ref": "string | null", "detail": "Record<string, unknown> | null"}),
 ]}
 
 

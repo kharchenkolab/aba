@@ -142,13 +142,9 @@ WINDOW = 40_960            # the bumped vLLM max_model_len for Qwen3-8B
 HALF   = WINDOW // 2       # the user's "base context ≤ half" rule
 
 
-_PRIORITY_TOOLS = (
-    "run_python", "run_r",
-    "Skill", "search_skills",
-    "present_plan", "ask_clarification",
-    "register_dataset", "list_data_files", "find_files",
-    "ensure_capability", "describe_tool",
-)
+# The REAL priority set — imported, not copied, so the budget measured here
+# is the one the runtime actually ships (a stale copy hid a breach once).
+from guide import _PRIORITY_TOOLS  # noqa: E402
 
 
 def _measure_static_tokens(spec_name: str) -> tuple[int, int, int]:
@@ -200,7 +196,9 @@ def test_lean_static_under_half_window():
     assert total_tok <= HALF, (
         f"lean static load {total_tok:,} tokens > half-window "
         f"({HALF:,}). System={sys_tok:,} tools={tools_tok:,}. "
-        f"Cut tools from the allowlist or drop more prompt blocks.")
+        f"Trim guide._PRIORITY_TOOLS (full-prose set) or drop prompt "
+        f"blocks — NEVER cut tools from the allowlist (full-surface "
+        f"parity is guarded by test_tool_allowlist.py).")
 
 
 def test_lean_static_meaningfully_smaller_than_full():

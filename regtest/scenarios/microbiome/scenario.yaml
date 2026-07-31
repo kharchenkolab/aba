@@ -1,4 +1,5 @@
 id: microbiome
+smoke: true
 title: 16S microbiome — alpha diversity by group, then beta diversity / ordination
 domain: microbiome
 gpu: false

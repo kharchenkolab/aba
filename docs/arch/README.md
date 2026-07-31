@@ -36,6 +36,7 @@ attach uniformly to all of them — **knowledge/bundle**, **verifiability/proven
 **Compute plane — doing the science**
 - [`compute-execution.md`](compute-execution.md) — the kernel pool (Python/R), `run_python`/`run_r`, path-agnostic artifact harvest, interactive-vs-background routing.
 - [`jobs-and-hpc.md`](jobs-and-hpc.md) — background jobs, the `BatchSubmitter` protocol, the weft lanes (local / shared-fs cluster / **detached** `site=` targeting), continuation, HPC discovery.
+- [`run-outputs.md`](run-outputs.md) — output durability + the consumption path: weft retention as the byte truth, the canonical locate/materialize pair (location transparency — lookups never transfer, movement is budgeted by the action surface), digest-validated caches, and the serve/list/view/render surfaces.
 - [`compute-sites.md`](compute-sites.md) — connecting external compute: the `WeftAdapter`/`SitePort` doorway, `weft-sites.yaml`, the science-first **Settings → Compute** tab (probe → propose → confirm), the Guide's connect tools, and the shared-controller weft-ui mount.
 - [`envs.md`](envs.md) — environments & provisioning: the weft-realized base-pack / project-session / named-env tiers, `ensure_capability`, integrity by content-addressing, GPU/accelerator.
 
@@ -45,6 +46,7 @@ attach uniformly to all of them — **knowledge/bundle**, **verifiability/proven
 **Cross-cuts — attach uniformly to every plane**
 - [`bundle-and-content.md`](bundle-and-content.md) — the scope-chain (system → installation → lab → user → `EffectiveBundle`), skills/recipes, capabilities, and **the content-pack seam** (`core ↛ content`).
 - [`context-and-memory.md`](context-and-memory.md) — the agent's context as a transient projection of the durable model; history compaction; memory-wipe recovery.
+- [`testing.md`](testing.md) — the testing estate: what each layer (guard suite, scenario sweep, surface/transport oracles, multinode, forensic) can *see*, and which one answers a given question. **Read before building any test infrastructure.**
 - [`deployment-and-access.md`](deployment-and-access.md) — the deployment-agnostic core, config topology, and the reserved identity/access seam.
   - [`settings-reference.md`](settings-reference.md) — **generated** catalogue of every `ABA_*` setting (env, type, default, `weft_fate`, `reduction`); produced from the `config.py` registry by `scripts/gen_settings_reference.py`. Not hand-edited.
 

@@ -83,6 +83,25 @@ def resolve_site_for_path(abspath: str) -> str:
 
 # ── fingerprints (weft data_fingerprint → external_ref-compatible digest) ────
 
+# Wordings that mean THE PATH IS ABSENT. Deliberately specific: the previous
+# test was `"not" in detail`, which also matched "canNOT connect to siteX" and
+# "host NOT reachable" — so a site being unreachable was recorded as the data
+# being gone, and the close-run sweep persisted that as a sticky source_missing
+# only a manual Re-check could clear. An outage is not a deletion; anything we
+# cannot classify propagates as the error it is.
+_ABSENT_DETAILS = ("no such file", "no such directory", "no such path",
+                   "not found", "does not exist", "nonexistent")
+
+
+def _is_absent(e) -> bool:
+    """True only when the substrate says the path is ABSENT (vs unreachable)."""
+    code = (getattr(e, "code", "") or "").lower()
+    if "missing" in code or "not_found" in code or "notfound" in code:
+        return True
+    detail = (getattr(e, "detail", "") or "").lower()
+    return any(p in detail for p in _ABSENT_DETAILS)
+
+
 def fingerprint_site_path(path: str, site: str) -> dict:
     """Stat-level fingerprint of a path ON A SITE, normalized to the
     external_ref shape: {exists, n_files, total_bytes, digest, truncated,
@@ -93,7 +112,7 @@ def fingerprint_site_path(path: str, site: str) -> dict:
                                hash_under=_FP_HASH_UNDER,
                                max_entries=_FP_MAX_ENTRIES)
     except ComputeError as e:
-        if "missing" in e.code or "not" in e.detail.lower():
+        if _is_absent(e):
             return {"exists": False}
         raise
     entries = fp.get("entries") or []
@@ -119,6 +138,25 @@ def descriptor_from(fp: dict) -> dict:
             "truncated": bool(fp.get("truncated"))}
 
 
+def known_complete_bytes(rec: Optional[dict]) -> Optional[int]:
+    """The size of a fingerprint/descriptor, or None when that size cannot be
+    trusted to represent the whole tree.
+
+    The ONE owner for every byte-budget decision. A size is trustworthy only
+    when it is present AND complete: `fingerprint_site_path` caps its walk at
+    `_FP_MAX_ENTRIES` and sums only what it walked, so a truncated record
+    reports a fraction of a large tree — a shape that read as "small" to every
+    gate. The degenerate weft reply (no entries, a top-level `bytes`) sums to
+    0 and read as smaller still. Callers must treat None as "refuse / don't
+    assume": a gate that cannot measure must not wave the transfer through."""
+    if not rec:
+        return None
+    if rec.get("truncated"):
+        return None
+    size = rec.get("total_bytes")
+    return size if isinstance(size, int) else None
+
+
 # ── registration-time record ─────────────────────────────────────────────────
 
 def register_source(source: str, *, site: Optional[str] = None,
@@ -135,7 +173,9 @@ def register_source(source: str, *, site: Optional[str] = None,
     * site/local path → durable-home record: fingerprint + descriptor,
       NO ingest, NO ref (content identity mints at first use). Set
       `eager_ref_max_bytes` > 0 to mint the reference-in-place ref
-      immediately for small data (one read pass).
+      immediately for data under that size (one read pass, on-site).
+      The eager mint is BEST-EFFORT: a mint failure leaves `ref` None
+      (the registration record stands; first use mints lazily).
     """
     comp = _comp()
     if is_url(source):
@@ -162,9 +202,17 @@ def register_source(source: str, *, site: Optional[str] = None,
            "fingerprint": fp,
            "descriptor": descriptor_from(fp),
            "ref": None}
-    if eager_ref_max_bytes and (fp.get("total_bytes") or 0) <= eager_ref_max_bytes:
-        r = comp.sync_call("data_register", abspath, site=site, ingest=False)
-        out["ref"] = r["ref"]
+    _eager = known_complete_bytes(fp)      # None (unknown/truncated) → decline
+    if eager_ref_max_bytes and _eager is not None and _eager <= eager_ref_max_bytes:
+        # BEST-EFFORT: identity minting must never fail a REGISTRATION — the
+        # durable record (home + fingerprint + descriptor) already stands; a
+        # ref that failed to mint stays absent and is minted lazily at first
+        # use (e.g. the viewer launch's ref-arm mint). One read pass, on-site.
+        try:
+            r = comp.sync_call("data_register", abspath, site=site, ingest=False)
+            out["ref"] = r["ref"]
+        except Exception:  # noqa: BLE001 — ref stays None; the record stands
+            pass
     return out
 
 
@@ -199,7 +247,7 @@ def content_shape(path: str, site: str) -> dict:
                                hash_under=_FP_HASH_UNDER,
                                max_entries=_FP_MAX_ENTRIES)
     except ComputeError as e:
-        if "missing" in e.code or "not" in e.detail.lower():
+        if _is_absent(e):
             return {"exists": False}
         raise
     entries = fp.get("entries") or []
@@ -289,12 +337,22 @@ def ensure_ref(meta: dict) -> dict:
 def fetch_check(meta: dict, *, limit: int = FETCH_GUARDRAIL_BYTES) -> dict:
     """The controller is a viewer, not a way-station: refuse oversized
     fetches with the placement suggestion instead (§5)."""
-    size = (meta.get("descriptor") or {}).get("total_bytes")
-    if size is not None and size > limit:
-        home = meta.get("home") or {}
+    desc = meta.get("descriptor") or {}
+    size = known_complete_bytes(desc)
+    if size is None:                       # unmeasurable → refuse, don't assume
+        size = known_complete_bytes(meta.get("fingerprint") or {})
+    home = meta.get("home") or {}
+    where = home.get("site", "the site holding the data")
+    if size is None:
+        return {"ok": False, "total_bytes": None, "limit": limit,
+                "suggestion": (f"this dataset's size is unknown or only partly "
+                               f"counted, so the transfer gate cannot clear it — "
+                               f"run the analysis on {where}, or re-register the "
+                               f"dataset to record a complete size")}
+    if size > limit:
         return {"ok": False, "total_bytes": size, "limit": limit,
                 "suggestion": ("run the analysis on "
-                               f"{home.get('site', 'the site holding the data')} "
+                               f"{where} "
                                "instead of transferring "
                                f"{size / 1e9:.1f} GB here")}
     return {"ok": True, "total_bytes": size}

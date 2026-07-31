@@ -7,6 +7,7 @@ tools env (on PATH), killpg cancellation, and png/csv artifact harvest. Before
 P5 the background path was an older parallel copy that saw none of P1–P4.
 """
 from __future__ import annotations
+import os
 import shutil
 import sys
 import uuid
@@ -42,14 +43,16 @@ def run_python_code(
     # interactive isolated-env kernel. weft rebuilds a GC-reclaimed realization
     # from the env's lock transparently at realize time.
     interp = (interp or "").strip() or None    # the param survives; branches below may set it
+    _default_rt = None    # default lane: session RUNTIME drives the argv, not a path
     if env:
         from core.compute import named_envs
         from core.compute.errors import ComputeError
         try:
             py = named_envs.interpreter(str(project_id), env)
         except ComputeError as ce:
+            from core.compute.errors import describe
             return {"error": f"isolated env {env!r} is not available "
-                             f"(project {project_id}): {ce.detail or ce.code}"}
+                             f"(project {project_id}): {describe(ce)}"}
         except Exception as e:  # noqa: BLE001
             return {"error": f"isolated env {env!r} is not available "
                              f"(project {project_id}): {e}"}
@@ -63,13 +66,18 @@ def run_python_code(
         # W3.5 weft-only: the default lane is the PROJECT's session over the
         # bundle-declared base pack — REQUIRED, no served-base fallback. A
         # deployment with no python pack is misconfigured (loud, structured).
+        # The session's RUNTIME (not a bare interpreter path) shapes the exec:
+        # a lazy session runs from its base realization in place, and a
+        # mount-scoped prefix has no path outside its activation.
         from core.compute import base_env, project_env
         from core.compute.errors import ComputeError
         try:
             base_env.require("python")
-            interp = str(project_env.interpreter(str(project_id), "python"))
+            _default_rt = project_env.runtime(str(project_id), "python")
         except (ComputeError, RuntimeError) as ce:
-            return {"error": f"the python environment pack is not available: {ce}"}
+            from core.compute.errors import describe
+            return {"error": f"the python environment pack is not available: "
+                             f"{describe(ce)}"}
 
     # Preamble: DATA_DIR prepended. Every run is now a weft env (isolated named
     # env or the project's base-pack session) — STANDALONE, its own site-packages
@@ -87,7 +95,11 @@ def run_python_code(
     _seed = 0
     lines.append(f"import random as _aba_rnd; _aba_rnd.seed({_seed})")
     lines.append(f"try:\n    import numpy as _aba_np; _aba_np.random.seed({_seed})\nexcept Exception: pass")
-    (scratch / "script.py").write_text("\n".join(lines) + "\n" + code)
+    # probe prologue sits AFTER the platform preamble (which owns the starting
+    # dir) and BEFORE the agent's code; the epilogue runs last
+    (scratch / "script.py").write_text(
+        "\n".join(lines) + "\n" + cwd_probe_prologue("python") + code
+        + cwd_probe_epilogue("python"))
     # Harvest only what THIS run produced. When run_id is the active Run, the
     # scratch IS the Run's work dir (shared with prior cells), so filter by the
     # script's mtime (same FS as the outputs → no cross-host clock skew) to
@@ -96,19 +108,34 @@ def run_python_code(
 
     ex = MaterializingExecutor()
     menv = ex.materialize(Provisioning())         # base-venv subprocess run harness
-    # `interp` is the weft interpreter (named env / job-spec / base-pack session);
-    # it is always resolved by here — the no-pack case already returned an error.
+    # Build the run argv. Default lane: topology-blind argv from the session
+    # runtime (direct prefix exec where permitted, activation-wrapped otherwise);
+    # isolated-env / job-spec lanes carry a weft-resolved interpreter PATH.
     # Never fall back to the backend venv (sys.executable) for science code.
-    used_interp = str(interp or "").strip()
-    if not used_interp:
-        return {"error": "no python interpreter resolved for this run (internal)"}
-    # Env-var parity with the interactive kernel (jupyter.py _kernel_env):
-    # the agent's code routinely reads WORK_DIR / DATA_DIR / ARTIFACTS_DIR via
-    # `os.environ[...]` since they're set up that way for run_python (kernel
-    # path). Background jobs run through the SAME script the agent writes, so
-    # the same env shape must be present — otherwise a backgrounded download
-    # crashes with KeyError: 'WORK_DIR' before doing any work (live, 2026-06-03,
-    # prj_413593e1 job_53df2f2734). MPLBACKEND=Agg keeps matplotlib headless.
+    # `used_interp` is the direct interpreter path when one exists — consumed by
+    # the best-effort env fingerprint below, which skips on activation-only
+    # topologies rather than lie.
+    if _default_rt is not None:
+        from core.compute import project_env as _penv
+        run_argv = _penv.argv_for_runtime(_default_rt, "python",
+                                          [str(scratch / "script.py")])
+        _p = _default_rt.get("prefix")
+        used_interp = (str(Path(_p) / "bin" / "python")
+                       if (_default_rt.get("direct_exec") and _p) else "")
+    else:
+        used_interp = str(interp or "").strip()
+        if not used_interp:
+            return {"error": "no python interpreter resolved for this run (internal)"}
+        run_argv = [used_interp, str(scratch / "script.py")]
+    # Env-var parity with the interactive kernel (core/exec/kernels/weft.py
+    # _weft_setup_code): the agent's code routinely reads WORK_DIR / DATA_DIR /
+    # ARTIFACTS_DIR via `os.environ[...]` AND via the bare variable, so BOTH lanes
+    # set BOTH forms — the kernel via its setup block, this one-shot lane via
+    # env_vars (below) + the DATA_DIR variable prepended to `lines` above. Without
+    # parity a backgrounded download crashes with KeyError: 'WORK_DIR' before doing
+    # any work (live, 2026-06-03, prj_413593e1 job_53df2f2734); the env-only-in-one-
+    # -lane split also bit run_python interactively (live, 2026-07-21). MPLBACKEND=Agg
+    # keeps matplotlib headless.
     env_vars = {
         "WORK_DIR": str(scratch),
         "DATA_DIR": str(_data_dir),
@@ -121,7 +148,7 @@ def run_python_code(
         "PYTHONUNBUFFERED": "1",
     }
     result = ex.exec(
-        menv, [used_interp, str(scratch / "script.py")],
+        menv, run_argv,
         cwd=str(scratch), cancel_token=cancel_token, timeout_s=timeout_s,
         env_vars=env_vars, stream=stream,
     )
@@ -135,12 +162,16 @@ def run_python_code(
 
     plots, tables, files, warns = harvest_artifacts(scratch, since_ts=_since,
                                                     project_id=str(project_id))
+    _st, _fi = read_cwd_sentinel(scratch)
+    _esc = cwd_escape_warning(_st, _fi)
+    if _esc:
+        warns = [*warns, _esc]
     from core.exec.output_cap import snip_middle
     # Provenance (provenance.md §3.1): snapshot the env DESCRIPTOR through the
     # interpreter that ran — the background/Slurm analog of the kernel-session
     # probe. Cheap (~0.1s), best-effort, never fails the run.
     from core.exec.fingerprint import package_versions_for_interpreter
-    _pkg = package_versions_for_interpreter(used_interp, "python")
+    _pkg = package_versions_for_interpreter(used_interp, "python") if used_interp else {}
     _langver = _pkg.pop("__lang_version__", "") if isinstance(_pkg, dict) else ""
     out = {
         "stdout": snip_middle(result.stdout or ""),
@@ -198,6 +229,7 @@ def run_r_code(
 
     # R preamble — kept short. The agent's own script.R follows verbatim.
     lib_lines: list[str] = []
+    _default_rt = None    # default lane: session RUNTIME drives the argv, not a path
     if env:
         # §11: isolated R env — under weft a named R env is a FULL standalone
         # env (its own R + libs, a realized prefix), not a lib dir stacked on
@@ -207,8 +239,9 @@ def run_r_code(
         try:
             rscript = named_envs.interpreter(str(project_id), env)
         except ComputeError as ce:
+            from core.compute.errors import describe
             return {"error": f"isolated R env {env!r} is not available "
-                             f"(project {project_id}): {ce.detail or ce.code}"}
+                             f"(project {project_id}): {describe(ce)}"}
         except Exception as e:  # noqa: BLE001
             return {"error": f"isolated R env {env!r} is not available "
                              f"(project {project_id}): {e}"}
@@ -219,19 +252,27 @@ def run_r_code(
     else:
         # W3.5 weft-only: the default R lane is the PROJECT's session over the
         # bundle-declared R base pack — REQUIRED, standalone (its own .libPaths,
-        # no stack). No tools-env R fallback; a missing R pack is loud.
+        # no stack). No tools-env R fallback; a missing R pack is loud. As with
+        # python, the session RUNTIME shapes the exec (lazy sessions run from
+        # the base realization; mount-scoped prefixes are activation-only).
         from core.compute import base_env, project_env
         from core.compute.errors import ComputeError
         try:
             base_env.require("r")
-            rscript = project_env.interpreter(str(project_id), "r")
+            _default_rt = project_env.runtime(str(project_id), "r")
+            rscript = None
         except (ComputeError, RuntimeError) as ce:
-            return {"error": f"the R environment pack is not available: {ce}"}
+            from core.compute.errors import describe
+            return {"error": f"the R environment pack is not available: "
+                             f"{describe(ce)}"}
     preamble_lines = list(lib_lines)
     preamble_lines.append(f'setwd({str(scratch)!r})')
     preamble_lines.append("set.seed(0)")   # provenance.md §3.3 — bit-stable re-run
     preamble = "\n".join(preamble_lines)
-    (scratch / "script.R").write_text(preamble + "\n" + code)
+    # probe prologue AFTER the preamble's setwd (it must record the dir the
+    # platform chose, not the launch dir); epilogue last
+    (scratch / "script.R").write_text(
+        preamble + "\n" + cwd_probe_prologue("r") + code + cwd_probe_epilogue("r"))
     _since = (scratch / "script.R").stat().st_mtime   # harvest only this run's outputs
 
     ex = MaterializingExecutor()
@@ -242,16 +283,26 @@ def run_r_code(
         "ARTIFACTS_DIR": str(ARTIFACTS_DIR),
         "ABA_PYTHON": sys.executable,  # let R shell out to Python if needed
     }
-    r_cmd = [str(rscript), "--vanilla", str(scratch / "script.R")]
     # R block-buffers stdout to a pipe (no PYTHONUNBUFFERED equivalent), so a background R
     # job's prints wouldn't reach run.log until it exits — the Jobs-card live tail would sit
     # empty until completion. `stdbuf -oL` forces line-buffered stdio → live streaming (Item 2).
     # Only for streaming (background) runs; best-effort (skip if stdbuf is unavailable).
+    _pre: list[str] = []
     if stream:
         import shutil as _sh
         _stdbuf = _sh.which("stdbuf")
         if _stdbuf:
-            r_cmd = [_stdbuf, "-oL", *r_cmd]
+            _pre = [_stdbuf, "-oL"]
+    if _default_rt is not None:
+        from core.compute import project_env as _penv
+        r_cmd = _penv.argv_for_runtime(_default_rt, "r",
+                                       ["--vanilla", str(scratch / "script.R")],
+                                       pre=_pre)
+        _p = _default_rt.get("prefix")
+        rscript = (Path(_p) / "bin" / "Rscript"
+                   if (_default_rt.get("direct_exec") and _p) else None)
+    else:
+        r_cmd = [*_pre, str(rscript), "--vanilla", str(scratch / "script.R")]
     result = ex.exec(
         env, r_cmd,
         cwd=str(scratch), cancel_token=cancel_token, timeout_s=timeout_s,
@@ -267,11 +318,18 @@ def run_r_code(
 
     plots, tables, files, warns = harvest_artifacts(scratch, since_ts=_since,
                                                     project_id=str(project_id))
+    _st, _fi = read_cwd_sentinel(scratch)
+    _esc = cwd_escape_warning(_st, _fi)
+    if _esc:
+        warns = [*warns, _esc]
     from core.exec.output_cap import snip_middle
     # Provenance: snapshot the R env with the SAME .libPaths() the run used.
+    # Best-effort — skipped (never faked) when no direct Rscript path exists
+    # (activation-only topology).
     from core.exec.fingerprint import package_versions_for_interpreter
-    _rpkg = package_versions_for_interpreter(str(rscript), "r",
-                                             r_preamble="\n".join(lib_lines))
+    _rpkg = (package_versions_for_interpreter(str(rscript), "r",
+                                              r_preamble="\n".join(lib_lines))
+             if rscript else {})
     _rver = _rpkg.pop("__lang_version__", "") if isinstance(_rpkg, dict) else ""
     out = {
         "stdout": snip_middle(result.stdout or ""),
@@ -293,6 +351,85 @@ def run_r_code(
     return out
 
 
+# ── working-directory escape probe (harvest honesty, 2026-07-26) ────────────
+# The harvest contract scans the run's working tree — but agent code can
+# chdir/setwd elsewhere mid-block, and NOTHING recorded where the process
+# ENDED UP: outputs written there vanished from produced[] with zero signal
+# (live: a multi-step run's card showed 2 of 6 outputs). The probe is a
+# prologue that records the STARTING dir inside the script and an epilogue
+# that writes "<start>\n<final>" to a dot-sentinel IN the starting dir —
+# self-contained (no controller paths baked in), so the same pair works in
+# every lane including a remote node harness. A script that dies before the
+# epilogue leaves no sentinel and the comparison simply doesn't happen.
+_FINAL_CWD_SENTINEL = ".aba-final-cwd"
+
+
+def cwd_probe_prologue(lang: str) -> str:
+    if lang == "r":
+        return '.aba_start_dir <- getwd()\n'
+    return 'import os as _aba_os; _ABA_START_DIR = _aba_os.getcwd()\n'
+
+
+def cwd_probe_epilogue(lang: str, sentinel_dir: Optional[str] = None) -> str:
+    """`sentinel_dir=None`: write into the START dir (one-shot lanes / remote
+    harness, where the start dir is the only address both sides know).
+    Explicit `sentinel_dir`: write to that absolute dir — the persistent-
+    kernel lane uses the harvest root, because there the start dir itself is
+    what may have silently drifted (a prior block's chdir) and a sentinel
+    left in the drifted dir would never be found."""
+    if lang == "r":
+        target = (f'file.path({sentinel_dir!r}, "{_FINAL_CWD_SENTINEL}")'
+                  if sentinel_dir else
+                  f'file.path(.aba_start_dir, "{_FINAL_CWD_SENTINEL}")')
+        return (f'\ntry(writeLines(c(.aba_start_dir, getwd()), {target}), '
+                'silent = TRUE)\n')
+    target = (f"_aba_os.path.join({sentinel_dir!r}, {_FINAL_CWD_SENTINEL!r})"
+              if sentinel_dir else
+              f"_aba_os.path.join(_ABA_START_DIR, {_FINAL_CWD_SENTINEL!r})")
+    return ("\ntry:\n"
+            "    import os as _aba_os\n"
+            f"    with open({target}, 'w') as _aba_f:\n"
+            "        _aba_f.write(_ABA_START_DIR + '\\n' + _aba_os.getcwd())\n"
+            "except Exception:\n"
+            "    pass\n")
+
+
+def read_cwd_sentinel(start_dir) -> tuple[Optional[str], Optional[str]]:
+    """(start, final) from the sentinel, consuming it; (None, None) when the
+    script died before the epilogue — no claim is made either way."""
+    p = Path(start_dir) / _FINAL_CWD_SENTINEL
+    try:
+        lines = p.read_text().splitlines()
+        p.unlink(missing_ok=True)
+        if len(lines) >= 2:
+            return lines[0].strip() or None, lines[1].strip() or None
+    except OSError:
+        pass
+    return None, None
+
+
+def cwd_escape_warning(start: Optional[str], final: Optional[str]) -> Optional[str]:
+    """The typed warning when a block ENDED outside its tracked tree. Moves
+    WITHIN the tree are fine (harvest is recursive). The remedy deliberately
+    does NOT say keep_outputs — retention is jobdir-scoped end to end, so a
+    keep naming an outside path would silently keep nothing; the valid levers
+    are register-by-absolute-path (read-in-place) or writing into WORK_DIR."""
+    if not start or not final:
+        return None
+    try:
+        s = os.path.realpath(start)
+        f = os.path.realpath(final)
+    except OSError:
+        return None
+    if f == s or f.startswith(s + os.sep):
+        return None
+    return (f"this code finished in working directory {final} — OUTSIDE the "
+            f"run's tracked directory ({start}). Files written there are NOT "
+            f"harvested, will NOT appear on the Run card, and CANNOT be kept "
+            f"with keep_outputs. To track them: register_dataset the absolute "
+            f"path (read-in-place), or write outputs into WORK_DIR instead.")
+
+
 _FILE_EXTS = (
     ".pdf", ".svg", ".html", ".htm",
     ".rds", ".h5", ".h5ad", ".npy", ".npz",
@@ -310,16 +447,50 @@ _HARVEST_SKIP_DIRS = frozenset((
 ))
 
 
-def _iter_kept(scratch: Path, suffixes: tuple[str, ...], since_ts: float):
+def _window_floor(ts: float) -> float:
+    """Round a wall-clock window start DOWN to whole-second resolution.
+
+    File stamps and `time.time()` do not share a resolution. BeeGFS/NFS (and
+    older ext3) record whole seconds, so an output written at X.50 stats as
+    X.00 — BELOW a step that started at X.45. Comparing a fractional clock
+    reading against a truncated file stamp therefore drops every output
+    written in the remainder of the start second, silently, and the
+    stale-stamp counter below misses them for the same reason (its ctime is
+    truncated too) — so the drop carries no warning either.
+
+    Flooring compares at the coarsest resolution any supported filesystem can
+    express. The cost is bounded and deliberate: a file written in the SAME
+    second but just BEFORE the window may now be (re-)caught. Sub-second
+    ordering is not recoverable from a whole-second stamp, so this is the
+    harvest's standing tradeoff — tracked beats lost.
+
+    The one-shot lanes are unaffected either way: they take `since_ts` from a
+    file's own mtime (the wrapper script), so both sides of the comparison
+    already carry the same truncation."""
+    return float(int(ts))
+
+
+def _iter_kept(scratch: Path, suffixes: tuple[str, ...], since_ts: float,
+               stale: Optional[list] = None):
     """Walk `scratch` recursively for files whose suffix matches `suffixes`
     (lowercased compare). Yields Path objects mtime-filtered by since_ts;
     skips hidden files, thumb sidecars, and known-transient subdirs.
 
+    `stale` (optional list) collects the mtime-window's SILENT REJECTS that
+    carry the archive-extraction signature: ctime >= since_ts (the inode
+    appeared during this window) but mtime < since_ts (the content stamp is
+    older — tar/unzip/cp -p/rsync -t preserve source times). Files from
+    EARLIER blocks fail both clocks and are not collected, so the signal is
+    precise: "appeared now, stamped old". Without this, extracting an
+    archive of outputs harvested NOTHING with zero signal (harvest-honesty
+    sweep, 2026-07-26 — the relink comparator has documented this exact
+    mtime-rewrite behavior for years while the harvest gate stayed blind).
+
     Recursive harvest fixes the case where a recipe writes per-sample
-    plots into a subdir (e.g. pagoda2's pagoda2_GSM.../qc_*.png) — those
-    used to be invisible to the chat tool-result even though they showed
-    up in the Run view (2026-06-04)."""
-    suff = tuple(s.lower() for s in suffixes)
+    plots into a subdir — those used to be invisible to the chat
+    tool-result even though they showed up in the Run view (2026-06-04)."""
+    suff = tuple(s.lower() for s in suffixes) if suffixes else None  # None = ANY suffix
+    since = _window_floor(since_ts)   # compare at filesystem stamp resolution
     for f in scratch.rglob("*"):
         # Skip any path under a transient subdir at any depth.
         if any(part in _HARVEST_SKIP_DIRS for part in f.parts):
@@ -334,12 +505,15 @@ def _iter_kept(scratch: Path, suffixes: tuple[str, ...], since_ts: float):
         # filtered so a re-harvest doesn't surface caches as content.
         if f.name.endswith(".thumb.png") or f.name.endswith(".preview.png"):
             continue
-        if f.suffix.lower() not in suff:
+        if suff is not None and f.suffix.lower() not in suff:
             continue
         try:
-            if f.stat().st_mtime < since_ts:
-                continue
+            st = f.stat()
         except OSError:
+            continue
+        if st.st_mtime < since:
+            if stale is not None and st.st_ctime >= since:
+                stale.append(f)     # appeared now, stamped old — see docstring
             continue
         yield f
 
@@ -395,17 +569,59 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0,
     adir = project_artifacts_dir(pid)
     import time as _time
     _harvest_begin = _time.time()   # agent's own writes precede this; our copies follow it
-    _created: set = set()           # uuid copies WE make this call (excluded from the off-convention pass)
+    _created: set = set()           # store names WE record this call (excluded from the off-convention pass)
 
     _skipped_cap = [0]   # files not copied because max_files was reached (reported in warnings)
 
     def _copy_and_record(f: Path, bucket: list, ext: str) -> None:
         if max_files is not None and len(_created) >= max_files:
+            # Cap reached: DON'T copy into the served store, but still ADVERTISE
+            # the file (link-only) so it lands in produced[] → a retain candidate,
+            # browsable + downloadable from the sandbox/retained tier via the
+            # tier-resolving /file route. The prior behavior only bumped a counter
+            # and dropped the entry entirely, so a capped output vanished from the
+            # manifest — the agent said "wrote X" and the user had no way to get it
+            # (live 2026-07-21). Same shape as the oversize link-only branch.
             _skipped_cap[0] += 1
+            try:
+                display = str(f.relative_to(scratch))
+            except ValueError:
+                display = f.name
+            try:
+                nbytes = f.stat().st_size
+            except OSError:
+                nbytes = 0
+            bucket.append({"url": None, "original_name": display,
+                           "bytes": nbytes, "link_only": True})
             return
-        dest_name = f"{uuid.uuid4().hex}{ext}"
+        # Identity is DERIVED from content, never minted by the copy. The store
+        # name is the file's sha256 (truncated to 128 bits — same length/shape
+        # as the uuid names it replaces), so: same bytes → same name (re-running
+        # a step, or the remote-kernel scrape re-landing an unchanged file, is a
+        # no-op instead of a second full copy); different bytes → different name
+        # (no clobber); and equality across runs/references is a name compare.
+        # The random-uuid scheme this replaces LOOKED content-addressed (flat
+        # hex names) but wasn't — every harvest minted fresh identity, so dedup,
+        # idempotence, and cross-run equality silently didn't exist.
+        import hashlib as _hashlib
+        _h = _hashlib.sha256()
+        try:
+            with open(f, "rb") as _fh:
+                for _chunk in iter(lambda: _fh.read(1 << 20), b""):
+                    _h.update(_chunk)
+        except OSError:
+            return                      # vanished mid-harvest — nothing to record
+        digest = _h.hexdigest()
+        dest_name = f"{digest[:32]}{ext}"
         _created.add(dest_name)
-        shutil.copy2(str(f), str(adir / dest_name))
+        dest = adir / dest_name
+        if not dest.exists():           # dedup: identical bytes already stored
+            # hardlink first (instant, no bytes moved — both names share inodes,
+            # matching curation's _hardlink_tree idiom); cross-device → full copy.
+            try:
+                os.link(str(f), str(dest))
+            except OSError:
+                shutil.copy2(str(f), str(dest))
         # original_name preserves the subdir context so the agent knows
         # WHERE the file lived (e.g. 'pagoda2_GSM.../qc_violin.png'), not
         # just the bare leaf — useful when multiple subdirs each have
@@ -420,8 +636,12 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0,
             nbytes = 0
         # record the size so the durable Files panel shows real bytes for
         # normally-copied files too (not just oversize link-only ones).
+        # sha256 makes the promised produced[] field real (core.exec.artifacts
+        # read it for years; nothing ever wrote it) — locate_run_output's
+        # harvested tier gets a genuine content digest.
         bucket.append({"url": f"/artifacts/{pid}/{dest_name}",
-                       "original_name": display, "bytes": nbytes})
+                       "original_name": display, "bytes": nbytes,
+                       "sha256": digest})
 
     # 1) Figures
     for f in _iter_kept(scratch, (".png",), since_ts):
@@ -438,6 +658,41 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0,
     # 2) Tables
     for f in _iter_kept(scratch, (".csv", ".tsv"), since_ts):
         _copy_and_record(f, tables, f.suffix.lower())
+
+    # 4) Skipped-shape files: anything new whose suffix is outside the
+    # harvest keep-lists. Previously these vanished COMPLETELY — no copy, no
+    # manifest row, no warning — so a name the agent just wrote stopped being
+    # real (the vanishing-name class; found by the producer-fed oversize
+    # guard). Record link-only rows: the name stays resolvable via the
+    # manifest tier, the file stays a retain candidate, and the search door
+    # can answer for it. Same caps discipline as everything else (counted,
+    # not silent).
+    _known = _FILE_EXTS + (".png", ".csv", ".tsv")
+    # this all-suffix pass sees every window reject once — collect the
+    # stale-stamped appearances here (see _iter_kept docstring)
+    _stale: list = []
+    for f in _iter_kept(scratch, None, since_ts, stale=_stale):
+        if f.suffix.lower() in _known or f.name in _created:
+            continue
+        # The runner's own wrapper is the since_ts reference stamp (its mtime
+        # EQUALS since_ts, so the freshness filter keeps it) — without this it
+        # landed in produced[] on every stateless run and find_files matched
+        # the harness's machinery across all recent runs.
+        if f.parent == scratch and f.name in ("script.py", "script.R"):
+            continue
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        try:
+            display = str(f.relative_to(scratch))
+        except ValueError:
+            display = f.name
+        if any(x.get("original_name") == display for x in files):
+            continue
+        files.append({"url": None, "original_name": display,
+                      "bytes": st.st_size, "link_only": True,
+                      "skipped_shape": True})
 
     # 3) Other useful files — PDFs, HTML, RDS, h5ad, etc. Cap each at
     # MAX_HARVEST_BYTES; oversize ones go to warnings so the agent can
@@ -467,10 +722,11 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0,
             files.append({"url": None, "original_name": display,
                           "bytes": st.st_size, "link_only": True})
             warnings.append(
-                f"File '{display}' is {st.st_size // (1024*1024)}MB — too large "
-                f"to auto-copy into the artifact store; it stays in the run "
-                f"sandbox and is retained durably when the run settles (listed "
-                f"in Files, not inline-linkable)."
+                f"File '{display}' is {st.st_size // (1024*1024)}MB — not "
+                f"auto-copied (over the size cap) but still YOURS BY NAME: it "
+                f"lives in the run sandbox, is retained durably when the run "
+                f"settles, and find_files('{display.rsplit('/', 1)[-1]}') "
+                f"locates it; opening fetches on demand."
             )
             continue
         suf = f.suffix.lower()
@@ -509,7 +765,7 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0,
                 mt = g.stat().st_mtime
             except OSError:
                 continue
-            if not (since_ts <= mt < _harvest_begin):
+            if not (_window_floor(since_ts) <= mt < _harvest_begin):
                 continue
             suf = g.suffix.lower()
             if suf == ".png":
@@ -559,6 +815,15 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0,
         warnings.append(
             f"{_skipped_cap[0]} additional output file(s) were NOT copied to the artifact store "
             f"(hit the max_files={max_files} cap); they remain browsable in the run folder.")
+    if _stale:
+        _ex = ", ".join(sorted(str(f.relative_to(scratch)) for f in _stale)[:3])
+        warnings.append(
+            f"{len(_stale)} file(s) appeared under the run dir during this "
+            f"step but carry timestamps OLDER than the step start (archive "
+            f"extraction / copy with preserved times?) — they were NOT "
+            f"harvested and will not appear on the Run card (e.g. {_ex}). "
+            f"Re-save or `touch` them, or keep/register them explicitly, to "
+            f"track them.")
     return plots, tables, files, warnings
 
 

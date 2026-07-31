@@ -10,9 +10,10 @@ or cancel_token (long-running installs).
 """
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
 
 from core import config
 
@@ -170,8 +171,10 @@ def register_discovery_tools(mcp: FastMCP) -> None:
         (real import / library()), its version, which tier owns it (base /
         shared-overlay / project-overlay), and the error if it's
         present-but-broken (ABI mismatch / partial install). Without `name`: an
-        overview of the env tiers + base-lock state. Use it to troubleshoot a
-        failed install or a package that 'is there' but won't import."""
+        overview of the env tiers + base-lock state, and also the project's
+        named-env catalog — what exists, what's in each, where each is realized
+        and how much disk it holds. Use it to troubleshoot a failed install or a
+        package that 'is there' but won't import."""
         from core.runtime.tool_ctx import peek_ctx
         from content.bio.tools import inspect_env as _impl
         return _impl({"name": name, "language": language}, peek_ctx(aba_ctx_id))
@@ -181,9 +184,13 @@ def register_discovery_tools(mcp: FastMCP) -> None:
                           packages: list[str] | None = None,
                           language: Literal["python", "r"] = "python",
                           python_version: str | None = None,
+                          conda_packages: list[str] | None = None,
                           aba_ctx_id: str | None = None) -> dict:
-        """Create/refresh an ISOLATED env you OWN (a standalone solved
-        environment) and install `packages` into it with full version control.
+        """Create/refresh an ISOLATED env you OWN (standalone solve) and
+        install `packages` into it with full version control.
+        CHECK FIRST: inspect_env() lists this project's existing envs — extend one
+        (same call with more packages, or ensure_capability(env=...)) instead of
+        creating a near-duplicate.
         Use when a package conflicts with the base (a different numpy,
         tensorflow, an ABI-incompatible wheel) or you need to resolve a
         dependency conflict your own way — the shared base is never touched, so
@@ -191,38 +198,101 @@ def register_discovery_tools(mcp: FastMCP) -> None:
         (or `run_r(env='name', …)` for R). `python_version` (e.g. "3.10") pins
         the interpreter — use it when a package needs a DIFFERENT python than
         the base (an old library that requires <3.11); the isolated env is
-        standalone so it can hold any version. (For R: a *project* install
-        already overrides the base via .libPaths — use this only for a fully
-        project-independent / one-off conflicting lib.)"""
+        standalone so it can hold any version. `conda_packages` routes
+        conda-only deps (system libraries like zlib, wheel-less tools) into
+        the solve's conda layer — `packages` registries cannot carry them.
+        (For R: this is the route when a package needs SYSTEM libraries the
+        base lacks — 'r-<name>' usually suffices, the solver pulls C libs;
+        promote with set_active_env(name, language='r') for bare run_r.)"""
         from core.runtime.tool_ctx import peek_ctx
         from content.bio.tools import make_isolated_env as _impl
         return _impl({"name": name, "packages": packages or [], "language": language,
-                      "python_version": python_version}, peek_ctx(aba_ctx_id))
+                      "python_version": python_version,
+                      "conda_packages": conda_packages or []}, peek_ctx(aba_ctx_id))
 
     @mcp.tool()
-    def set_active_env(name: str, aba_ctx_id: str | None = None) -> dict:
-        """Set the project's ACTIVE python environment — after this, a bare
-        `run_python` (no `env=`) runs in `name` until you change it. Pass
-        name='default' to switch back to the project's normal environment. Use
-        when most of your work will happen in one isolated env (created with
-        make_isolated_env), so you don't repeat `env=` on every call. (Python
-        only — R's per-project library already overrides the base.)"""
+    def set_active_env(name: str, language: str = "python",
+                       aba_ctx_id: str | None = None) -> dict:
+        """Set the project's ACTIVE environment for a language — after this, a
+        bare `run_python` / `run_r` (no `env=`) runs in `name` until you change
+        it, and ensure_capability installs land there. Pass name='default' to
+        switch back to the project's normal environment. Use when most of your
+        work happens in one isolated env (created with make_isolated_env), so
+        you don't repeat `env=` on every call. language='r' promotes an
+        isolated R env — the way to make an R package that needs SYSTEM
+        libraries the base lacks ambient for bare run_r (the session overlay
+        carries R packages only, never system libraries)."""
         from core.runtime.tool_ctx import peek_ctx
         from content.bio.tools import set_active_env as _impl
-        return _impl({"name": name}, peek_ctx(aba_ctx_id))
+        return _impl({"name": name, "language": language}, peek_ctx(aba_ctx_id))
+
+    @mcp.tool()
+    def evict_env(name: str,
+                  site: str | None = None,
+                  forget: bool = False,
+                  aba_ctx_id: str | None = None) -> dict:
+        """Reclaim the disk a named env holds on a machine — or retire it. Evicts
+        the env's realizations (weft): pass `site='name'` for one machine, omit it
+        for every site. Eviction keeps the env's identity + lock, so it rebuilds
+        transparently from the lock on next use — nothing is lost but time.
+        `forget=True` additionally removes the env from the project's registry (the
+        name is gone); refused for the ACTIVE env — set_active_env('default') first.
+        Returns per-site freed bytes. Use it to reclaim disk on a machine, or to
+        retire an env you no longer need."""
+        from core.runtime.tool_ctx import peek_ctx
+        from content.bio.tools import evict_env as _impl
+        return _impl({"name": name, "site": site, "forget": forget},
+                     peek_ctx(aba_ctx_id))
 
     @mcp.tool()
     def ensure_capability(name: str | list[str],
                           source: str | None = None,
                           package: str | None = None,
                           ref: str | None = None,
+                          subdir: Annotated[str | None, Field(
+                              description="For a GitHub R package that does NOT "
+                              "live at the repo root (a polyglot monorepo keeps "
+                              "it under e.g. 'R/'): the path within the repo "
+                              "that holds DESCRIPTION. Without it install_github "
+                              "looks for DESCRIPTION at the root and fails as if "
+                              "the repository were missing."
+                          )] = None,
+                          library: Annotated[str | None, Field(
+                              description="The R library name to load-verify "
+                              "when it differs from the package/repo name — "
+                              "mixed-case CRAN names for a conda-named package, "
+                              "or a monorepo subdir package whose name is not "
+                              "the repo basename. Without it the post-install "
+                              "check can probe the wrong name and report a "
+                              "successful install as a failure."
+                          )] = None,
                           min_version: str | None = None,
                           force: bool = False,
+                          language: Annotated[str | None, Field(
+                              description="Which runtime the capability must be "
+                              "ready IN: 'python' or 'r'. A name can exist in both "
+                              "ecosystems, so readiness is per-runtime. Omit to "
+                              "infer from the env= target or the live kernel; "
+                              "responses carry `ready_in` naming the runtime that "
+                              "was actually provisioned."
+                          )] = None,
+                          env: Annotated[str | None, Field(
+                              description="Install into this named ISOLATED env "
+                              "(from make_isolated_env / inspect_env) instead of the "
+                              "project default — the package extends that env (a new "
+                              "EnvID is minted; history kept). Package installs only; "
+                              "ignored for non-package capabilities like MCP servers."
+                          )] = None,
                           aba_ctx_id: str | None = None) -> dict:
         """Install / make-ready a named capability (PyPI, conda,
         bioconda, MCP server, …). Long-running for installs — uses
         in_tool_ctx so progress.emit phase lines reach the handler-
         thread sink and stream to the chat as tool_progress events.
+
+        INTO A NAMED ENV: pass env='name' to install into an isolated env
+        (created with make_isolated_env) rather than the default — the package
+        extends that env (new EnvID, old id kept in history). Applies to package
+        installs; a non-package capability ignores env= and says so.
 
         SEVERAL AT ONCE: pass a LIST of names — ensure_capability(["numpy",
         "scipy", "pandas"]) — to make them all ready in one call; the result
@@ -246,20 +316,28 @@ def register_discovery_tools(mcp: FastMCP) -> None:
             return {"status": "error", "note": "ensure_capability needs at least one name."}
         overrides = {k: v for k, v in
                      (("source", source), ("package", package), ("ref", ref),
+                      ("subdir", subdir), ("library", library),
                       ("min_version", min_version)) if v}
         if len(names) > 1 and overrides:
             return {"status": "error", "note": (
-                "source/package/ref/min_version apply to a SINGLE capability — pass one "
-                "name with those overrides, or a list of names with none.")}
+                "source/package/ref/subdir/library/min_version apply to a SINGLE "
+                "capability — pass one name with those overrides, or a list of "
+                "names with none.")}
+        _env = {"env": env} if env else {}
+        if language:
+            _env["language"] = language
         with in_tool_ctx(aba_ctx_id) as ctx:
             if len(names) == 1:
-                _in: dict = {"name": names[0], **overrides}
+                _in: dict = {"name": names[0], **overrides, **_env}
                 if force:
                     _in["force"] = True
                 return _impl(_in, ctx)
             # Several packages: ensure each; aggregate a per-package result list.
-            _READY = {"ok", "ready", "reference", "available"}
-            results = [_impl({"name": n, **({"force": True} if force else {})}, ctx)
+            # one ready-vocabulary (M5): ready_isolated (auto-isolated env)
+            # and provided_by_pack are genuine readiness; 'deferred' is not
+            _READY = {"ok", "ready", "reference", "available",
+                      "ready_isolated", "provided_by_pack"}
+            results = [_impl({"name": n, **_env, **({"force": True} if force else {})}, ctx)
                        for n in names]
             not_ready = [r for r in results if r.get("status") not in _READY]
             out = {"status": "ok" if not not_ready else "partial",

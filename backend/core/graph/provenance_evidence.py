@@ -21,6 +21,7 @@ from __future__ import annotations
 from core.graph.entities import get_entity
 from core.graph import exec_records as _er
 from core.graph.edges import edges_from
+from core.graph.kinds import ANALYSIS, FIGURE, RESULT, TABLE
 from core.graph.provenance import neighborhood, promotion_record
 
 # Packages worth showing first in a trimmed environment summary (domain-notable),
@@ -67,13 +68,13 @@ def _producing_execs(entity: dict, *, limit: int = 12) -> list[dict]:
 
     if entity.get("exec_id"):
         _add(entity["exec_id"])
-    if entity.get("type") == "analysis":
+    if entity.get("type") == ANALYSIS:
         _add_run(entity.get("id"))
     # A Result is a CURATION of independent panels grouped by scientific meaning —
     # they may share no sources. Rolling their provenance into one "how it was made"
     # is misleading, so a Result's evidence is curation + lineage only; each panel
     # carries (and surfaces) its own provenance via its own exec_id.
-    if entity.get("type") == "result":
+    if entity.get("type") == RESULT:
         return execs
     if not execs:
         for e in edges_from(entity.get("id")):
@@ -84,7 +85,7 @@ def _producing_execs(entity: dict, *, limit: int = 12) -> list[dict]:
                 continue
             if tgt.get("exec_id"):
                 _add(tgt["exec_id"])
-            elif tgt.get("type") == "analysis":
+            elif tgt.get("type") == ANALYSIS:
                 _add_run(tgt.get("id"))
     return execs
 
@@ -245,7 +246,7 @@ def evidence(entity_id: str) -> dict | None:
         "reproducible": bool(primary and primary.get("code")),
         "backfilled": bool(primary and primary.get("source") == "backfill"),
         # A revise/reproduce affordance only exists for exec-born artifacts today.
-        "revisable": entity.get("type") in ("figure", "table"),
+        "revisable": entity.get("type") in (FIGURE, TABLE),
     }
 
     return {

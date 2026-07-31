@@ -41,6 +41,13 @@ requires: slurm                # optional — skip the scenario unless this subm
 summary: <one sentence>
 data_files: [ ... ]            # staged into DATA_DIR at start
 make_data: _make_data.py       # optional deterministic generator (seed=0)
+#   Every declared data_files entry MUST be present in DATA_DIR after staging,
+#   which means `make_data` must REPRODUCE it deterministically+offline — do not
+#   depend on a gitignored, network-fetched artifact that a clean checkout won't
+#   have. The runner asserts this before step 1: a missing seed exits 3
+#   (SETUP-ERROR), which the sweep treats as unscored/infra (never a 0-score
+#   regression, never baked into a baseline) — because a missing input makes the
+#   agent refuse to fabricate, which must not be misread as product failure.
 
 steps:
   - id: s1
@@ -91,7 +98,11 @@ expected_overall:
 - **produces** — `{figure: n, table: n}` ≥ counts from the turn's run-artifacts.
 - **state** (queried after the step via manifest + entities):
   `pinned_results_min`, `manifest_contains` / `manifest_not_contains`,
-  `entity_archived:{ref}`, `entity_active:{ref}`, `entities_of_type:{figure: n}`.
+  `entity_archived:{ref}`, `entity_active:{ref}`, `entities_of_type:{figure: n}` (>= n),
+  `entities_of_type_max:{dataset: n}` (<= n). Pair the two whenever the behaviour under
+  test has a THRESHOLD: `entities_of_type` alone can only reward creating more, so a
+  "register the right things" rule passes equally when the agent registers everything.
+  The ceiling is what makes such a guard two-sided.
 - **provenance / versioning state**:
   `reproduced: true|false` + `env_drift: true|false` (read THIS step's `reproduce` result),
   `superseded_min: n` (count of `status=superseded` entities — proves a non-destructive
@@ -100,11 +111,62 @@ expected_overall:
 - **context** (from the turn's raw API request + `usage`):
   `cache_breakpoints: true` (system stable prefix + last message carry cache_control),
   `cache_read: true` (this turn read from cache — empirical hit; only meaningful on turns ≥2).
+  `cache_hit_min: 0.8` (threshold on this turn's hit fraction cr/(cr+cw+in) — fails on a
+  caching REGRESSION, not just a total miss. Armed: if the check is requested and usage
+  wasn't captured, that is a loud UNMEASURED failure, never a silent pass. Use on late
+  steps of long warm scenarios; turn 1 is always a cold write.)
   NOTE: `msgs_grow` is recorded as telemetry but is NOT a pass/fail gate — ABA does
   not monotonically accumulate messages; a `resume` rehydrates a compact, bounded
   context (e.g. 45 → 16 msgs) that then stays roughly flat. Treat n_msgs as an
   observable, not an invariant.
 - `checks` / `expected_overall.notes` carry the real judgement for a human/LLM grader.
+
+## Surface levels (automatic — scenarios opt OUT, not in)
+
+The harness enforces the consumption-surface level uniformly, driven by what a
+scenario already declares — authors cannot forget it and the 25 existing
+scenarios get it without edits:
+
+- **`produces` ⇒ served.** A step claiming `produces` implicitly promises those
+  artifacts are CONSUMABLE: every produced artifact with a served URL must
+  stream non-empty bytes at that step (200, or an honest 413) — a row that
+  exists but doesn't open is a failure (`produces_served:<kind> -> <status>`).
+  Per-step opt-out: `expect: {produces_served: false}`.
+- **pin ⇒ downloadable.** A user `pin` step implicitly promises the pinned
+  entity is reachable: its download must serve (200 with bytes / honest 413).
+  Explicit form for other steps: `state: {downloadable: {ref: sX, ok: true}}`;
+  `ok: false` asserts an HONEST refusal (4xx — never 200, never 5xx).
+
+## Transport truth (scenario-end oracle, default ON)
+
+After the last step the runner also walks the scenario's execution records over
+the mechanism-truth surface (`GET /api/runs/{id}/execs`, `harness/transport.py`)
+and asserts none self-identify as LEGACY executions (`compute.substrate` other
+than the substrate). Rationale: outcome oracles cannot see mechanism — the
+legacy local kernel lane and the substrate lane produce identical results,
+records, and surfaces, which is how the platform ran the legacy lane by default
+for months while every test stayed green. Reported as a synthetic `_transport`
+row carrying `checked` (records examined) and `proven` (`checked > 0`). A
+zero-checked pass proves nothing, so it is marked `proven: false` and printed
+`UNPROVEN(checked=0)` — the scorecard can then tell "verified weft-clean" from
+"verified nothing". By default an unproven step still scores PASS (flipping a
+vacuous step would drop mech_pass and perturb an accepted baseline);
+`ABA_REGTEST_TRANSPORT_STRICT=1` makes an unproven step FAIL. Opt out entirely
+with a top-level `transport: false`.
+
+## Surface parity (scenario-end oracle, default ON)
+
+After the last step, the runner walks the CONSUMPTION surfaces for every run the
+scenario produced (`harness/surfaces.py`): each file the durability listing
+advertises must answer at its URL (200 with bytes, or an honest 413 naming
+where/why — never a dead link), a `retained` row must carry a live URL, produced
+artifacts with served URLs must stream, entity downloads must serve or refuse
+honestly, and the viewer lookup must see viewer-eligible outputs. Reported as a
+synthetic `_surfaces` step in the scorecard. Rationale: the per-step checks
+verify RECORDS; without this, a scenario can compute right answers and record
+right rows while every surface a person actually opens is broken. Opt out (rare
+— e.g. a scenario that deliberately ends with bytes reclaimed) with a top-level
+`surfaces: false`.
 
 ## Conventions (kept from v1)
 Biologist voice, never name the tool. Planted, checkable truth (fixed seeds). Each

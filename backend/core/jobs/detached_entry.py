@@ -49,6 +49,79 @@ def _snapshot() -> set:
     return out
 
 
+# cwd-escape probe (harvest honesty): outputs are collected RELATIVE TO THE
+# WORKDIR — a script that chdir/setwd's elsewhere writes files nothing will
+# ever collect, silently. The harness wraps the user script with a prologue
+# recording the starting dir and an epilogue writing "<start>\n<final>" to a
+# dot-sentinel in the starting dir; result.json carries both so the
+# controller can warn. Inline (stdlib-only file — cannot import the
+# controller's core.exec.run helpers; keep the sentinel NAME in sync).
+_SENTINEL = ".aba-final-cwd"
+_PY_PRO = "import os as _aba_os; _ABA_START_DIR = _aba_os.getcwd()\n"
+_PY_EPI = ("\ntry:\n"
+           "    import os as _aba_os\n"
+           f"    with open(_aba_os.path.join(_ABA_START_DIR, {_SENTINEL!r}), 'w') as _aba_f:\n"
+           "        _aba_f.write(_ABA_START_DIR + '\\n' + _aba_os.getcwd())\n"
+           "except Exception:\n"
+           "    pass\n")
+_R_PRO = ".aba_start_dir <- getwd()\n"
+_R_EPI = ('\ntry(writeLines(c(.aba_start_dir, getwd()), '
+          f'file.path(.aba_start_dir, "{_SENTINEL}")), silent = TRUE)\n')
+
+
+def _wrap_script(script: str, interp: str) -> str:
+    """Copy the payload script into the workdir with the probe wrapped around
+    it (payload mounts may be read-only). Dot-named so output collection
+    skips it."""
+    is_r = "rscript" in interp.lower()
+    pro, epi = (_R_PRO, _R_EPI) if is_r else (_PY_PRO, _PY_EPI)
+    with open(script) as fh:
+        body = fh.read()
+    wrapped = "._aba_wrapped" + (".R" if is_r else ".py")
+    if not is_r:
+        # `from __future__` must be the first statement in a Python file, so a
+        # blind prepend turns a valid script into a SyntaxError. Slip the probe
+        # in AFTER any future imports (and the docstring/comments they may
+        # follow) instead of ahead of them.
+        body = _py_insert_after_future(body, pro)
+        with open(wrapped, "w") as fh:
+            fh.write(body + epi)
+        return wrapped
+    with open(wrapped, "w") as fh:
+        fh.write(pro + body + epi)
+    return wrapped
+
+
+def _py_insert_after_future(body: str, pro: str) -> str:
+    """Insert `pro` after the last `from __future__ import …` line, else at the
+    top. Line-based on purpose: the probe must not disturb the payload's own
+    line numbering any more than necessary, and a full parse would fail on the
+    very scripts (syntax errors) whose traceback the user needs."""
+    lines = body.splitlines(keepends=True)
+    last = -1
+    for i, ln in enumerate(lines):
+        s = ln.strip()
+        if s.startswith("from __future__ import"):
+            last = i
+        elif s and not s.startswith("#") and last >= 0:
+            break                      # future block ended
+    if last < 0:
+        return pro + body
+    return "".join(lines[:last + 1]) + pro + "".join(lines[last + 1:])
+
+
+def _read_sentinel() -> tuple:
+    try:
+        with open(_SENTINEL) as fh:
+            lines = fh.read().splitlines()
+        os.unlink(_SENTINEL)
+        if len(lines) >= 2:
+            return lines[0].strip() or None, lines[1].strip() or None
+    except OSError:
+        pass
+    return None, None
+
+
 def _runtime_version(interp: str) -> str:
     try:
         r = subprocess.run([interp, "--version"], capture_output=True,
@@ -75,6 +148,10 @@ def main() -> int:
         _write(result, t0)
         return 1
     result["runtime"] = _runtime_version(exe)
+    try:
+        script = _wrap_script(script, interp)
+    except Exception:  # noqa: BLE001 — probe is best-effort, never blocks the run
+        pass
     before = _snapshot()
     try:
         p = subprocess.run([exe, script], capture_output=True, text=True,
@@ -99,7 +176,12 @@ def main() -> int:
                             f"or use a sized background job)")
     except Exception as e:  # noqa: BLE001 — report, never swallow
         result.update(status="error", returncode=1, error=str(e)[:2000])
-    result["outputs"] = sorted(_snapshot() - before - {"result.json"})
+    start_cwd, final_cwd = _read_sentinel()
+    if final_cwd:
+        result["start_cwd"] = start_cwd
+        result["final_cwd"] = final_cwd
+    result["outputs"] = sorted(_snapshot() - before - {"result.json"}
+                               - {"._aba_wrapped.py", "._aba_wrapped.R"})
     _write(result, t0)
     return 0 if result["status"] == "ok" else 1
 

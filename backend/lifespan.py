@@ -31,15 +31,9 @@ async def on_startup():
         ensure_sys_executable()
     except Exception as e:  # noqa: BLE001
         print(f"[startup] sys.executable recovery failed (non-fatal): {e}")
-    # Orphan-kernel reaper — SIGKILL any kernels left behind by a prior
-    # uvicorn that didn't run our shutdown handler (forced kill / crash /
-    # SIGKILL during dev bouncing). Called explicitly here (not lazily on
-    # first get_pool()) so the cleanup happens BEFORE any user load.
-    try:
-        from core.exec.kernels.pool import _reap_orphan_kernels
-        _reap_orphan_kernels()
-    except Exception as e:  # noqa: BLE001
-        print(f"[startup] orphan kernel reap failed (non-fatal): {e}")
+    # (The jupyter-era startup orphan-kernel reaper is gone with the legacy
+    # transport: weft kernels are substrate-owned — no local OS pids to leak —
+    # and stale ones are the substrate's kernel_status/stop lifecycle to reap.)
     # Startup self-checks (core/runtime/selfcheck) — register the platform checks
     # and run them once so degraded config (e.g. a node-local ENVS_DIR under a Slurm
     # submitter, finding F6b) is LOUD in the log AND on /api/health + the admin
@@ -196,21 +190,17 @@ async def on_shutdown():
     from core.runtime import turn_sink, cancellation
 
     def _kill_owned_kernels():
-        # SIGKILL all owned kernel subprocesses. atexit doesn't fire on SIGTERM,
-        # and a signal-handler-in-worker is unreliable; the FastAPI shutdown
-        # lifecycle IS invoked on uvicorn graceful exits, so we shoot the kernels
-        # here. Prevents the orphan/zombie accumulation PK observed.
+        # Stop every pooled kernel through the substrate (weft kernel_stop via
+        # session.shutdown). atexit doesn't fire on SIGTERM; the FastAPI
+        # shutdown lifecycle IS invoked on uvicorn graceful exits, so the
+        # cleanup happens here. (Weft kernels own no local OS pids — the old
+        # jupyter-era SIGKILL sweep died with that transport.)
         try:
             from core.exec.kernels import get_pool
-            import os, signal
-            pids = get_pool().owned_kernel_pids()
-            for pid in pids:
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                except (ProcessLookupError, PermissionError):
-                    pass
-            if pids:
-                print(f"[shutdown] SIGKILLed {len(pids)} owned kernel subprocess(es)")
+            n = get_pool().live_count()
+            get_pool().shutdown_all()
+            if n:
+                print(f"[shutdown] stopped {n} pooled kernel session(s)")
         except Exception as e:  # noqa: BLE001
             print(f"[shutdown] kernel cleanup failed (non-fatal): {e}")
 

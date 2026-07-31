@@ -57,6 +57,7 @@ def list_data_files(_input: dict) -> dict:
     from pathlib import Path as _Path
     files = []
     registered_names = set()
+    any_remote = False
     for d in _registered_datasets():
         path = d.get("path")
         name = d.get("name", "")
@@ -68,9 +69,24 @@ def list_data_files(_input: dict) -> dict:
                 size = _Path(path).stat().st_size
         except Exception:
             pass
-        files.append({"filename": name, "size_bytes": size,
-                      "path": str(path) if path else None,
-                      "title": d.get("title"), "registered": True})
+        # LOCATION IS PART OF THE LISTING (surfacing census 2026-07-26): the
+        # home site is recorded at registration, but this surface rendered
+        # path/title only — silence read as "local", and live the agent
+        # probed the local disk three times for a remote-homed dataset
+        # before inferring the site from an unrelated ambient line. `site`
+        # is always explicit; a remote entry also carries the recorded size
+        # (a local stat of a remote path rendered size as null) and an
+        # actionable note.
+        entry = {"filename": name, "size_bytes": size,
+                 "path": str(path) if path else None,
+                 "title": d.get("title"), "registered": True,
+                 "site": d.get("site") or "local"}
+        if d.get("remote"):
+            any_remote = True
+            entry["size_bytes"] = size if size is not None else d.get("total_bytes")
+            if d.get("note"):
+                entry["note"] = d["note"]
+        files.append(entry)
 
     # Also surface data files sitting in DATA_DIR that aren't registered as
     # datasets — otherwise the agent sees "no datasets", concludes the project
@@ -127,6 +143,11 @@ def list_data_files(_input: dict) -> dict:
                    "These datasets do NOT live in DATA_DIR (e.g. they were registered "
                    "from a work scratch dir or an explicit absolute path); the "
                    "DATA_DIR/<filename> shortcut won't resolve.")
+    if any_remote:
+        message += (" NOTE: entries with a non-local `site` are NOT on this "
+                    "machine — their paths only resolve on that site (run "
+                    "compute there with site=<name>), or mirror them locally "
+                    "first.")
     out = {"files": files, "data_dir": data_dir_str, "message": message}
     return out
 
@@ -139,14 +160,26 @@ def _registered_datasets() -> list[dict]:
     agent saw the right path in list_data_files but then built a
     DATA_DIR-shaped path from prior and hit "path not found")."""
     from core.graph.entities import list_entities
+    from content.bio.data_location import dataset_location, remote_use_note
     out = []
     for e in list_entities(include_archived=False):
         if e.get("type") != "dataset":
             continue
         path = e.get("artifact_path")
         name = Path(path).name if path else (e.get("title") or "")
-        if name:
-            out.append({"name": name, "path": path, "title": e.get("title")})
+        if not name:
+            continue
+        # location facts ride every row (surfacing census 2026-07-26) —
+        # additive keys, so callers reading only name/path/title are
+        # untouched; a local dataset carries site="local" and no note.
+        loc = dataset_location(e)
+        row = {"name": name, "path": path, "title": e.get("title"),
+               "site": loc["site"], "remote": loc["remote"],
+               "total_bytes": loc["total_bytes"]}
+        note = remote_use_note(e)
+        if note:
+            row["note"] = note
+        out.append(row)
     return out
 
 
@@ -440,6 +473,25 @@ def _resolve_project_path(path_str: str, ctx: dict | None,
     work_root = project_work_dir(pid).resolve()
     data_root = project_data_dir(pid).resolve()
 
+    # A SERVED ARTIFACT URL is the handle our own tool results hand back — a
+    # harvested output arrives as {"url": "/artifacts/<pid>/<hash>.ext"}. Treated
+    # as a filesystem path it resolves to a literal `/artifacts/...` that cannot
+    # exist, so `view_file` on the URL a run had JUST returned answered "file not
+    # found" (live, thr_a1f7f687: run_r harvested bundle_files.txt, handed back
+    # its URL, and the next call could not open it — the agent had to re-run the
+    # step and print to stdout instead). `view_artifact` has always mapped these;
+    # this door must too, or the platform contradicts itself between consecutive
+    # results. Mapped BEFORE the absolute/relative split; the sandbox check below
+    # still refuses it for write/edit, since a served artifact is not editable.
+    if raw.startswith("/artifacts/"):
+        try:
+            from core.web.artifacts import _artifact_url_to_path
+            d = _artifact_url_to_path(raw)
+        except Exception:  # noqa: BLE001 — fall through to plain path handling
+            d = None
+        if d is not None:
+            raw = str(d)
+
     p = Path(raw)
     if not p.is_absolute():
         # Relative: anchor at the active run's cwd if one is open, else the
@@ -480,7 +532,64 @@ def _resolve_project_path(path_str: str, ctx: dict | None,
                         f"{work_root} (WORK_DIR) and {data_root} (DATA_DIR). "
                         f"Got: {p}")
     if must_exist and not p.exists():
-        return "", f"file not found: {p}"
+        # Door fallback: the name may live in a sandbox, a prior run's outputs,
+        # or another searched tier. One unambiguous ELIGIBLE hit resolves;
+        # several → the caller gets labeled candidates; none → not-found WITH
+        # the search bounds, so absent is never conflated with unsearched.
+        #
+        # Under enforce_sandbox the door stays a READ convenience: a hit outside
+        # the editable roots is never a write target. A unique same-name file in
+        # a served store copy (content-addressed — editing it in place breaks the
+        # digest↔bytes invariant and every hardlinked sibling) or a live kernel
+        # jobdir (the kernel list is deployment-wide, so possibly ANOTHER
+        # project's) is reported as out-of-sandbox, not resolved.
+        try:
+            from content.bio.project_locate import locate_project_files
+            found = locate_project_files(Path(raw).name, limit=6, ctx=ctx)
+            local = [h for h in found.get("matches", []) if h.get("path")]
+            excluded: list = []
+            if enforce_sandbox:
+                def _in_roots(pp: str) -> bool:
+                    try:
+                        rp = Path(pp).resolve()
+                    except (OSError, ValueError):
+                        return False
+                    try:
+                        return rp.is_relative_to(work_root) or rp.is_relative_to(data_root)
+                    except AttributeError:
+                        s = str(rp)
+                        return (s.startswith(str(work_root) + os.sep)
+                                or s.startswith(str(data_root) + os.sep))
+                excluded = [h for h in local if not _in_roots(h["path"])]
+                local = [h for h in local if _in_roots(h["path"])]
+            if len(local) == 1:
+                return local[0]["path"], None
+            if len(local) > 1:
+                opts = "; ".join(f"{h['path']} [{h['tier']}"
+                                 + (f", {h.get('from_exec')}" if h.get('from_exec') else "")
+                                 + "]" for h in local)
+                return "", (f"ambiguous name {Path(raw).name!r} — "
+                            f"{len(local)} matches: {opts}. Pass the full path "
+                            f"of the one you mean.")
+            if excluded:
+                h = excluded[0]
+                return "", (f"{Path(raw).name!r} exists but outside the editable "
+                            f"sandbox (tier: {h.get('tier')}, at {h['path']}) — "
+                            f"writes stay under {work_root} (WORK_DIR) or "
+                            f"{data_root} (DATA_DIR). Copy it into the project "
+                            f"first, or pass a path inside the sandbox.")
+            remote = [h for h in found.get("matches", []) if not h.get("path")]
+            if remote:
+                h = remote[0]
+                return "", (f"{Path(raw).name!r} exists but is not local: "
+                            f"{h.get('opens')} (tier: {h.get('tier')}, "
+                            f"site: {h.get('site', '?')}).")
+            searched = found.get("searched", {})
+            return "", (f"file not found: {p} (searched: {searched}"
+                        + (f"; UNKNOWN tiers: {found['unsearched']}"
+                           if found.get("unsearched") else "") + ")")
+        except Exception:  # noqa: BLE001 — fallback must never mask the plain error
+            return "", f"file not found: {p}"
     return str(p), None
 
 

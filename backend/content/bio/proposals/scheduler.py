@@ -422,7 +422,6 @@ def _file_oq(tid: str, text: str) -> str:
 # ---------- Hook handlers ----------
 # Pass D: post-turn proposal evaluation registered as an on_stop hook.
 
-import asyncio as _asyncio
 from core.hooks.dispatcher import register as _register_hook
 
 
@@ -431,11 +430,10 @@ def _on_stop_evaluate(ctx: dict) -> None:
     tid = ctx.get("thread_id")
     if not tid:
         return
-    try:
-        loop = _asyncio.get_event_loop()
-        loop.run_in_executor(None, evaluate_thread, tid, "post_turn")
-    except RuntimeError:
-        evaluate_thread(tid, "post_turn")
+    # projects.spawn: evaluation reads/writes THIS project's graph, and the bare
+    # executor hop drops the project binding (it also owns the no-loop fallback).
+    from core import projects
+    projects.spawn(evaluate_thread, tid, "post_turn")
 
 
 # Priority 20 so reflect (priority 10) runs first if it ever needs to.

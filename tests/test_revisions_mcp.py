@@ -25,6 +25,7 @@ os.environ["ABA_ENVS_DIR"] = str(Path(_tmp) / "envs")
 sys.path.insert(0, str(ROOT / "backend"))
 
 from core.graph._schema import init_db                  # noqa: E402
+from _substrate_gate import skip_without_substrate  # tests/ is on sys.path (pytest prepend + standalone)
 
 _failures: list[str] = []
 
@@ -33,6 +34,8 @@ def check(label, cond, detail=""):
     print(f"  [{'PASS' if cond else 'FAIL'}] {label}" + (f" — {detail}" if detail else ""))
     if not cond:
         _failures.append(label)
+        raise AssertionError(  # armed: pytest sees check() failures
+            f"{label}" + (f" — {detail}" if detail else ""))
 
 
 def test_register_revision_tools():
@@ -59,16 +62,26 @@ def test_register_revision_tools():
           f"got {names}")
     check("set_current_revision registered",
           "set_current_revision" in names, f"got {names}")
-    # The five core revision tools, plus the env-reproduction trio added by
+    # The five core revision tools, plus the env-reproduction group added by
     # the provenance P4/P5 work (1b60e8c, 2026-06-26): diff_env / rebuild_env
-    # / export_reproduction_bundle. Kept as an exact-set check so an
-    # accidental leak (e.g. a lifecycle helper registered by mistake) is
-    # still caught.
+    # / export_reproduction_bundle / import_reproduction_bundle. Kept as an
+    # exact-set check so an accidental leak (e.g. a lifecycle helper registered
+    # by mistake) is still caught.
+    #
+    # `import_reproduction_bundle` — the counterpart to export — was added
+    # WITHOUT updating this pin, and nothing complained: this file's check()
+    # only appended to a list the standalone runner reads, so under pytest a
+    # failing exact-set comparison still reported PASS. The pin is a
+    # shared-agent-input guard (the tool catalog); arming check() surfaced the
+    # drift. Whenever a tool joins or leaves this server, this set moves WITH it.
     expected = {"make_revision", "reproduce_from_exec",
                 "delete_revision", "list_revisions", "set_current_revision",
-                "diff_env", "rebuild_env", "export_reproduction_bundle"}
-    check("revision tool set is exactly the expected eight",
-          set(names) == expected, f"got {names}")
+                "diff_env", "rebuild_env",
+                "export_reproduction_bundle", "import_reproduction_bundle"}
+    check(f"revision tool set is exactly the expected {len(expected)}",
+          set(names) == expected,
+          f"got {sorted(names)}; symmetric difference "
+          f"{sorted(set(names) ^ expected)}")
 
 
 def test_make_server_includes_revision_tools():
@@ -132,6 +145,8 @@ def test_make_revision_end_to_end_via_handler():
     sanity check). The schema test above covers the catalog wiring;
     this confirms the call path through the @mcp.tool() handler.
     """
+    if skip_without_substrate():
+        return
     print("\n[4] make_revision handler executes against a real figure")
     # Make a seed figure first
     from content.bio.tools.run_exec import run_python
@@ -217,6 +232,8 @@ def test_make_revision_end_to_end_via_handler():
 
 
 def test_reproduce_handler():
+    if skip_without_substrate():
+        return
     print("\n[5] reproduce_from_exec handler executes against a real figure")
     from content.bio.tools.run_exec import run_python
     from content.bio.lifecycle.registry import register_artifacts_from_tool_result

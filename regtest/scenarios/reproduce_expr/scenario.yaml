@@ -1,4 +1,5 @@
 id: reproduce_expr
+smoke: true
 title: Reproduce a TPM analysis from its record (provenance / memory-wipe recovery)
 domain: transcriptomics
 expected_overall:

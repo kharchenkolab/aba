@@ -168,6 +168,34 @@ Note a naming collision: `store.promote(entity_id, to_scope)` (`store.py:97`) is
 *different* axis — it elevates an existing entity's **scope** (project → lab/shared), a P0
 scope-tag flip with no byte movement yet. It is not substrate→entity promotion.
 
+## Deletion — dependents block, lineage doesn't
+
+Archive (`archive_entity`) is the default, reversible verb; hard delete
+(`DELETE /api/entities/{id}?hard=true`, `backend/main.py` `entities_delete`) is guarded by
+**edge semantics**, not edge existence. Every rel points source→target = "source builds on
+target", so the guard refuses (409) only for live **inbound dependency** edges — `_DEP_RELS`
+(`includes`/`supports`/`wasDerivedFrom`/`wasRevisionOf`, `main.py`) — the same judgment the
+Result member-cascade uses for its keep decision, plus `used` (`_BLOCK_RELS`) at the
+top-level blocker only. Consumption blocks because for a dataset the same request also
+`rmtree`s the bytes: unlike a lineage record, the target of a `used` edge cannot be
+reconstructed, so erasing a live run's inputs is a decision the user must make, not a
+side effect. The cascade keep-decision deliberately stays on `_DEP_RELS` (a Result's
+figure is containment even if a run read it). The remaining bookkeeping stamps
+(`wasGeneratedBy`, `produced_by`) and all outbound edges never block: a run is not held
+hostage by its outputs, nor an output by its producing run. The refusal is actionable —
+`{error, references[], can_override: true}` — and `?force=true` is the informed override
+(the UI shows the dependents first, then offers Archive-instead alongside a primary
+Delete/Delete-anyway that is present for EVERY failure, so a transient error is
+retryable, `frontend/src/bio/EntityMenu.tsx`). On any hard delete, every surviving
+non-archived neighbor gets a `severed_refs` metadata stamp `{id, type, title, at, rel,
+dir}` (via `append_metadata_list`) — including a cascade member that was PRESERVED and
+merely detached, the one case where an edge vanishes and the entity lives. The stamp has
+a reader: `frontend/src/components/SeveredRefs.tsx`, rendered above the per-type body so
+every entity type shows the gap rather than a dangling nothing.
+`?cascade=members` on a Result additionally sweeps members + revision chains through the
+`result_cascade_members` service seam. Guards: `tests/test_delete_blockers.py` (gated),
+`tests/test_result_delete_cascade.py` (bio).
+
 ## Key implementation references
 
 | Where | What |

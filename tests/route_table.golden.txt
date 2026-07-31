@@ -1,6 +1,7 @@
 DELETE /api/claims/{cid}/alternatives/{aid}
 DELETE /api/claims/{cid}/caveats/{caid}
 DELETE /api/claims/{cid}/evidence/{rid}
+DELETE /api/claims/{cid}/notes/{nid}
 DELETE /api/compute/sites/{name}
 DELETE /api/entities/{entity_id}
 DELETE /api/entities/{entity_id}/messages
@@ -67,6 +68,7 @@ GET /api/projects/{pid}/data-ledger
 GET /api/projects/{pid}/recovery-report
 GET /api/runs/{rid}/archive
 GET /api/runs/{rid}/durable
+GET /api/runs/{rid}/execs
 GET /api/runs/{rid}/file
 GET /api/runs/{rid}/tree
 GET /api/runs/{run_id}/artifacts
@@ -118,6 +120,7 @@ POST /api/claims/{cid}/alternatives
 POST /api/claims/{cid}/alternatives/{aid}/promote
 POST /api/claims/{cid}/caveats
 POST /api/claims/{cid}/evidence
+POST /api/claims/{cid}/notes
 POST /api/claims/{cid}/status
 POST /api/compute/hostkey
 POST /api/compute/keysetup
@@ -130,6 +133,7 @@ POST /api/compute/sites/{name}/verify
 POST /api/context-suggestions/reject-all
 POST /api/context-suggestions/{sid}/action
 POST /api/datasets
+POST /api/datasets/{did}/mirror
 POST /api/datasets/{did}/recheck
 POST /api/datasets/{did}/relink
 POST /api/entities/{entity_id}/advise

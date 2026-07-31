@@ -1,11 +1,9 @@
-"""LocalSubprocessExecutor — runs commands in the base venv on this VM.
+"""LocalSubprocessExecutor — runs commands as local subprocesses.
 
-The subprocess + process-group cancellation + timeout logic is extracted from
-content.bio.tools.run_python so it can be reused (Stage 2 rewires run_python to
-call this) and so future executors share the same exec contract. This impl
-materializes only the base venv; conda/container/remote materialization are
-separate impls behind the same `Executor` protocol (P1+).
-"""
+Owns the subprocess + process-group cancellation + timeout contract shared by
+the one-shot lanes. It knows only the base venv as a materialization target —
+environment provisioning is the substrate's job; callers pass already-resolved
+interpreters and this executor just runs them."""
 from __future__ import annotations
 import os
 import signal

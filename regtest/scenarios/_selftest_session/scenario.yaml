@@ -1,4 +1,5 @@
 id: _selftest_session
+smoke: true
 title: Runner self-test — a light realistic session (examine/analyze/pin/revise/delete/resume)
 domain: _infra
 gpu: false

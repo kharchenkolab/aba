@@ -61,26 +61,28 @@ see the same paths — the local node and shared-filesystem Slurm clusters) writ
 `job_spec.json`/`result.json` into a scratch dir the node reads directly, and the node runs the
 same `python -m core.jobs.slurm_entry` entry an interactive run uses; **detached** (a host-bearing
 ssh site that shares nothing) ships the code *as data* over the weft data plane and runs a
-stdlib-only payload harness. A second implementation, **`LocalSubmitter`** (`runner.py`), runs the
-job in **this** process' async worker — the loud fallback when the substrate is offline, and the
-explicit `worker` escape hatch. `get_submitter()` maps the `config.env` toggle
-`ABA_BATCH_SUBMITTER=local|slurm|worker` (a topology fact exactly like `ABA_ACCELERATOR`, owned by
+stdlib-only payload harness. `get_submitter()` maps the `config.env` toggle
+`ABA_BATCH_SUBMITTER=local|slurm` (a topology fact exactly like `ABA_ACCELERATOR`, owned by
 [`deployment-and-access.md`](deployment-and-access.md)) onto a lane: `local` → a **local-site weft
-task** (in-process fallback if the substrate is down); `slurm` → a weft task on the declared
-**Slurm-kind site** (`_slurm_lane` → `WeftSubmitter(site=…)` via `weft_slurm_site()`, never
-`sbatch`); `worker` → the in-process `LocalSubmitter`.
+task**; `slurm` → a weft task on the declared **Slurm-kind site** (`_slurm_lane` →
+`WeftSubmitter(site=…)` via `weft_slurm_site()`, never `sbatch`). With the substrate offline the
+submit fails with the substrate's own **typed error** — an honest refusal (science jobs cannot run
+without their envs anyway); the legacy silent fall-back to an in-process worker and the `worker`
+escape hatch were **retired with the kernel-transport cutover**. `LocalSubmitter` (`runner.py`)
+still exists, but only as the **cancel owner** for a legacy pre-cutover row that recorded an
+in-process `inline` submission — never a submit-time lane.
 
 ```
 run_python/run_r(background) ─ submit_*_job ─► create_job(row, status=queued)
                                                     │  get_submitter_for(submission)
                        ┌────────────────────────────┴──────────────────────────────┐
-             WeftSubmitter.submit  (a weft task)                        LocalSubmitter.submit
-               ├ shared-fs (local node · Slurm site):                   (substrate offline / `worker`)
-               │   python -m core.jobs.slurm_entry <spec> → result.json  enqueue → _worker → _run_one
-               └ detached (ssh site): code-as-data payload →              │  run_python_code, in-process
-                   python3 payload/aba_entry.py → result.json (data plane)│
-                       │  _weft_poll_loop watches for a terminal state    │
-                       └───────────────► _finalize_job(result) ◄──────────┘
+             WeftSubmitter.submit  (a weft task)                  substrate offline →
+               ├ shared-fs (local node · Slurm site):             typed refusal at submit
+               │   python -m core.jobs.slurm_entry <spec> → result.json   (no in-process fallback)
+               └ detached (ssh site): code-as-data payload →
+                   python3 payload/aba_entry.py → result.json (data plane)
+                       │  _weft_poll_loop watches for a terminal state
+                       └───────────────► _finalize_job(result)
                                              │  exec record → on_job_complete (harvest) → status=done|failed
                                              ▼
                                    enqueue_continuation → _fire → reasoning_port.run_continuation

@@ -186,6 +186,42 @@ def _site_ran(caps):
     return sites
 
 
+def _site_ran_strict(caps, site):
+    """STRICT companion to _site_ran (cross-cutting rec #2): the site actually
+    ran a step to a clean finish — at least ONE run_python/run_r call on `site`
+    whose RESULT envelope reports returncode == 0. Unlike _site_ran, a call
+    carrying NO result envelope (a deferred/background continuation) does NOT
+    count. Use for core placement claims where a silently-skipped or
+    never-observed step must fail rather than pass vacuously. NOTE: local +
+    remote-SESSION (env='system') results carry `returncode`; a remote fresh-
+    process sync result exposes `status=='ok'` instead — so this helper is
+    exact for the session/local lanes."""
+    for t in tools_named(caps, "run_python") + tools_named(caps, "run_r"):
+        if t["input"].get("site") != site:
+            continue
+        res = t.get("result")
+        if isinstance(res, dict) and res.get("returncode") == 0:
+            return True
+    return False
+
+
+def _jobs_snapshot():
+    """Every job row in the active project DB (id, status, params, log_tail) —
+    the substrate truth a background job's OWN captured output lands in
+    (runner writes stdout[-1500:] to log_tail). Same sqlite path the timeout /
+    gpu-routing / cancel scenarios read."""
+    import sqlite3
+    from core.graph.jobs import _row_to_job
+    from core.graph._schema import active_db_path
+    try:
+        c = sqlite3.connect(active_db_path()); c.row_factory = sqlite3.Row
+        rows = [_row_to_job(r) for r in c.execute("SELECT * FROM jobs").fetchall()]
+        c.close()
+        return rows
+    except Exception:  # noqa: BLE001
+        return []
+
+
 # ── scenarios ─────────────────────────────────────────────────────────────────
 
 @scenario("mn_size_up")
@@ -202,6 +238,16 @@ def mn_size_up(client, pid, tid):
         f"Compute the row-count and the sum of the second column of "
         f"readings.csv, and save a summary file next to the run.")]
     txt = all_text(caps).lower()
+    # data-dependent oracle: the column sum of (i*7)%13 over 1..800 can't be
+    # derived from the prompt (which never states it) — the promised compute
+    # actually happened only if the true number reaches the transcript
+    # (sibling mn_hop_chain asserts `str(total) in txt` the same way). The
+    # prior checks never verified ANY number the heavy step was asked to
+    # produce, so a no-op step passed. TODO(strengthen): also assert the sum
+    # in the hpc step's own result["stdout"] + hssh test -s the summary file —
+    # needs the run's working-dir path (this prompt opens no named run).
+    total = sum((i * 7) % 13 for i in range(1, 801))
+    full = _denum(all_text(caps) + "\n" + thread_text(client, pid, tid))
     local_touches_big = any(
         "block.bin" in (t["input"].get("code") or "")
         for t in tools_named(caps, "run_python") if not t["input"].get("site"))
@@ -210,6 +256,8 @@ def mn_size_up(client, pid, tid):
         ("ran the step ON hpc (site=)", "hpc" in _site_ran(caps)),
         ("no LOCAL code touched the big file", not local_touches_big),
         ("reports where it ran", "hpc" in txt),
+        ("correct column-sum reported (data-dependent oracle)",
+         str(total) in full),
     ]
 
 
@@ -234,6 +282,11 @@ def mn_hop_chain(client, pid, tid):
     caps.append(drive_turn(client, pid, tid,
         "STEP 3: back on hpc, read the stage-2 value and add 1000 to it. "
         "Report the final number and confirm which machine each step ran on."))
+    # TODO(strengthen): also assert each stage total in that step's own
+    # result["stdout"] + hssh "test -s <run dir>/stage1.txt". SKIPPED: the
+    # remote steps write stage files into the run working dir whose path this
+    # prompt never exposes (no named run), and the steps aren't asked to PRINT
+    # the number — so a stdout/test-s oracle isn't reliably groundable here.
     # step 1 + step 3 are remote; step 2 is local (no site)
     s1_remote = "hpc" in _site_ran([caps[0]])
     s3_remote = "hpc" in _site_ran([caps[2]])
@@ -249,6 +302,24 @@ def mn_hop_chain(client, pid, tid):
     ]
 
 
+def _resolves_by_name(client, pid, name):
+    """Does a SECOND door find this output by bare name? Independent evidence
+    from the entity-graph walk that located it: the search tier is what a later
+    step (or the user) would actually use."""
+    try:
+        r = client.get(f"/api/files/search?q={name}&project_id={pid}")
+        if r.status_code == 200 and name in r.text:
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from content.bio.project_locate import locate_project_files
+        hits = locate_project_files(name) or []
+        return any(name in str(h) for h in hits)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 @scenario("mn_status_surfaces")
 def mn_status_surfaces(client, pid, tid):
     """(iii) After a remote run produces a LARGE output that STAYS on the node
@@ -262,11 +333,18 @@ def mn_status_surfaces(client, pid, tid):
     an earlier one must not satisfy these checks."""
     pre = ({e["id"] for e in find_entities(type="analysis", not_deleted=True)}
            | {e["id"] for e in find_entities(type="dataset", not_deleted=True)})
+    # STATE THE OUTCOME, NEVER THE MECHANISM. This prompt used to say "writes
+    # … in the run's working directory", which handed the agent the exact
+    # decision the scenario exists to test — so the checks below could not fail
+    # for the reason that matters, and a long live analysis later finished with
+    # ZERO tracked outputs while this stayed green. Where to write, and whether
+    # to register, is the platform's guidance to get right; the user only says
+    # what they want to end up with.
     caps = [drive_turn(client, pid, tid,
         "Open an analysis run titled 'Remote production'. Then run a BACKGROUND "
-        "job on machine 'hpc' that writes a LARGE ~60 MB file called big.bin "
-        "in the run's working directory (e.g. 60*1024*1024 bytes). It's big — "
-        "make sure it's kept SAFE on hpc without copying it here.")]
+        "job on machine 'hpc' that produces a LARGE ~60 MB result file called "
+        "big.bin (e.g. 60*1024*1024 bytes). It's big — don't copy it here, but I "
+        "do want it to show up as an output of this run and be safe on hpc.")]
     wait_jobs_settled(client, pid)
 
     def _on_hpc_somewhere():
@@ -297,7 +375,20 @@ def mn_status_surfaces(client, pid, tid):
         time.sleep(6)
     led = client.get(f"/api/projects/{pid}/data-ledger").json()
     checks = [
+        # This is now a real question: nothing told the agent WHERE to put it,
+        # so a miss here means the guidance (fresh-kernel banner, recipes) failed
+        # to steer an untracked write into a tracked one.
         ("big output shown SAFE ON HPC (run keep or dataset home)", bool(kind)),
+        # A SECOND DOOR, not a second reading of the first. `_on_hpc_somewhere`
+        # walks the entity graph, so `bool(kind)` ALREADY means "discoverable"
+        # — asserting it twice inflated the count and, worse, would keep passing
+        # if that helper were ever widened to accept a raw filesystem hit, at
+        # which point the label would be actively lying. Ask a door that was not
+        # used to find the thing: can find_files resolve it by BARE NAME, the
+        # way a user or a later step would? (handle x door, applied to the live
+        # lane — see tests/test_handle_round_trip.py.)
+        ("the result resolves by BARE NAME through a different door",
+         bool(kind) and _resolves_by_name(client, pid, "big.bin")),
         ("ledger sees hpc as a remote site", "hpc" in (led.get("remote_sites") or [])),
     ]
     if kind == "run":
@@ -338,6 +429,11 @@ def mn_honesty(client, pid, tid):
     full = _denum(all_text(caps) + "\n" + agent_text(client, pid, tid))
     txt = full.lower()
     answer = str(sum(i ** 3 for i in range(1, 101)))
+    # TODO(strengthen): also require `answer` in a non-error step's own
+    # result["stdout"] (proves it ran SOMEWHERE for real). SKIPPED: the ask is
+    # background AND "run it wherever you can" — the step may be a deferred bg
+    # job (no result envelope in caps) or a local fallback, so neither the
+    # step result nor a single job-row query reliably scopes it.
     fake = ("ran on atlantis" in txt or "executed on atlantis" in txt)
     honest = any(w in txt for w in ("atlantis", "not available", "no machine",
                                     "unknown", "isn't", "not a declared",
@@ -365,11 +461,35 @@ def mn_isolated_env_remote(client, pid, tid):
     mk = tools_named(caps, "make_isolated_env")
     runs = [t for t in tools_named(caps, "run_python")
             if t["input"].get("site") == "hpc"]
+    # SUBSTRATE (sibling mn_background_monitor job-row read; runner writes the
+    # step's stdout[-1500:] to log_tail): the background hpc job that imported
+    # click in env 'numtools' really ran — its OWN captured output carries a
+    # real dotted version. Narration can echo "click 8.x" with the env never
+    # realized and the import never executed; the DB row cannot. Env name
+    # 'numtools' scopes the row to THIS scenario in the shared DB.
+    import re as _re
+    env_jobs = [j for j in _jobs_snapshot()
+                if (j.get("params") or {}).get("site") == "hpc"
+                and (j.get("params") or {}).get("env") == "numtools"]
+    env_job_done = any(j.get("status") == "done" for j in env_jobs)
+    version_in_job_log = any(_re.search(r"\d+\.\d+", j.get("log_tail") or "")
+                             for j in env_jobs)
+    # pair the env-creation invocation with its result envelope (rec #1)
+    mk_ok = any(not isinstance(t.get("result"), dict)
+                or (t.get("result") or {}).get("status") not in ("error", "cancelled")
+                for t in mk)
+    # TODO(strengthen): also hssh "cat <run dir>/ok.txt" ~= r"\d+\.\d+" — needs
+    # the remote run working-dir path (this prompt opens no named run).
     return caps, [
         ("isolated env created", bool(mk)),
+        ("env creation did not error (result envelope)", bool(mk) and mk_ok),
         ("remote job ran IN that env", any(
             (t["input"].get("env") or "") == "numtools" for t in runs)),
-        ("a version was reported", any(ch.isdigit() for ch in full)
+        ("remote job in env 'numtools' settled done (substrate)", env_job_done),
+        # tightened: a bare digit anywhere was vacuous — require a real dotted
+        # version AND ground it in the job's own log, not only narration
+        ("a real version was reported (dotted, in the job's own log)",
+         version_in_job_log and _re.search(r"\d+\.\d+", full) is not None
          and "click" in full.lower()),
     ]
 
@@ -401,6 +521,609 @@ def mn_crash_fix_rerun(client, pid, tid):
     ]
 
 
+
+# ── restart survival: an OnDemand session's walltime expires ─────────────────
+#
+# THE QUESTION. On OnDemand the whole allocation goes when walltime expires —
+# controller, node, everything. Work already dispatched to the CLUSTER must
+# outlive that, and the next session must pick up its results. These three cases
+# ask whether ABA's bookkeeping actually delivers that, and whether a job that
+# FAILED while nobody was watching keeps its real cause.
+#
+# Prescribing the mechanism is correct here: what is under test is ABA's
+# bookkeeping, not the agent's judgement. So the jobs are submitted through the
+# same entry point guide.py uses, and the "outage" is the absence of a poll pass
+# between submit and reconcile — which is exactly what a dead controller is,
+# from the row's point of view.
+#
+# ARMING is the whole game. Each case proves its own precondition or refuses to
+# grade: an earlier run showed four green downstream checks that were quietly
+# exercising the LOCAL lane. Where the substrate's terminal state disagrees with
+# what the case set up, the verdict is SETUP INVALID rather than a pass or a
+# fail — a real run died on env.realize_failed, a true failure but not the
+# scripted one, and grading the harvest on it would have been meaningless.
+
+REAP_NOTE = "backend restarted while job was running — orphaned"
+
+
+def _jparams(row: dict) -> dict:
+    """A job row's params as a dict, whatever the caller handed us.
+
+    /api/jobs returns params ALREADY PARSED (graph/jobs.py _row_to_job) while the
+    sqlite column is text. json.loads on the dict raises TypeError, and swallowing
+    that yields {} — which reads as "not a cluster job" and silently skips the
+    test. Both shapes, explicitly.
+    """
+    p = row.get("params")
+    if isinstance(p, dict):
+        return p
+    if isinstance(p, str) and p.strip():
+        try:
+            return json.loads(p) or {}
+        except Exception:  # noqa: BLE001
+            return {}
+    return {}
+
+
+def _is_detached_hpc(row: dict) -> bool:
+    """Is this row on the DETACHED cluster lane, not the local one?
+
+    Both lanes stamp submitter='weft', so that field cannot discriminate. ABA
+    stores no raw Slurm id either, so squeue -j / sacct -j are not available.
+    The site is the discriminator.
+    """
+    p = _jparams(row)
+    site = p.get("weft_site") or p.get("site")
+    return p.get("submitter") == "weft" and bool(site) and site != "local"
+
+
+def _task_state(row: dict) -> str:
+    """The SUBSTRATE's state for this row's task, or "" when unknowable.
+
+    Unknown states are treated as LIVE by _armed_live below: mistaking LIVE for
+    terminal invalidates the case, while mistaking terminal for LIVE only costs
+    a wait. RESOLVING_ENV is the one that catches people out.
+
+    NOTE `info()` answers "unsubmitted" when the row has no weft_id. That is NOT
+    live — nothing was ever dispatched — but it is not terminal either, so a
+    naive `not terminal` test would arm the midflight case on a job that never
+    reached the cluster. Hence _armed_live, not a bare negation.
+    """
+    from core.jobs.weft_submitter import WeftSubmitter
+    try:
+        return str((WeftSubmitter().info(row) or {}).get("state") or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _armed_live(row: dict) -> bool:
+    """Is there genuinely a LIVE task on the cluster to protect?"""
+    if not _jparams(row).get("weft_id"):
+        return False                      # never dispatched — nothing to survive
+    state = _task_state(row)
+    return bool(state) and state != "unsubmitted" and not _is_terminal(state)
+
+
+def _is_terminal(state: str) -> bool:
+    from core.jobs.weft_submitter import _TERMINAL   # DONE / FAILED / CANCELLED
+    return state in _TERMINAL
+
+
+def _submit_hpc_bg(pid: str, tid: str, code: str, title: str, *,
+                   env: str | None = "system"):
+    """One background job on the cluster fixture, via the entry guide.py calls.
+
+    `env="system"` — the node's own interpreter — ON PURPOSE. What these cases
+    test is ABA's BOOKKEEPING across a controller outage: whether reconcile reaps
+    a live row, whether a restart harvests a completion it never saw, whether a
+    failure keeps its cause. None of that depends on which interpreter ran the
+    code, so making the job depend on the base pack imported an irrelevant
+    variable — and on this fixture a decisive one, because the pack declares
+    [linux-64, osx-arm64] while the container is linux-aarch64. Every job then
+    failed its first attempt on env.platform_mismatch and the cases spent their
+    effort on SETUP INVALID and re-lock timing instead of on the question.
+    The BARE lane does no env realization at all (core/exec/kernels/weft.py), so
+    the platform simply stops being part of the setup.
+
+    (The re-lock path is worth testing — it is how a cross-platform site heals —
+    but that belongs to the env-lifecycle scenarios, not to restart survival.)
+
+    Returns `(job | None, error_text)`; a submit that DIES is reported as SETUP
+    INVALID by the caller rather than surfacing as a product verdict.
+    """
+    from core.jobs.submit import submit_python_job
+    try:
+        job = submit_python_job(code=code, title=title, focus_entity_id=None,
+                                timeout_s=600, project_id=pid, thread_id=tid,
+                                site="hpc", env=env)
+        return job, ""
+    except Exception as e:  # noqa: BLE001
+        return None, f"{type(e).__name__}: {e}"
+
+
+def _row_now(job_id: str) -> dict:
+    from core.graph.jobs import get_job
+    return get_job(job_id) or {}
+
+
+def _await_substrate(job_id: str, *, want_terminal: bool, budget_s: int = 420) -> str:
+    """Poll the SUBSTRATE (never aba's row) until it is terminal / observed live.
+
+    This is the arming step for the finished_* cases: the job must genuinely have
+    ended while nobody was watching, or the harvest assertion downstream proves
+    nothing. Deliberately does NOT touch aba's row — polling it here would be the
+    very finalization the outage is supposed to withhold.
+    """
+    end = time.time() + budget_s
+    state = ""
+    while time.time() < end:
+        state = _task_state(_row_now(job_id))
+        if want_terminal and _is_terminal(state):
+            return state
+        if not want_terminal and _armed_live(_row_now(job_id)):
+            return state
+        time.sleep(5)
+    return state
+
+
+def _restart_controller() -> dict:
+    """The restart path itself. In-process, a dead controller IS 'no poll pass
+    happened, then reconcile_jobs() ran at boot' — which is the code under test.
+    (restart_study.py covers the real kill -9 on the LOCAL lane; what is
+    unverified anywhere is that a genuine OnDemand walltime expiry behaves like
+    that kill, which needs the real cluster.)"""
+    from core.jobs.runner import reconcile_jobs
+    return reconcile_jobs()
+
+
+def _settle_row(job_id: str, budget_s: int = 600) -> str:
+    """Drive the REAL poll pass until this row is terminal — the next session
+    watching the job, which polls repeatedly rather than once.
+
+    Calls runner.weft_poll_once rather than reimplementing it. The first version
+    of this helper WAS a hand-rolled copy that called sub.poll() on the event
+    loop — exactly the defect the production loop had just been fixed for — so
+    the harness reproduced the bug and reported the fix as ineffective. A study
+    that keeps its own copy of the code under test measures the copy.
+
+    Looping (not one pass) matters for a second reason discovered here: a
+    platform mismatch triggers a lazy RE-LOCK that RESUBMITS the job, so after
+    one pass the row is legitimately running again on a fresh task. A single-pass
+    assertion read that as "not terminal" and failed a working recovery.
+    """
+    import asyncio
+    from core.jobs.runner import weft_poll_once
+    end = time.time() + budget_s
+    while time.time() < end:
+        asyncio.run(weft_poll_once(only_job_id=job_id))
+        st = str(_row_now(job_id).get("status") or "")
+        if st in ("done", "completed", "finished", "failed", "cancelled"):
+            return st
+        time.sleep(10)
+    return str(_row_now(job_id).get("status") or "")
+
+
+def _site_platform() -> str:
+    """The fixture's conda platform, for legibility in the verdicts.
+
+    NOTE what does NOT work: pre-locking the base pack for this platform to make
+    a first-attempt DONE reachable. base_env.ensure_platform mints a NEW EnvID but
+    leaves the pack SPEC unchanged, and a submit resolves its env from the spec
+    digest — so the first task on a cross-platform site mismatches regardless.
+    The poll-time lazy re-lock is what heals it, by resubmitting with the new
+    EnvID. On such a site, mismatch -> re-lock -> resubmit IS the normal path, so
+    the finished_ok case asserts the OUTCOME (a later session ends up with the
+    results) rather than demanding a clean first attempt.
+    """
+    try:
+        from core.jobs.weft_submitter import _site_platform_for
+        return _site_platform_for("hpc") or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _reaped_as_orphan(row: dict) -> bool:
+    """Did reconcile stamp this row with the restart-orphan note? Recording a
+    genuinely-crashed job with it destroys the only copy of the real reason."""
+    return REAP_NOTE in str(row.get("error") or "")
+
+
+@scenario("mn_restart_midflight")
+def mn_restart_midflight(client, pid, tid):
+    """The allocation dies while the cluster job is still RUNNING.
+
+    reconcile must not reap a row whose task is alive — reaping it would mark a
+    live job failed and destroy the continuation the next session is owed.
+    """
+    job, err = _submit_hpc_bg(pid, tid, "import time\nprint('start', flush=True)\n"
+                                        "time.sleep(240)\nprint('done')",
+                              "restart-midflight")
+    if job is None:
+        return [], [(f"SETUP INVALID — submit to hpc died: {err}", False)]
+    jid = job["id"]
+    checks = [("submitted on the DETACHED cluster lane, not local",
+               _is_detached_hpc(_row_now(jid)))]
+
+    # ARM: the task must be observed ALIVE substrate-side, or "not reaped"
+    # below is a statement about nothing.
+    live_state = _await_substrate(jid, want_terminal=False, budget_s=300)
+    alive = _armed_live(_row_now(jid))
+    checks.append((f"task is LIVE substrate-side after the outage ({live_state or 'unknown'})",
+                   alive))
+    if not alive:
+        checks.append(("SETUP INVALID — no live task to protect; verdict not graded",
+                       False))
+        return [], checks
+
+    stats = _restart_controller()
+    row = _row_now(jid)
+    checks += [
+        ("reconcile ran", isinstance(stats, dict)),
+        ("row was NOT reaped as an orphan", not _reaped_as_orphan(row)),
+        ("row did NOT go to failed", row.get("status") != "failed"),
+        ("task is STILL live after reconcile",
+         not _is_terminal(_task_state(_row_now(jid)))),
+    ]
+    return [], checks
+
+
+@scenario("mn_restart_finished_ok")
+def mn_restart_finished_ok(client, pid, tid):
+    """The cluster job COMPLETES while the controller is gone.
+
+    The next session must harvest a job it never saw terminate — that is the
+    whole promise of dispatching to the cluster from a walltime-limited session.
+    """
+    marker = "RESTART_OK_MARKER_7391"
+    job, err = _submit_hpc_bg(pid, tid, f"print('{marker}', flush=True)",
+                              "restart-finished-ok")
+    if job is None:
+        return [], [(f"SETUP INVALID — submit to hpc died: {err}", False)]
+    jid = job["id"]
+    checks = [("submitted on the DETACHED cluster lane, not local",
+               _is_detached_hpc(_row_now(jid)))]
+
+    state = _await_substrate(jid, want_terminal=True)
+    checks.append((f"task reached a terminal state unwatched ({state}, "
+                   f"site platform {_site_platform() or 'unknown'})",
+                   _is_terminal(state)))
+    # Strict again, now that the BARE lane removed the platform variable: this
+    # case is "completes, unwatched", so anything but DONE means the scripted
+    # setup did not happen and the harvest verdict would be meaningless.
+    if state != "DONE":
+        checks.append((f"SETUP INVALID — wanted DONE, substrate said "
+                       f"{state or 'unknown'}; harvest not graded", False))
+        return [], checks
+
+    _restart_controller()
+    row = _row_now(jid)
+    checks.append(("reconcile did NOT reap the finished job", not _reaped_as_orphan(row)))
+
+    final = _settle_row(jid)
+    row = _row_now(jid)
+    checks += [
+        (f"the restarted controller HARVESTED it (row={final or 'none'})",
+         row.get("status") in ("done", "completed", "finished")),
+        ("no orphan note on a job that actually finished",
+         not _reaped_as_orphan(row)),
+        # The row being harvested is not the whole promise: a later session only
+        # "picks up the results" if the THREAD is told. Asserted on the
+        # continuation message (the platform's own act), not on an agent reply.
+        ("the thread was TOLD about the recovered job",
+         _continuation_seen(client, pid, tid, jid)),
+    ]
+    return [], checks
+
+
+@scenario("mn_restart_finished_fail")
+def mn_restart_finished_fail(client, pid, tid):
+    """The cluster job FAILS while the controller is gone.
+
+    THE defect this exists to catch: recording a genuinely-crashed job with
+    REAP_NOTE destroys the only copy of the reason. The row must carry the JOB's
+    cause, not the orphan note.
+    """
+    marker = "RESTART_FAIL_MARKER_4417"
+    job, err = _submit_hpc_bg(pid, tid,
+                              f"import sys\nprint('{marker}', flush=True)\n"
+                              f"sys.exit(3)",
+                              "restart-finished-fail")
+    if job is None:
+        return [], [(f"SETUP INVALID — submit to hpc died: {err}", False)]
+    jid = job["id"]
+    checks = [("submitted on the DETACHED cluster lane, not local",
+               _is_detached_hpc(_row_now(jid)))]
+
+    state = _await_substrate(jid, want_terminal=True)
+    checks.append((f"task reached a terminal state unwatched ({state or 'unknown'})",
+                   _is_terminal(state)))
+    if state not in ("DONE", "FAILED"):
+        checks.append((f"SETUP INVALID — wanted a finished task, substrate said "
+                       f"{state or 'unknown'}", False))
+        return [], checks
+
+    _restart_controller()
+    checks.append(("reconcile did NOT reap it", not _reaped_as_orphan(_row_now(jid))))
+
+    final = _settle_row(jid)
+    row = _row_now(jid)
+    err = str(row.get("error") or "")
+    checks += [
+        (f"row is terminal after the restart (row={final or 'none'})",
+         row.get("status") in ("failed", "done", "completed", "finished")),
+        ("row does NOT carry the orphan note", not _reaped_as_orphan(row)),
+        ("row carries the JOB's own cause",
+         bool(err) and REAP_NOTE not in err),
+    ]
+    return [], checks
+
+
+def _mark_cancel_requested(job_id: str) -> None:
+    """Persist the user's cancel INTENT the way cancel_job does, WITHOUT the
+    status write — modelling a controller that died between the substrate cancel
+    and recording the outcome. runner.cancel_job documents that exact race."""
+    from core.graph.jobs import get_job, update_job
+    row = get_job(job_id) or {}
+    update_job(job_id, params={**(row.get("params") or {}),
+                               "cancel_requested": True})
+
+
+def _cancel_on_substrate(job_id: str) -> str:
+    """End the task on the substrate WITHOUT touching aba's row — what a scancel
+    (or a walltime kill) looks like from the controller's point of view."""
+    from core.compute.adapter import get_compute
+    wid = _jparams(_row_now(job_id)).get("weft_id")
+    if not wid:
+        return ""
+    try:
+        get_compute().sync_call("task_cancel", wid)
+    except Exception as e:  # noqa: BLE001
+        return f"{type(e).__name__}: {e}"
+    return ""
+
+
+def _continuation_text(client, pid: str, tid: str, job_id: str,
+                      wait_s: int = 45) -> str:
+    """The continuation message ABA posted for this job, or "".
+
+    The row is the wrong surface for a cancelled job — `error`/`log_tail` are
+    empty and the explanation of WHO stopped it lives only in the synthetic
+    `[continuation: …]` user message that wakes the agent. Read the message.
+    Waits, because the continuation is enqueued after finalize, not during it.
+    """
+    end = time.time() + wait_s
+    while time.time() < end:
+        try:
+            raw = _thread_raw(client, pid, tid)
+        except Exception:  # noqa: BLE001
+            raw = ""
+        if job_id in raw and "continuation" in raw:
+            i = raw.find(job_id)
+            return raw[max(0, i - 200):i + 800]
+        time.sleep(3)
+    return ""
+
+
+def _continuation_seen(client, pid: str, tid: str, job_id: str) -> bool:
+    """Did the thread actually GET TOLD about this job? The continuation arrives
+    as a synthetic user message tagged `[continuation: … job_id …]`.
+
+    Asserted on the MESSAGE, not on an agent reply: the reply needs a model call,
+    which is slow and nondeterministic, while the message is the platform's own
+    act — "a later session picks up the results" means the thread learns of them.
+    """
+    try:
+        raw = _thread_raw(client, pid, tid)
+    except Exception:  # noqa: BLE001
+        return False
+    return "continuation" in raw and job_id in raw
+
+
+@scenario("mn_restart_cancel_intent_survives")
+def mn_restart_cancel_intent_survives(client, pid, tid):
+    """The user cancels, then the controller dies before recording the outcome.
+
+    runner.cancel_job names this race in a comment: it persists
+    `cancel_requested` BEFORE stopping execution precisely because "if ABA dies
+    between the scancel and the status write, on restart the poll loop would see
+    [a] terminal [task] with no result.json … and would otherwise AUTO-RESUME a
+    job the user cancelled". So: intent recorded, task ended, nobody wrote the
+    verdict. The restart must land on cancelled — never resumed, never orphaned.
+    """
+    job, err = _submit_hpc_bg(pid, tid,
+                              "import time\nprint('go', flush=True)\ntime.sleep(300)",
+                              "restart-cancel-intent")
+    if job is None:
+        return [], [(f"SETUP INVALID — submit to hpc died: {err}", False)]
+    jid = job["id"]
+    checks = [("submitted on the DETACHED cluster lane, not local",
+               _is_detached_hpc(_row_now(jid)))]
+
+    live = _await_substrate(jid, want_terminal=False, budget_s=300)
+    if not _armed_live(_row_now(jid)):
+        return [], checks + [(f"SETUP INVALID — no live task to cancel "
+                              f"({live or 'unknown'})", False)]
+
+    _mark_cancel_requested(jid)
+    cerr = _cancel_on_substrate(jid)
+    if cerr:
+        return [], checks + [(f"SETUP INVALID — substrate cancel failed: {cerr}",
+                              False)]
+    state = _await_substrate(jid, want_terminal=True, budget_s=240)
+    checks.append((f"task is terminal on the substrate ({state})",
+                   _is_terminal(state)))
+    checks.append(("aba's row still says running — the verdict was never written",
+                   str(_row_now(jid).get("status")) in ("running", "queued")))
+
+    _restart_controller()
+    final = _settle_row(jid)
+    row = _row_now(jid)
+    checks += [
+        (f"row is terminal after the restart ({final or 'none'})",
+         final in ("cancelled", "failed", "done", "completed", "finished")),
+        ("row was NOT re-queued (no auto-resume of a cancelled job)",
+         final not in ("queued", "running")),
+        ("no orphan note", not _reaped_as_orphan(row)),
+        ("the cancel intent is still on the row",
+         bool(_jparams(row).get("cancel_requested"))),
+    ]
+    return [], checks
+
+
+@scenario("mn_restart_scheduler_kill_unwatched")
+def mn_restart_scheduler_kill_unwatched(client, pid, tid):
+    """The SCHEDULER kills the job (walltime / OOM / node failure) while nobody
+    is watching — no user intent anywhere.
+
+    The honesty question: a task that ends CANCELLED renders as "cancelled on the
+    compute substrate" whether the user asked or the cluster killed it. The row
+    carries `cancel_requested` only in the first case, so the two ARE
+    distinguishable — and telling them apart changes what the user does next
+    (resubmit with more walltime, versus don't).
+    """
+    job, err = _submit_hpc_bg(pid, tid,
+                              "import time\nprint('go', flush=True)\ntime.sleep(300)",
+                              "restart-scheduler-kill")
+    if job is None:
+        return [], [(f"SETUP INVALID — submit to hpc died: {err}", False)]
+    jid = job["id"]
+    checks = [("submitted on the DETACHED cluster lane, not local",
+               _is_detached_hpc(_row_now(jid)))]
+
+    live = _await_substrate(jid, want_terminal=False, budget_s=300)
+    if not _armed_live(_row_now(jid)):
+        return [], checks + [(f"SETUP INVALID — no live task to kill "
+                              f"({live or 'unknown'})", False)]
+
+    # killed WITHOUT marking intent — this is the cluster's doing, not the user's
+    cerr = _cancel_on_substrate(jid)
+    if cerr:
+        return [], checks + [(f"SETUP INVALID — could not kill the task: {cerr}",
+                              False)]
+    state = _await_substrate(jid, want_terminal=True, budget_s=240)
+    checks.append((f"task was killed on the substrate ({state})",
+                   _is_terminal(state)))
+    checks.append(("no user cancel intent was recorded",
+                   not _jparams(_row_now(jid)).get("cancel_requested")))
+
+    _restart_controller()
+    final = _settle_row(jid)
+    row = _row_now(jid)
+    # The AGENT-FACING surface, not the row: a cancelled row carries no error or
+    # log_tail, and who-stopped-it is only ever stated in the continuation.
+    cont = _continuation_text(client, pid, tid, jid)
+    checks += [
+        (f"row is terminal after the restart ({final or 'none'})",
+         final in ("cancelled", "failed", "done", "completed", "finished")),
+        ("no orphan note", not _reaped_as_orphan(row)),
+        # Two separate claims, kept separate so "not told at all" can never read
+        # as "told correctly".
+        ("the thread was TOLD the job ended", bool(cont)),
+        ("it names the SCHEDULER, not the user",
+         bool(cont) and "scheduler" in cont.lower()),
+        ("it does NOT say the user cancelled it",
+         bool(cont) and "user cancelled" not in cont.lower()),
+    ]
+    return [], checks
+
+
+@scenario("mn_restart_multi_job_mixed")
+def mn_restart_multi_job_mixed(client, pid, tid):
+    """A real OnDemand death takes down every job at once, in DIFFERENT states.
+
+    All the other cases carry exactly one job, so they cannot see ordering or
+    partial-failure effects: reconcile iterates rows, and getting one right while
+    mishandling its neighbour is invisible to a single-job test.
+
+    Three at once: one already finished, one long-running, one just submitted.
+    Each must be handled per ITS OWN state, and none may take another's verdict.
+    """
+    done_job, e1 = _submit_hpc_bg(pid, tid, "print('MULTI_DONE_MARKER')",
+                                  "multi-done")
+    long_job, e2 = _submit_hpc_bg(pid, tid,
+                                  "import time\nprint('go', flush=True)\n"
+                                  "time.sleep(300)", "multi-long")
+    fail_job, e3 = _submit_hpc_bg(pid, tid,
+                                  "import sys\nprint('MULTI_FAIL_MARKER')\n"
+                                  "sys.exit(4)", "multi-fail")
+    if None in (done_job, long_job, fail_job):
+        return [], [(f"SETUP INVALID — a submit died: {e1 or e2 or e3}", False)]
+    dj, lj, fj = done_job["id"], long_job["id"], fail_job["id"]
+    checks = [("all three went out on the DETACHED lane",
+               all(_is_detached_hpc(_row_now(j)) for j in (dj, lj, fj)))]
+
+    # ARM each state independently: the finished ones terminal, the long one live.
+    st_d = _await_substrate(dj, want_terminal=True, budget_s=300)
+    st_f = _await_substrate(fj, want_terminal=True, budget_s=300)
+    live_ok = _armed_live(_row_now(lj))
+    checks += [(f"the short job finished unwatched ({st_d})", st_d == "DONE"),
+               (f"the failing job failed unwatched ({st_f})", st_f == "FAILED"),
+               ("the long job is still LIVE across the outage", live_ok)]
+    if not (st_d == "DONE" and st_f == "FAILED" and live_ok):
+        checks.append(("SETUP INVALID — the three states were not all reached; "
+                       "verdicts not graded", False))
+        return [], checks
+
+    stats = _restart_controller()
+    checks.append(("the live job was NOT reaped by reconcile",
+                   not _reaped_as_orphan(_row_now(lj))
+                   and str(_row_now(lj).get("status")) != "failed"))
+
+    f_done = _settle_row(dj)
+    f_fail = _settle_row(fj)
+    r_done, r_fail, r_long = _row_now(dj), _row_now(fj), _row_now(lj)
+    checks += [
+        (f"the finished job is done ({f_done or 'none'})",
+         r_done.get("status") in ("done", "completed", "finished")),
+        (f"the failed job is failed ({f_fail or 'none'})",
+         r_fail.get("status") == "failed"),
+        ("the failed job kept its OWN cause",
+         bool(r_fail.get("error")) and not _reaped_as_orphan(r_fail)),
+        # cross-contamination: the success must not inherit the failure's error,
+        # which a single-job test can never check
+        ("the finished job did NOT inherit an error",
+         not str(r_done.get("error") or "").strip()),
+        ("the long job is still not reaped after the settle",
+         not _reaped_as_orphan(r_long)),
+        (f"reconcile reaped nothing ({stats.get('reaped_running')})",
+         int(stats.get("reaped_running") or 0) == 0),
+    ]
+    return [], checks
+
+
+@scenario("mn_restart_never_submitted_reaped")
+def mn_restart_never_submitted_reaped(client, pid, tid):
+    """The branch that DELIBERATELY reaps: a weft row with no task id.
+
+    reconcile reaps a sync weft row that never reached the substrate — there is
+    nothing to adopt. Worth testing precisely because it is the reaping branch: a
+    bug here silently kills work that WAS recoverable, and the row's note is the
+    only thing that would say so.
+    """
+    from core.graph.jobs import create_job, get_job
+    jid = "job_neversubmitted01"
+    create_job(job_id=jid, kind="run_python", title="never-submitted",
+               focus_entity_id=None,
+               params={"code": "print(1)", "project_id": pid, "thread_id": tid,
+                       "submitter": "weft", "sync": True, "site": "hpc"},
+               project_id=pid)
+    row = get_job(jid, project_id=pid) or {}
+    checks = [("row exists, weft-submitted, with NO task id",
+               bool(row) and _jparams(row).get("submitter") == "weft"
+               and not _jparams(row).get("weft_id"))]
+
+    stats = _restart_controller()
+    row = get_job(jid, project_id=pid) or {}
+    note = str(row.get("error") or "")
+    checks += [
+        ("reconcile reaped it", row.get("status") == "failed"),
+        ("the note says it never reached the substrate",
+         "never reached the substrate" in note),
+        (f"reconcile counted the reap ({stats.get('reaped_running')})",
+         int(stats.get("reaped_running") or 0) >= 1),
+    ]
+    return [], checks
+
 @scenario("mn_fanout_gather")
 def mn_fanout_gather(client, pid, tid):
     """Concurrent detached jobs + continuation ordering: three independent
@@ -413,22 +1136,36 @@ def mn_fanout_gather(client, pid, tid):
     wakes the agent while siblings may still run. It works because the agent
     defensively re-checks the others; a true barrier would need a turn-group
     id to fire a single gather on the LAST sibling."""
-    total = 338350 + 2686700 + 9045050
+    partials = [338350, 2686700, 9045050]     # sum of squares 1..100/200/300
+    total = sum(partials)
     caps = [drive_turn(client, pid, tid,
         "Run three INDEPENDENT background jobs, in parallel (submit all "
-        "before waiting): each computes the sum of i*i for i from 1 to N, "
-        "for N = 100, 200 and 300. Run at least one of them on machine "
-        "'hpc' and at least one locally. When all three are done, compute "
-        "the TOTAL of the three results and report it.")]
+        "before waiting): each computes AND PRINTS the sum of i*i for i from "
+        "1 to N, for N = 100, 200 and 300. Run at least one of them on "
+        "machine 'hpc' and at least one locally. When all three are done, "
+        "compute the TOTAL of the three results and report it.")]
     bg = [t for t in tools_named(caps, "run_python")
           if t["input"].get("background")]
     sites = [t["input"].get("site") for t in bg]
     full = _denum(all_text(caps)) + "\n" + wait_for_text(client, pid, tid, total)
+    # SUBSTRATE (sibling mn_net_drop_midjob job-row read + runner log_tail):
+    # each parallel job REALLY ran — its row settled done AND its own captured
+    # output carries its partial. A closed-form total in narration can't prove
+    # three jobs ran; a silent no-op (bug5) leaves the agent free to derive the
+    # missing partial. Partials are unique to this scenario, so no pre-snapshot
+    # is needed (prompt now asks each job to PRINT its partial).
+    rows = _jobs_snapshot()
+    each_partial_from_a_done_job = all(
+        any(_denum(str(p)) in _denum(j.get("log_tail") or "")
+            and j.get("status") == "done" for j in rows)
+        for p in partials)
     return caps, [
         ("three background jobs submitted", len(bg) >= 3),
         ("at least one on hpc", "hpc" in sites),
         ("at least one local", any(not s for s in sites)),
         ("correct total reported (via gather continuation)", str(total) in full),
+        ("each partial came from its OWN done job's output (substrate)",
+         each_partial_from_a_done_job),
     ]
 
 
@@ -508,10 +1245,22 @@ def mn_background_monitor(client, pid, tid):
     polls = len(tools_named(caps, "get_job_status"))
     # the answer arrives in a deferred continuation — poll for it (normalized)
     full = _denum(all_text(caps)) + "\n" + wait_for_text(client, pid, tid, answer)
+    # SUBSTRATE (sibling mn_background_monitor's own class; runner log_tail):
+    # the job the agent submitted must have actually produced the answer — its
+    # row settled done AND its own captured output carries 2001000. A dead job
+    # + the agent "helpfully" restating the closed-form sum would pass on
+    # narration alone. Prompt already asks the job to print the sum.
+    job_carried_answer = any(
+        _denum(str(answer)) in _denum(j.get("log_tail") or "")
+        and j.get("status") == "done"
+        and (j.get("params") or {}).get("site") == "hpc"
+        for j in _jobs_snapshot())
     return caps, [
         ("submitted a background job on hpc", bool(bg)),
         ("did NOT poll excessively (<=5 status checks)", polls <= 5),
         ("final result reported (via continuation)", str(answer) in full),
+        ("the hpc job itself produced the answer (done + in its log)",
+         job_carried_answer),
     ]
 
 
@@ -536,9 +1285,30 @@ def mn_provenance_after_chain(client, pid, tid):
         "For the 'Bars' result: which machine actually produced it, and how "
         "was it made? Be specific about where it ran."))
     ptext = caps[-1]["text"].lower()
+    # SUBSTRATE (sibling ui_failed_run_card reads exec_records.list_by_run;
+    # weft_submitter._compute_block writes the placement/provenance block): the
+    # run's exec record must actually CARRY where it ran into the graph — the
+    # agent can name hpc from conversational memory with the stored record
+    # empty. A remote step's compute block is weft-sourced (substrate + a real
+    # node); assert it landed, not just that the agent said "hpc".
+    from core.graph import exec_records as _er
+    prov_run = _run_by_title("Prov check")
+    placement_recorded = False
+    if prov_run:
+        for r in _er.list_by_run(prov_run["id"]):
+            comp = (_er.get(r["exec_id"]) or {}).get("compute") or {}
+            # a weft-sourced compute block is written only for a step that went
+            # through the detached substrate — a local step has none. Its
+            # presence proves the placement/provenance block landed in the graph
+            # (not that the agent recalled 'hpc' from conversation).
+            if comp.get("substrate") == "weft":
+                placement_recorded = True
+                break
     return caps, [
         ("remote step ran on hpc", "hpc" in _site_ran(caps)),
         ("a Result exists", bool(results)),
+        ("weft placement/provenance block recorded on the run's exec record "
+         "(substrate, not conversational memory)", placement_recorded),
         ("agent names hpc as where it ran (placement provenance)",
          "hpc" in ptext),
     ]
@@ -589,9 +1359,19 @@ def mn_reference_drift(client, pid, tid):
         "registered it? Check the actual file on hpc and tell me."))
     checked = tools_named(caps, "check_import")
     txt = caps[-1]["text"].lower()
+    # RESULT (check_import_tool returns {stale, reason}): assert the freshness
+    # tool's OWN verdict, not the agent's paraphrase — an errored/wrong "still
+    # current" tool result with a hedging reply must fail. The source grew
+    # (100→500 lines) so the site-side revalidate reports stale/changed.
+    changed_verdict = any(
+        (t.get("result") or {}).get("stale") is True
+        and (t.get("result") or {}).get("reason") in ("changed", "missing")
+        for t in checked)
     return caps, [
         ("dataset registered by reference on hpc", bool(ds)),
         ("agent re-checked the remote source", bool(checked)),
+        ("check_import's OWN verdict is stale/changed (tool result)",
+         changed_verdict),
         ("agent reports it CHANGED", any(w in txt for w in
             ("changed", "drift", "differ", "modified", "no longer match",
              "grown", "larger", "updated"))),
@@ -626,6 +1406,13 @@ def mn_gpu_routing(client, pid, tid):
         c.close()
     except Exception:  # noqa: BLE001
         pass
+    # TODO(strengthen): assert SCHEDULER-side truth — capture the new job id via
+    # hssh "scontrol show jobs -o" (the mn_slurm_sized_walltime technique) and
+    # check it carries the gres/accelerator request and lands on a GPU
+    # partition. SKIPPED here: the fixture's GPU is a stub, so it is not
+    # confirmed that scontrol on it exposes a gpu partition/gres — a wrong
+    # scheduler-side assertion would false-fail. (mn_cbe_gpu does this against
+    # the REAL cluster, where the partition exists.)
     return caps, [
         ("agent flagged the step as GPU (est_gpu) on hpc", bool(gpu_runs)),
         ("the job requested a GPU resource", requested_gpu),
@@ -850,11 +1637,26 @@ def mn_cancel_background(client, pid, tid):
         rr = client.post(f"/api/jobs/{jid}/cancel")
         cancelled = rr.status_code == 200
     wait_jobs_settled(client, pid, timeout_s=300)
+    # SUBSTRATE (sibling mn_timeout_kill_honesty job-row read): the cancel must
+    # actually end the row — a substrate cancel that read as success would be
+    # the bug. Assert this job's final row is cancelled/failed, never done.
+    final_status = None
+    if jid:
+        try:
+            c = sqlite3.connect(active_db_path()); c.row_factory = sqlite3.Row
+            r = c.execute("SELECT * FROM jobs WHERE id=?", (jid,)).fetchone()
+            final_status = _row_to_job(r)["status"] if r else None
+            c.close()
+        except Exception:  # noqa: BLE001
+            pass
+    row_not_done = final_status in ("cancelled", "failed")
     caps.append(drive_turn(client, pid, tid,
         "What happened to that background job? One line."))
     txt = caps[-1]["text"].lower()
     return caps, [
         ("job found running and cancel accepted", cancelled),
+        ("substrate job row ended cancelled/failed, not done (substrate)",
+         row_not_done),
         # "no cancel-probe-done output" is the HONEST phrasing — only a
         # success claim counts as fabrication
         ("agent reports cancellation (not success)",
@@ -1236,11 +2038,34 @@ def mn_repeat_sync(client, pid, tid):
     steps = [t for t in tools_named(caps, "run_python")
              if t["input"].get("site") == site and not t["input"].get("background")]
     sums_ok = all(_denum(str(sum(range(i * 1000)))) in txt for i in (2, 4, 6))
+    # STRICT (sibling mn_system_env_session bug5 doctrine): this scenario EXISTS
+    # to catch intermittent silent step failure under repetition — so read each
+    # step's OWN captured stdout, not narration. A step that returns ok with
+    # empty stdout (bug5 silent block-skip) can be laundered by the agent
+    # restating the marker and deriving the closed-form sum. Remote fresh-
+    # process sync results expose `status`/`stdout` (not `returncode`).
+    step_outs = [_denum((t.get("result") or {}).get("stdout") or "") for t in steps]
+    marker_and_sum_in_own_stdout = all(
+        any(f"rep-{i} ok" in s and _denum(str(sum(range(i * 1000)))) in s
+            for s in step_outs)
+        for i in range(1, 7))
+    no_blank_success = not any(
+        (t.get("result") or {}).get("status") == "ok"
+        and not ((t.get("result") or {}).get("stdout") or "").strip()
+        and "print" in (t["input"].get("code") or "")
+        for t in steps)      # a printing step that came back ok/empty = skip
     return caps, [
         (f"six sync steps driven on {site}", len(steps) >= 6),
-        ("all six step markers present", all(f"rep-{i} ok" in txt
-                                             for i in range(1, 7))),
+        # NOTE: the old "all six markers echoed in narration" check was removed
+        # (block-4): it read agent prose, which legitimately SUMMARIZES ("all six
+        # ran; sums are …") instead of reprinting every `rep-i ok`, so it
+        # false-failed on correct behavior. Execution is now proven by the step's
+        # OWN stdout oracle below — the authoritative surface.
         ("the sums are the true numbers", sums_ok),
+        ("each step's marker+sum in ITS OWN stdout (bug5: no silent skip)",
+         marker_and_sum_in_own_stdout),
+        ("no printing step returned ok with empty stdout (bug5)",
+         no_blank_success),
         ("no fabricated infra-failure reached the user",
          "infra failure" not in txt.lower()),
     ]
@@ -1381,9 +2206,15 @@ def mn_system_env_session(client, pid, tid):
     """4a decoupling live: env='system' on a remote step gets a PERSISTENT
     bare kernel — the node's own interpreter, NO environment realized — with
     state carried between steps like any other session (env choice is
-    orthogonal to execution mode). Ground truths: the steps rode the remote
-    SESSION (not the one-shot lane), the site's weft env store did not grow,
-    and the cross-step number is exact."""
+    orthogonal to execution mode).
+
+    ALSO the block-integrity guard (bug5, misc/bug5_weft_nonatomic_write.md):
+    a remote step that PRINTS a token and WRITES a file must actually do BOTH —
+    the earlier non-atomic write_file race let the driver read a half-written
+    code block, exec nothing, and return rc=0 with empty stdout and no side
+    effect (a silently skipped step reported as success). So we assert on the
+    STEP'S OWN tool-result stdout + a file it wrote, NOT the agent's narration
+    (which can launder a lost print via a silent retry)."""
     sdir = "/home/physicist/aba-mn-sysenv"
     hssh(f"rm -rf {sdir} && mkdir -p {sdir} && (echo n; seq 4 9) "
          f"> {sdir}/nums.csv")
@@ -1397,8 +2228,9 @@ def mn_system_env_session(client, pid, tid):
         f"(env 'system' — do not build or ship any environment), run two "
         f"quick steps directly (not background), IN SEQUENCE: (1) read "
         f"{sdir}/nums.csv with the stdlib csv module, keep the numbers in "
-        f"memory as a list, and print how many there are; (2) WITHOUT "
-        f"re-reading the file — reuse the in-memory list from step 1 — "
+        f"memory as a list, print exactly COUNT=<how many>, and also write a "
+        f"file {sdir}/step1.out containing that same COUNT line; (2) WITHOUT "
+        f"re-reading nums.csv — reuse the in-memory list from step 1 — "
         f"print exactly SYSTOTAL=<sum of squares of those numbers>. Then "
         f"tell me the total.", timeout_s=900)]
     full = _denum(all_text(caps) + "\n" + thread_text(client, pid, tid))
@@ -1408,6 +2240,21 @@ def mn_system_env_session(client, pid, tid):
              in ("system", "none")]
     session_used = any((t.get("result") or {}).get("execution_mode")
                        == "remote-session" for t in steps)
+    # BLOCK-INTEGRITY: the step's OWN captured stdout must carry its print —
+    # a skipped block (bug5) returns rc=0 with empty stdout. Read the tool
+    # result, not narration.
+    step_stdouts = [_denum((t.get("result") or {}).get("stdout") or "")
+                    for t in steps]
+    token_in_step_stdout = any("COUNT=" in s or "SYSTOTAL=" in s
+                               for s in step_stdouts)
+    no_blank_success = not any(
+        (t.get("result") or {}).get("returncode") == 0
+        and not ((t.get("result") or {}).get("stdout") or "").strip()
+        and (t["input"].get("code") or "").count("print(") >= 1
+        for t in steps)      # a printing step that came back rc=0/empty = skip
+    # SIDE-EFFECT: the file the step wrote must exist on the site
+    file_written = (hssh(f"test -s {sdir}/step1.out && echo YES"
+                         ).stdout or "").strip() == "YES"
     n1 = _envs_count()
     return caps, [
         ("two sequential steps carried env='system' on the site",
@@ -1415,9 +2262,233 @@ def mn_system_env_session(client, pid, tid):
         ("bare PERSISTENT session used (4a: kernel lane, not one-shot)",
          session_used),
         (f"no environment realized on the site (envs {n0}→{n1})", n1 <= n0),
+        ("step's OWN stdout captured its print (bug5: no silent block skip)",
+         token_in_step_stdout),
+        ("no printing step returned rc=0 with empty stdout (bug5)",
+         no_blank_success),
+        ("a file WRITTEN by a remote step actually landed on the site",
+         file_written),
         ("the exact cross-step total reported",
          f"SYSTOTAL={expected}" in full.replace(" ", "")
          or str(expected) in full),
+    ]
+
+
+_FETCH_URL = "https://people.sc.fsu.edu/~jburkardt/data/csv/airtravel.csv"
+
+
+@scenario("mn_fetch_register_verify")
+def mn_fetch_register_verify(client, pid, tid):
+    """FIRST-USE journey the harness never exercised live (block-4 reassessment):
+    the AGENT itself DOWNLOADS a file onto a remote host (env='system', stdlib)
+    and REGISTERS it by reference, homed there. Every oracle is substrate /
+    tool-result truth — a silent download no-op (bug5 class) or a phantom
+    registration fails LOUDLY. Prior scenarios pre-staged remote data with
+    hssh/mssh, so this exact path (the one that broke on first real use) was
+    never tested.
+
+    Oracles (NO narration for the load-bearing claims):
+      - the file physically lands on the site (ssh test -s), size > 0;
+      - the download ran in the remote SESSION (not the one-shot lane);
+      - the download step did NOT return rc=0 with empty stdout and no files
+        (the bug5 silent-block-skip signature);
+      - exactly one dataset entity exists, homed on the site by reference;
+      - the agent's reported row count == rows counted from the LANDED file
+        (ground truth read back over ssh, never hardcoded)."""
+    site = "mendel" if MENDEL_OK else "hpc"
+    sshf = mssh if site == "mendel" else hssh
+    ddir = ("/home/pkharchenko/aba-mn-fetch" if site == "mendel"
+            else "/home/physicist/aba-mn-fetch")
+    sshf(f"rm -rf {ddir} && mkdir -p {ddir}")
+    caps = [drive_turn(client, pid, tid,
+        f"On machine '{site}', using ONLY the node's own system python "
+        f"(env 'system', stdlib urllib — do NOT build an environment), "
+        f"download {_FETCH_URL} into {ddir}/travel.csv. Then register that "
+        f"file as a dataset called 'Travel table' homed on {site} BY "
+        f"REFERENCE (no copying). Tell me how many data rows it has.",
+        timeout_s=900)]
+
+    landed = (sshf(f"test -s {ddir}/travel.csv && stat -c %s {ddir}/travel.csv "
+                   f"|| echo MISSING").stdout or "").strip()
+    file_ok = landed.isdigit() and int(landed) > 0
+    rc_out = (sshf(f"wc -l < {ddir}/travel.csv 2>/dev/null || echo 0"
+                   ).stdout or "0").strip()
+    data_rows = max(0, int(rc_out or 0) - 1)      # data rows = lines - header
+
+    dl_steps = [t for t in tools_named(caps, "run_python")
+                if t["input"].get("site") == site
+                and str(t["input"].get("env") or "").lower() in ("system", "none")]
+    step_ran = any((t.get("result") or {}).get("execution_mode") == "remote-session"
+                   for t in dl_steps)
+    no_silent_skip = not any(
+        (t.get("result") or {}).get("returncode") == 0
+        and not ((t.get("result") or {}).get("stdout") or "").strip()
+        and not ((t.get("result") or {}).get("files") or [])
+        and "urllib" in (t["input"].get("code") or "")
+        for t in dl_steps)
+
+    ds = [d for d in find_entities(type="dataset", not_deleted=True)
+          if "travel table" in (d.get("title") or "").lower()]
+    one_ds = len(ds) == 1
+    meta = (ds[0].get("metadata") or {}) if ds else {}
+    home = meta.get("home") or meta.get("weft_home") or {}
+    homed = home.get("site") == site
+
+    full = _denum(all_text(caps) + "\n" + thread_text(client, pid, tid))
+    count_ok = data_rows > 0 and _denum(str(data_rows)) in full
+
+    return caps, [
+        (f"file physically landed on {site} (ssh test -s)", file_ok),
+        ("download ran in the remote session (not one-shot lane)", step_ran),
+        ("no silent block-skip on the download step (bug5)", no_silent_skip),
+        ("exactly one dataset entity created", one_ds),
+        (f"dataset homed on {site} by reference (no copy)", homed),
+        (f"agent's row count == rows in the LANDED file ({data_rows})", count_ok),
+    ]
+
+
+@scenario("mn_env_lifecycle_arc")
+def mn_env_lifecycle_arc(client, pid, tid):
+    """ENV-AGENCY flagship (env_agency_plan.md Phase 2): one named env across
+    its whole life — create with one package, EXTEND with another (new frozen
+    id, history kept), stateful remote SESSION inside it on the slurm fixture,
+    then FRESH-THREAD rediscovery (user never names it) and reuse on a SECOND
+    site (local), with the substrate's per-site realization list as ground
+    truth. Oracles: registry + env_status realizations + tool inputs +
+    step-OWN stdout; narration never load-bearing."""
+    sdir = "/home/physicist/aba-mn-envarc"
+    hssh(f"rm -rf {sdir} && mkdir -p {sdir} && (echo v; seq 1 200 | "
+         f"awk '{{print ($1*11)%29}}') > {sdir}/vals.csv")
+    expected_sum = sum((i * 11) % 29 for i in range(1, 201))
+    caps = [drive_turn(client, pid, tid,
+        "Create an isolated python environment named 'nptools' containing "
+        "numpy, and run a quick LOCAL step in that environment that prints "
+        "exactly NPV=<numpy.__version__>.", timeout_s=1200)]
+    from core.compute.named_envs import resolve
+    first_id = (resolve(pid, "nptools") or {}).get("env_id")
+    caps.append(drive_turn(client, pid, tid,
+        "Also add pandas to that same environment.", timeout_s=1200))
+    row = resolve(pid, "nptools") or {}
+    extended = row.get("env_id") not in (None, first_id)
+    both_pkgs = {"numpy", "pandas"} <= set(row.get("packages") or [])
+    caps.append(drive_turn(client, pid, tid,
+        f"On machine 'hpc', IN the nptools environment, run two direct steps "
+        f"in sequence (not background): (1) load the single column of "
+        f"{sdir}/vals.csv into a numpy array and KEEP IT IN MEMORY, printing "
+        f"exactly COUNT=<how many values>; (2) WITHOUT re-reading the file — "
+        f"using the in-memory array from step 1 — print exactly "
+        f"NPSUM=<the integer sum of the array>.", timeout_s=1800))
+    hpc_steps = [t for t in tools_named(caps, "run_python")
+                 if t["input"].get("site") == "hpc"
+                 and (t["input"].get("env") or "") == "nptools"]
+    outs = [((t.get("result") or {}).get("stdout") or "") for t in hpc_steps]
+    count_ok = any("COUNT=200" in o.replace(" ", "") for o in outs)
+    sum_ok = any(f"NPSUM={expected_sum}" in o.replace(" ", "") for o in outs)
+    session_used = any((t.get("result") or {}).get("execution_mode")
+                       == "remote-session" for t in hpc_steps)
+    # ── FRESH THREAD: rediscover (never named) + SECOND site (local) ──
+    tid2 = client.post("/api/threads",
+                       json={"project_id": pid,
+                             "title": "env arc recall"}).json()["id"]
+    cap4 = drive_turn(client, pid, tid2,
+        "What isolated environments does this project have and what's in "
+        "them? Then, right here locally (no site), verify the appropriate "
+        "one still works by printing exactly PDV=<pandas.__version__> from "
+        "inside it.", timeout_s=1200)
+    caps.append(cap4)
+    recall_steps = [t for t in tools_named([cap4], "run_python")
+                    if (t["input"].get("env") or "") == "nptools"
+                    and not t["input"].get("site")]
+    pdv_ok = any("PDV=" in ((t.get("result") or {}).get("stdout") or "")
+                 for t in recall_steps)
+    no_dup = not tools_named([cap4], "make_isolated_env")
+    # SUBSTRATE: the CURRENT env id must be realized on the SECOND site (hpc).
+    # NB a CROSS-PLATFORM second site re-locks to a new frozen id (base+layers
+    # re-solved for that platform), so the local realization stays under the
+    # earlier id — the honest cross-site invariant is "current id realized on
+    # the site we just used it on", plus the functional NPV(local)/NPSUM(hpc)
+    # checks that prove it actually WORKED on both. Requiring one id realized on
+    # both at once would fight the re-lock design (only holds for same-platform).
+    sites: set = set()
+    try:
+        from core.compute import adapter as _ad
+        cur = (resolve(pid, "nptools") or {}).get("env_id")
+        st = _ad.get_compute().sync_call("env_status", cur)
+        sites = {r.get("site") for r in (st.get("realizations") or [])
+                 if str(r.get("state")).lower() == "ready"}
+    except Exception:  # noqa: BLE001 — leave empty → check fails loudly
+        pass
+    return caps, [
+        ("env created + used locally (NPV in step's OWN stdout)",
+         any("NPV=" in ((t.get("result") or {}).get("stdout") or "")
+             for t in tools_named(caps, "run_python")
+             if (t["input"].get("env") or "") == "nptools")),
+        ("extension minted a NEW frozen id", extended),
+        ("registry carries numpy AND pandas after extension", both_pkgs),
+        ("stateful SESSION on hpc inside the env (remote-session)",
+         bool(hpc_steps) and session_used),
+        ("COUNT from the step's OWN stdout", count_ok),
+        (f"exact in-memory NPSUM={expected_sum} from the step's OWN stdout",
+         sum_ok),
+        ("fresh thread REDISCOVERED the env (never named by user)",
+         bool(recall_steps) and pdv_ok),
+        ("no duplicate env minted on recall (anti-sprawl)", no_dup),
+        (f"substrate truth: current env id realized on the 2nd site hpc "
+         f"({sorted(sites)})", "hpc" in sites),
+    ]
+
+
+@scenario("mn_env_reclaim")
+def mn_env_reclaim(client, pid, tid):
+    """ENV-AGENCY reclaim (env_agency_plan.md Phase 2): disk on the node is
+    reclaimed via evict_env while the env's IDENTITY survives — next use
+    transparently rebuilds from the lock. Ground truths: the evict tool's own
+    result, the substrate realization state, the node's real env-store disk
+    usage (ssh du), and the rebuilt step's own stdout."""
+    def _du_envs() -> int:
+        out = hssh("du -sk /home/physicist/.weft/envs 2>/dev/null "
+                   "| cut -f1").stdout or "0"
+        return int(out.strip() or 0)
+    caps = [drive_turn(client, pid, tid,
+        "Create an isolated python environment named 'evictme' containing "
+        "the 'six' package, and on machine 'hpc' run a quick direct step IN "
+        "that environment printing exactly S6=<six.__version__>.",
+        timeout_s=1800)]
+    used = [t for t in tools_named(caps, "run_python")
+            if (t["input"].get("env") or "") == "evictme"
+            and t["input"].get("site") == "hpc"]
+    s6_ok = any("S6=" in ((t.get("result") or {}).get("stdout") or "")
+                for t in used)
+    du_before = _du_envs()
+    caps.append(drive_turn(client, pid, tid,
+        "That environment's copy on hpc is taking up disk — reclaim that "
+        "space on hpc, but keep the environment itself so we can use it "
+        "again later.", timeout_s=900))
+    ev = tools_named(caps, "evict_env")
+    ev_ok = any((t["input"].get("name") == "evictme"
+                 and not t["input"].get("forget")
+                 and not (t.get("result") or {}).get("error"))
+                for t in ev)
+    du_after = _du_envs()
+    from core.compute.named_envs import resolve
+    still_registered = resolve(pid, "evictme") is not None
+    caps.append(drive_turn(client, pid, tid,
+        "Run the same version check in that environment on hpc again.",
+        timeout_s=1800))
+    rebuilt = [t for t in tools_named([caps[-1]], "run_python")
+               if (t["input"].get("env") or "") == "evictme"
+               and t["input"].get("site") == "hpc"]
+    rebuilt_ok = any("S6=" in ((t.get("result") or {}).get("stdout") or "")
+                     for t in rebuilt)
+    return caps, [
+        ("env created + used on hpc (S6 in step's OWN stdout)",
+         bool(used) and s6_ok),
+        ("evict_env applied (name=evictme, forget not set, no error)", ev_ok),
+        (f"node env store actually SHRANK (du {du_before}K→{du_after}K)",
+         du_after < du_before),
+        ("registry row survived the evict (identity kept)", still_registered),
+        ("next use on hpc transparently REBUILT (S6 again, own stdout)",
+         bool(rebuilt) and rebuilt_ok),
     ]
 
 
@@ -1499,10 +2570,26 @@ def mn_long_arc(client, pid, tid):
 
     results = [e for e in find_entities(type="result", not_deleted=True)]
     titles = " | ".join((e.get("title") or "").lower() for e in results)
+    # SUBSTRATE (sibling compaction_survival's pinned-Result inspection): the
+    # prompt demands the numbers IN the interpretation — assert they landed on
+    # the durable Result ENTITY, not only in thread narration (the agent can
+    # name totals from conversational memory with a hollow pin).
+    import json as _json
+    full_results = [get_entity(e["id"]) or {} for e in results]
+
+    def _result_json(frag):
+        return _denum(" ".join(_json.dumps(r, default=str) for r in full_results
+                               if frag in (r.get("title") or "").lower()))
+    arc_json = _result_json("arc summary")
+    base_json = _result_json("baseline total")
     return caps, [
         ("baseline pinned with the true total",
          "baseline total" in titles and
          str(loc_sum) in _denum(all_text(caps[:2]) + caps[1]["text"])),
+        ("Baseline total result RECORDS the true total (durable metadata)",
+         str(loc_sum) in base_json),
+        ("Arc summary result RECORDS both totals (durable metadata)",
+         str(loc_sum) in arc_json and str(rem_sum) in arc_json),
         ("foreground answered while bg ran (arc not blocked)",
          fg_done_fast and str(loc_max) in fg_txt and str(loc_arg) in fg_txt),
         ("ambiguous 'the remote one' resolved to Remote series "
@@ -1548,6 +2635,77 @@ def mn_cbe_kernel(client, pid, tid):
          session_used),
         ("true value handed across steps", f"CBEKR={expected}" in
          txt.replace(" ", "") or _denum(expected) in txt),
+    ]
+
+
+@scenario("mn_env_lifecycle_cbe")
+def mn_env_lifecycle_cbe(client, pid, tid):
+    """ENV-AGENCY on REAL SLURM (cbe.next): the full custom-env journey against
+    a real cluster that is a DIFFERENT platform from the mac controller — so it
+    also exercises F-ENV-2 (cross-platform re-lock of an extended env) for real,
+    plus a stateful session inside the env against real partition caps, and disk
+    reclaim on the cluster. Oracles: registry + substrate env_status
+    realizations + evict_env's own result + step-OWN stdout (never narration)."""
+    if not CBE_OK:
+        return [], [("cbe.next available (scenario skipped otherwise)", False)]
+    from core.compute.named_envs import resolve
+    caps = [drive_turn(client, pid, tid,
+        "Create an isolated python environment named 'cbeenv' containing "
+        "numpy, and on machine 'cbe' run a quick direct step (not background) "
+        "IN that environment that loads numpy, builds the array 0..999, and "
+        "prints exactly CNPV=<numpy.__version__> and CSUM=<int(arr.sum())>.",
+        timeout_s=2400)]
+    first_id = (resolve(pid, "cbeenv") or {}).get("env_id")
+    step1 = [t for t in tools_named(caps, "run_python")
+             if t["input"].get("site") == "cbe"
+             and (t["input"].get("env") or "") == "cbeenv"]
+    cnpv_ok = any("CNPV=" in ((t.get("result") or {}).get("stdout") or "")
+                  for t in step1)
+    csum_ok = any("CSUM=499500" in ((t.get("result") or {}).get("stdout") or ""
+                                     ).replace(" ", "") for t in step1)
+    session_used = any((t.get("result") or {}).get("execution_mode")
+                       == "remote-session" for t in step1)
+    caps.append(drive_turn(client, pid, tid,
+        "Add pandas to that same 'cbeenv' environment. Then, still on 'cbe' "
+        "and IN cbeenv, print exactly CPDV=<pandas.__version__>.",
+        timeout_s=2400))
+    row = resolve(pid, "cbeenv") or {}
+    extended = row.get("env_id") not in (None, first_id)
+    both_pkgs = {"numpy", "pandas"} <= set(row.get("packages") or [])
+    cpdv_ok = any("CPDV=" in ((t.get("result") or {}).get("stdout") or "")
+                  for t in tools_named([caps[-1]], "run_python")
+                  if t["input"].get("site") == "cbe")
+    # SUBSTRATE: current env id realized on cbe
+    on_cbe = False
+    try:
+        from core.compute import adapter as _ad
+        st = _ad.get_compute().sync_call(
+            "env_status", (resolve(pid, "cbeenv") or {}).get("env_id"))
+        on_cbe = any(r.get("site") == "cbe"
+                     and str(r.get("state")).lower() == "ready"
+                     for r in (st.get("realizations") or []))
+    except Exception:  # noqa: BLE001
+        pass
+    # RECLAIM on the real cluster
+    caps.append(drive_turn(client, pid, tid,
+        "cbeenv's copy on cbe is using disk — reclaim that space on cbe but "
+        "keep the environment so we can use it again.", timeout_s=900))
+    ev = [t for t in tools_named([caps[-1]], "evict_env")
+          if t["input"].get("name") == "cbeenv"
+          and not (t.get("result") or {}).get("error")]
+    still_registered = resolve(pid, "cbeenv") is not None
+    return caps, [
+        ("env created + used on cbe (CNPV in step's OWN stdout)",
+         bool(step1) and cnpv_ok),
+        ("stateful array computed in-env on cbe (CSUM own stdout)", csum_ok),
+        ("persistent SESSION used on the REAL cluster inside the env",
+         session_used),
+        ("extension minted a NEW frozen id", extended),
+        ("registry carries numpy AND pandas after extension", both_pkgs),
+        ("post-extend CPDV printed from cbe (own stdout)", cpdv_ok),
+        (f"substrate truth: env realized on cbe", on_cbe),
+        ("evict_env applied on cbe without error", bool(ev)),
+        ("registry identity survived the reclaim", still_registered),
     ]
 
 
@@ -1764,7 +2922,7 @@ def main():
     # of jump-host latency every run otherwise.
     global CBE_OK
     if (only is None or only & {"mn_cbe_smoke", "mn_cbe_kernel",
-                                "mn_cbe_gpu"}):
+                                "mn_cbe_gpu", "mn_env_lifecycle_cbe"}):
         if cssh("echo ok").stdout.strip() == "ok":
             try:
                 r = c.sync_call("register_site", "cbe", "slurm",
@@ -1783,6 +2941,13 @@ def main():
     scenarios = [(fn._scenario, fn) for fn in
                  [mn_size_up, mn_hop_chain, mn_status_surfaces, mn_honesty,
                   mn_isolated_env_remote, mn_crash_fix_rerun, mn_fanout_gather,
+                  # restart survival across an OnDemand walltime expiry
+                  mn_restart_midflight, mn_restart_finished_ok,
+                  mn_restart_finished_fail,
+                  mn_restart_cancel_intent_survives,
+                  mn_restart_scheduler_kill_unwatched,
+                  mn_restart_multi_job_mixed,
+                  mn_restart_never_submitted_reaped,
                   mn_pin_remote_result, mn_external_ref_inject,
                   mn_background_monitor, mn_provenance_after_chain,
                   mn_preflight_disconnect, mn_reference_drift,
@@ -1795,9 +2960,11 @@ def main():
                   mn_cross_thread_separation, mn_concurrent_threads_one_node,
                   mn_net_drop_midjob, mn_mid_chain_steering,
                   mn_repeat_sync, mn_interrupt_sync, mn_first_use,
-                  mn_system_env_session,
+                  mn_system_env_session, mn_fetch_register_verify,
+                  mn_env_lifecycle_arc, mn_env_reclaim,
                   mn_cbe_smoke, mn_missing_then_recover,
                   mn_bundle_header_drift, mn_cbe_kernel, mn_cbe_gpu,
+                  mn_env_lifecycle_cbe,
                   mn_long_arc]]
     # --only must NAME REAL scenarios: an unmatched filter ran ZERO scenarios
     # and printed ALL PASS vacuously (the exact bug class this study hunts)

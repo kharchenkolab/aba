@@ -107,11 +107,17 @@ def _utcnow() -> str:
 
 
 def _is_slurm_params(params_text) -> bool:
-    """True if a job row's params JSON marks it EXTERNALLY submitted (Slurm, or
-    a weft task — W2). Such jobs run independently of this process and survive
-    an ABA restart, so reconcile must NOT reap (running) or re-enqueue (queued)
-    them — the matching poll loop re-adopts them (shared-FS sentinel for Slurm;
-    weft's own durable job state for weft tasks)."""
+    """True if a job row's params JSON marks it EXTERNALLY submitted. Such jobs
+    run independently of this process and survive an ABA restart, so reconcile
+    must NOT reap (running) or re-enqueue (queued) them — `_weft_poll_loop`
+    re-adopts them from weft's own durable job state.
+
+    In practice that means WEFT: since the W2 cutover nothing stamps
+    `submitter="slurm"` and `_slurm_poll_loop` (the shared-FS sentinel) is
+    retired. "slurm" stays in the tuple only so a LEGACY row left in an existing
+    DB by a pre-cutover build is still protected from reaping — there is no live
+    lane behind it, and no poll loop that would adopt one. The name is historical;
+    read it as _is_externally_submitted."""
     if not params_text:
         return False
     try:
@@ -169,6 +175,23 @@ async def _continue_after_failure(job_id: str, lookup_pid: str | None,
             print(f"[jobs.continuation] job={job_id} (failure) → {result}", flush=True)
     except Exception as e:  # noqa: BLE001
         _record_worker_failure("continuation-after-failure", job_id, e)
+
+
+async def _continue_after_cancel(job_id: str, lookup_pid: str | None,
+                                 effective_pid: str) -> None:
+    """Tell the thread a background job was STOPPED. Mirrors
+    _continue_after_failure; the message itself distinguishes a user cancel from a
+    scheduler kill (continuation._continuation_message_text). Best-effort — a
+    notification failure must never re-raise into the finalizer."""
+    try:
+        from core.jobs.continuation import enqueue_continuation
+        fresh = get_job(job_id, project_id=lookup_pid) or {}
+        result = await enqueue_continuation(fresh, str(effective_pid))
+        if result.get("state") != "skipped":
+            print(f"[jobs.continuation] job={job_id} (cancelled) → {result}",
+                  flush=True)
+    except Exception as e:  # noqa: BLE001
+        _record_worker_failure("continuation-after-cancel", job_id, e)
 
 
 def _settle_job_deferred(job_id: str, lookup_pid: str | None) -> None:
@@ -448,6 +471,19 @@ async def _finalize_job(job: dict, result_obj: dict, lookup_pid: str | None,
     if job_id in _CANCELLED or result_obj.get("status") == "cancelled":
         update_job(job_id, project_id=lookup_pid, status="cancelled", finished_at=_utcnow())
         _settle_job_deferred(job_id, lookup_pid)
+        # NOTIFY. continuation.py explicitly supports 'cancelled' — "Originally
+        # cancelled was skipped, but that left a background job's originating turn
+        # with no notification (broken flow + a tool line that never resolves)" —
+        # and this early return meant it was never called, so the intent lived on
+        # one side only.
+        #
+        # It matters most for the case the user did NOT choose: a job the
+        # SCHEDULER killed (walltime, OOM, node failure) ended in total silence —
+        # the row flips to cancelled with no error, no note, no message, and the
+        # agent's plan just stops. A user cancel is at least self-explanatory;
+        # this was not. Found by regtest mn_restart_scheduler_kill_unwatched: the
+        # thread was never told at all.
+        await _continue_after_cancel(job_id, lookup_pid, str(effective_pid))
         return
     if "error" in result_obj:
         # every failure verdict is loggable evidence for an operator — today
@@ -525,7 +561,24 @@ async def _finalize_job(job: dict, result_obj: dict, lookup_pid: str | None,
 
 
 async def _run_one(job_id: str, project_id: str | None = None) -> None:
+    """Run one background job. Wrapped in _run_one_bound so the whole body —
+    execution, harvest, provenance, finalize — runs with the job's project BOUND.
+
+    Without the binding every ambient project read inside resolves to the
+    PROCESS-GLOBAL, which any concurrent project switch moves. Live
+    (2026-07-27): job continuations from a finished sweep kept writing exec
+    records into whatever project the NEXT sweep had just created — the calls
+    that take project_id explicitly were fine, the ambient reads deeper in were
+    not. The worker is global; the work is per-project.
+    """
+    from core import projects as _projects_bind
     job = get_job(job_id, project_id=project_id)
+    pid_for_bind = project_id or ((job or {}).get("params") or {}).get("project_id")
+    with _projects_bind.bind(str(pid_for_bind) if pid_for_bind else None):
+        return await _run_one_inner(job_id, project_id, job)
+
+
+async def _run_one_inner(job_id: str, project_id: str | None, job: dict | None) -> None:
     if not job:
         # Job row vanished between enqueue and run (only really possible if a
         # test wiped the DB out from under us). Skip silently — no row to
@@ -562,12 +615,16 @@ async def _run_one(job_id: str, project_id: str | None = None) -> None:
     # job-scoped dir the agent then has to re-materialize. Falls back to job_id
     # when the submit had no open Run. stream=True tees output to a live job.log.
     exec_run_id = params.get("run_id") or job_id
+    # projects.in_thread, not a bare run_in_executor: the executor hop drops
+    # the project binding, so anything inside that resolves the project
+    # implicitly would fall through to the process-global. These calls pass
+    # project_id explicitly, but the hop must not be the weak link (see
+    # core.projects — the thread-boundary counterpart of bind()).
+    from core import projects as _projects_ctx
     try:
-        loop = asyncio.get_event_loop()
         if kind == "run_nextflow":
             from core.exec.nextflow import run_nextflow_code
-            result_obj = await loop.run_in_executor(
-                None,
+            result_obj = await _projects_ctx.in_thread(
                 lambda: run_nextflow_code(
                     params.get("pipeline") or "", project_id=str(effective_pid),
                     run_id=exec_run_id, revision=params.get("revision"),
@@ -581,8 +638,7 @@ async def _run_one(job_id: str, project_id: str | None = None) -> None:
             # Scrape an external results dir into the standard result_obj — reuses the whole
             # finalize→register→present chain to import an outside Run (misc/external_import.md).
             from core.exec.import_run import import_run_code
-            result_obj = await loop.run_in_executor(
-                None,
+            result_obj = await _projects_ctx.in_thread(
                 lambda: import_run_code(
                     params.get("source_dir") or "", project_id=str(effective_pid),
                     run_id=exec_run_id, pipeline=params.get("pipeline"),
@@ -590,15 +646,13 @@ async def _run_one(job_id: str, project_id: str | None = None) -> None:
                     timeout_s=timeout_s, cancel_token=token, stream=True),
             )
         elif kind == "run_r":
-            result_obj = await loop.run_in_executor(
-                None,
+            result_obj = await _projects_ctx.in_thread(
                 lambda: run_r_code(code, project_id=str(effective_pid), run_id=exec_run_id,
                                    timeout_s=timeout_s, cancel_token=token,
                                    env=params.get("env"), stream=True),
             )
         else:
-            result_obj = await loop.run_in_executor(
-                None,
+            result_obj = await _projects_ctx.in_thread(
                 lambda: run_python_code(code, project_id=str(effective_pid), run_id=exec_run_id,
                                         timeout_s=timeout_s, cancel_token=token,
                                         env=params.get("env"), stream=True),
@@ -834,15 +888,29 @@ def reconcile_jobs() -> dict:
                 if rp.get("submitter") != "weft" or not rp.get("weft_id") \
                         or rp.get("local_orphan_at"):
                     continue
-                site = rp.get("weft_site") or rp.get("site")
-                if site and site != "local":
-                    continue    # remote lanes genuinely survive a restart
+                # EVERY weft row, remote sites included. This used to skip them —
+                # "remote lanes genuinely survive a restart" — and the WORK does:
+                # measured on the docker slurm fixture after a real kill -9, the
+                # job ran to completion on the node (exit_code 0, result.json
+                # written). The BOOKKEEPING did not. weft's task_status stayed
+                # RUNNING forever because whatever advances it died with the
+                # controller, so the poll loop saw a non-terminal state and never
+                # finalized — a finished job, its result sitting on the node,
+                # invisible for good.
+                #
+                # The escape hatch already existed (weft_submitter.poll reads
+                # result.json as durable truth "despite the frozen state") but was
+                # gated on this stamp, which only local rows ever got. Stamping
+                # remote rows too is inert when a substrate DOES advance its own
+                # state — the terminal path wins first — and the walltime+grace
+                # rule already covers "may be mid-run right now".
+                site = rp.get("weft_site") or rp.get("site") or "local"
                 rp["local_orphan_at"] = time.time()
                 c.execute("UPDATE jobs SET params=? WHERE id=?",
                           (json.dumps(rp), r["id"]))
                 stamped += 1
-                print(f"[jobs.reconcile] stamped local weft job {r['id']} as "
-                      f"restart-orphan — poll loop finalizes from result.json "
+                print(f"[jobs.reconcile] stamped weft job {r['id']} (site={site}) "
+                      f"as restart-orphan — poll loop finalizes from result.json "
                       f"truth (walltime-capped)", flush=True)
             c.commit()
             c.close()
@@ -1079,6 +1147,13 @@ def _active_weft_jobs() -> list[dict]:
     return out
 
 
+def _projects_ctx_poll():
+    """core.projects, imported lazily — the poll loop is hot and this module is
+    imported very early."""
+    from core import projects as _p
+    return _p
+
+
 async def _weft_poll_loop() -> None:
     """Watch weft-submitted background jobs for completion (W2 — the local
     background lane). Started unconditionally; idles while the compute
@@ -1095,24 +1170,51 @@ async def _weft_poll_loop() -> None:
                 if not announced:
                     print("[jobs.weft] poll loop live", flush=True)
                     announced = True
-                for job in _active_weft_jobs():
-                    pid = job.get("project_id")
-                    result = sub.poll(job)
-                    if result is not None:
-                        # Nextflow heads ride THIS lane now (§4a / nextflow→weft);
-                        # auto-resume one Slurm killed (walltime/node-fail) before it
-                        # finished — re-submit with -resume instead of failing, exactly
-                        # as the retired _slurm_poll_loop did.
-                        if _maybe_resume_nextflow_job(sub, job, result, pid):
-                            continue
-                        await _finalize_job(job, result, pid, str(pid or "default"))
-                    elif job.get("status") == "queued":
-                        if (sub.info(job) or {}).get("state") == "RUNNING":
-                            update_job(job["id"], project_id=pid, status="running",
-                                       started_at=_utcnow())
+                await weft_poll_once(sub, only_job_id=None)
         except Exception as e:  # noqa: BLE001
             _record_worker_failure("weft-poll", None, e)
         await asyncio.sleep(_WEFT_POLL_S)
+
+
+async def weft_poll_once(sub=None, *, only_job_id: str | None = None) -> int:
+    """ONE pass over the active weft rows. Returns how many were finalized.
+
+    Extracted so tests and studies can drive the REAL pass instead of keeping
+    their own copy. regtest's restart scenarios had a hand-rolled version that
+    called sub.poll() on the event loop, so it reproduced the very defect the
+    production loop had just been fixed for — the harness testing its own copy
+    and reporting the fix as ineffective.
+    """
+    from core.jobs.weft_submitter import WeftSubmitter
+    sub = sub or WeftSubmitter()
+    finalized = 0
+    for job in _active_weft_jobs():
+        if only_job_id and job.get("id") != only_job_id:
+            continue
+        pid = job.get("project_id")
+        # OFF the loop. poll()'s fast substrate reads are safe on the loop
+        # thread (adapter.sync_call is built for that), but its lazy platform
+        # RE-LOCK is a SOLVE, and named_envs._sync refuses the event loop by
+        # design — so that recovery path could never fire in production. Found
+        # by regtest mn_restart_finished_ok on the aarch64 fixture: "platform
+        # re-lock failed: named_envs is sync-only", and the job stayed FAILED on
+        # a mismatch it was supposed to heal. in_thread also carries the project
+        # binding across the hop.
+        result = await _projects_ctx_poll().in_thread(sub.poll, job)
+        if result is not None:
+            # Nextflow heads ride THIS lane now (§4a / nextflow→weft);
+            # auto-resume one Slurm killed (walltime/node-fail) before it
+            # finished — re-submit with -resume instead of failing, exactly
+            # as the retired _slurm_poll_loop did.
+            if _maybe_resume_nextflow_job(sub, job, result, pid):
+                continue
+            await _finalize_job(job, result, pid, str(pid or "default"))
+            finalized += 1
+        elif job.get("status") == "queued":
+            if (sub.info(job) or {}).get("state") == "RUNNING":
+                update_job(job["id"], project_id=pid, status="running",
+                           started_at=_utcnow())
+    return finalized
 
 
 _INLINE_WATCH_S = 30.0    # hangs unfold over minutes — a slow cadence keeps this near-free

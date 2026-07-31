@@ -167,10 +167,13 @@ def test_dump_has_cache_control_on_stable_system():
         # The cache-controlled block IS the stable prefix (find it by the marker, not
         # by index 0 — a CC marker may sit at index 0 in oauth_cc mode).
         assert cc[0]["text"] == "STABLE-SYS-PREFIX"
-        # Dynamic tail is present but uncached — sanity-check both.
-        assert any(b["text"] == "DYN-TAIL" for b in dump["system"])
-        assert all("cache_control" not in b
-                   for b in dump["system"] if b.get("text") == "DYN-TAIL")
+        # The volatile tail must NOT be in `system` at all. Anything there sits in the
+        # cache prefix of the MESSAGES breakpoint too (order: tools → system →
+        # messages), so a per-turn tail here re-bills the whole conversation every turn
+        # it changes. It rides the last message instead — see
+        # core.llm.place_volatile_tail and tests/test_catalog_caching.py.
+        assert all(b.get("text") != "DYN-TAIL" for b in sys_blocks), \
+            "volatile tail is back in the system array — cached prefix is unstable again"
 
 
 def test_dump_has_cache_control_on_last_tool():
@@ -190,8 +193,18 @@ def test_dump_has_cache_control_on_last_message_block():
         asyncio.run(_open_and_close(ctx))
         dump = _load_one_dump(dump_dir)
         last_msg = dump["messages"][-1]
-        last_block = last_msg["content"][-1]
-        assert last_block["cache_control"] == {"type": "ephemeral"}
+        content = last_msg["content"]
+        # The volatile tail is delivered LAST and stays uncached; the cache mark sits on
+        # the block BEFORE it, so the tail falls outside every cached prefix. Ordering
+        # is the whole point — a mark after the tail would put per-turn bytes back
+        # inside the cached prefix and re-bill the conversation each turn. The tail
+        # rides inside a <system-reminder> wrapper (harness-injected state, not user
+        # text — see place_volatile_tail).
+        assert content[-1]["text"] == "<system-reminder>\nDYN-TAIL\n</system-reminder>", \
+            "volatile tail not delivered last (or wrapper missing)"
+        assert "cache_control" not in content[-1], "the volatile tail must stay uncached"
+        assert content[-2]["cache_control"] == {"type": "ephemeral"}, \
+            "cache mark must land on the last real block, ahead of the volatile tail"
 
 
 def test_dump_matches_actual_api_call_kwargs():
@@ -285,3 +298,120 @@ def _run_open_and_consume_capture_stdout() -> str:
     finally:
         llm_mod._llm_client = orig_llm_client       # type: ignore[assignment]
     return buf.getvalue()
+
+
+# ── LOG-3: wire tripwire counters (prep/sent hash parity) ────────────────
+
+
+def test_wire_tripwire_unarmed_scores_nothing_but_is_counted():
+    """Unarmed sends must not produce match/mismatch verdicts — but they DO
+    tick sends_scored: that's the armed-ness signal distinguishing frozen
+    zeros from no traffic (the dead-diagnostic class)."""
+    from core.llm import _WIRE_DIAG, _RECENT_PREP_SHAS, _note_wire_hash
+    _RECENT_PREP_SHAS.clear()
+    m0, x0 = _WIRE_DIAG["hash_match"], _WIRE_DIAG["hash_mismatch"]
+    s0 = _WIRE_DIAG["sends_scored"]
+    _note_wire_hash("abc123")            # no prep hash ever recorded
+    assert _WIRE_DIAG["hash_match"] == m0 and _WIRE_DIAG["hash_mismatch"] == x0, \
+        "unarmed tripwire must not verdict"
+    assert _WIRE_DIAG["sends_scored"] == s0 + 1, "unarmed send left uncounted"
+
+
+def test_wire_tripwire_counts_match_and_mismatch():
+    from core.llm import _WIRE_DIAG, _RECENT_PREP_SHAS, _note_wire_hash
+    _RECENT_PREP_SHAS.clear()
+    _RECENT_PREP_SHAS.append("aaa")
+    _RECENT_PREP_SHAS.append("bbb")
+    m0, x0 = _WIRE_DIAG["hash_match"], _WIRE_DIAG["hash_mismatch"]
+    _note_wire_hash("bbb")               # concurrent-safe: membership, not last
+    _note_wire_hash("aaa")
+    _note_wire_hash("zzz")
+    assert _WIRE_DIAG["hash_match"] == m0 + 2
+    assert _WIRE_DIAG["hash_mismatch"] == x0 + 1
+    assert _WIRE_DIAG["last_mismatch"] == "zzz"
+
+
+def test_wire_tripwire_fires_from_the_real_dump_path():
+    """The hook must actually run inside _RealStream's dump block — an armed
+    tripwire that the send path never calls is the dead-diagnostic bug again."""
+    from core.llm import _WIRE_DIAG, _RECENT_PREP_SHAS
+    _RECENT_PREP_SHAS.clear()
+    _RECENT_PREP_SHAS.append("not-the-real-sha")     # armed, guaranteed mismatch
+    x0 = _WIRE_DIAG["hash_mismatch"]
+    with tempfile.TemporaryDirectory(prefix="dump_") as dump_dir:
+        capture, ctx = _make_ctx(dump_dir=dump_dir)
+        asyncio.run(_open_and_close(ctx))
+    assert _WIRE_DIAG["hash_mismatch"] == x0 + 1, \
+        "send path did not score its hash — tripwire not wired"
+    _RECENT_PREP_SHAS.clear()
+
+
+# ── LOG-6: the tripwire measures the SAME boundary on both sides, and is
+#           armed independently of the debug dump ──────────────────────────
+
+def test_prep_and_sent_hash_share_one_boundary_on_degenerate_shapes():
+    """The false-positive class: guide hashed llm_history BEFORE the
+    api_messages transform while the send side hashed AFTER it, so any
+    history carrying a transform-affected shape (attachment chip blocks,
+    emptied text blocks) tripped a mismatch on every request — red during
+    normal operation, the exact condition the tripwire exists to end.
+    Both sides must hash the transformed envelope via ONE function."""
+    from core.llm import prep_wire_hash, wire_hash
+    from core.runtime.history_prep import api_messages
+    shapes = {
+        "plain": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+        "attachment_chip": [
+            {"role": "user", "content": [
+                {"type": "text", "text": "see file"},
+                {"type": "attachments", "items": [{"name": "a.csv"}]}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "ok"}]}],
+        "halt_shape_empty_text": [
+            {"role": "user", "content": [{"type": "text", "text": "go"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": ""}]}],
+    }
+    for name, h in shapes.items():
+        assert prep_wire_hash(h) == wire_hash(api_messages(h)), \
+            f"boundary drift on {name}: prep and sent hash different bytes"
+    # and the transform genuinely bites on the degenerate shapes — otherwise
+    # this parity proves nothing (armed check on the check itself)
+    chip = shapes["attachment_chip"]
+    assert wire_hash(chip) != wire_hash(api_messages(chip)), \
+        "fixture no longer exercises a transform-affected shape"
+
+
+def test_guide_prep_scores_through_the_shared_boundary():
+    """Source anchor: guide's prep block must call prep_wire_hash — a revert
+    to inline hashing of the untransformed history re-opens the false-positive
+    class without any behavioral test noticing (the parity test above checks
+    the functions, not the caller)."""
+    src = (ROOT / "backend" / "guide.py").read_text()
+    assert "prep_wire_hash(" in src, "guide.py no longer scores via prep_wire_hash"
+
+
+def test_send_scoring_survives_dump_off():
+    """The disarm bug: scoring lived INSIDE the raw-dump block, so
+    ABA_RAW_REQUEST_DIR=off (or an unwritable dir) silently killed the
+    tripwire — frozen zeros indistinguishable from no traffic. Scoring must
+    be independent of the dump."""
+    from core.llm import _WIRE_DIAG, _RECENT_PREP_SHAS
+    _RECENT_PREP_SHAS.clear()
+    _RECENT_PREP_SHAS.append("not-the-real-sha")
+    x0 = _WIRE_DIAG["hash_mismatch"]
+    capture, ctx = _make_ctx(dump_dir="off")
+    asyncio.run(_open_and_close(ctx))
+    assert _WIRE_DIAG["hash_mismatch"] == x0 + 1, \
+        "dump off disarmed the tripwire — scoring is coupled to the dump"
+    _RECENT_PREP_SHAS.clear()
+
+
+def test_wire_diag_carries_armedness_counter():
+    """A counter nobody can distinguish from 'no traffic' is a dead
+    diagnostic: sends_scored must tick on EVERY send-path scoring, armed or
+    not, so frozen match/mismatch zeros are readable against real traffic."""
+    from core.llm import _WIRE_DIAG, _RECENT_PREP_SHAS
+    _RECENT_PREP_SHAS.clear()                     # UNARMED on purpose
+    s0 = _WIRE_DIAG.get("sends_scored", 0)
+    capture, ctx = _make_ctx(dump_dir="off")
+    asyncio.run(_open_and_close(ctx))
+    assert _WIRE_DIAG.get("sends_scored", 0) == s0 + 1, \
+        "unarmed send not counted — armed-ness invisible"

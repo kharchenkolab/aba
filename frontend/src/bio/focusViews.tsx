@@ -68,9 +68,12 @@ export interface FocusViewProps {
    *  carry a freehand-highlight surface inside the body. Captured strokes
    *  arrive here and propagate to the composer via App.tsx's
    *  attachAnnotation. Mirrors FocusCanvas's `onAnnotate` for figures. */
-  onAnnotate?: (a: { image: string; note: string }) => void
+  onAnnotate?: (a: { image: string; note: string }, ownerId?: string) => void
   /** Bumped to clear any drawn marks (focus change, attach commit). */
   annotClear?: number
+  /** Token of the panel that owns the pinned highlight (App state) — keeps a
+   *  captured MemberPanel mark frozen until superseded or dismissed. */
+  hlOwner?: string | null
   /** Highlight-mode lifted from App.tsx so the canvas-actions row's
    *  ✏️ button drives ResultView's per-MemberPanel hover surfaces. */
   highlighting?: boolean
@@ -112,7 +115,10 @@ interface TablePreview {
 }
 interface NonePreview { kind: 'none' }
 interface ErrorPreview { kind: 'error'; error: string }
-type Preview = TablePreview | NonePreview | ErrorPreview
+/** Remote-homed dataset with no local bytes: the preview names the site
+ *  instead of silently rendering nothing (surfacing census 2026-07-26). */
+interface RemotePreview { kind: 'remote'; site: string; total_bytes?: number | null }
+type Preview = TablePreview | NonePreview | ErrorPreview | RemotePreview
 
 
 /** Paginated CSV/TSV preview. Used by DatasetView (header + table)
@@ -300,6 +306,94 @@ function FigureView({ entity }: FocusViewProps) {
 }
 
 
+/** WHERE the data lives, and what to do about it (live UX finding 2026-07-25:
+ *  a by-reference dataset's site was invisible everywhere on the card — the
+ *  header pill said only "external" — with no affordance to bring bytes
+ *  home). Renders only for datasets with a recorded non-local home. Safety
+ *  comes from the SAME ledger query the strip and chat use, shown per-item
+ *  here now that the all-safe strip is quiet by design. */
+export function DatasetHomeRow({ entity, onChange, projectId }: {
+  entity: Entity; onChange: () => void; projectId?: string
+}) {
+  const md = (entity.metadata ?? {}) as {
+    home?: { site?: string; path?: string }
+    local_mirror?: { path?: string; at?: number }
+  }
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState<string | null>(null)
+  const [safety, setSafety] = useState<{ state: string; why: string } | null>(null)
+  useEffect(() => {
+    let dead = false
+    setSafety(null)
+    // Only REMOTE datasets render a safety row (the early return below), and
+    // the ledger call builds the durability map + keep items for the whole
+    // project — so firing it for every local dataset card was pure cost for a
+    // component that renders nothing. Guarded here rather than above the hook,
+    // which must stay unconditional.
+    if (!md.home?.site || md.home.site === 'local') return
+    if (!projectId) return          // no project → the row can't match anyway
+    fetch(`/api/projects/${encodeURIComponent(projectId)}/data-ledger`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => {
+        if (dead || !d) return
+        const it = (d.items as { entity_id: string; state: string; why: string }[] | undefined)
+          ?.find(i => i.entity_id === entity.id)
+        if (it) setSafety({ state: it.state, why: it.why })
+      })
+      .catch(() => {})
+    return () => { dead = true }
+  }, [entity.id, projectId])
+
+  const home = md.home
+  if (!home?.site || home.site === 'local') return null
+
+  const mirror = async () => {
+    setBusy(true); setNote(null)
+    try {
+      const r = await fetch(`/api/datasets/${encodeURIComponent(entity.id)}/mirror`, { method: 'POST' })
+      if (!r.ok) {
+        const d = await r.json().catch(() => null)
+        setNote(typeof d?.detail === 'string' ? d.detail : `mirror failed (${r.status})`)
+      } else onChange()
+    } finally { setBusy(false) }
+  }
+
+  const stateWord: Record<string, string> = { at_risk: 'at risk', changed: 'source changed' }
+  return (
+    <>
+      <div className="focus__row">
+        <span className="focus__row-label">lives on</span>
+        <span className="focus__row-val">
+          <strong>{home.site}</strong>
+          {home.path ? <> · <code>{home.path}</code></> : null}
+          {md.local_mirror
+            ? <span className="focus__muted"> · mirrored locally</span>
+            : <button className="focus__inline-btn" disabled={busy} onClick={mirror}
+                      title="Copy the bytes into this project (size-gated, content-verified)">
+                {busy ? 'mirroring…' : 'Mirror locally'}
+              </button>}
+        </span>
+      </div>
+      {safety && (
+        <div className="focus__row">
+          <span className="focus__row-label">safety</span>
+          <span className={`focus__row-val ${safety.state === 'safe'
+            ? 'focus__muted' : `focus__safety--${safety.state}`}`}>
+            {safety.state === 'safe' ? 'safe' : (stateWord[safety.state] || safety.state)} — {safety.why}
+          </span>
+        </div>
+      )}
+      {note && (
+        <div className="focus__row">
+          <span className="focus__row-label" />
+          <span className="focus__row-val focus__safety--at_risk">{note}</span>
+        </div>
+      )}
+    </>
+  )
+}
+
+
 function DatasetView({ entity, onFocus, onChange, onChatResult, onPrefill, projectId }: FocusViewProps) {
   const [preview, setPreview] = useState<Preview | null>(null)
   useEffect(() => {
@@ -321,6 +415,7 @@ function DatasetView({ entity, onFocus, onChange, onChatResult, onPrefill, proje
           <span className="focus__row-label">file</span>
           <code className="focus__row-val">{entity.artifact_path ?? '—'}</code>
         </div>
+        <DatasetHomeRow entity={entity} onChange={onChange} projectId={projectId} />
         {entity.metadata?.source ? (
           <div className="focus__row">
             <span className="focus__row-label">source</span>
@@ -351,6 +446,13 @@ function DatasetView({ entity, onFocus, onChange, onChatResult, onPrefill, proje
       {preview?.kind === 'table' && <PreviewTable entityId={entity.id} pageSize={15} />}
       {preview?.kind === 'error' && (
         <div className="focus__placeholder">preview error: {preview.error}</div>
+      )}
+      {preview?.kind === 'remote' && (
+        <div className="focus__placeholder">
+          No local copy to preview — the data lives on <strong>{preview.site}</strong>
+          {preview.total_bytes ? ` (${formatBytes(Number(preview.total_bytes))})` : ''}.
+          Use “Mirror locally” above to preview here.
+        </div>
       )}
       <ExternalViewerActions entity={entity} />
       <DatasetFiles entity={entity} onFocus={onFocus} onChatResult={onChatResult}
@@ -631,10 +733,10 @@ function RunViewAdapter({ entity, entities, onFocus, onChange, onAsk, onPrefill,
                   onAsk={onAsk} onPrefill={onPrefill} onChatResult={onChatResult} onBrowseFiles={onBrowseFiles} />
 }
 
-function ResultViewAdapter({ entity, entities, onFocus, onChange, onAsk, onChatResult, onAnnotate, annotClear, highlighting, onHighlightingChange }: FocusViewProps) {
+function ResultViewAdapter({ entity, entities, onFocus, onChange, onAsk, onChatResult, onAnnotate, annotClear, hlOwner, highlighting, onHighlightingChange }: FocusViewProps) {
   return <ResultView result={entity} entities={entities} onFocus={onFocus} onChange={onChange}
                      onAsk={onAsk} onChatResult={onChatResult}
-                     onAnnotate={onAnnotate} annotClear={annotClear}
+                     onAnnotate={onAnnotate} annotClear={annotClear} hlOwner={hlOwner}
                      highlighting={highlighting} onHighlightingChange={onHighlightingChange} />
 }
 

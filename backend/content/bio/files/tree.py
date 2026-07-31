@@ -72,6 +72,70 @@ def _file_meta(e: dict) -> dict:
     return {"size": size, "mtime": mtime, "disk_path": str(disk) if disk else None}
 
 
+def _dataset_home_site(e: dict) -> Optional[str]:
+    """The site a dataset's bytes live on, from `metadata.home.site`; None if unset."""
+    return ((e.get("metadata") or {}).get("home") or {}).get("site")
+
+
+def _dataset_descriptor(e: dict) -> dict:
+    """`{top, n_files, total_bytes}` for a dataset — from `metadata.descriptor`,
+    falling back to `metadata.fingerprint`. `top` is the real first-level names the
+    controller captured even when it never holds the bytes."""
+    md = e.get("metadata") or {}
+    desc = md.get("descriptor") or {}
+    fp = md.get("fingerprint") or {}
+    top = desc.get("top") or fp.get("top") or []
+    n_files = desc.get("n_files") or fp.get("n_files") or len(top)
+    total_bytes = desc.get("total_bytes") or fp.get("total_bytes")
+    return {"top": list(top), "n_files": n_files or 0, "total_bytes": total_bytes}
+
+
+def _is_remote_dataset(e: dict) -> bool:
+    """A by-reference / non-local-home dataset — its bytes are on another site, so
+    the controller's local disk walk must not run (it would fabricate a `.bin`)."""
+    md = e.get("metadata") or {}
+    site = _dataset_home_site(e)
+    return bool(md.get("by_reference")) or bool(site and site != "local")
+
+
+def _is_remote_dir_dataset(e: dict) -> bool:
+    """A remote dataset shaped as a directory (more than one real file) — the case
+    `_leaf_name` must not coerce into a single `.bin`."""
+    return _is_remote_dataset(e) and (_dataset_descriptor(e)["n_files"] or 0) > 1
+
+
+def _remote_dataset_node(e: dict, seg: str) -> dict:
+    """Build a dataset node for a remote/by-reference home from the captured
+    descriptor — NEVER the controller's local disk (which holds no bytes). A
+    directory home (n_files > 1) becomes an entity-backed folder with one child per
+    real filename (sizes unknown → null, not a lie); a single-file home stays a
+    leaf. Each node carries `site` so the UI can label the home."""
+    site = _dataset_home_site(e)
+    desc = _dataset_descriptor(e)
+    top, n_files = desc["top"], desc["n_files"]
+    ap = (e.get("artifact_path") or "").rstrip("/")
+    if n_files > 1 or len(top) > 1:
+        ds = _folder(seg, path=f"datasets/{seg}", entity=e)
+        ds["site"] = site
+        for nm in top:
+            ds["children"].append({
+                "kind": "file",
+                "name": nm,
+                "path": f"datasets/{seg}/{nm}",
+                "entity_id": None,
+                "entity_type": None,
+                "title": nm,
+                "artifact_path": (f"{ap}/{nm}" if ap else None),
+                "size": None,      # per-file size isn't captured; total_bytes is aggregate
+                "mtime": None,
+                "site": site,
+            })
+        return ds
+    node = _file_node(e, path=f"datasets/{_leaf_name(e)}")
+    node["site"] = site
+    return node
+
+
 def _leaf_name(e: dict) -> str:
     """Filename for a leaf entity. Uses title slug + extension lookup;
     name_with_ext skips an already-present suffix so a title like
@@ -81,6 +145,12 @@ def _leaf_name(e: dict) -> str:
     if t in PROSE_EXTS:
         return name_with_ext(slug, PROSE_EXTS[t])
     ext = ext_from_artifact(e, default=".bin")
+    # Guard: a remote/by-reference DIRECTORY home has a dot-less final segment
+    # (e.g. `.../GSM5746259`), which would otherwise coerce into a fabricated
+    # single ".bin" leaf. Such a dataset is rendered from its descriptor (see the
+    # datasets branch below); never invent an extension for it here.
+    if ext == ".bin" and _is_remote_dir_dataset(e):
+        ext = ""
     return name_with_ext(slug, ext)
 
 
@@ -273,11 +343,22 @@ def _graft_dir(parent: dict, base, *, ephemeral: bool = True,
 
     def _ensure(parts: list[str]) -> dict:
         path, node = parent["path"], parent
+        disk = base
         for p in parts:
             path = f"{path}/{p}" if path else p
+            disk = disk / p
             child = folders.get(path)
             if child is None:
                 child = _folder(p, path=path, kind="folder")
+                # A disk-grafted folder KNOWS where it lives — carry the real
+                # path so a directory-shaped source (a chunked store fetched
+                # into work/<run>-fetched/) resolves and serves LOCALLY.
+                # Without it the node is an address-less shadow: it wins the
+                # basename match in _resolve_files_node yet gives the launcher
+                # neither a run key nor bytes, starving BOTH launch arms
+                # (found live: a stale fetched mirror 404'd an
+                # otherwise-streamable store).
+                child["artifact_path"] = str(disk)
                 if ephemeral:
                     child["ephemeral"] = True
                 node["children"].append(child)
@@ -311,6 +392,100 @@ def _graft_dir(parent: dict, base, *, ephemeral: bool = True,
         cnt += 1
         if counter is not None:
             counter[0] += 1
+    return cnt
+
+
+def _graft_run_outputs(parent: dict, run: dict, *, cap: int = 300) -> int:
+    """Graft a Run's output/ from the PRODUCED LEDGER (exec-record produced[]
+    + retention states via run_durable_view), then top up from the run's
+    artifact_path on disk for anything the ledger doesn't list.
+
+    The ledger is primary because under the weft-kernel substrate produced
+    files live in the KERNEL WORKSPACE, not in artifact_path — the old
+    disk-walk-only source silently showed an empty output/ for every kernel
+    run (bulk .h5ad/.zarr outputs invisible in the Files tab while the Run
+    card, which reads the ledger, listed them). The disk top-up keeps legacy
+    jobdir runs (whose files really do land in artifact_path) fully listed.
+
+    Honesty rules, matching the durable panel: `cleared` files don't render
+    (the tab lists files that exist; the Run card owns the discard
+    narrative); `in-sandbox`/`at-risk`/`unknown` are marked ephemeral (an
+    address that dies with its sandbox must say so); a cap cut is DECLARED
+    on the parent node, never silent. File nodes carry `run_id` + `rel` so
+    the serve/materialize doors can resolve bytes through the canonical
+    run resolver instead of trusting a URL shape."""
+    from pathlib import Path as _P
+    rid = run["id"]
+    listed: list[str] = []
+    cnt = 0
+    view_files: list[dict] = []
+    try:
+        from core.exec.artifacts import artifacts_for_run
+        if artifacts_for_run(rid):     # cheap local gate: no ledger rows →
+            from content.bio.lifecycle.runs import run_durable_view
+            view_files = [f for f in run_durable_view(rid)["files"]
+                          if f.get("state") != "cleared"]
+    except Exception:  # noqa: BLE001 — substrate trouble ≠ empty run; the
+        pass           # disk top-up below still lists what's locally visible
+
+    folders: dict[str, dict] = {parent["path"]: parent}
+
+    def _ensure(parts: list[str]) -> dict:
+        path, node = parent["path"], parent
+        for p in parts:
+            path = f"{path}/{p}"
+            child = folders.get(path)
+            if child is None:
+                child = _folder(p, path=path, kind="folder")
+                node["children"].append(child)
+                folders[path] = child
+            node = child
+        return node
+
+    for f in view_files[:cap]:
+        rel = f.get("rel") or ""
+        if not rel:
+            continue
+        parts = rel.split("/")
+        node = _ensure(parts[:-1])
+        fnode: dict = {
+            "kind": "file", "name": parts[-1],
+            "path": f"{node['path']}/{parts[-1]}",
+            "artifact_path": f.get("url"),
+            "size": f.get("bytes"),
+            "state": f.get("state"), "badge": f.get("badge"),
+            "run_id": rid, "rel": rel,
+        }
+        if f.get("site"):
+            fnode["site"] = f["site"]
+        if f.get("state") in ("in-sandbox", "at-risk", "unknown"):
+            fnode["ephemeral"] = True
+        node["children"].append(fnode)
+        listed.append(rel)
+        cnt += 1
+    if len(view_files) > cap:
+        parent["truncated"] = True
+        parent["note"] = (f"showing {cap} of {len(view_files)} produced files "
+                          f"— open the Run for the full list")
+
+    out_dir = run.get("artifact_path")
+    if out_dir and cnt < cap:
+        try:
+            base = _P(out_dir)
+            # rels already listed from the ledger + the sandbox scaffolding a
+            # job runner writes at its root (process bookkeeping, not products
+            # — the run log has its own surfaces; one owner for the name set:
+            # the durable view folds the same rels). blocks/ is the execution
+            # transcript, folded at the ledger level for the same reason.
+            from content.bio.lifecycle.runs import _RUNNER_SCAFFOLDING
+            skip = frozenset(
+                [str((base / rel).resolve()) for rel in listed]
+                + [str((base / n).resolve()) for n in _RUNNER_SCAFFOLDING])
+            skip_dirs = (str((base / "blocks").resolve()),)
+        except Exception:  # noqa: BLE001
+            skip, skip_dirs = frozenset(), ()
+        cnt += _graft_dir(parent, out_dir, ephemeral=False, skip=skip,
+                          skip_dirs=skip_dirs, cap=cap - cnt)
     return cnt
 
 
@@ -438,6 +613,13 @@ def build_files_tree(*, include_archived: bool = False) -> dict:
         for d in sorted(datasets, key=lambda x: x.get("created_at") or ""):
             placed_in_thread.add(d["id"])  # datasets aren't orphans
             ap = d.get("artifact_path")
+            # Remote / by-reference home: the bytes are on another site, so build
+            # the listing from the captured descriptor (real filenames) rather than
+            # walking the controller's local disk — which holds nothing and would
+            # fabricate a title-slug `.bin`.
+            if _is_remote_dataset(d):
+                d_folder["children"].append(_remote_dataset_node(d, _folder_slug(d)))
+                continue
             disk = _resolve_disk(ap) if ap else None
             if disk and _P(disk).is_dir():
                 # A directory dataset (e.g. a 10x bundle / multi-sample download):
@@ -515,16 +697,15 @@ def build_files_tree(*, include_archived: bool = False) -> dict:
                             "synthesized_content": code,
                         })
 
-                    # Full output directory — every file the pipeline wrote
-                    # (.rds/.h5ad/subfolders/…), nested as on disk. This is the
-                    # browsable bundle; the curated figures/tables below are the
+                    # Full output listing — every file the run PRODUCED, from
+                    # the ledger (durable states included) plus any legacy
+                    # on-disk files under artifact_path. This is the browsable
+                    # bundle; the curated figures/tables below are the
                     # harvested subset (also kept as entities, pinnable).
-                    out_dir = run.get("artifact_path")
-                    if out_dir:
-                        out_node = _folder("output", path=f"{r_path}/output", kind="folder")
-                        _graft_dir(out_node, out_dir, ephemeral=False, cap=300)
-                        if out_node["children"]:
-                            r_folder["children"].append(out_node)
+                    out_node = _folder("output", path=f"{r_path}/output", kind="folder")
+                    _graft_run_outputs(out_node, run, cap=300)
+                    if out_node["children"]:
+                        r_folder["children"].append(out_node)
 
                     # Group run's children by type into subfolders.
                     children = run_children(run["id"])

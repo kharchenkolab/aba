@@ -165,6 +165,30 @@ def _frame_tool_result_body(body: str, mode: str) -> str:
     return body
 
 
+def place_volatile_tail_openai(messages: list[dict], dynamic: str,
+                               *, responses_shape: bool = False) -> list[dict]:
+    """Deliver the per-turn volatile context (project snapshot, focus/thread
+    preambles, recipe slice, compute-env line) as a trailing user message AFTER
+    the translated history — never concatenated into the front-positioned system.
+
+    Same invariant as core.llm.place_volatile_tail, for the same reason applied
+    to a different cache: vLLM's automatic prefix caching (and OpenAI's prompt
+    caching) is prefix-only, so a volatile byte in the system message forces a
+    full KV-prefix recompute of system + ENTIRE history every turn it changes —
+    on the lean local-model tiers that is pure GPU latency growing with the
+    conversation. The tail is wrapped in <system-reminder> so the model reads it
+    as harness-injected state, not user text (aligned with the direct + SDK
+    runtimes). Returns a NEW list; no-op for an empty tail."""
+    if not dynamic:
+        return messages
+    wrapped = f"<system-reminder>\n{dynamic}\n</system-reminder>"
+    if responses_shape:
+        tail = {"role": "user", "content": [{"type": "input_text", "text": wrapped}]}
+    else:
+        tail = {"role": "user", "content": wrapped}
+    return [*messages, tail]
+
+
 def translate_history_to_openai(messages: list[dict]) -> list[dict]:
     """Anthropic-shape `messages` → OpenAI-shape `messages`.
 
@@ -622,9 +646,6 @@ class OpenAICompatibleRuntime:
         identical for guide.py)
 
     What it intentionally does NOT do (yet):
-      • prompt-cache reasoning (vLLM APC is automatic + prefix-only;
-        making the system prefix APC-friendly is a guide.py-side
-        change deferred to Phase 3)
       • progress_q drain pattern (run_python doesn't currently push
         ticks to OpenAI-backend tools; will lift from DirectAPI when
         we wire run_python in)
@@ -695,12 +716,12 @@ class OpenAICompatibleRuntime:
         chatgpt.com/backend-api/codex. Translates the Anthropic-shape history/tools
         into Responses `input`/`instructions`/`tools`, streams, and reuses the
         shared completion+dispatch tail so guide.py sees identical events."""
+        # Stable block ALONE as instructions; the volatile tail rides AFTER the
+        # history (see place_volatile_tail_openai — prefix-cache invariant).
         instructions = req.system.stable or ""
-        if req.system.dynamic:
-            instructions = (instructions + "\n\n" + req.system.dynamic
-                            if instructions else req.system.dynamic)
-
-        input_items = _history_to_responses_input(req.history)
+        input_items = place_volatile_tail_openai(
+            _history_to_responses_input(req.history), req.system.dynamic,
+            responses_shape=True)
         tools = _tools_to_responses(req.tools)
 
         kwargs: dict = {
@@ -801,15 +822,16 @@ class OpenAICompatibleRuntime:
             async for _ev in self._run_turn_responses(req, tool_executor, halt_on_tools):
                 yield _ev
             return
-        # 1. Build the outgoing payload.
+        # 1. Build the outgoing payload. Stable block ALONE in the system
+        # message; the volatile tail rides AFTER the history (see
+        # place_volatile_tail_openai — vLLM APC is prefix-only, so this is what
+        # keeps the KV cache for system + history warm across turns).
         system_text = req.system.stable or ""
-        if req.system.dynamic:
-            system_text = (system_text + "\n\n" + req.system.dynamic
-                           if system_text else req.system.dynamic)
         messages: list[dict] = []
         if system_text:
             messages.append({"role": "system", "content": system_text})
         messages.extend(translate_history_to_openai(req.history))
+        messages = place_volatile_tail_openai(messages, req.system.dynamic)
         openai_tools = translate_tools_to_openai(req.tools)
 
         model = req.model or config.settings.openai_model.get() or "qwen3-8b"

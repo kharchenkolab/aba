@@ -12,7 +12,8 @@ import { EntityGlyph, AgentGlyph } from '../components/icons'
 import RevisionStrip, { useFigureRevisions, type RevisionAction } from './RevisionStrip'
 import ProvenanceSection from '../components/ProvenanceSection'
 import ConfirmDialog from '../components/ConfirmDialog'
-import { HILITE, captureHighlight, type Pt } from '../components/highlightTools'
+import { HILITE, captureHighlight, nextAnnotToken, type Pt } from '../components/highlightTools'
+import EditableTitle from '../components/EditableTitle'
 import './ResultView.css'
 
 
@@ -67,7 +68,7 @@ function _canonicalKindLabel(url: string | null | undefined): string {
 const IMG = /\.(png|jpe?g|svg|webp|gif)$/i
 
 export default function ResultView({ result, entities, onChange, onFocus, onAsk, onChatResult,
-                                     onAnnotate, annotClear, highlighting: highlightingProp,
+                                     onAnnotate, annotClear, hlOwner, highlighting: highlightingProp,
                                      onHighlightingChange }: {
   result: Entity
   entities: Entity[]
@@ -81,10 +82,13 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
   /** Capture-handoff for the freehand Highlight tool — sends {image, note}
    *  to the composer (App.tsx:attachAnnotation). When undefined the toggle
    *  hides itself. */
-  onAnnotate?: (a: { image: string; note: string }) => void
+  onAnnotate?: (a: { image: string; note: string }, ownerId?: string) => void
   /** Bumped on focus change / annotation clear; signals MemberPanels to
    *  drop any in-progress stroke. */
   annotClear?: number
+  /** Token of the panel that currently owns the pinned highlight (App state).
+   *  A MemberPanel keeps its captured mark frozen only while it holds this. */
+  hlOwner?: string | null
   /** Highlight mode (lifted from App.tsx so the canvas-actions ✏️ button
    *  drives this view's MemberPanels). Provided when ResultView is hosted
    *  inside FocusCanvas; falls back to local state for standalone tests. */
@@ -98,8 +102,6 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
   const threadId = result.metadata?.thread_id as string | undefined
   const cellById = (id?: string) => (id ? entities.find(e => e.id === id) : undefined)
 
-  const [titleEdit, setTitleEdit] = useState(false)
-  const [title, setTitle] = useState(result.title)
   const [reading, setReading] = useState(interpretation)
   const [synthesisOpen, setSynthesisOpen] = useState(false)
   const [synthGen, setSynthGen] = useState(false)          // synthesis being generated
@@ -128,11 +130,14 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
   const highlighting = highlightingProp ?? hlLocal
   const setHighlighting = (on: boolean) => (onHighlightingChange ?? setHlLocal)(on)
   const [anyDrawing, setAnyDrawing] = useState(false)
+  // Text-selection → "Claim from selection": the trimmed text + a screen
+  // position for the floating pill (mirrors ChatPane's `sel`).
+  const [sel, setSel] = useState<{ text: string; x: number; y: number } | null>(null)
   // Exit highlight mode when the focused entity changes or the parent
   // signals an annotation-clear (avoids stale ✏️-on state after Esc).
   useEffect(() => { setHighlighting(false) }, [result.id, annotClear])  // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { setReading(interpretation); setTitle(result.title); lastSyncedInterp.current = interpretation }, [result.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setReading(interpretation); lastSyncedInterp.current = interpretation }, [result.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Pick up a background-generated synthesis (auto at pin, or the Guide button via
   // the entity_updated broadcast) WITHOUT clobbering an in-flight user edit — mirrors
@@ -161,6 +166,24 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [zoom])
+
+  // Text-selection → "Claim from selection" (mirrors ChatPane): selecting a
+  // span inside the members body surfaces a floating pill that drafts a claim
+  // citing THIS result as evidence. Scoped to membersRef so a selection made
+  // elsewhere on the page is ignored; ≥ 8 chars filters stray clicks/drags.
+  useEffect(() => {
+    function onUp() {
+      const s = window.getSelection()
+      const text = s?.toString().trim() ?? ''
+      const node = s && s.rangeCount ? s.anchorNode : null
+      const host = node?.nodeType === 3 ? node.parentElement : (node as Element | null)
+      if (!text || text.length < 8 || !host || !membersRef.current?.contains(host)) { setSel(null); return }
+      const r = s!.getRangeAt(0).getBoundingClientRect()
+      setSel({ text, x: r.left + r.width / 2, y: r.top })
+    }
+    document.addEventListener('mouseup', onUp)
+    return () => document.removeEventListener('mouseup', onUp)
+  }, [])
 
   // ── Multi-member viewport tracking ──────────────────────────────────────
   // Gated on members.length > 1: a one-panel Result has nothing to
@@ -276,7 +299,6 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
     onChange()
   }
   const rid = encodeURIComponent(result.id)
-  const saveTitle = () => { setTitleEdit(false); if (title.trim() && title.trim() !== result.title) api(`/api/entities/${rid}`, 'PATCH', { title: title.trim() }) }
   // On any user edit, flip interpretation_origin to 'user' so the ✨ tag disappears
   // and the background auto-interpret won't overwrite the user's text later.
   const saveReading = () => {
@@ -318,6 +340,16 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
     await fetch(`/api/results/${rid}/upload-evidence`, { method: 'POST', body: fd }).catch(() => {})
     onChange()
   }
+  // Make a claim citing THIS result as evidence, then open it entity-first for
+  // review/edit (mirrors App.createClaim + FocusCanvas.doFigureClaim). Shared by
+  // the text-selection pill and the "Make new Claim" button in the add-row.
+  const makeClaim = async (statement: string) => {
+    const r = await fetch('/api/claims', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ statement, evidence_ids: [result.id], thread_id: threadId }),
+    }).catch(() => null)
+    if (r && r.ok) { const c = await r.json(); onChange(); onFocus(c.id) }
+  }
   const removeMember = (mid: string) => api(`/api/results/${rid}/members/${encodeURIComponent(mid)}`, 'DELETE')
   // Hard-delete one revision in a figure/table chain. The backend re-parents
   // children and re-anchors member.ref so the chain stays navigable. Refuses
@@ -357,32 +389,30 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
 
   // Capture-then-attach. On a successful highlight, exit the mode (mirror
   // ChatPane: one mark, one attach, then return to normal interaction).
-  const onPanelAnnotate = (a: { image: string; note: string }) => {
-    onAnnotate?.(a)
+  const onPanelAnnotate = (a: { image: string; note: string }, ownerId?: string) => {
+    onAnnotate?.(a, ownerId)
     setHighlighting(false)
     setAnyDrawing(false)
   }
 
   return (
     <div className="rv">
+      {sel && (
+        <button className="rv-claim-sel" style={{ left: Math.max(90, sel.x), top: Math.max(56, sel.y - 38) }}
+          onMouseDown={e => e.preventDefault()}
+          onClick={() => { makeClaim(sel.text); window.getSelection()?.removeAllRanges(); setSel(null) }}>
+          ✦ Claim from selection
+        </button>
+      )}
       {/* Title row. The Highlight toggle now lives in App.tsx's
           canvas-actions row (consistent with the Threads view), so it's
           NOT rendered here — each MemberPanel is driven by the lifted
           `highlighting` prop. */}
-      {titleEdit ? (
-        <input className="rv__title-input" autoFocus value={title}
-               onChange={e => setTitle(e.target.value)} onBlur={saveTitle}
-               onKeyDown={e => { if (e.key === 'Enter') saveTitle(); if (e.key === 'Escape') { setTitle(result.title); setTitleEdit(false) } }} />
-      ) : (
-        <div className="rv__title-row">
-          <h1 className="rv__title" onClick={() => setTitleEdit(true)} title="Click to rename">{result.title}</h1>
-          {titleOrigin === 'ai' && (
-            <span className="rv__ai-tag" title="Title suggested by Guide — edit to make it yours">
-              <AgentGlyph agent="guide" size={13} />
-            </span>
-          )}
-        </div>
-      )}
+      <div className="rv__title-row">
+        <EditableTitle as="h1" className="rv__title" value={result.title} ariaLabel="Rename result"
+          aiSuggested={titleOrigin === 'ai'}
+          onCommit={t => api(`/api/entities/${rid}`, 'PATCH', { title: t })} />
+      </div>
 
       <div className="rv__members" ref={membersRef}>
         {members.map((m, i) => (
@@ -399,6 +429,7 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
             anyDrawing={anyDrawing}
             onDrawingChange={setAnyDrawing}
             onAnnotate={onPanelAnnotate}
+            hlOwner={hlOwner}
             entities={entities}
             isActive={trackFocus && m.id === activeMemberId} />
         ))}
@@ -447,6 +478,9 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
           <input ref={uploadRef} type="file" style={{ display: 'none' }}
                  accept="image/*,.csv,.tsv,.xlsx,.pdf"
                  onChange={e => { const f = e.target.files?.[0]; if (f) uploadEvidence(f); e.target.value = '' }} />
+          <button className="rv__add-btn rv__add-btn--claim"
+                  title="Draft a claim supported by this result — edit it in the claim view"
+                  onClick={() => makeClaim(reading.trim() || result.title)}>✦ Make new Claim</button>
         </div>
         {picker && (
           <div className="rv__picker">
@@ -485,7 +519,7 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
 }
 
 function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, onMove, onCaption, onText, onFocus, onChatResult, onAsk, onDeleteRevision, resultTitle, isLastNonAutoMember, revisionsSignal,
-                       highlighting, anyDrawing, onDrawingChange, onAnnotate, entities,
+                       highlighting, anyDrawing, onDrawingChange, onAnnotate, hlOwner, entities,
                        isActive }: {
   member: ResultMember
   idx: number
@@ -522,8 +556,13 @@ function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, on
    *  other panels so the stroke locks to this one for the duration. */
   anyDrawing?: boolean
   onDrawingChange?: (b: boolean) => void
-  /** Capture-handoff: rasterized cell + structured note → composer. */
-  onAnnotate?: (a: { image: string; note: string }) => void
+  /** Capture-handoff: rasterized cell + structured note → composer. `ownerId`
+   *  (a fresh token per capture) lets App track which panel owns the pinned
+   *  mark so this panel can keep its overlay frozen until dismissed. */
+  onAnnotate?: (a: { image: string; note: string }, ownerId?: string) => void
+  /** Token of the panel that owns the pinned highlight (App state); this panel
+   *  shows its frozen mark only while hlOwner === its own capture token. */
+  hlOwner?: string | null
   /** Project entities (for figure-entity lookup inside describeHighlightedFigure). */
   entities?: Entity[]
   /** True when this panel is the multi-member Result's current viewport
@@ -595,6 +634,15 @@ function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, on
   const canHighlight = !!onAnnotate
   const showSurface = !!highlighting && canHighlight && ((hovered && !anyDrawing) || drawing)
   useEffect(() => { if (!highlighting) { setStroke([]); strokeRef.current = []; setHovered(false) } }, [highlighting])
+  // Frozen (pinned) mark — see Message.tsx for the full rationale. After the
+  // snapshot is captured the mark stays on this panel until a newer highlight
+  // supersedes it or the composer chip is dismissed; App arbitrates ownership
+  // via hlOwner against this panel's live capture token. No "invalidate on
+  // move" trigger: the overlay is absolute to the panel and the stroke is in
+  // [0,1] fractions, so it rides the panel through scroll/reflow.
+  const [frozen, setFrozen] = useState<Pt[] | null>(null)
+  const myToken = useRef<string | null>(null)
+  useEffect(() => { if (hlOwner !== myToken.current) setFrozen(null) }, [hlOwner])
 
   // Normalize CSS coords to the panel's [0,1] bbox (clamped) so the user can
   // drag past the edge without breaking the stroke.
@@ -648,15 +696,25 @@ function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, on
         cellText,
         onlyImage,
       })
-      if (result) onAnnotate?.(result)
+      if (result) {
+        const token = nextAnnotToken()
+        myToken.current = token
+        setFrozen([...pts])          // keep the mark on the panel until dismissed
+        onAnnotate?.(result, token)
+      }
     } catch { /* rasterize failed — drop the mark */ }
     finally { setBusy(false); setStroke([]); strokeRef.current = [] }
   }
 
   const strokePts = stroke.map(p => `${p.x * 100},${p.y * 100}`).join(' ')
+  // Show the frozen mark only while this panel still owns the pinned highlight.
+  const frozenActive = !!frozen && frozen.length > 1 && hlOwner != null && hlOwner === myToken.current
+  const frozenPts = frozen ? frozen.map(p => `${p.x * 100},${p.y * 100}`).join(' ') : ''
 
-  // Reusable surface JSX, sized to the contentRef wrapper. Renders only
-  // when showSurface is true (either hovering with mode on, or mid-drag).
+  // Reusable surface JSX, sized to the contentRef wrapper. The active draw
+  // surface shows while hovering with mode on (or mid-drag); otherwise, if this
+  // panel still owns the pinned highlight, its frozen mark stays put — no draw
+  // handler, no hint, click-through so the panel remains interactive.
   const renderHlSurface = () => (
     showSurface ? (
       <div className="rv-panel__hl" onMouseDown={hlDown}>
@@ -667,6 +725,13 @@ function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, on
           </svg>
         )}
         <div className="rv-panel__hl-hint">{busy ? 'capturing…' : 'draw to highlight'}</div>
+      </div>
+    ) : frozenActive ? (
+      <div className="rv-panel__hl rv-panel__hl--frozen" aria-hidden>
+        <svg className="rv-panel__hl-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+          <polyline points={frozenPts} fill="none" stroke={HILITE} strokeWidth="16"
+                    strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+        </svg>
       </div>
     ) : null
   )

@@ -45,6 +45,8 @@ def check(label, cond, detail=""):
           + (f" — {detail}" if (detail and not cond) else ""))
     if not cond:
         _failures.append(label)
+        raise AssertionError(  # armed: pytest sees check() failures
+            f"{label}" + (f" — {detail}" if detail else ""))
 
 
 def _chain(n: int) -> list[str]:
