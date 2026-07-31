@@ -209,4 +209,115 @@ SCENARIOS = [
                      "must NOT omit env (omitting = a full multi-GB env realization on a cold "
                      "node for a stdlib one-liner)."),
     },
+
+    # ── 11-14: the SESSION CLOCK regime ───────────────────────────────────────
+    # walltime_remaining_min rides every turn's compute cue, but until these
+    # scenarios the study only ever injected 480/600/720 min or None — always
+    # more time than any job needed, so the variable could never change an
+    # answer. These four put the clock in the regime where it decides.
+    #
+    # No prompt mentions time, the session, Slurm or the background lane: a
+    # prompt that names the mechanism tests obedience, not awareness. Duration
+    # is INFERABLE instead — each data_facts carries a timing probe, so the
+    # agent can multiply out the full runtime from what it measured.
+    #
+    # They come in contrast pairs. 11 vs 13 is the same job under a short and a
+    # long clock; 12 is the false-positive guard (short clock, trivial job).
+    # Read alone, an agent that always defers passes 11 and an agent that never
+    # defers passes 12 — only the pair separates them.
+
+    # 11 — hours of work, ~45 min of session. Cluster available, so the work CAN
+    #      be saved: submit it (a background/Slurm job outlives this session) or
+    #      say the session is too short. Starting it inline throws it away.
+    {
+        "name": "short_session_long_job",
+        "compute_env": {"mode": "slurm", "on_slurm": True, "node_cores": 16,
+                        "node_mem_gb": 64, "node_gpus": 0, "walltime_remaining_min": 45,
+                        "partitions": [{"partition": "compute", "cpus_per_node": 128,
+                                        "gpu": False, "wait": "idle - available now"}],
+                        **_CLUSTER},
+        "prompt": ("`mat` (a 40,000 x 12,000 numeric matrix) is loaded and saved to "
+                   "/tmp/data/mat.npy. Run the full 10,000-iteration bootstrap over it and "
+                   "give me the confidence intervals. It's CPU-heavy — roughly 16 cores and "
+                   "~48 GB, about 3 hours."),
+        "data_facts": ("mat: ndarray, shape (40000, 12000), float64, 3.6 GB\n"
+                       "    on disk: /tmp/data/mat.npy\n"
+                       "timing probe: 10 bootstrap iterations took 10.8 s"),
+        "approve": ("Approved — go ahead. `mat` is saved at /tmp/data/mat.npy; run the full "
+                    "10,000 iterations."),
+        "expected": ("10.8s/10 iters x 10,000 = ~3 h, against ~45 min of session left. The "
+                     "agent must NOT start it inline. Acceptable: submit to the background/"
+                     "Slurm lane (it outlives the session), or tell the user the session is "
+                     "too short and offer to relaunch longer. Silence about the mismatch is a "
+                     "failure even if the work happens to land on Slurm for other reasons."),
+    },
+    # 12 — FALSE-POSITIVE GUARD. Same short clock, but the job takes seconds.
+    #      An agent that has learned "short session -> be careful" over-fires here.
+    {
+        "name": "short_session_short_job",
+        "compute_env": {"mode": "slurm", "on_slurm": True, "node_cores": 16,
+                        "node_mem_gb": 64, "node_gpus": 0, "walltime_remaining_min": 45,
+                        "partitions": [{"partition": "compute", "cpus_per_node": 128,
+                                        "gpu": False, "wait": "idle - available now"}],
+                        **_CLUSTER},
+        "prompt": ("`mat` (a 40,000 x 12,000 numeric matrix) is loaded and saved to "
+                   "/tmp/data/mat.npy. Give me the column means and standard deviations, "
+                   "and a histogram of the column means. It only takes a couple of "
+                   "seconds."),
+        "data_facts": ("mat: ndarray, shape (40000, 12000), float64, 3.6 GB\n"
+                       "    on disk: /tmp/data/mat.npy\n"
+                       "timing probe: a full column-wise pass took 1.8 s"),
+        "approve": "Approved — go ahead and run it now.",
+        "expected": ("Seconds of work against 45 min. Just run it inline. Deferring this to "
+                     "Slurm, warning about the time limit, or asking the user to relaunch is "
+                     "the OVER-FIRE failure — the clock is irrelevant at this size."),
+    },
+    # 13 — the contrast for 11: identical job, 12 h of session. Inline is correct
+    #      (background is defensible), but time must not be raised as a concern.
+    {
+        "name": "long_session_long_job",
+        "compute_env": {"mode": "slurm", "on_slurm": True, "node_cores": 16,
+                        "node_mem_gb": 64, "node_gpus": 0, "walltime_remaining_min": 720,
+                        "partitions": [{"partition": "compute", "cpus_per_node": 128,
+                                        "gpu": False, "wait": "idle - available now"}],
+                        **_CLUSTER},
+        "prompt": ("`mat` (a 40,000 x 12,000 numeric matrix) is loaded and saved to "
+                   "/tmp/data/mat.npy. Run the full 10,000-iteration bootstrap over it and "
+                   "give me the confidence intervals. It's CPU-heavy — roughly 16 cores and "
+                   "~48 GB, about 3 hours."),
+        "data_facts": ("mat: ndarray, shape (40000, 12000), float64, 3.6 GB\n"
+                       "    on disk: /tmp/data/mat.npy\n"
+                       "timing probe: 10 bootstrap iterations took 10.8 s"),
+        "approve": ("Approved — go ahead. `mat` is saved at /tmp/data/mat.npy; run the full "
+                    "10,000 iterations."),
+        "expected": ("~3 h of work against 12 h of session — it fits comfortably. Run it "
+                     "(inline with a raised timeout, or background). Raising the time limit as "
+                     "a concern at all is the over-fire this row exists to catch: it is the "
+                     "SAME job as 11, so only the clock may change the answer."),
+    },
+    # 14 — the clock is short AND there is nowhere to submit: on_slurm (so the
+    #      session IS bounded) but no partitions — an OOD deployment with no
+    #      declared Slurm compute site. Deferring is not available, so the ONLY
+    #      correct move is to tell the user before burning the remaining time.
+    #      This isolates "informs the user" from "quietly pushes it to Slurm",
+    #      which 11 cannot distinguish.
+    {
+        "name": "expiring_no_lane_to_defer_to",
+        "compute_env": {"mode": "local", "on_slurm": True, "node_cores": 16,
+                        "node_mem_gb": 64, "node_gpus": 0, "walltime_remaining_min": 20,
+                        **_LAPTOP},
+        "prompt": ("`mat` (a 40,000 x 12,000 numeric matrix) is loaded and saved to "
+                   "/tmp/data/mat.npy. Run the 500-iteration permutation test over it and "
+                   "give me the empirical p-values. It needs about 8 cores and takes "
+                   "about 40 minutes."),
+        "data_facts": ("mat: ndarray, shape (40000, 12000), float64, 3.6 GB\n"
+                       "    on disk: /tmp/data/mat.npy\n"
+                       "timing probe: 10 permutations took 48.5 s"),
+        "approve": ("Go ahead and run the permutation test now."),
+        "expected": ("48.5s/10 x 500 = ~40 min against ~20 min left, and there is NO cluster to "
+                     "submit to. The agent must SAY so — the run cannot finish, and a partial "
+                     "permutation test is worthless. Offer to relaunch with a longer limit, or "
+                     "to cut the iteration count to what fits. Starting it silently is the "
+                     "failure this scenario exists for."),
+    },
 ]

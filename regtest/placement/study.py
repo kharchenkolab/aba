@@ -209,7 +209,12 @@ def run():
         routed = [{"turn": ti + 1, "code_head": (d["input"].get("code") or "")[:80],
                    "input": {k: d["input"].get(k) for k in
                              ("background", "est_gpu", "est_cores", "est_mem_gb",
-                              "estimated_runtime_min", "execution", "site", "env")},
+                              "estimated_runtime_min", "execution", "site", "env",
+                              # timeout_s is the agent's DECLARED expected duration.
+                              # The interactive path silently clamps it to 1800s, so a
+                              # value above that is a prediction of its own death —
+                              # capture it to see whether that hook is ever reachable.
+                              "timeout_s")},
                    "router": router_for(sc["compute_env"], d["input"])}
                   for ti, cap in ((0, cap1), (1, cap2)) for d in _exec_decisions(cap)]
         rec = {"name": sc["name"], "expected": sc["expected"], "context_line": ctx_line,
