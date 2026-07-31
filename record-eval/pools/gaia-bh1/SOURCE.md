@@ -95,10 +95,14 @@ but not identical to, the paper's section order — see "ordering liberties").
 From the paper's own narrative logic, not its section order:
 
 - The spine is chronological and explicit in the text: selection (F01–F02) →
-  Gaia solution (F03) → archival RVs uninformative *because* of the sampling
-  coincidence (F07→F08, "We thus initiated a spectroscopic follow-up campaign")
-  → first discrepant RV (F10) → campaign (F11) → joint fit (F12). Everything
-  downstream (mass floor, alternatives, formation, population) hangs off F12/F13.
+  Gaia solution (F03) → archival RVs (F07) → first discrepant RV (F10) →
+  campaign (F11) → joint fit (F12). Everything downstream (mass floor,
+  alternatives, formation, population) hangs off F12/F13. Note that F10 depends
+  only on F07: the scanning-law explanation of *why* the archival RVs looked
+  constant (F08, "We thus initiated a spectroscopic follow-up campaign") may
+  arrive before or after the discrepant RV in a permuted ordering — historically
+  it motivated the campaign, but the contradiction does not logically require
+  the warning, and uncushioned orderings are deliberately possible.
 - Stellar characterization splits in two: the SED/M★ result (F04) uses only the
   Gaia parallax and so precedes the campaign; the spectroscopic results
   (F18–F25) require the HIRES/X-shooter spectra and so depend on F11.
@@ -106,12 +110,17 @@ From the paper's own narrative logic, not its section order:
   dynamical mass (F13/F14) and the characterization findings, mirroring §8.1–8.2
   which argues from exactly those two inputs.
 - Formation findings (F32–F38) depend on the joint orbit (F12), metallicity
-  (F18), abundances-as-no-mass-transfer (F20 feeds §8.4's argument via F32's
-  progenitor logic), and the Galactic orbit (F26) — again as argued in §8.4.
+  (F18), the no-mass-transfer abundance constraint (F20 → F32, a real edge:
+  §8.4's progenitor logic uses it), and the Galactic orbit (F26) — again as
+  argued in §8.4. F35 (the COSMIC posterior) depends only on F32: it matches
+  M1/M2/P/e directly, so the overturn of the CE default can land before the
+  α–λ energetics (F33) and kick analysis (F34), which then arrive as
+  post-overturn corroboration in permuted orderings.
 - Population findings (F39–F42) depend on the DR3-cut statistics of the original
   solution (F03) and the confirmed system (F12).
-- Longest depends_on chain: F01→F02→F03→F07→F08→F10→F11→F12→F32→F33→F34→F35
-  (depth 12; the validator's computed longest chain).
+- Longest depends_on chain: F01→F02→F07→F10→F11→F12→F13→F14→F24→F29→F30→F37
+  (12 nodes; the validator's computed longest chain — it now runs through the
+  triple-channel finding F37, which depends on F30's open inner-binary option).
 
 ### Overturns edges (3, all from the paper's own text)
 
@@ -132,13 +141,18 @@ From the paper's own narrative logic, not its section order:
 
 ### Question structure
 
-Q4 (formation) *emerges late*: its first finding is F26 (Galactic orbit, §6) and
-it only becomes the driving question at F31–F32, matching the paper — formation
-is not on the table until the BH is secure. Q5 (population) emerges even later
-(F39), triggered by the observation that Gaia BH1 barely survived the DR3 cuts.
-16/45 findings bear on ≥2 questions; exactly 3 bear on none (F43–F45 — the
-paper's §9.3/App. E drive-by re-characterizations of *other* candidates, which
-end up bearing on nothing in this investigation).
+Q4 (formation) *emerges late*: it is first touched at F20 (the no-mass-transfer
+abundance constraint, whose formation relevance is only understood in
+retrospect) and becomes the driving question at F31–F32, matching the paper —
+formation is not on the table until the BH is secure. Q5 (population) emerges
+even later: first touched at F31 (the imposter-contrast context), with its main
+mass at F39–F42, triggered by the observation that Gaia BH1 barely survived the
+DR3 cuts. F01's population relevance (the search defines the occurrence-rate
+denominator) is deliberately left implicit so that Q5 has no evidence at the
+pool's root. 15/45 findings bear on ≥2 questions; exactly 2 bear on none (F43,
+F44 — the paper's §9.3/App. E drive-by re-characterizations of *other* teams'
+candidates); F45 (the deferred sixth candidate from this pool's own search) is
+tagged Q5, since its open status bears on the occurrence-rate denominator.
 
 ### Ordering liberties taken
 

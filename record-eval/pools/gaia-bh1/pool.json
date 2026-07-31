@@ -17,7 +17,7 @@
   "findings": [
     {
       "id": "F01",
-      "questions": ["Q1", "Q5"],
+      "questions": ["Q1"],
       "claim": "A search of all 168,065 Gaia DR3 nss_two_body_orbit astrometric solutions for unusually large photocenter ellipses at fixed period (mass proxy Mtilde > 3 Msun) yields exactly 6 initially promising dark-companion candidates.",
       "evidence": { "kind": "run", "caption": "Selection query over gaiadr3.nss_two_body_orbit: Mtilde = (4 pi^2 / P^2 G)(a0/parallax)^3 > 3 Msun, exploiting that dark companions produce larger photocenter wobble than luminous ones at the same mass", "values": { "n_astrometric_solutions": 168065, "mtilde_cut_msun": 3, "n_candidates": 6 } },
       "strength": "moderate",
@@ -45,7 +45,7 @@
     {
       "id": "F04",
       "questions": ["Q2", "Q3"],
-      "claim": "A single-star model fits the full GALEX-to-WISE SED with chi2/N = 0.99 (Teff ~ 5905 K, R = 0.99 Rsun, E(B-V) = 0.29); the star sits on the main sequence, and MIST and PARSEC isochrones agree on Mstar = 0.93 +/- 0.05 Msun to within 0.02 Msun - independently confirming the Gaia distance and leaving no room for a bright companion.",
+      "claim": "A single-star model fits the full GALEX-to-WISE SED with chi2/N = 0.99 (Teff ~ 5905 K, R = 0.99 Rsun, E(B-V) = 0.29); the star sits on the main sequence, and MIST and PARSEC isochrones agree on Mstar = 0.93 +/- 0.05 Msun to within 0.02 Msun - corroborating that the Gaia distance is not catastrophically wrong and suggesting no bright companion (the definitive flux-ratio limits come later).",
       "evidence": { "kind": "figure", "caption": "Figure 1 (upper right, lower right): broadband SED with single-star fit; Teff-R plane vs MIST isochrones at [Fe/H] = -0.2", "values": { "chi2_per_n": 0.99, "teff_k": 5905, "r_rsun": 0.99, "ebv": 0.29, "mstar_msun": 0.93, "mstar_err": 0.05, "isochrone_agreement_msun": 0.02 } },
       "strength": "moderate",
       "depends_on": ["F03"],
@@ -102,7 +102,7 @@
       "claim": "The first follow-up spectrum (MagE, JD 2459767) gives RV = 63.8 +/- 3.0 km/s, ~44 km/s above the LAMOST/Gaia archival level near 20 km/s: the star is strongly RV-variable after all, and the Gaia astrometric solution is plausibly correct.",
       "evidence": { "kind": "stat", "caption": "First follow-up RV epoch vs archival LAMOST RVs and Gaia DR3 mean RV", "values": { "rv_kms": 63.8, "rv_err_kms": 3.0, "archival_level_kms": 20, "offset_kms": 44 } },
       "strength": "moderate",
-      "depends_on": ["F07", "F08"],
+      "depends_on": ["F07"],
       "overturns": ["F07"],
       "notes": "Section 3.2. Overturns the face-value 'no RV variation' reading of the archival data."
     },
@@ -127,7 +127,7 @@
     },
     {
       "id": "F13",
-      "questions": ["Q1", "Q2", "Q3"],
+      "questions": ["Q1", "Q2"],
       "claim": "Fitting the RVs alone (no astrometry) independently recovers the orbit: free-period fit gives P = 184.8 +/- 0.7 d (consistent with Gaia); with P fixed to 185.6 d, K = 66.7 +/- 0.6 km/s, e = 0.447 +/- 0.005, gamma = 47.1 +/- 0.6 km/s, omega = 13.9 +/- 1.2 deg, spectroscopic mass function f(M2) = 4.08 +/- 0.08 Msun; reduced chi2 = 0.54.",
       "evidence": { "kind": "figure", "caption": "Figure 4 (top): best-fit RV-only orbital solution and residuals over two phased periods", "values": { "p_free_days": 184.8, "p_free_err": 0.7, "k_kms": 66.7, "k_err": 0.6, "e": 0.447, "e_err": 0.005, "fm_msun": 4.08, "fm_err": 0.08, "chi2_reduced": 0.54 } },
       "strength": "strong",
@@ -167,8 +167,8 @@
       "claim": "The Gaia-only and joint solutions agree on every photocenter-ellipse parameter to within 1.6 sigma (Thiele-Innes coefficients, P, e, T_p), and the measured RVs are consistent with predictions of the astrometry-only solution - the Gaia solution and its uncertainties are reliable despite the half-orbit phase coverage.",
       "evidence": { "kind": "table", "caption": "Table C1: parameter-by-parameter comparison of astrometry-only vs joint constraints; Figure C1: measured RVs vs astrometry-only predictions", "values": { "max_discrepancy_sigma": 1.6, "n_parameters_compared": 7 } },
       "strength": "moderate",
-      "depends_on": ["F03", "F11", "F12"],
-      "notes": "Appendix C. Directly answers the spuriousness worry that killed 4 of the 6 original candidates."
+      "depends_on": ["F03", "F09", "F11", "F12"],
+      "notes": "Appendix C. Directly answers the spuriousness worry that killed 4 of the 6 original candidates, including the defused sigma_a0 anomaly (F09)."
     },
     {
       "id": "F18",
@@ -192,7 +192,7 @@
       "id": "F20",
       "questions": ["Q2", "Q3", "Q4"],
       "claim": "BACCHUS abundances for 22 elements fall within the 1-sigma thin-disk scatter of the solar neighborhood for most elements and within 2 sigma for all; there is no alpha-element pollution from the companion's death and only mild [Ba/Fe] = +0.17 +/- 0.04 (not a barium star) - the G star never accreted significant material from its companion.",
-      "evidence": { "kind": "table", "caption": "Table 2: BACCHUS [X/Fe] for Na through Eu vs Bensby et al. (2014) solar-neighborhood trends", "values": { "n_elements": 22, "ba_fe": 0.17, "ba_fe_err": 0.04, "scatter_most_elements_sigma": 1, "scatter_all_elements_sigma": 2 } },
+      "evidence": { "kind": "table", "caption": "Table 2: BACCHUS abundances - 20 [X/Fe] ratios (Na through Eu) plus [Fe/H] and A(Li) - vs Bensby et al. (2014) solar-neighborhood trends", "values": { "n_elements": 22, "ba_fe": 0.17, "ba_fe_err": 0.04, "scatter_most_elements_sigma": 1, "scatter_all_elements_sigma": 2 } },
       "strength": "moderate",
       "depends_on": ["F18"],
       "notes": "Section 5.1. Later load-bearing for the no-mass-transfer constraint in the formation analysis (F32-F34)."
@@ -200,7 +200,7 @@
     {
       "id": "F21",
       "questions": ["Q2"],
-      "claim": "The projected rotation velocity is bounded at vsini <= 3.5 km/s (instrumental broadening dominates below that), implying P_rot >~ 14/sin(i) d and, via gyrochronology (if never tidally spun up), an age >~ 1 Gyr.",
+      "claim": "The projected rotation velocity is bounded at vsini <= 3.5 km/s (instrumental broadening dominates below that), implying P_rot >~ 14 sin(i) d - i.e. >~ 14 d for sin i ~ 1, the assumption the gyrochronological age uses - and thus (if never tidally spun up) an age >~ 1 Gyr.",
       "evidence": { "kind": "stat", "caption": "Line-broadening analysis: BOSZ template convolved with rotation kernels + R~55000 HIRES instrumental profile", "values": { "vsini_max_kms": 3.5, "prot_min_days": 14, "gyro_age_min_gyr": 1 } },
       "strength": "weak",
       "depends_on": ["F11"],
@@ -264,7 +264,7 @@
       "id": "F28",
       "questions": ["Q1"],
       "claim": "The non-detections are expected: Hoyle-Lyttleton accretion of the G star's wind gives Mdot_acc ~ 6e-18 Msun/yr (< 1e-10 of Eddington); radiatively inefficient ADAF models (eta ~ 1e-6) predict F_X ~ 1e-20 erg/s/cm2 - far below any instrument - while the radio-X-ray correlation predicts ~10 uJy (eta = 0.1) down to ~1 nJy (eta = 1e-6) at 8 GHz.",
-      "evidence": { "kind": "stat", "caption": "Wind-accretion rate and predicted X-ray/radio fluxes vs eta, for M_BH = 10 Msun, a = 1.4 au, v_wind ~ 600 km/s", "values": { "mdot_acc_msun_yr": 6e-18, "edd_fraction": 1e-10, "eta_adaf": 1e-6, "fx_adaf_erg_s_cm2": 1e-20, "radio_eta01_ujy": 10 } },
+      "evidence": { "kind": "stat", "caption": "Wind-accretion rate and predicted X-ray/radio fluxes vs eta, for M_BH = 10 Msun, a = 1 au (Equation 6 normalization), v_wind ~ 600 km/s", "values": { "mdot_acc_msun_yr": 6e-18, "edd_fraction": 1e-10, "eta_adaf": 1e-6, "fx_adaf_erg_s_cm2": 1e-20, "radio_eta01_ujy": 10 } },
       "strength": "weak",
       "depends_on": ["F12", "F27"],
       "notes": "Section 7.1. Order-of-magnitude; >1 dex uncertainty from wind assumptions is acknowledged."
@@ -302,8 +302,8 @@
       "claim": "The BH progenitor must have been massive (helium core >~ 9 Msun requires ZAMS ~30-50 Msun at near-solar metallicity per Sukhbold et al. 2016) and would have swelled to ~10 au as a supergiant - vastly exceeding the current 1.40 au separation. The stars must therefore have interacted, and given the extreme mass ratio the expected outcome is a common-envelope (CE) episode: CE evolution is the default formation hypothesis.",
       "evidence": { "kind": "stat", "caption": "Progenitor mass and maximum-radius requirements vs the observed orbit", "values": { "he_core_min_msun": 9, "zams_range_msun": "30-50", "supergiant_radius_au": 10, "current_a_au": 1.40 } },
       "strength": "moderate",
-      "depends_on": ["F12", "F18"],
-      "notes": "Section 8.4 opening logic. The CE default is subsequently overturned by the quantitative analysis (F35)."
+      "depends_on": ["F12", "F18", "F20"],
+      "notes": "Section 8.4 opening logic; the no-mass-transfer abundance constraint (F20) feeds the progenitor argument. The CE default is subsequently overturned by the quantitative analysis (F35)."
     },
     {
       "id": "F33",
@@ -329,7 +329,7 @@
       "claim": "A COSMIC population-synthesis posterior over ZAMS parameters, CE efficiency and natal kicks shows Gaia BH1 can form through a common envelope only if alpha >= 5 with preference for alpha ~ 14 - i.e. the liberated orbital energy would have to be a small fraction of what ejects the envelope, which is likely unphysical. The CE channel is effectively ruled out as the standard explanation; preferred (if forced): ZAMS 65-75 Msun + 0.8-1.1 Msun at P = 1600-4800 d, v_kick <~ 45 km/s.",
       "evidence": { "kind": "run", "caption": "Figure 8: emcee-sampled COSMIC posterior (1024 walkers, 100k steps) over ZAMS masses, period, eccentricity, alpha, and kick parameters matching M1, M2, P, e of Gaia BH1", "values": { "alpha_min": 5, "alpha_preferred": 14, "zams_m1_msun": "65-75", "zams_m2_msun": "0.8-1.1", "p_init_days": "1600-4800", "vkick_max_kms": 45 } },
       "strength": "strong",
-      "depends_on": ["F33", "F34"],
+      "depends_on": ["F32"],
       "overturns": ["F32"],
       "notes": "Section 8.4.1 + Figure 8. Overturns the default CE hypothesis of F32: 'formed through standard binary evolution with a common envelope only under extreme (and likely unphysical) assumptions'."
     },
@@ -348,7 +348,7 @@
       "claim": "A hierarchical-triple channel is viable and testable: MESA models show an inner massive binary (e.g. 20 Msun donor + 10 Msun BH at P = 4 d) undergoing stable Case A mass transfer ends as a 5 Msun helium star in a 96-d orbit, letting an outer G star survive near its birth orbit; if an inner compact binary remains, it would perturb the G star's RVs at 2 m/s (4-d inner period) to 250 m/s (30-d) semi-amplitude - within reach of precision spectrographs.",
       "evidence": { "kind": "run", "caption": "MESA binary models (Fuller & Ma 2019 setup) of the inner binary; Hayashi & Suto perturbation amplitudes scaling as (P_in/P_out)^(7/3)", "values": { "donor_msun": 20, "bh_msun": 10, "p_inner_init_days": 4, "he_star_msun": 5, "p_inner_final_days": 96, "rv_perturb_4d_m_s": 2, "rv_perturb_30d_m_s": 250 } },
       "strength": "moderate",
-      "depends_on": ["F12", "F35"],
+      "depends_on": ["F12", "F30", "F35"],
       "notes": "Sections 8.4.5, 10. The paper's favored direction once CE fails; motivated by F30's open inner-binary option."
     },
     {
@@ -367,7 +367,7 @@
       "evidence": { "kind": "stat", "caption": "Gaia BH1's astrometric SNR statistics vs the Halbwachs et al. DR3 acceptance thresholds (Equations 10-11)", "values": { "plx_over_err": 120, "plx_over_err_required": 107.7, "a0_over_err": 13.6, "a0_over_err_required": 11.6, "period_percentile_dr3": 95 } },
       "strength": "moderate",
       "depends_on": ["F03"],
-      "notes": "Section 9. Pivot from the single object to the population question."
+      "notes": "Section 9. Pivot from the single object to the population question. The paper prints '20000/P = 107'; 107.7 is the recomputed value (20000/185.77)."
     },
     {
       "id": "F40",
@@ -416,12 +416,12 @@
     },
     {
       "id": "F45",
-      "questions": [],
+      "questions": ["Q5"],
       "claim": "The deferred sixth candidate (Gaia DR3 5870569352746779008, red-giant primary) remains open: P = 1352 +/- 45 d exceeds the DR3 baseline, i = 35 +/- 1 deg is low, and if the astrometric solution is correct the spectroscopic mass function is only ~1 Msun - so its nature hinges entirely on unverifiable astrometry; RV monitoring has begun and is so far consistent.",
       "evidence": { "kind": "table", "caption": "Table E1 row + Appendix E discussion for the red-giant candidate; rv_amplitude_robust near the astrometric prediction", "values": { "p_days": 1352, "p_err": 45, "inc_deg": 35, "inc_err": 1, "fm_if_correct_msun": 1 } },
       "strength": "weak",
       "depends_on": ["F02"],
-      "notes": "Appendix E + Section 9.3. Status note on a sibling candidate; bears on nothing current in this pool."
+      "notes": "Appendix E + Section 9.3. Status of the sixth candidate from this pool's own search - bears on the occurrence-rate denominator, hence Q5."
     }
   ]
 }
