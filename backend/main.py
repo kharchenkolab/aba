@@ -126,6 +126,8 @@ from core.web.routers import projects as _projects_routes
 app.include_router(_projects_routes.router)
 from core.web.routers import turns as _turns_routes
 app.include_router(_turns_routes.router)
+from core.web.routers import record as _record_routes
+app.include_router(_record_routes.router)
 from core.web.routers import misc as _misc_routes
 app.include_router(_misc_routes.router)
 

@@ -38,6 +38,8 @@ FILES=(
   tests/test_harvest_honesty.py
   tests/test_project_locate.py
   tests/test_vision_refs.py
+  # Record face (phase 1): world projection read-port + register seam
+  tests/test_record_world.py
   tests/test_env_integrity.py
   tests/test_env_resolution.py
   tests/test_env_resolution_honesty.py
