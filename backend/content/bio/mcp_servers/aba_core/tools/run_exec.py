@@ -112,6 +112,7 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
           sizing/ walltime hint, NOT an auto-background trigger — and it sets the
           background job's TIMEOUT ceiling (~2x the estimate). Give a realistic
           `estimated_runtime_min` (or an explicit `timeout_s`) for a long job;
+          Hard cap 1800s (30 min) — larger values are silently clamped; longer work must use background=True (1 h default, 24 h max).
           background jobs are NOT capped at the interactive 30-min limit.
           `execution` (with background=True): `'slurm'` (default on a cluster) submits an
           sbatch job; `'local'` runs it in-place in ABA's OWN allocation — no queue wait —
@@ -225,6 +226,7 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
         environment:" line / `describe_compute` / the `compute-placement`
         knowhow): default is the interactive R kernel (state persists; a LONG
         cell is fine — raise `timeout_s`, don't background to dodge a timeout).
+        Hard cap 1800s (30 min) — larger values are silently clamped; longer work must use background=True (1 h default, 24 h max).
         `background=True` runs as a queued Rscript job in a FRESH process — it
         loads its inputs from disk and writes outputs to disk (no interactive
         objects), with artifacts harvested + the plan continuation re-firing on

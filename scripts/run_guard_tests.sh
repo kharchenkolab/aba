@@ -74,6 +74,7 @@ FILES=(
   tests/test_remote_setup_purity.py
   tests/test_exec_argv_activation.py
   tests/test_handle_round_trip.py
+  tests/test_interactive_timeout_note.py
   tests/test_job_failure_surfacing.py
   tests/test_shared_fs_inference.py
   tests/test_project_binding_propagation.py

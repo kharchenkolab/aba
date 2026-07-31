@@ -117,6 +117,31 @@ def context_line() -> str:
         wt = e.get("walltime_remaining_min")
         if wt is not None:
             line += f", ~{round(wt / 60, 1)}h walltime left"
+            # The clock alone does not tell the agent whether DEFERRING saves the
+            # work — a different question whose answer flips with the dispatch
+            # mode. Seen in the placement study: with 20 min left and no cluster,
+            # the agent refused to start an hour of work and then offered the
+            # "background" lane, which on local mode is this same node, dying with
+            # the session.
+            # The behaviour rule (system_bundle/rules/behavior.md, "The session
+            # clock matters only when the work approaches it") keys on this fact,
+            # so the two ship together — that pair is what was measured. Rendered
+            # only when a clock exists, so an unbounded local install is untouched.
+            line += (" — the session ends then and anything still running in it dies. "
+                     + ("A background job is dispatched to the cluster and OUTLIVES the "
+                        "session, so its results are recoverable from a later one"
+                        if e.get("mode") == "slurm" else
+                        "Background jobs die with it too (they run on this node), so "
+                        "deferring does NOT rescue work that will not fit: say so, and "
+                        "offer a longer session or a smaller run"))
+        # The 30-min interactive cap is a HARD property of this lane, not a judgement a
+        # scheduler can change, so it renders either way. It used to sit only on the
+        # no-partitions branch — meaning on a real cluster, the one case where a long
+        # step is actually at stake, the cue offered "weigh Slurm vs local" and never
+        # mentioned the limit that settles the question.
+        line += (". Interactive cells are capped at 30 min (a larger timeout_s is "
+                 "clamped); anything longer must use background=True, a fresh "
+                 "process with no kernel state")
         parts = e.get("partitions") or []
         if parts:
             line += ". Slurm available — partitions: " + "; ".join(
@@ -125,11 +150,7 @@ def context_line() -> str:
                 + f", {p.get('wait', '?')})" for p in parts[:6])
             line += (". For a heavy / parallel / GPU / long step, weigh Slurm vs local "
                      "(call describe_compute); a background/Slurm job is a FRESH process — "
-                     "load inputs from disk, don't rely on kernel state.")
-        else:
-            line += (". Long cells run interactively (raise timeout_s if needed); use "
-                     "background=True only to parallelize independent jobs or when the user "
-                     "asks — it's a fresh process with no kernel state.")
+                     "load inputs from disk, don't rely on kernel state")
         remotes = e.get("remote_sites") or []
         if remotes:
             line += (f". Remote machines available: {', '.join(remotes)} — run a step there "
@@ -161,7 +182,12 @@ def context_line() -> str:
                 line += ("; named envs: " + ", ".join(_items) + " — inspect_env() for detail")
         except Exception:  # noqa: BLE001 — the clause must never break a turn
             pass
-        return line
+        # The line is assembled by appending clauses, most of which open with ". ".
+        # Clauses that also CLOSED with "." rendered ".." at four of the six live
+        # env shapes. Normalising once here is the property fix: a clause added
+        # later cannot reintroduce it, whichever punctuation its author picks.
+        line = re.sub(r"\.\.+(?=\s|$)", ".", line).rstrip()
+        return line if line.endswith((".", "!", "?")) else line + "."
     except Exception:  # noqa: BLE001
         return ""
 

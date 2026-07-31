@@ -934,6 +934,27 @@ def _run_in_named_env(env: str, code: str, lang: str, timeout_s: int) -> dict:
             "execution_mode": "isolated"}
 
 
+# The interactive ceiling. `timeout_s` above this is CLAMPED, not honored — so an
+# agent that reads "timed out (1800s limit)" and retries with a bigger timeout_s gets
+# the identical death, silently. Any timeout message at this value must say so and
+# name the background lane instead (see _timeout_note).
+INTERACTIVE_MAX_S = 1800
+
+
+def _timeout_note(timeout_s: int, lang: str = "python") -> str:
+    """What to tell the agent when a cell times out. Below the ceiling, raising
+    `timeout_s` genuinely fixes it. AT the ceiling it cannot: the value is capped,
+    so the only way to run longer is the background lane (1 h default, 24 h max)."""
+    if timeout_s >= INTERACTIVE_MAX_S:
+        return (f" — {INTERACTIVE_MAX_S}s is the HARD interactive ceiling and a larger "
+                f"timeout_s is silently clamped to it, so retrying with a bigger value "
+                f"fails identically. Work this long belongs in the background lane: "
+                f"re-run with background=True (1 h default, 24 h max), which also "
+                f"survives the session ending.")
+    return (f" — raise timeout_s (up to {INTERACTIVE_MAX_S}s) if it just needs longer, "
+            f"or re-run with background=True for genuinely long work.")
+
+
 def _background_timeout_s(input_: dict, est_min: float) -> int:
     """Size a BACKGROUND job's timeout CEILING. Background work is long, so it does
     NOT use the interactive 300s default / 30-min cap (live incident 2026-06-28: a
@@ -1095,7 +1116,7 @@ def _run_remote_kernel(input_: dict, ctx: dict | None, project_id: str,
     from core.exec.output_cap import snip_middle
 
     code = input_.get("code", "")
-    timeout_s = max(5, min(int(input_.get("timeout_s") or 300), 1800))
+    timeout_s = max(5, min(int(input_.get("timeout_s") or 300), INTERACTIVE_MAX_S))
     cancel_token = (ctx or {}).get("cancel_token")
     from core.compute.named_envs import resolve_env
     env_name = resolve_env(project_id, lang, explicit=input_.get("env"))
@@ -1193,7 +1214,13 @@ def _run_remote_kernel(input_: dict, ctx: dict | None, project_id: str,
                          "only waits on the same queue")
         except Exception:  # noqa: BLE001
             pass
-        return {"error": f"Code execution timed out ({timeout_s}s limit){why}"}
+        # The two notes give OPPOSITE advice: a pending allocation means
+        # "retrying with a longer timeout only waits on the same queue", while
+        # the ceiling note is about how long a cell that DID run may take. Only
+        # one can be true of a given timeout, so the ceiling note is suppressed
+        # when the kernel never started.
+        return {"error": f"Code execution timed out ({timeout_s}s limit){why}"
+                         f"{'' if why else _timeout_note(timeout_s)}"}
     if res.cancelled:
         return {"status": "cancelled",
                 "note": f"Run was cancelled by the user "
@@ -1347,7 +1374,7 @@ def _run_remote_sync(input_: dict, ctx: dict | None, project_id: str,
     from content.bio.lifecycle.runs import active_run_id
 
     site = input_["site"]
-    timeout_s = max(5, min(int(input_.get("timeout_s") or 300), 1800))
+    timeout_s = max(5, min(int(input_.get("timeout_s") or 300), INTERACTIVE_MAX_S))
     submit = submit_r_job if kind == "run_r" else submit_python_job
     # Env identity — SAME rules as every lane: env=None follows the project's
     # active env for the step's LANGUAGE (resolve_env); 'default'/reserved →
@@ -1470,7 +1497,7 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
     from core import projects
 
     code = input_.get("code", "")
-    timeout_s = max(5, min(int(input_.get("timeout_s") or 300), 1800))
+    timeout_s = max(5, min(int(input_.get("timeout_s") or 300), INTERACTIVE_MAX_S))
     cancel_token = (ctx or {}).get("cancel_token")
     project_id = (ctx or {}).get("project_id") or projects.current() or "default"
     thread_id = (ctx or {}).get("thread_id") or "default"
@@ -1629,7 +1656,8 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
             res = sess.execute(_with_cwd_probe(sess, code, "python", cwd),
                                cancel_token=cancel_token, timeout_s=timeout_s)
             if res.timed_out:
-                return {"error": f"Code execution timed out ({timeout_s}s limit)"}
+                return {"error": f"Code execution timed out ({timeout_s}s limit)"
+                          f"{_timeout_note(timeout_s)}"}
             if res.cancelled:
                 return {"status": "cancelled",
                         "note": f"Run was cancelled by the user "
@@ -1752,7 +1780,7 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
     from core import projects
 
     code = input_.get("code", "")
-    timeout_s = max(5, min(int(input_.get("timeout_s") or 600), 1800))
+    timeout_s = max(5, min(int(input_.get("timeout_s") or 600), INTERACTIVE_MAX_S))
     cancel_token = (ctx or {}).get("cancel_token")
     project_id = (ctx or {}).get("project_id") or projects.current() or "default"
     thread_id = (ctx or {}).get("thread_id") or "default"
@@ -1933,7 +1961,8 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
                 "absolute paths for files you want to keep.")
         return result
     if res.timed_out:
-        return {"error": f"R code timed out ({timeout_s}s limit)"}
+        return {"error": f"R code timed out ({timeout_s}s limit)"
+                          f"{_timeout_note(timeout_s, 'r')}"}
     if res.cancelled:
         return {"status": "cancelled",
                 "note": f"Run was cancelled by the user "

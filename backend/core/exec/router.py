@@ -13,8 +13,14 @@ which silently relocated state-dependent cells into a fresh process):
   when the step needs more than this node has (cores/mem/GPU) or might exceed the
   allocation's remaining walltime; otherwise interactive. The agent drives the
   speed-vs-queue-wait judgment by requesting resources (est_cores/est_gpu) after
-  reading `describe_compute`. Code here is the safety net (won't fit / would be
-  killed) plus honoring the explicit flag.
+  reading `describe_compute`.
+
+**This is not a safety net.** Every Slurm-mode check reads the estimate the CALLER
+supplied; a call with no est_* args is compared against nothing and runs
+interactively. A step that will not fit, or that will be killed when the
+allocation ends, is only caught if the agent characterised it first — so the
+rationale for an un-characterised call says exactly that, rather than claiming a
+fit that was never tested.
 
 `location` stays "local" | "background"; the active submitter
 (`ABA_BATCH_SUBMITTER`) turns a "background" choice into a local weft task or a
@@ -86,4 +92,10 @@ def decide(*, env: Optional[dict] = None,
 
     if reasons:
         return ExecutorChoice("background", "Slurm: " + "; ".join(reasons))
+    if not (ec or em or eg or ert):
+        # Every clause above is gated on a supplied estimate, so a call with no
+        # est_* args reaches here having been checked against nothing. Claiming
+        # it "fits this node" asserts a test that never ran.
+        return ExecutorChoice("local", "interactive — no estimate given, so no "
+                                       "fit or walltime check was possible")
     return ExecutorChoice("local", "fits this node — interactive")
