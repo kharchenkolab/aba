@@ -31,6 +31,29 @@ resolvable at render or deploy time — never baked into the image. If a
 change to these files requires rebuilding the SIF, the change is designed
 wrong.
 
+## The instance ladder lives in site.yaml, and two files read it
+
+Cores and memory only mean something against a node's core count and its
+memory-per-core, so the SITE owns the ladder (`site.yaml` → `form.instances`,
+`form.walltimes`). Two templates consume it and must agree: `form.yml.erb`
+renders the menu, `submit.yml.erb` turns the chosen id into
+`-c <cores> --mem=<mem>`. Each also carries a built-in fallback for a
+deployment that ships no site config; those fallbacks are byte-identical by
+contract, because drift there means the card *displays* one size and *submits*
+another with nothing failing.
+
+`--mem` is not optional. Under Slurm `CR_CORE_MEMORY` with no `DefMemPerCPU` /
+`DefMemPerNode`, a job that requests no memory is allocated the entire node's
+memory, so one session locks every other core on its node out of the pool.
+
+Both are dashboard-side templates: they render before any of this app's shell
+has run, so nothing has exported `ABA_SHARE` yet and the `/cluster/aba` literal
+in each file is the only thing that resolves `site.yaml`. Both must therefore be
+on the site deployer's share-root rewrite list. The `template/` scripts are
+different — they run on the node after `before.sh.erb` exports the real value,
+and take it from the environment. `tests/test_ood_template_contracts.py` pins
+both halves.
+
 ## The card icon is found by filename
 
 OnDemand resolves the launcher icon positionally, not from the manifest:

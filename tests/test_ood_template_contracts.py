@@ -96,6 +96,80 @@ def test_the_card_ships_an_icon_ood_will_find_and_can_actually_render():
         "loads none of them, so those parts render blank")
 
 
+def _ladder_block(path: Path) -> str:
+    """The instance-ladder fallback between its marker comments."""
+    m = re.search(r">>> instance-ladder fallback(.*?)<<< instance-ladder fallback",
+                  path.read_text(), re.S)
+    assert m, f"{path.name} has lost its instance-ladder fallback markers"
+    # Drop the marker lines' own trailing prose; compare the Ruby literal only.
+    return "\n".join(l for l in m.group(1).splitlines() if "def_instances" in l or "'id' =>" in l)
+
+
+def test_the_two_templates_fall_back_to_the_SAME_instance_ladder():
+    """form.yml.erb renders the Instance menu; submit.yml.erb turns the chosen id
+    into `-c <cores> --mem=<mem>`. Both prefer site.yaml's ladder, and both carry
+    a built-in fallback for a deployment that ships no site config.
+
+    Those two fallbacks must agree. If they drift, a bare deployment shows one
+    size on the card and SUBMITS another — and nothing fails, because each file
+    is independently valid. Same class as the card advertising a download whose
+    bytes are missing: two halves of one contract, verified apart."""
+    form = _ladder_block(APP / "form.yml.erb")
+    submit = _ladder_block(APP / "submit.yml.erb")
+    assert form.strip(), "the form's fallback ladder came back empty — marker drift"
+    assert form == submit, (
+        "the fallback instance ladders have diverged; a site-config-less "
+        f"deployment would display one size and submit another:\n"
+        f"--- form.yml.erb\n{form}\n--- submit.yml.erb\n{submit}")
+
+
+def test_dashboard_side_templates_that_resolve_site_yaml_are_pinned():
+    """`/cluster/aba` is the upstream default share root; a site deploy script
+    rewrites it (install/ood/README.md, "Site deployer contract") — but it seds
+    a FIXED LIST of files.
+
+    The list matters only for the DASHBOARD-side templates. They render before
+    any of this app's shell has run, so nothing has exported ABA_SHARE yet and
+    the literal in the file is the only thing that resolves site.yaml. Miss one
+    and it reads a config that isn't there, then degrades to the shipped
+    fallback instead of erroring — submit.yml.erb would launch the portable
+    instance ladder rather than the site's, silently.
+
+    Pinned, so adding one is the reminder to extend the deployer's sed list."""
+    readers = {f.name for f in sorted(APP.glob("*.yml.erb"))
+               if "ABA_SITE_CONFIG" in f.read_text()}
+    expected = {"form.yml.erb", "submit.yml.erb"}
+    assert readers == expected, (
+        f"dashboard-side site.yaml readers changed: added={sorted(readers - expected)} "
+        f"removed={sorted(expected - readers)}. Extend the site deploy script's "
+        "share-root rewrite list, then update this test.")
+    for name in sorted(readers):
+        assert "/cluster/aba/site.yaml" in (APP / name).read_text(), (
+            f"{name} resolves site.yaml but not via the rewritable "
+            "'/cluster/aba/site.yaml' literal, so the deployer's sed cannot reach it")
+
+
+def test_node_side_scripts_take_the_share_root_from_the_environment():
+    """The counterpart: the `template/` scripts run on the compute node, AFTER
+    before.sh.erb has exported ABA_SHARE / ABA_SITE_CONFIG. They are therefore
+    NOT on the deployer's rewrite list — which is only safe while every mention
+    of the default is overridable. A bare `/cluster/aba` in one of them would be
+    an unrewritten hardcode pointing at a path the site does not have."""
+    offenders = []
+    for f in sorted((APP / "template").rglob("*")):
+        if not f.is_file():
+            continue
+        for i, line in enumerate(f.read_text(errors="ignore").splitlines(), 1):
+            if "/cluster/aba" not in line or line.lstrip().startswith("#"):
+                continue
+            if ":-" not in line.split("/cluster/aba")[0][-40:]:
+                offenders.append(f"{f.relative_to(APP)}:{i}: {line.strip()}")
+    assert not offenders, (
+        "node-side script hardcodes the default share root with no ${VAR:-…} "
+        "override, and the deployer does not rewrite these files:\n"
+        + "\n".join(offenders))
+
+
 def test_session_tmpdir_prefers_node_local_and_cleans_fallback():
     """The ENOSPC fix contract: TMPDIR prefers $SLURM_TMPDIR (node-local,
     Slurm-purged); the parallel-FS fallback is per-session and removed by the

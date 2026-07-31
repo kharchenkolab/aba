@@ -15,6 +15,23 @@
   # with no GPU partition the checkbox only ever produces a --gres=gpu:1 submit failure.
   fcfg     = site['form'] || {}
   show_gpu = fcfg.key?('gpu') ? !!fcfg['gpu'] : true
+  # ── Instance ladder + time menu (site.yaml `form:`) ──
+  # Cores and RAM only mean anything against a node's core count and its
+  # memory-per-core, so the SITE owns the ladder. The fallback below is
+  # deliberately PORTABLE — 4 GB/core, a commodity ratio — so a bare
+  # deployment still schedules; a site with fat nodes raises it in its own
+  # config rather than here.
+  # >>> instance-ladder fallback (byte-identical in submit.yml.erb, which
+  #     resolves the SAME ladder to sbatch flags — a guard asserts the match)
+  def_instances = [{'id' => 'light', 'label' => 'Light', 'cores' => 4,  'mem' => '16G'},
+                   {'id' => 'heavy', 'label' => 'Heavy', 'cores' => 16, 'mem' => '64G'}]
+  # <<< instance-ladder fallback
+  instances = (fcfg['instances'].is_a?(Array) && !fcfg['instances'].empty?) ?
+                fcfg['instances'] : def_instances
+  def_walltimes = [{'label' => 'Short — 4 hours', 'seconds' => 14400},
+                   {'label' => '12 hours',        'seconds' => 43200}]
+  walltimes = (fcfg['walltimes'].is_a?(Array) && !fcfg['walltimes'].empty?) ?
+                fcfg['walltimes'] : def_walltimes
   root_tmpl   = gcfg['root_path'] || '/groups/{group_dir}/aba'
   strip       = gcfg['strip_suffix'].to_s                 # strip a site suffix: unix group → folder
   ui          = site['ui_text'] || {}
@@ -61,6 +78,7 @@ cluster: "dev-cluster"
 form:
   - aba_lab
   - aba_instance
+  - aba_walltime
 <%- if show_gpu -%>
   - has_gpu
 <%- end -%>
@@ -71,10 +89,24 @@ attributes:
   aba_instance:
     widget: "select"
     label: "Instance"
-    help: "Light = 1 core; Heavy = 10 cores."
+    help: "Cores and memory for the session. The whole allocation is held for the full time limit, whether or not you are connected."
     options:
-      - ["Light — 1 core", "light"]
-      - ["Heavy — 10 cores", "heavy"]
+<%- instances.each do |i| -%>
+      - ["<%= i['label'] %> — <%= i['cores'] %> cores, <%= i['mem'] %> RAM", "<%= i['id'] %>"]
+<%- end -%>
+  # The FIRST option is what OnDemand preselects, so the shortest goes first.
+  # A time limit cannot be raised once the job is running — only a Slurm
+  # operator can do that — so this choice is a commitment. Hitting it costs
+  # the live kernel, not the project: entities persist in the lab workspace
+  # and a relaunch resumes them.
+  aba_walltime:
+    widget: "select"
+    label: "Time limit"
+    help: "The session is killed at this limit and cannot be extended once running. There is no idle timeout, so a session left open holds its cores and memory until it expires — close it when you are done."
+    options:
+<%- walltimes.each do |w| -%>
+      - ["<%= w['label'] %>", "<%= w['seconds'].to_i %>"]
+<%- end -%>
   aba_lab:
     widget: "select"
     label: "Lab"

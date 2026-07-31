@@ -1,15 +1,50 @@
+<%-
+  # 'basic' = plain HTTP web app. Cores/RAM come from the SAME site.yaml ladder
+  # the form rendered its Instance menu from, keyed by the id the user picked;
+  # the time limit arrives already in seconds. deploy.sh rewrites the share root
+  # below exactly as it does in form.yml.erb.
+  require 'yaml'
+  site = (YAML.safe_load(File.read(ENV['ABA_SITE_CONFIG'] || '/cluster/aba/site.yaml')) rescue nil) || {}
+  fcfg = site['form'] || {}
+  # >>> instance-ladder fallback (byte-identical in form.yml.erb, which renders
+  #     the SAME ladder as the menu — a guard asserts the match)
+  def_instances = [{'id' => 'light', 'label' => 'Light', 'cores' => 4,  'mem' => '16G'},
+                   {'id' => 'heavy', 'label' => 'Heavy', 'cores' => 16, 'mem' => '64G'}]
+  # <<< instance-ladder fallback
+  instances = (fcfg['instances'].is_a?(Array) && !fcfg['instances'].empty?) ?
+                fcfg['instances'] : def_instances
+  # An unknown id (a SAVED SETTING from before the site retuned the ladder)
+  # falls back to the first rung rather than rendering an empty flag.
+  want = (defined?(aba_instance) ? aba_instance.to_s : '')
+  inst = instances.find { |i| i['id'].to_s == want } || instances.first
+  # Same for a saved setting predating the time menu: take the shortest rung.
+  secs = (defined?(aba_walltime) && aba_walltime.to_s =~ /\A\d+\z/) ?
+           aba_walltime.to_i : 14400
+-%>
 ---
-# 'basic' = plain HTTP web app. The form's Instance select maps to cores here
-# (Light=1, Heavy=10); GPU adds --gres. Walltime defaults to 8h (no form field).
 batch_connect:
   template: "basic"
 script:
-  wall_time: 28800
+  wall_time: <%= secs %>
   native:
     # submit.yml.erb renders with the form-values struct as self, so attributes
     # are bare names here (NOT context.x — that's for the template/ scripts).
-    - "-n"
-    - "<%= aba_instance.to_s == 'heavy' ? '10' : '1' %>"
+    #
+    # -N 1 -c N, not -n N. The session is ONE process that wants N cores next to
+    # it: -n asks for N *tasks*, which Slurm may spread across nodes, leaving the
+    # app on the first with the rest unreachable. -c is also what the runtime
+    # reads — core/exec/cpu.py takes SLURM_CPUS_PER_TASK ahead of
+    # SLURM_CPUS_ON_NODE when sizing BLAS/OMP pools.
+    - "-N"
+    - "1"
+    - "-c"
+    - "<%= inst['cores'] %>"
+    # --mem is not optional. Under CR_CORE_MEMORY with no DefMemPerCPU /
+    # DefMemPerNode, a job that requests no memory is allocated the ENTIRE
+    # node's memory (observed live: a 1-core job holding 717 GB), so a single
+    # session locks every remaining core on its node out of the pool. The
+    # ladder's mem is what makes the instance sizes mean anything at all.
+    - "--mem=<%= inst['mem'] %>"
 <%- # `has_gpu` is absent from the struct when site.yaml sets form.gpu: false -%>
 <%- if defined?(has_gpu) && has_gpu.to_s == '1' -%>
     - "--gres=gpu:1"
