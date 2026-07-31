@@ -130,11 +130,9 @@ def render(matrix):
     else:
         lines.append("acceptance OK: every scenario is failed by >=1 baseline")
     disc = scenario_discrimination(matrix)
-    weakest = min(disc.items(), key=lambda kv: (len(kv[1]), kv[0]))
-    lines.append(f"scenario failed by fewest baselines: "
-                 f"{weakest[0][0]}/{weakest[0][1]} "
-                 f"({len(weakest[1])}/5 — 5/5 everywhere means maximal "
-                 f"discrimination)")
+    n_fail = sorted(len(v) for v in disc.values())
+    lines.append(f"baselines failing per scenario: min {n_fail[0]}/5, "
+                 f"max {n_fail[-1]}/5 across {len(disc)} scenarios")
     return "\n".join(lines)
 
 

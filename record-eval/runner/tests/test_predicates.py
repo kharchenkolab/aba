@@ -473,3 +473,89 @@ class TestProvenanceChain(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestC2Regressions(unittest.TestCase):
+    """Locks the post-S4 critic fixes: pending rows are visible destinations,
+    tray checks sample the in-window peak, gate violations grade not crash."""
+
+    def test_pending_story_row_under_forbidden_question_violates(self):
+        s = snap(findings={"G03": {"id": "G03", "faded": False,
+                                   "citations": [{"stratum": "sediment",
+                                                  "question": None,
+                                                  "revised": False}]}},
+                 routing_rows={"R1": {"id": "R1", "product": "G03",
+                                      "stratum": "story", "questions": ["Q2"],
+                                      "status": "pending",
+                                      "typed": "routine"}})
+        v = P.routing_destination(traj(entry(5, snapshot=s)), POOL, None,
+                                  window=None,
+                                  spec={"G03": dict(
+                                      allowed=("notes", "sediment"),
+                                      forbid_questions=("Q2",))})
+        self.assertFalse(v.passed)
+
+    def test_pending_row_counts_as_citation_before_distill(self):
+        s = snap(sections={"S1": {"id": "S1", "question_id": "Q1",
+                                  "cited": [], "kind": "question-root",
+                                  "status": "live", "parent_id": None}},
+                 findings={"G01": {"id": "G01", "citations": []}},
+                 routing_rows={"R1": {"id": "R1", "product": "G01",
+                                      "stratum": "story", "questions": ["Q1"],
+                                      "status": "pending",
+                                      "typed": "routine"}})
+        v = P.cited_under_questions(traj(entry(5, snapshot=s)), POOL, None,
+                                    window=None, findings=("G01",),
+                                    questions=("Q1",))
+        self.assertTrue(v.passed, v.detail)
+
+    def test_tray_peak_sampled_not_post_settle(self):
+        busy = snap(routing_rows={"R1": {"id": "R1", "status": "pending",
+                                         "typed": "routine", "product": "G01",
+                                         "questions": []}})
+        settled = snap()  # after distill: everything settled
+        t = traj(entry(3, snapshot=busy), entry(4, snapshot=settled))
+        v = P.tray_state(t, POOL, None, window=(3, 4), non_empty=True)
+        self.assertTrue(v.passed, v.detail)
+
+    def test_absorb_rejects_pending_without_ratified_implication(self):
+        s = snap(findings={"G01": {"id": "G01", "superseded_by": None,
+                                   "citations": [{"stratum": "story"}]}},
+                 proposals={"PR1": {"id": "PR1", "cls": "X",
+                                    "kind": "addendum", "status": "pending",
+                                    "description": "supersede G01"}})
+        v = P.overturn_handling(traj(entry(5, snapshot=s)), POOL, None,
+                                window=(5, 5), pairs=[("G01", "G02")],
+                                mode="absorb")
+        self.assertFalse(v.passed)
+
+
+class TestGateViolationGraded(unittest.TestCase):
+    def test_grade_survives_gate_violation(self):
+        import os
+        from runner import ops as O
+        from runner.grade import grade
+        # a policy that demotes without consent on the first finding
+        from runner.policy import Policy
+
+        class Rogue(Policy):
+            name = "rogue-test"
+
+            def decide(self, moment):
+                if moment.kind == "finding_landed":
+                    return [O.DemoteSection(section="Q1", to="closed",
+                                            cls="3")]
+                return []
+
+        from runner.cli import POLICIES
+        POLICIES["rogue-test"] = Rogue
+        try:
+            pool_dir = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(
+                    os.path.abspath(__file__)))), "pools",
+                "checkout-p99-lb-idle-timeout")
+            graded, summary = grade(pool_dir, "contradiction", "rogue-test")
+            self.assertTrue(all(not g.passed for g in graded))
+            self.assertIn("gate violation", graded[0].detail)
+        finally:
+            del POLICIES["rogue-test"]

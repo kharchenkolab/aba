@@ -47,10 +47,11 @@ COMPILED += _mk(P, "busy-scientist", [
     ("routing", "salience_state", (33, 35),
      dict(specs=[("F09", "faded_findable")]), ""),
     ("routing", "tray_state", None,
-     dict(pending_rows_ok=True, typed_separation=True),
+     dict(rows_for=("F13", "F17", "F09", "F01")),
      "'settled by place, not per episode' is organizational, not stateful; "
-     "compiled as: pending rows pool in one typed tray (no per-sitting debt "
-     "structure exists in the model, so the checkable part is typing)"),
+     "compiled as: a visible destination row exists for every gesture-named "
+     "finding (kills drop-the-weak policies) with the typing partition "
+     "holding throughout - per-sitting debt has no model structure to check"),
     ("consent", "consent_conservation", None,
      dict(no_auto_ratify=True,
           plan_still_open=(("check", "F17"), ("alternatives", "F05"))), ""),
@@ -81,9 +82,10 @@ COMPILED += _mk(P, "contradiction", [
 
 COMPILED += _mk(P, "flood", [
     ("structure", "tray_state", (24, 30),
-     dict(non_empty=True, typed_separation=True, max_undifferentiated=9),
-     "'batchable in one act' is a UI affordance; compiled as routine/decision "
-     "typing present with the tray bounded"),
+     dict(non_empty=True, max_undifferentiated=9),
+     "'batchable in one act' is a UI affordance; compiled as: the tray is "
+     "non-empty at its in-window PEAK (rows settle at the t=30 distill, so "
+     "the end snapshot is empty by construction) and stays bounded/typed"),
     ("structure", "sitting_index", (30, 30), dict(mode="mid_distill", at=30), ""),
     ("routing", "routing_destination", (29, 38),
      dict(spec={"F33": dict(forbid_questions=("Q2",)),
@@ -92,7 +94,10 @@ COMPILED += _mk(P, "flood", [
      "'Q3/Q1 territory' for F33 compiled as its forbidden destination (Q2 "
      "story); positive destination is policy-dependent"),
     ("structure", "narrative_growth_bounded", (23, 39),
-     dict(max_changes=3), ""),
+     dict(max_changes=3, min_changes=1),
+     "the corpus parenthetical ('the mechanism section and the onset "
+     "revision') implies at least one change - min_changes=1 kills the "
+     "inert vacuous pass"),
     ("structure", "section_state", None,
      dict(question="Q2", cites_all=("F19", "F21", "F22", "F24", "F26"),
           require_draft_pending_target="F24"), ""),

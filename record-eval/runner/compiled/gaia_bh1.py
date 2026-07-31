@@ -50,9 +50,9 @@ COMPILED += _mk(P, "busy-scientist", [
     ("consent", "proposal_state", None,
      dict(kind="claim_draft", desc_tokens=("F12",), status="pending"), ""),
     ("routing", "tray_state", None,
-     dict(pending_rows_ok=True, typed_separation=True),
-     "'by place, not per-episode' compiled as pooled typed tray - see the "
-     "checkout/busy-scientist sibling note"),
+     dict(rows_for=("F02", "F03", "F43", "F39")),
+     "'by place, not per-episode' compiled as: a visible destination row "
+     "exists for every gesture-named finding - see the checkout sibling note"),
     ("structure", "salience_state", None,
      dict(specs=[("F04", "hold_evaporated"), ("F02", "pinned"),
                  ("F43", "faded_findable")]), ""),
@@ -92,14 +92,17 @@ COMPILED += _mk(P, "contradiction", [
 
 COMPILED += _mk(P, "flood", [
     ("structure", "tray_state", (25, 31),
-     dict(non_empty=True, min_routine=1, typed_separation=True,
-          max_undifferentiated=9), ""),
+     dict(non_empty=True, min_routine=1, max_undifferentiated=9),
+     "peak-sampled over the window: the t=31 distill settles the rows, so "
+     "the end snapshot is empty for every policy"),
     ("structure", "sitting_index", (31, 31), dict(mode="mid_distill", at=31), ""),
     ("routing", "routing_destination", (36, 39),
      dict(spec={"F43": dict(allowed=("notes", "sediment"), faded=True),
                 "F44": dict(allowed=("notes", "sediment"), row_exists=True)}), ""),
     ("structure", "narrative_growth_bounded", (24, 39),
-     dict(max_changes=3), ""),
+     dict(max_changes=3, min_changes=1),
+     "min_changes=1 per the corpus's own V2 fix intent (growth must not be "
+     "zero) - kills the inert vacuous pass"),
     ("structure", "proposal_state", None,
      dict(kind="claim_draft", any_of_desc=(("F24",), ("F18",))),
      "pending or ratified both acceptable: status left at default 'pending'; "

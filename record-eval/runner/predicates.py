@@ -15,7 +15,8 @@ total: they never raise on empty stores — they fail with a detail string.
 
 Conventions relied on (documented in engine.py / REPORT.md):
 - the "tray" is reconstructed as pending routing rows + pending proposals
-  (rows carry `typed`: routine vs decision);
+  (rows carry `typed`; NOTE: the current engine types every policy row
+  "routine", so decision-typing enters via pending decision proposals);
 - "cited under all tagged questions, no copies" uses the deduped
   `section.cited` list, never `finding.citations` (not deduped);
 - the `contested` flag on ratified prose carries "no prose asserts X at face
@@ -155,8 +156,11 @@ def gap_record(traj, pool, scenario, *, window, min_gap_days=0,
             if "sediment" not in strata:
                 return _no(f"background {f['id']} not in sediment")
     if briefing:
-        if not (snap.get("briefings") or traj.notes_in(None, "briefing")):
-            return _no("no re-entry briefing recorded after the gap")
+        gap_end = max((a.get("ended_day", 0) for a in absences), default=0)
+        briefs = [b for b in (snap.get("briefings") or [])
+                  if b.get("day", -1) >= gap_end]
+        if not briefs:
+            return _no("no re-entry briefing recorded at/after the gap end")
     if check_touched_last_sitting:
         sittings = list(snap.get("sittings", {}).values())
         if sittings:
@@ -255,8 +259,6 @@ def ops_bounded(traj, pool, scenario, *, window, forbid_kinds=(),
                            f"> {max_cls}")
         if no_revise_ratified and name == "revise_prose":
             return _no(f"revise_prose applied at t={t} (ratified guard)")
-        if forbid_new_addendum_except is not None and name == "propose":
-            pass
     if forbid_new_addendum_except is not None:
         allowed = set(forbid_new_addendum_except)
         for t, n in traj.notes_in(window, "proposal_opened"):
@@ -435,6 +437,12 @@ def cited_under_questions(traj, pool, scenario, *, window, findings=None,
     for s in sections:
         q = s.get("question_id")
         by_q.setdefault(q, set()).update(s.get("cited", []))
+    # a pending routing row IS the visible destination proposal: citations
+    # settle only at distill, so pre-distill windows read rows (C2 fix)
+    for r in snap.get("routing_rows", {}).values():
+        if r.get("stratum") == "story":
+            for q in r.get("questions", []):
+                by_q.setdefault(q, set()).add(r.get("product"))
     checks = []
     if question_map:
         checks = [(fid, qs) for fid, qs in question_map.items()]
@@ -462,7 +470,7 @@ def cited_under_questions(traj, pool, scenario, *, window, findings=None,
                       if p.get("section_id") in secs
                       and fid in p.get("provenance", [])
                       and not p.get("superseded_by")]
-            if len(blocks) > 2:
+            if len(blocks) > 1:
                 return _no(f"{fid} appears in {len(blocks)} live prose blocks "
                            f"under {q} (copies)")
     return _ok(f"{len(checks)} finding(s) correctly multi-cited")
@@ -480,14 +488,22 @@ def routing_destination(traj, pool, scenario, *, window, spec):
             return _no(f"{fid} not landed")
         cits = [c for c in f.get("citations", []) if not c.get("revised")]
         strata = {c["stratum"] for c in cits}
+        strata |= {r.get("stratum") for r in snap.get("routing_rows", {}).values()
+                   if r.get("product") == fid and r.get("status") == "pending"}
         allowed = set(rule.get("allowed", ("story", "notes", "sediment")))
         extra = strata - allowed
         if extra:
             return _no(f"{fid} found in {sorted(extra)} (allowed {sorted(allowed)})")
+        rows = [r for r in snap.get("routing_rows", {}).values()
+                if r.get("product") == fid]
         for q in rule.get("forbid_questions", ()):
             if any(c.get("question") == q and c["stratum"] == "story"
                    for c in cits):
                 return _no(f"{fid} cited in {q}'s story")
+            if any(r.get("stratum") == "story" and q in r.get("questions", [])
+                   and r.get("status") == "pending" for r in rows):
+                return _no(f"{fid} has a pending story row under {q} - the "
+                           f"row is the destination proposal")
         if rule.get("require_row_question"):
             q = rule["require_row_question"]
             rows = snap.get("routing_rows", {}).values()
@@ -521,9 +537,17 @@ def overturn_handling(traj, pool, scenario, *, window, pairs, mode,
         if f is None:
             return f"{overturned} not landed"
         marked = f.get("superseded_by") == by
-        pending = any(p.get("status") == "pending"
-                      and _has_token(p.get("description", ""), overturned)
-                      for p in snap.get("proposals", {}).values())
+        # a merely-pending proposal counts ONLY where ratified prose is
+        # implicated (the legal path necessarily pends awaiting consent);
+        # otherwise absorption means the mark actually applied (C2 fix)
+        ratified_implicated = any(
+            (pr.get("ratified") or pr.get("authored"))
+            and overturned in pr.get("provenance", [])
+            for pr in snap.get("prose", {}).values())
+        pending = ratified_implicated and any(
+            p.get("status") == "pending"
+            and _has_token(p.get("description", ""), overturned)
+            for p in snap.get("proposals", {}).values())
         if not (marked or pending):
             return f"{overturned} neither marked superseded by {by} nor pending"
         # findable: still present with citations
@@ -786,9 +810,10 @@ def stub_is_plan(traj, pool, scenario, *, window, question, intent=True,
     if len(items) < min_items:
         return _no(f"{len(items)} plan items under {question} (< {min_items})")
     if no_prose:
+        # question-root prose counts too: evidence prose under the root is
+        # still prose pretending evidence for the direction (C2 fix)
         sids = {s["id"] for s in snap.get("sections", {}).values()
-                if s.get("question_id") == question
-                and s.get("kind") != "question-root"}
+                if s.get("question_id") == question}
         blocks = [p for p in snap.get("prose", {}).values()
                   if p.get("section_id") in sids]
         if blocks:
@@ -800,42 +825,65 @@ def stub_is_plan(traj, pool, scenario, *, window, question, intent=True,
 
 # 14
 def tray_state(traj, pool, scenario, *, window, non_empty=None,
-               max_undifferentiated=None, typed_separation=True,
-               min_routine=None, pending_rows_ok=True,
-               compare_around_t=None):
+               max_undifferentiated=None, min_routine=None,
+               rows_for=(), compare_around_t=None):
     """The needs-you tray (reconstructed: pending routing rows + pending
     proposals) stays bounded and typed — routine batchable, decisions
-    one-by-one — and is derived, so restructuring alone never changes it."""
+    one-by-one.  Peak checks (non_empty/min_routine) scan every in-window
+    snapshot, because distills settle rows: the post-settle end snapshot is
+    empty by construction (C2 fix).  The typing partition is unconditional.
+    rows_for requires a visible destination row (any status) per finding."""
     snap = traj.snap_end(window)
-    rows = [r for r in snap.get("routing_rows", {}).values()
-            if r.get("status") == "pending"]
-    props = [p for p in snap.get("proposals", {}).values()
-             if p.get("status") == "pending"]
-    routine = [r for r in rows if r.get("typed") == "routine"]
-    decisions = [r for r in rows if r.get("typed") == "decision"] + props
-    total = len(rows) + len(props)
-    if non_empty and total == 0:
-        return _no("tray empty (inert)")
-    if min_routine is not None and len(routine) < min_routine:
-        return _no(f"{len(routine)} routine rows (< {min_routine})")
-    if max_undifferentiated is not None and typed_separation:
-        if len(routine) + len(decisions) < total:
+
+    def tray_of(s):
+        rows = [r for r in s.get("routing_rows", {}).values()
+                if r.get("status") == "pending"]
+        props = [p for p in s.get("proposals", {}).values()
+                 if p.get("status") == "pending"]
+        routine = [r for r in rows if r.get("typed") == "routine"]
+        decisions = [r for r in rows if r.get("typed") == "decision"] + props
+        return rows, props, routine, decisions
+
+    snaps = [e.get("snapshot") or {} for e in traj.in_window(window)] or [snap]
+    # typing partition must hold at EVERY snapshot
+    for s in snaps:
+        rows, props, routine, decisions = tray_of(s)
+        if len(routine) + len(decisions) < len(rows) + len(props):
             return _no("tray rows lack routine/decision typing")
-        if total > max_undifferentiated and not routine:
-            return _no(f"{total} undifferentiated tray items")
+        if max_undifferentiated is not None and                 len(rows) + len(props) > max_undifferentiated and not routine:
+            return _no(f"{len(rows) + len(props)} undifferentiated tray items")
+    peak_total = max(len(t[0]) + len(t[1]) for t in map(tray_of, snaps))
+    peak_routine = max(len(t[2]) for t in map(tray_of, snaps))
+    if non_empty and peak_total == 0:
+        return _no("tray never non-empty in window (inert)")
+    if min_routine is not None and peak_routine < min_routine:
+        return _no(f"peak routine rows {peak_routine} (< {min_routine})")
+    if rows_for:
+        all_rows = snap.get("routing_rows", {}).values()
+        for fid in rows_for:
+            if not any(r.get("product") == fid for r in all_rows):
+                return _no(f"no visible destination row for {fid}")
+    rows, props, routine, decisions = tray_of(snap)
+    total = len(rows) + len(props)
     if compare_around_t is not None:
+        # "immediately before and after": snapshot just before t vs at t,
+        # not the terminal state (C2 fix)
         before = traj.snap_before(compare_around_t)
-        b_rows = [r for r in before.get("routing_rows", {}).values()
-                  if r.get("status") == "pending"]
-        b_props = [p for p in before.get("proposals", {}).values()
-                   if p.get("status") == "pending"]
-        after_n, before_n = total, len(b_rows) + len(b_props)
-        resolved = sum(1 for p in snap.get("proposals", {}).values()
-                       if p.get("status") == "accepted"
-                       and p.get("decided_event") is not None)
-        if before_n - after_n > resolved + 1:
-            return _no(f"needs-you count moved {before_n}->{after_n} beyond "
-                       f"items the pivot resolved ({resolved})")
+        at = traj.snap_end((compare_around_t, compare_around_t))
+        _, _, b_routine, b_dec = tray_of(before)
+        _, _, a_routine, a_dec = tray_of(at)
+        before_n = len(b_routine) + len(b_dec)
+        after_n = len(a_routine) + len(a_dec)
+        idx_at = {e["event"]["t"]: e["event"]["index"]
+                  for e in traj.in_window(None)}
+        resolved = sum(
+            1 for p in at.get("proposals", {}).values()
+            if p.get("status") in ("accepted", "dismissed")
+            and p.get("decided_event") == idx_at.get(compare_around_t))
+        if abs(before_n - after_n) > resolved:
+            return _no(f"needs-you count moved {before_n}->{after_n} across "
+                       f"the restructuring beyond items it resolved "
+                       f"({resolved})")
     return _ok(f"tray: {len(routine)} routine + {len(decisions)} decisions")
 
 

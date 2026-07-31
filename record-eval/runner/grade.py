@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 from .cli import POLICIES, default_pools_root, _resolve_pool_dir
 from .compiled import registry
-from .engine import ReplayEngine
+from .engine import GateViolation, ReplayEngine
 from .events import load_pool, load_scenario
 from .predicates import PREDICATES, Trajectory
 from .scripted_good import POOL_ID as SG_POOL, SCENARIO_ID as SG_SCENARIO
@@ -41,9 +41,20 @@ def grade(pool_dir: str, scenario_id: str, policy_name: str):
     scen_path = os.path.join(pool_dir, "scenarios", scenario_id + ".json")
     scenario = load_scenario(scen_path, pool)
     policy = POLICIES[policy_name]()
-    result = ReplayEngine(pool, scenario, policy, snapshots=True).run()
-    traj = Trajectory(result.trace)
     compiled = registry().get((pool.id, scenario_id), [])
+    try:
+        result = ReplayEngine(pool, scenario, policy, snapshots=True).run()
+    except GateViolation as exc:
+        # a policy that trips the gate is GRADED, not crashed: every
+        # assertion fails, with the consent organ carrying the diagnosis
+        # (C2 fix — makes the consent predicates live for illegal policies)
+        graded = [GradedAssertion(ca.index, ca.kind, ca.predicate, False,
+                                  f"gate violation during replay: {exc}",
+                                  ca.reading_note)
+                  for ca in compiled]
+        return graded, {"pool": pool.id, "scenario": scenario_id,
+                        "policy": policy_name, "gate_violation": str(exc)}
+    traj = Trajectory(result.trace)
     graded = []
     for ca in compiled:
         pred = PREDICATES[ca.predicate]
