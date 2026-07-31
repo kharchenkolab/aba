@@ -308,14 +308,36 @@ def _continuation_message_text(job: dict, project_id: str | None = None) -> str:
     job_id = job.get("id") or "?"
     status = job.get("status") or "done"
     if status == "cancelled":
-        # The user stopped this background job (e.g. via the Jobs panel). Do NOT
-        # continue the plan — acknowledge and ask how to proceed.
+        # WHO stopped it decides what to say. `cancel_requested` is persisted by
+        # cancel_job BEFORE it stops execution, so its presence means the user
+        # asked; its absence means the SCHEDULER ended the job (walltime, OOM,
+        # node failure) and the user does not know yet.
+        #
+        # This text used to be hardcoded to "The user cancelled the background job
+        # you submitted" for both, so a walltime kill was reported to the agent as
+        # something the user did — and the agent would dutifully ask the user how
+        # they'd like to proceed with a cancellation they never made. The two need
+        # opposite next moves: acknowledge and stop, versus explain the limit and
+        # offer a longer runtime.
+        if (job.get("params") or {}).get("cancel_requested"):
+            return (
+                f"[continuation: background job `{job_id}` ({title}) was CANCELLED]\n\n"
+                f"The user cancelled the background job you submitted, so it did not finish. "
+                f"Do NOT continue the plan as if it succeeded. Briefly acknowledge the "
+                f"cancellation and ask the user how they'd like to proceed (retry, adjust "
+                f"parameters, or do something else)."
+            )
+        where = ((job.get("params") or {}).get("weft_site")
+                 or (job.get("params") or {}).get("site") or "the compute site")
         return (
-            f"[continuation: background job `{job_id}` ({title}) was CANCELLED]\n\n"
-            f"The user cancelled the background job you submitted, so it did not finish. "
-            f"Do NOT continue the plan as if it succeeded. Briefly acknowledge the "
-            f"cancellation and ask the user how they'd like to proceed (retry, adjust "
-            f"parameters, or do something else)."
+            f"[continuation: background job `{job_id}` ({title}) was ENDED BY THE "
+            f"SCHEDULER on {where} — NOT by the user]\n\n"
+            f"Nobody cancelled this job: the scheduler stopped it, which typically "
+            f"means it hit its walltime limit, was killed for memory, or its node "
+            f"failed. Do NOT continue the plan as if it succeeded, and do NOT tell "
+            f"the user they cancelled it. Say what happened, check the node log for "
+            f"the reason if one is available, and if it looks like walltime, offer to "
+            f"re-submit with a longer estimated runtime."
         )
     if status == "failed":
         # A watchdog-aborted deadlock: tell the agent it STALLED (not a normal error) and why,

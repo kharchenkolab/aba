@@ -177,6 +177,23 @@ async def _continue_after_failure(job_id: str, lookup_pid: str | None,
         _record_worker_failure("continuation-after-failure", job_id, e)
 
 
+async def _continue_after_cancel(job_id: str, lookup_pid: str | None,
+                                 effective_pid: str) -> None:
+    """Tell the thread a background job was STOPPED. Mirrors
+    _continue_after_failure; the message itself distinguishes a user cancel from a
+    scheduler kill (continuation._continuation_message_text). Best-effort — a
+    notification failure must never re-raise into the finalizer."""
+    try:
+        from core.jobs.continuation import enqueue_continuation
+        fresh = get_job(job_id, project_id=lookup_pid) or {}
+        result = await enqueue_continuation(fresh, str(effective_pid))
+        if result.get("state") != "skipped":
+            print(f"[jobs.continuation] job={job_id} (cancelled) → {result}",
+                  flush=True)
+    except Exception as e:  # noqa: BLE001
+        _record_worker_failure("continuation-after-cancel", job_id, e)
+
+
 def _settle_job_deferred(job_id: str, lookup_pid: str | None) -> None:
     """Resolve the parked deferred tool_use for a now-terminal background job (idempotent):
     writes the terminal tool_result + transitions the turn out of AWAITING_TOOL_RESULT, so
@@ -454,6 +471,19 @@ async def _finalize_job(job: dict, result_obj: dict, lookup_pid: str | None,
     if job_id in _CANCELLED or result_obj.get("status") == "cancelled":
         update_job(job_id, project_id=lookup_pid, status="cancelled", finished_at=_utcnow())
         _settle_job_deferred(job_id, lookup_pid)
+        # NOTIFY. continuation.py explicitly supports 'cancelled' — "Originally
+        # cancelled was skipped, but that left a background job's originating turn
+        # with no notification (broken flow + a tool line that never resolves)" —
+        # and this early return meant it was never called, so the intent lived on
+        # one side only.
+        #
+        # It matters most for the case the user did NOT choose: a job the
+        # SCHEDULER killed (walltime, OOM, node failure) ended in total silence —
+        # the row flips to cancelled with no error, no note, no message, and the
+        # agent's plan just stops. A user cancel is at least self-explanatory;
+        # this was not. Found by regtest mn_restart_scheduler_kill_unwatched: the
+        # thread was never told at all.
+        await _continue_after_cancel(job_id, lookup_pid, str(effective_pid))
         return
     if "error" in result_obj:
         # every failure verdict is loggable evidence for an operator — today
@@ -858,15 +888,29 @@ def reconcile_jobs() -> dict:
                 if rp.get("submitter") != "weft" or not rp.get("weft_id") \
                         or rp.get("local_orphan_at"):
                     continue
-                site = rp.get("weft_site") or rp.get("site")
-                if site and site != "local":
-                    continue    # remote lanes genuinely survive a restart
+                # EVERY weft row, remote sites included. This used to skip them —
+                # "remote lanes genuinely survive a restart" — and the WORK does:
+                # measured on the docker slurm fixture after a real kill -9, the
+                # job ran to completion on the node (exit_code 0, result.json
+                # written). The BOOKKEEPING did not. weft's task_status stayed
+                # RUNNING forever because whatever advances it died with the
+                # controller, so the poll loop saw a non-terminal state and never
+                # finalized — a finished job, its result sitting on the node,
+                # invisible for good.
+                #
+                # The escape hatch already existed (weft_submitter.poll reads
+                # result.json as durable truth "despite the frozen state") but was
+                # gated on this stamp, which only local rows ever got. Stamping
+                # remote rows too is inert when a substrate DOES advance its own
+                # state — the terminal path wins first — and the walltime+grace
+                # rule already covers "may be mid-run right now".
+                site = rp.get("weft_site") or rp.get("site") or "local"
                 rp["local_orphan_at"] = time.time()
                 c.execute("UPDATE jobs SET params=? WHERE id=?",
                           (json.dumps(rp), r["id"]))
                 stamped += 1
-                print(f"[jobs.reconcile] stamped local weft job {r['id']} as "
-                      f"restart-orphan — poll loop finalizes from result.json "
+                print(f"[jobs.reconcile] stamped weft job {r['id']} (site={site}) "
+                      f"as restart-orphan — poll loop finalizes from result.json "
                       f"truth (walltime-capped)", flush=True)
             c.commit()
             c.close()

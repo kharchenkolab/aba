@@ -87,8 +87,21 @@ def test_stamped_row_within_deadline_waits(submitter):
 
 def test_reconcile_single_db_stamps_local_weft(tmp_path, monkeypatch):
     """SINGLE mode: reconcile must scan the flat DB (projects_scanned>=1) and
-    stamp local-lane weft running rows — the restart_study finding
-    (projects_scanned: 0 → orphan invisible forever)."""
+    stamp EVERY weft running row — the restart_study finding (projects_scanned: 0
+    → orphan invisible forever).
+
+    This test used to assert `not rows["j_rem"].get("local_orphan_at")` with the
+    comment "remote survives". That encoded the same false premise as the code:
+    measured on the docker slurm fixture with a real kill -9, a cluster job ran to
+    completion (exit_code 0, result.json written on the node) while weft's
+    task_status stayed frozen at RUNNING — so ABA's poll never finalized and the
+    row hung forever. The WORK survives a restart; the BOOKKEEPING did not, and
+    the stamp is what opens poll's result.json recovery path.
+
+    Left as a two-sided check: both rows stamped, and the count matches, so a
+    change that stamped nothing (or everything indiscriminately, including rows
+    with no task id) still fails.
+    """
     import sqlite3
     db = tmp_path / "flat.db"
     c = sqlite3.connect(db)
@@ -113,11 +126,13 @@ def test_reconcile_single_db_stamps_local_weft(tmp_path, monkeypatch):
     monkeypatch.setattr(rn, "_settle_job_deferred", lambda *a: None)
     stats = rn.reconcile_jobs()
     assert stats["projects_scanned"] == 1
-    assert stats["stamped_local_orphans"] == 1
+    assert stats["stamped_local_orphans"] == 2      # local AND remote
 
     c = sqlite3.connect(db); c.row_factory = sqlite3.Row
     rows = {r["id"]: json.loads(r["params"])
             for r in c.execute("SELECT id, params FROM jobs")}
     c.close()
     assert rows["j_loc"].get("local_orphan_at")          # stamped
-    assert not rows["j_rem"].get("local_orphan_at")      # remote survives
+    # REMOTE is stamped too: its task state is advanced controller-side, so it
+    # freezes at RUNNING when the backend dies (see the docstring).
+    assert rows["j_rem"].get("local_orphan_at")

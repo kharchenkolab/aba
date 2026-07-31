@@ -806,6 +806,11 @@ def mn_restart_finished_ok(client, pid, tid):
          row.get("status") in ("done", "completed", "finished")),
         ("no orphan note on a job that actually finished",
          not _reaped_as_orphan(row)),
+        # The row being harvested is not the whole promise: a later session only
+        # "picks up the results" if the THREAD is told. Asserted on the
+        # continuation message (the platform's own act), not on an agent reply.
+        ("the thread was TOLD about the recovered job",
+         _continuation_seen(client, pid, tid, jid)),
     ]
     return [], checks
 
@@ -849,6 +854,273 @@ def mn_restart_finished_fail(client, pid, tid):
         ("row does NOT carry the orphan note", not _reaped_as_orphan(row)),
         ("row carries the JOB's own cause",
          bool(err) and REAP_NOTE not in err),
+    ]
+    return [], checks
+
+
+def _mark_cancel_requested(job_id: str) -> None:
+    """Persist the user's cancel INTENT the way cancel_job does, WITHOUT the
+    status write — modelling a controller that died between the substrate cancel
+    and recording the outcome. runner.cancel_job documents that exact race."""
+    from core.graph.jobs import get_job, update_job
+    row = get_job(job_id) or {}
+    update_job(job_id, params={**(row.get("params") or {}),
+                               "cancel_requested": True})
+
+
+def _cancel_on_substrate(job_id: str) -> str:
+    """End the task on the substrate WITHOUT touching aba's row — what a scancel
+    (or a walltime kill) looks like from the controller's point of view."""
+    from core.compute.adapter import get_compute
+    wid = _jparams(_row_now(job_id)).get("weft_id")
+    if not wid:
+        return ""
+    try:
+        get_compute().sync_call("task_cancel", wid)
+    except Exception as e:  # noqa: BLE001
+        return f"{type(e).__name__}: {e}"
+    return ""
+
+
+def _continuation_text(client, pid: str, tid: str, job_id: str,
+                      wait_s: int = 45) -> str:
+    """The continuation message ABA posted for this job, or "".
+
+    The row is the wrong surface for a cancelled job — `error`/`log_tail` are
+    empty and the explanation of WHO stopped it lives only in the synthetic
+    `[continuation: …]` user message that wakes the agent. Read the message.
+    Waits, because the continuation is enqueued after finalize, not during it.
+    """
+    end = time.time() + wait_s
+    while time.time() < end:
+        try:
+            raw = _thread_raw(client, pid, tid)
+        except Exception:  # noqa: BLE001
+            raw = ""
+        if job_id in raw and "continuation" in raw:
+            i = raw.find(job_id)
+            return raw[max(0, i - 200):i + 800]
+        time.sleep(3)
+    return ""
+
+
+def _continuation_seen(client, pid: str, tid: str, job_id: str) -> bool:
+    """Did the thread actually GET TOLD about this job? The continuation arrives
+    as a synthetic user message tagged `[continuation: … job_id …]`.
+
+    Asserted on the MESSAGE, not on an agent reply: the reply needs a model call,
+    which is slow and nondeterministic, while the message is the platform's own
+    act — "a later session picks up the results" means the thread learns of them.
+    """
+    try:
+        raw = _thread_raw(client, pid, tid)
+    except Exception:  # noqa: BLE001
+        return False
+    return "continuation" in raw and job_id in raw
+
+
+@scenario("mn_restart_cancel_intent_survives")
+def mn_restart_cancel_intent_survives(client, pid, tid):
+    """The user cancels, then the controller dies before recording the outcome.
+
+    runner.cancel_job names this race in a comment: it persists
+    `cancel_requested` BEFORE stopping execution precisely because "if ABA dies
+    between the scancel and the status write, on restart the poll loop would see
+    [a] terminal [task] with no result.json … and would otherwise AUTO-RESUME a
+    job the user cancelled". So: intent recorded, task ended, nobody wrote the
+    verdict. The restart must land on cancelled — never resumed, never orphaned.
+    """
+    job, err = _submit_hpc_bg(pid, tid,
+                              "import time\nprint('go', flush=True)\ntime.sleep(300)",
+                              "restart-cancel-intent")
+    if job is None:
+        return [], [(f"SETUP INVALID — submit to hpc died: {err}", False)]
+    jid = job["id"]
+    checks = [("submitted on the DETACHED cluster lane, not local",
+               _is_detached_hpc(_row_now(jid)))]
+
+    live = _await_substrate(jid, want_terminal=False, budget_s=300)
+    if not _armed_live(_row_now(jid)):
+        return [], checks + [(f"SETUP INVALID — no live task to cancel "
+                              f"({live or 'unknown'})", False)]
+
+    _mark_cancel_requested(jid)
+    cerr = _cancel_on_substrate(jid)
+    if cerr:
+        return [], checks + [(f"SETUP INVALID — substrate cancel failed: {cerr}",
+                              False)]
+    state = _await_substrate(jid, want_terminal=True, budget_s=240)
+    checks.append((f"task is terminal on the substrate ({state})",
+                   _is_terminal(state)))
+    checks.append(("aba's row still says running — the verdict was never written",
+                   str(_row_now(jid).get("status")) in ("running", "queued")))
+
+    _restart_controller()
+    final = _settle_row(jid)
+    row = _row_now(jid)
+    checks += [
+        (f"row is terminal after the restart ({final or 'none'})",
+         final in ("cancelled", "failed", "done", "completed", "finished")),
+        ("row was NOT re-queued (no auto-resume of a cancelled job)",
+         final not in ("queued", "running")),
+        ("no orphan note", not _reaped_as_orphan(row)),
+        ("the cancel intent is still on the row",
+         bool(_jparams(row).get("cancel_requested"))),
+    ]
+    return [], checks
+
+
+@scenario("mn_restart_scheduler_kill_unwatched")
+def mn_restart_scheduler_kill_unwatched(client, pid, tid):
+    """The SCHEDULER kills the job (walltime / OOM / node failure) while nobody
+    is watching — no user intent anywhere.
+
+    The honesty question: a task that ends CANCELLED renders as "cancelled on the
+    compute substrate" whether the user asked or the cluster killed it. The row
+    carries `cancel_requested` only in the first case, so the two ARE
+    distinguishable — and telling them apart changes what the user does next
+    (resubmit with more walltime, versus don't).
+    """
+    job, err = _submit_hpc_bg(pid, tid,
+                              "import time\nprint('go', flush=True)\ntime.sleep(300)",
+                              "restart-scheduler-kill")
+    if job is None:
+        return [], [(f"SETUP INVALID — submit to hpc died: {err}", False)]
+    jid = job["id"]
+    checks = [("submitted on the DETACHED cluster lane, not local",
+               _is_detached_hpc(_row_now(jid)))]
+
+    live = _await_substrate(jid, want_terminal=False, budget_s=300)
+    if not _armed_live(_row_now(jid)):
+        return [], checks + [(f"SETUP INVALID — no live task to kill "
+                              f"({live or 'unknown'})", False)]
+
+    # killed WITHOUT marking intent — this is the cluster's doing, not the user's
+    cerr = _cancel_on_substrate(jid)
+    if cerr:
+        return [], checks + [(f"SETUP INVALID — could not kill the task: {cerr}",
+                              False)]
+    state = _await_substrate(jid, want_terminal=True, budget_s=240)
+    checks.append((f"task was killed on the substrate ({state})",
+                   _is_terminal(state)))
+    checks.append(("no user cancel intent was recorded",
+                   not _jparams(_row_now(jid)).get("cancel_requested")))
+
+    _restart_controller()
+    final = _settle_row(jid)
+    row = _row_now(jid)
+    # The AGENT-FACING surface, not the row: a cancelled row carries no error or
+    # log_tail, and who-stopped-it is only ever stated in the continuation.
+    cont = _continuation_text(client, pid, tid, jid)
+    checks += [
+        (f"row is terminal after the restart ({final or 'none'})",
+         final in ("cancelled", "failed", "done", "completed", "finished")),
+        ("no orphan note", not _reaped_as_orphan(row)),
+        # Two separate claims, kept separate so "not told at all" can never read
+        # as "told correctly".
+        ("the thread was TOLD the job ended", bool(cont)),
+        ("it names the SCHEDULER, not the user",
+         bool(cont) and "scheduler" in cont.lower()),
+        ("it does NOT say the user cancelled it",
+         bool(cont) and "user cancelled" not in cont.lower()),
+    ]
+    return [], checks
+
+
+@scenario("mn_restart_multi_job_mixed")
+def mn_restart_multi_job_mixed(client, pid, tid):
+    """A real OnDemand death takes down every job at once, in DIFFERENT states.
+
+    All the other cases carry exactly one job, so they cannot see ordering or
+    partial-failure effects: reconcile iterates rows, and getting one right while
+    mishandling its neighbour is invisible to a single-job test.
+
+    Three at once: one already finished, one long-running, one just submitted.
+    Each must be handled per ITS OWN state, and none may take another's verdict.
+    """
+    done_job, e1 = _submit_hpc_bg(pid, tid, "print('MULTI_DONE_MARKER')",
+                                  "multi-done")
+    long_job, e2 = _submit_hpc_bg(pid, tid,
+                                  "import time\nprint('go', flush=True)\n"
+                                  "time.sleep(300)", "multi-long")
+    fail_job, e3 = _submit_hpc_bg(pid, tid,
+                                  "import sys\nprint('MULTI_FAIL_MARKER')\n"
+                                  "sys.exit(4)", "multi-fail")
+    if None in (done_job, long_job, fail_job):
+        return [], [(f"SETUP INVALID — a submit died: {e1 or e2 or e3}", False)]
+    dj, lj, fj = done_job["id"], long_job["id"], fail_job["id"]
+    checks = [("all three went out on the DETACHED lane",
+               all(_is_detached_hpc(_row_now(j)) for j in (dj, lj, fj)))]
+
+    # ARM each state independently: the finished ones terminal, the long one live.
+    st_d = _await_substrate(dj, want_terminal=True, budget_s=300)
+    st_f = _await_substrate(fj, want_terminal=True, budget_s=300)
+    live_ok = _armed_live(_row_now(lj))
+    checks += [(f"the short job finished unwatched ({st_d})", st_d == "DONE"),
+               (f"the failing job failed unwatched ({st_f})", st_f == "FAILED"),
+               ("the long job is still LIVE across the outage", live_ok)]
+    if not (st_d == "DONE" and st_f == "FAILED" and live_ok):
+        checks.append(("SETUP INVALID — the three states were not all reached; "
+                       "verdicts not graded", False))
+        return [], checks
+
+    stats = _restart_controller()
+    checks.append(("the live job was NOT reaped by reconcile",
+                   not _reaped_as_orphan(_row_now(lj))
+                   and str(_row_now(lj).get("status")) != "failed"))
+
+    f_done = _settle_row(dj)
+    f_fail = _settle_row(fj)
+    r_done, r_fail, r_long = _row_now(dj), _row_now(fj), _row_now(lj)
+    checks += [
+        (f"the finished job is done ({f_done or 'none'})",
+         r_done.get("status") in ("done", "completed", "finished")),
+        (f"the failed job is failed ({f_fail or 'none'})",
+         r_fail.get("status") == "failed"),
+        ("the failed job kept its OWN cause",
+         bool(r_fail.get("error")) and not _reaped_as_orphan(r_fail)),
+        # cross-contamination: the success must not inherit the failure's error,
+        # which a single-job test can never check
+        ("the finished job did NOT inherit an error",
+         not str(r_done.get("error") or "").strip()),
+        ("the long job is still not reaped after the settle",
+         not _reaped_as_orphan(r_long)),
+        (f"reconcile reaped nothing ({stats.get('reaped_running')})",
+         int(stats.get("reaped_running") or 0) == 0),
+    ]
+    return [], checks
+
+
+@scenario("mn_restart_never_submitted_reaped")
+def mn_restart_never_submitted_reaped(client, pid, tid):
+    """The branch that DELIBERATELY reaps: a weft row with no task id.
+
+    reconcile reaps a sync weft row that never reached the substrate — there is
+    nothing to adopt. Worth testing precisely because it is the reaping branch: a
+    bug here silently kills work that WAS recoverable, and the row's note is the
+    only thing that would say so.
+    """
+    from core.graph.jobs import create_job, get_job
+    jid = "job_neversubmitted01"
+    create_job(job_id=jid, kind="run_python", title="never-submitted",
+               focus_entity_id=None,
+               params={"code": "print(1)", "project_id": pid, "thread_id": tid,
+                       "submitter": "weft", "sync": True, "site": "hpc"},
+               project_id=pid)
+    row = get_job(jid, project_id=pid) or {}
+    checks = [("row exists, weft-submitted, with NO task id",
+               bool(row) and _jparams(row).get("submitter") == "weft"
+               and not _jparams(row).get("weft_id"))]
+
+    stats = _restart_controller()
+    row = get_job(jid, project_id=pid) or {}
+    note = str(row.get("error") or "")
+    checks += [
+        ("reconcile reaped it", row.get("status") == "failed"),
+        ("the note says it never reached the substrate",
+         "never reached the substrate" in note),
+        (f"reconcile counted the reap ({stats.get('reaped_running')})",
+         int(stats.get("reaped_running") or 0) >= 1),
     ]
     return [], checks
 
@@ -2672,6 +2944,10 @@ def main():
                   # restart survival across an OnDemand walltime expiry
                   mn_restart_midflight, mn_restart_finished_ok,
                   mn_restart_finished_fail,
+                  mn_restart_cancel_intent_survives,
+                  mn_restart_scheduler_kill_unwatched,
+                  mn_restart_multi_job_mixed,
+                  mn_restart_never_submitted_reaped,
                   mn_pin_remote_result, mn_external_ref_inject,
                   mn_background_monitor, mn_provenance_after_chain,
                   mn_preflight_disconnect, mn_reference_drift,

@@ -289,6 +289,50 @@ class WeftSubmitter:
         pid = (job.get("params") or {}).get("project_id") or "default"
         return scratch_dir(str(pid), job["id"])
 
+    @staticmethod
+    def _cancelled_note(params: dict) -> str:
+        """Why did this task end CANCELLED — the user, or the cluster?
+
+        Both look identical to the substrate, and both used to render as
+        "cancelled on the compute substrate" — so a walltime kill read like
+        something the user did. The row settles it: cancel_job persists
+        `cancel_requested` BEFORE stopping execution, so its presence means the
+        user asked and its absence means the scheduler ended it. The two imply
+        opposite next actions (don't resubmit vs resubmit with more walltime),
+        which is the whole reason to tell them apart.
+        """
+        where = params.get("weft_site") or params.get("site") or "local"
+        if params.get("cancel_requested"):
+            return f"cancelled at your request (stopped on {where})"
+        return (f"ended by the scheduler on {where}, not by you — typically a "
+                f"walltime limit, an out-of-memory kill or a node failure. "
+                f"Nothing here was cancelled from ABA. Check the node log for "
+                f"the reason; if it was walltime, re-submit with a longer "
+                f"estimated runtime.")
+
+    def _detached_result_present(self, job: dict, params: dict) -> bool:
+        """Has the entry written result.json — on whichever side actually holds it?
+
+        Shared-fs / local: `_run_dir` is the real directory, so a plain exists().
+        DETACHED: the file is on the NODE and travels over the data plane, so ask
+        the substrate. Without this the frozen-state recovery is local-only, and a
+        remote job's finished result stays invisible until its walltime lapses.
+        A substrate hiccup answers "not yet" — the walltime rule then applies, so
+        a transient error can only delay the verdict, never fabricate one.
+        """
+        if (self._run_dir(job) / "result.json").exists():
+            return True
+        site = params.get("weft_site") or params.get("site")
+        if not site or site == "local":
+            return False
+        try:
+            from core.compute import retention
+            out = retention.file_read(params.get("weft_id"), "result.json",
+                                      max_bytes=1 << 20)
+            return bool((out or {}).get("bytes_b64"))
+        except Exception:  # noqa: BLE001 — unreadable == not there YET
+            return False
+
     # ── submit ────────────────────────────────────────────────────────────
     def submit(self, job: dict) -> None:
         # DETACHED sites (no shared FS with this controller — a personal remote
@@ -613,7 +657,7 @@ class WeftSubmitter:
         from core.compute import retention
         if state == "CANCELLED":
             res: dict = {"status": "cancelled",
-                         "note": "cancelled on the compute substrate"}
+                         "note": self._cancelled_note(params)}
             res.setdefault("compute", self._compute_block(wid, state))
             return res
 
@@ -843,7 +887,14 @@ class WeftSubmitter:
             oat = params.get("local_orphan_at")
             if not oat:
                 return None
-            if (self._run_dir(job) / "result.json").exists():
+            # WHERE result.json lives depends on the lane, and _run_dir is a
+            # CONTROLLER path. A detached job writes it on the NODE and it comes
+            # home over the data plane, so the local check can never see it —
+            # a stamped remote row would wait out its walltime and fail with the
+            # answer sitting on the node. Measured after a real kill -9 on the
+            # docker slurm fixture: exit_code 0, result.json present there,
+            # weft's state frozen at RUNNING, and the row failed anyway.
+            if self._detached_result_present(job, params):
                 state = "DONE"          # the entry finished; fall through
             else:
                 import time as _t
@@ -855,11 +906,12 @@ class WeftSubmitter:
                                          why="restart orphan past walltime")
                 except Exception:  # noqa: BLE001
                     pass
+                _where = params.get("weft_site") or params.get("site") or "local"
                 res = {"error": (
-                    "the backend restarted while this local job was running "
-                    "and the job wrote no result within its walltime after "
-                    "the restart — it was orphaned by the restart and has "
-                    "been stopped; re-run it if the outputs are needed")}
+                    f"the backend restarted while this job was running on "
+                    f"{_where} and it wrote no result within its walltime "
+                    f"after the restart — it was orphaned by the restart and "
+                    f"has been stopped; re-run it if the outputs are needed")}
                 res.setdefault("compute", self._compute_block(wid, state))
                 return res
         # Finalization decisions come from the PERSISTED row, never the
@@ -903,7 +955,7 @@ class WeftSubmitter:
             except Exception:  # noqa: BLE001
                 res = {"error": f"result.json unreadable for weft job {wid}"}
         elif state == "CANCELLED":
-            res = {"status": "cancelled", "note": "cancelled on the compute substrate"}
+            res = {"status": "cancelled", "note": self._cancelled_note(params)}
         elif state == "DONE":
             # Terminal SUCCESS with no result file yet: shared-fs writes can
             # lag (close-to-open consistency). "Terminal, result not yet
