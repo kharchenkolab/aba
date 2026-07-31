@@ -662,27 +662,55 @@ def _restart_controller() -> dict:
     return reconcile_jobs()
 
 
-def _poll_and_finalize(job_id: str) -> None:
-    """One pass of the weft poll loop over this row — the next session adopting
-    the task and finalizing from the substrate's durable state."""
+def _settle_row(job_id: str, budget_s: int = 600) -> str:
+    """Drive the REAL poll pass until this row is terminal — the next session
+    watching the job, which polls repeatedly rather than once.
+
+    Calls runner.weft_poll_once rather than reimplementing it. The first version
+    of this helper WAS a hand-rolled copy that called sub.poll() on the event
+    loop — exactly the defect the production loop had just been fixed for — so
+    the harness reproduced the bug and reported the fix as ineffective. A study
+    that keeps its own copy of the code under test measures the copy.
+
+    Looping (not one pass) matters for a second reason discovered here: a
+    platform mismatch triggers a lazy RE-LOCK that RESUBMITS the job, so after
+    one pass the row is legitimately running again on a fresh task. A single-pass
+    assertion read that as "not terminal" and failed a working recovery.
+    """
     import asyncio
-    from core.jobs import runner as _r
-    from core.jobs.weft_submitter import WeftSubmitter
-    sub = WeftSubmitter()
+    from core.jobs.runner import weft_poll_once
+    end = time.time() + budget_s
+    while time.time() < end:
+        asyncio.run(weft_poll_once(only_job_id=job_id))
+        st = str(_row_now(job_id).get("status") or "")
+        if st in ("done", "completed", "finished", "failed", "cancelled"):
+            return st
+        time.sleep(10)
+    return str(_row_now(job_id).get("status") or "")
 
-    async def go():
-        for job in _r._active_weft_jobs():
-            if job.get("id") != job_id:
-                continue
-            result = sub.poll(job)
-            if result is not None:
-                await _r._finalize_job(job, result, job.get("project_id"),
-                                       str(job.get("project_id") or "default"))
 
-    asyncio.run(go())
+def _site_platform() -> str:
+    """The fixture's conda platform, for legibility in the verdicts.
+
+    NOTE what does NOT work: pre-locking the base pack for this platform to make
+    a first-attempt DONE reachable. base_env.ensure_platform mints a NEW EnvID but
+    leaves the pack SPEC unchanged, and a submit resolves its env from the spec
+    digest — so the first task on a cross-platform site mismatches regardless.
+    The poll-time lazy re-lock is what heals it, by resubmitting with the new
+    EnvID. On such a site, mismatch -> re-lock -> resubmit IS the normal path, so
+    the finished_ok case asserts the OUTCOME (a later session ends up with the
+    results) rather than demanding a clean first attempt.
+    """
+    try:
+        from core.jobs.weft_submitter import _site_platform_for
+        return _site_platform_for("hpc") or ""
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def _reaped_as_orphan(row: dict) -> bool:
+    """Did reconcile stamp this row with the restart-orphan note? Recording a
+    genuinely-crashed job with it destroys the only copy of the real reason."""
     return REAP_NOTE in str(row.get("error") or "")
 
 
@@ -742,23 +770,22 @@ def mn_restart_finished_ok(client, pid, tid):
                _is_detached_hpc(_row_now(jid)))]
 
     state = _await_substrate(jid, want_terminal=True)
-    checks.append((f"task reached a terminal state unwatched ({state or 'unknown'})",
+    checks.append((f"task reached a terminal state unwatched ({state}, "
+                   f"site platform {_site_platform() or 'unknown'})",
                    _is_terminal(state)))
-    if state != "DONE":
-        # A true failure that is not the scripted one (env.realize_failed, say)
-        # must not be graded as a harvest verdict.
-        checks.append((f"SETUP INVALID — wanted DONE, substrate said {state or 'unknown'}",
-                       False))
+    if not _is_terminal(state):
+        checks.append(("SETUP INVALID — the task never ended, so there is no "
+                       "unwatched completion to harvest", False))
         return [], checks
 
     _restart_controller()
     row = _row_now(jid)
     checks.append(("reconcile did NOT reap the finished job", not _reaped_as_orphan(row)))
 
-    _poll_and_finalize(jid)
+    final = _settle_row(jid)
     row = _row_now(jid)
     checks += [
-        ("the restarted controller HARVESTED it",
+        (f"the restarted controller HARVESTED it (row={final or 'none'})",
          row.get("status") in ("done", "completed", "finished")),
         ("no orphan note on a job that actually finished",
          not _reaped_as_orphan(row)),
@@ -796,11 +823,11 @@ def mn_restart_finished_fail(client, pid, tid):
     _restart_controller()
     checks.append(("reconcile did NOT reap it", not _reaped_as_orphan(_row_now(jid))))
 
-    _poll_and_finalize(jid)
+    final = _settle_row(jid)
     row = _row_now(jid)
     err = str(row.get("error") or "")
     checks += [
-        ("row is terminal after the restart",
+        (f"row is terminal after the restart (row={final or 'none'})",
          row.get("status") in ("failed", "done", "completed", "finished")),
         ("row does NOT carry the orphan note", not _reaped_as_orphan(row)),
         ("row carries the JOB's own cause",

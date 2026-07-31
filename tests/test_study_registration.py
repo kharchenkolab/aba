@@ -127,5 +127,107 @@ def test_every_listed_scenario_is_defined(path):
     assert not missing, f"{path.name}: listed but never defined: {missing}"
 
 
+# ── a study must not reference a helper it does not define ───────────────────
+#
+# A slice-based edit removed `_reaped_as_orphan` while leaving three call sites,
+# and the only thing that noticed was a 35-second live run against a real slurm
+# fixture: three scenarios, each `✗ exception` on a NameError. These studies cost
+# minutes per scenario and real substrate time, so a missing name must surface
+# statically.
+#
+# Scope-aware ON PURPOSE. A first cut only collected MODULE-level definitions and
+# reported twelve false positives — helpers imported inside a function body
+# (`from core.jobs.weft_submitter import _site_platform_for`) and nested defs. A
+# check with a dozen false alarms gets silenced, not fixed, so it has to model
+# scope: for each function, module names PLUS everything bound anywhere inside it.
+
+
+def _bound_in(node) -> set[str]:
+    """Every name bound anywhere inside `node` — defs, imports, assignments,
+    args, comprehension targets, with/except aliases. A superset is correct here:
+    this check exists to catch a name bound NOWHERE."""
+    out: set[str] = set()
+    for n in ast.walk(node):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            out.add(n.name)
+            a = getattr(n, "args", None)
+            if a is not None:
+                for arg in (*a.args, *a.posonlyargs, *a.kwonlyargs):
+                    out.add(arg.arg)
+                for extra in (a.vararg, a.kwarg):
+                    if extra is not None:
+                        out.add(extra.arg)
+        elif isinstance(n, (ast.Import, ast.ImportFrom)):
+            for al in n.names:
+                out.add((al.asname or al.name).split(".")[0])
+        elif isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del)):
+            out.add(n.id)
+        elif isinstance(n, ast.ExceptHandler) and n.name:
+            out.add(n.name)
+        elif isinstance(n, ast.Lambda):
+            for arg in (*n.args.args, *n.args.posonlyargs, *n.args.kwonlyargs):
+                out.add(arg.arg)
+    return out
+
+
+def _called_private(node) -> set[str]:
+    """`_foo(...)` call targets — the private helpers a study defines for itself.
+    Attribute calls (`mod._foo`) live in someone else's namespace."""
+    return {n.func.id for n in ast.walk(node)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+            and n.func.id.startswith("_") and not n.func.id.startswith("__")}
+
+
+def _undefined_private(src: str) -> list[str]:
+    """Private helpers called but bound NOWHERE in the module.
+
+    A deliberate SUPERSET of "bound in an enclosing scope": names bound anywhere
+    in the file count as known. That misses the narrow case of a helper defined
+    in one function and called from another — a real NameError, but one the first
+    live run catches anyway.
+
+    The precise version needs parent-scope tracking, and two attempts without it
+    produced twelve false positives (a helper imported inside a function body,
+    then a nested def using its parent's import). A check with a dozen false
+    alarms gets switched off rather than fixed, so the superset — which still
+    catches the defect that shipped, a name bound nowhere at all — is the better
+    instrument.
+    """
+    tree = ast.parse(src)
+    known = _bound_in(tree)
+    return sorted(c for c in _called_private(tree) if c not in known)
+
+
+def test_the_undefined_helper_rule_fires():
+    """ARMED on the exact shape that shipped — called, defined nowhere."""
+    assert _undefined_private("def f():\n    return _gone(1)\n") == ["_gone"]
+
+
+def test_the_rule_does_not_fire_on_the_false_positives_it_first_produced():
+    """CEILING: every shape the two earlier versions wrongly flagged — a helper
+    imported INSIDE a function body, a nested def, and a nested function using its
+    PARENT's import. A check that cries wolf gets turned off, not fixed."""
+    ok = ("def f():\n"
+          "    from core.jobs.weft_submitter import _site_platform_for\n"
+          "    return _site_platform_for('hpc')\n"
+          "def g():\n"
+          "    def _inner(x):\n        return x\n"
+          "    return _inner(1)\n"
+          "def h():\n"
+          "    from mod import _outer\n"
+          "    def _nested():\n        return _outer(2)\n"
+          "    return _nested()\n")
+    assert _undefined_private(ok) == []
+
+
+@pytest.mark.parametrize("path", STUDIES, ids=lambda p: p.name)
+def test_no_study_calls_an_undefined_private_helper(path):
+    missing = _undefined_private(path.read_text(encoding="utf-8", errors="ignore"))
+    assert not missing, (
+        f"{path.name}: calls private helper(s) it never defines — a NameError at "
+        f"scenario runtime, i.e. after the fixture and the substrate are already "
+        f"paid for: {missing}")
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

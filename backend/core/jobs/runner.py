@@ -1120,33 +1120,51 @@ async def _weft_poll_loop() -> None:
                 if not announced:
                     print("[jobs.weft] poll loop live", flush=True)
                     announced = True
-                for job in _active_weft_jobs():
-                    pid = job.get("project_id")
-                    # OFF the loop. poll()'s fast substrate reads are safe on the
-                    # loop thread (adapter.sync_call is built for that), but its
-                    # lazy platform RE-LOCK is a solve, and named_envs._sync
-                    # refuses to run on the event loop by design — so that
-                    # recovery path could never fire in production. Found by
-                    # regtest mn_restart_finished_ok on the aarch64 fixture:
-                    # "platform re-lock failed: named_envs is sync-only", and the
-                    # job stayed FAILED on a mismatch it was supposed to heal.
-                    # in_thread also carries the project binding across the hop.
-                    result = await _projects_ctx_poll().in_thread(sub.poll, job)
-                    if result is not None:
-                        # Nextflow heads ride THIS lane now (§4a / nextflow→weft);
-                        # auto-resume one Slurm killed (walltime/node-fail) before it
-                        # finished — re-submit with -resume instead of failing, exactly
-                        # as the retired _slurm_poll_loop did.
-                        if _maybe_resume_nextflow_job(sub, job, result, pid):
-                            continue
-                        await _finalize_job(job, result, pid, str(pid or "default"))
-                    elif job.get("status") == "queued":
-                        if (sub.info(job) or {}).get("state") == "RUNNING":
-                            update_job(job["id"], project_id=pid, status="running",
-                                       started_at=_utcnow())
+                await weft_poll_once(sub, only_job_id=None)
         except Exception as e:  # noqa: BLE001
             _record_worker_failure("weft-poll", None, e)
         await asyncio.sleep(_WEFT_POLL_S)
+
+
+async def weft_poll_once(sub=None, *, only_job_id: str | None = None) -> int:
+    """ONE pass over the active weft rows. Returns how many were finalized.
+
+    Extracted so tests and studies can drive the REAL pass instead of keeping
+    their own copy. regtest's restart scenarios had a hand-rolled version that
+    called sub.poll() on the event loop, so it reproduced the very defect the
+    production loop had just been fixed for — the harness testing its own copy
+    and reporting the fix as ineffective.
+    """
+    from core.jobs.weft_submitter import WeftSubmitter
+    sub = sub or WeftSubmitter()
+    finalized = 0
+    for job in _active_weft_jobs():
+        if only_job_id and job.get("id") != only_job_id:
+            continue
+        pid = job.get("project_id")
+        # OFF the loop. poll()'s fast substrate reads are safe on the loop
+        # thread (adapter.sync_call is built for that), but its lazy platform
+        # RE-LOCK is a SOLVE, and named_envs._sync refuses the event loop by
+        # design — so that recovery path could never fire in production. Found
+        # by regtest mn_restart_finished_ok on the aarch64 fixture: "platform
+        # re-lock failed: named_envs is sync-only", and the job stayed FAILED on
+        # a mismatch it was supposed to heal. in_thread also carries the project
+        # binding across the hop.
+        result = await _projects_ctx_poll().in_thread(sub.poll, job)
+        if result is not None:
+            # Nextflow heads ride THIS lane now (§4a / nextflow→weft);
+            # auto-resume one Slurm killed (walltime/node-fail) before it
+            # finished — re-submit with -resume instead of failing, exactly
+            # as the retired _slurm_poll_loop did.
+            if _maybe_resume_nextflow_job(sub, job, result, pid):
+                continue
+            await _finalize_job(job, result, pid, str(pid or "default"))
+            finalized += 1
+        elif job.get("status") == "queued":
+            if (sub.info(job) or {}).get("state") == "RUNNING":
+                update_job(job["id"], project_id=pid, status="running",
+                           started_at=_utcnow())
+    return finalized
 
 
 _INLINE_WATCH_S = 30.0    # hangs unfold over minutes — a slow cadence keeps this near-free
