@@ -213,7 +213,8 @@ Each scenario is a JSON file:
     { "t": 4, "type": "instruction", "text": "the cache angle is the important one — emphasize it",
       "expect": "salience raise where evidence supports it; floor-conversion to stub+plan where it doesn't" },
     { "t": 5, "type": "distill" },
-    { "t": 6, "type": "clock", "advance_days": 6 }
+    { "t": 6, "type": "ratify", "target": "the cache-regression claim draft" },
+    { "t": 7, "type": "clock", "advance_days": 6 }
   ],
   "assertions": [
     { "at": "event:12..20", "kind": "structure", "expect": "the cache direction is promoted from stub to section in this window" },
@@ -223,11 +224,22 @@ Each scenario is a JSON file:
 }
 ```
 
-Event types: `session_start {anchor}`, `finding {ref}`, `gesture {verb, target}`,
-`instruction {text, expect}`, `distill`, `clock {advance_days}`. Gesture verbs:
+Event types: `session_start {anchor}`, `finding {ref, background?}`,
+`gesture {verb, target, note?}`, `instruction {text, expect}`,
+`ratify {target, note?, expect?}`, `dismiss {target, note?, expect?}`,
+`distill`, `clock {advance_days}`. Gesture verbs:
 `pin, expand, check, fade, corroborate, alternatives, plan, draft_claim, hold`.
 Sessions have no close event — attention just moves (next `session_start` or
 `clock`). `distill` mid-session is "distill so far".
+
+Consent semantics: `distill` accepts the routine routing rows it presents
+(veto-tier). Decisions — claim drafts, addenda, Class-2/3 structural changes —
+are ratified only by an explicit `ratify` event; `dismiss` declines one.
+`target` is a free-text descriptor of the pending proposal (proposals are
+runtime artifacts with no pool-level ids; the runner matches by description).
+A gesture `note` carries aimed free text (e.g. the content of a `plan` item).
+A finding with `"background": true` is a machine run landing in the sediment
+outside any sitting (design §5: runs land at launch, without a session).
 
 Assertions are **semi-formal**: tagged English (`kind`: `structure | routing |
 consent | salience | plan | provenance`) precise enough that the future runner can

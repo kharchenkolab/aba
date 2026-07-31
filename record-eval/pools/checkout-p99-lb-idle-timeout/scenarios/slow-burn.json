@@ -2,7 +2,7 @@
   "id": "slow-burn",
   "pool": "checkout-p99-lb-idle-timeout",
   "stresses": "promotion timing: the mechanism direction accumulates one finding per sitting; when does it earn a section",
-  "description": "The connection-lifecycle mechanism assembles one rung per sitting: quantized spans (F14), the small-n idle pattern (F17, deliberately weak), the packet capture (F19), counter-scale confirmation (F21/F22), the change record (F24), and the lab repro (F26). The direction must not earn a section on the weak F17 hint, must earn one in the window where hard evidence lands (F19-F24), and the corroborate gesture on F17 must compile a typed item that F22 later discharges. Conventions: routine routing rows are accepted at each distill; decisions (claim drafts) are ratified only by explicit instruction events.",
+  "description": "The connection-lifecycle mechanism assembles one rung per sitting: quantized spans (F14), the small-n idle pattern (F17, deliberately weak), the packet capture (F19), counter-scale confirmation (F21/F22), the change record (F24), and the lab repro (F26). The direction must not earn a section on the weak F17 hint, must earn one in the window where hard evidence lands (F19-F24), and the corroborate gesture on F17 must compile a typed item that F22 later discharges. Conventions: routine routing rows are accepted at each distill; decisions (claim drafts) are ratified only by explicit ratify events.",
   "events": [
     { "t": 1, "type": "session_start", "anchor": "Q1" },
     { "t": 2, "type": "finding", "ref": "F01" },
@@ -35,7 +35,7 @@
     { "t": 29, "type": "finding", "ref": "F20" },
     { "t": 30, "type": "finding", "ref": "F24" },
     { "t": 31, "type": "gesture", "verb": "draft_claim", "target": "F24" },
-    { "t": 32, "type": "instruction", "text": "that is the root cause - accept the claim",
+    { "t": 32, "type": "ratify", "target": "the F24 root-cause claim draft",
       "expect": "the F24 causal claim is ratified into Q2 prose carrying its evidence chain" },
     { "t": 33, "type": "distill" },
     { "t": 34, "type": "clock", "advance_days": 1 },

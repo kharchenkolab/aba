@@ -2,7 +2,7 @@
   "id": "pivot",
   "pool": "gaia-bh1",
   "stresses": "direction change mid-project: demotion/appendixing of the resolved arc; Class-3 consent",
-  "description": "The pivot this investigation actually contains: not a failed direction dying, but a resolved one stepping down. Once F29/F30 close the is-it-really-a-BH question, the vetting-and-confirmation machinery that dominated the record (spuriousness checks, robustness fits, imposter exclusions) must be demoted to appendix rank while attention re-centers on formation (Q4) and population (Q5) - exactly what the published paper did with its appendices. Closing a question and appendixing its machinery are Class-3 changes: proposed, consented to explicitly, links surviving. Conventions: routine routing rows are accepted at each distill; decisions and Class-3 changes are ratified only by explicit instruction events.",
+  "description": "The pivot this investigation actually contains: not a failed direction dying, but a resolved one stepping down. Once F29/F30 close the is-it-really-a-BH question, the vetting-and-confirmation machinery that dominated the record (spuriousness checks, robustness fits, imposter exclusions) must be demoted to appendix rank while attention re-centers on formation (Q4) and population (Q5) - exactly what the published paper did with its appendices. Closing a question and appendixing its machinery are Class-3 changes: proposed, consented to explicitly, links surviving. Conventions: routine routing rows are accepted at each distill; decisions and Class-3 changes are ratified only by explicit ratify events.",
   "events": [
     { "t": 1, "type": "session_start", "anchor": "Q1" },
     { "t": 2, "type": "finding", "ref": "F01" },
@@ -43,7 +43,7 @@
     { "t": 37, "type": "gesture", "verb": "draft_claim", "target": "F30" },
     { "t": 38, "type": "instruction", "text": "that settles it - it is a black hole; close the question, and the vetting machinery does not belong in the main line anymore. formation and population are the story now",
       "expect": "the agent proposes the Class-3 batch: close Q1 holding its claim, demote the vetting/robustness material (F07-F09, F16-F17 arc) to appendix rank, and re-center the page on Q4/Q5 - proposed with reader-impact stated, applied only on consent" },
-    { "t": 39, "type": "instruction", "text": "yes - do all of that, and accept the black-hole claim",
+    { "t": 39, "type": "ratify", "target": "the Q1-closure restructuring proposal and the black-hole claim draft",
       "expect": "explicit Class-3 consent: Q1 closes on the ratified claim, the vetting arc is appendixed with links intact, and the restructuring applies" },
     { "t": 40, "type": "distill" },
     { "t": 41, "type": "clock", "advance_days": 6 },

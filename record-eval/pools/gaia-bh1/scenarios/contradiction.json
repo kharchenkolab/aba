@@ -2,7 +2,7 @@
   "id": "contradiction",
   "pool": "gaia-bh1",
   "stresses": "an overturn lands: narrative revises with provenance, never silently deletes",
-  "description": "Two revisions of different severity, which must be handled DIFFERENTLY. Early, the joint RV+astrometry fit supersedes the Gaia-only orbital parameters - a refine-don't-delete case absorbed as a parameter revision. Later, the common-envelope formation default is committed to the narrative and then blindsided: F35 (which depends only on F32) lands immediately after it, with the energetics, kick, and channel findings arriving only AFTER the overturn as post-overturn mass an already-revised story must absorb. Conventions: routine routing rows are accepted at each distill; decisions and prose commitments are ratified only by explicit instruction events (the t=21 instruction ratifies the CE framing); an overturn supersedes the claim's face-value reading, not the findings derived from it - downstream citations get revised, not deleted.",
+  "description": "Two revisions of different severity, which must be handled DIFFERENTLY. Early, the joint RV+astrometry fit supersedes the Gaia-only orbital parameters - a refine-don't-delete case absorbed as a parameter revision. Later, the common-envelope formation default is committed to the narrative and then blindsided: F35 (which depends only on F32) lands immediately after it, with the energetics, kick, and channel findings arriving only AFTER the overturn as post-overturn mass an already-revised story must absorb. Conventions: routine routing rows are accepted at each distill; decisions and prose commitments are ratified only by explicit ratify events (the t=21 ratify event commits the CE framing); an overturn supersedes the claim's face-value reading, not the findings derived from it - downstream citations get revised, not deleted.",
   "events": [
     { "t": 1, "type": "session_start", "anchor": "Q1" },
     { "t": 2, "type": "finding", "ref": "F01" },
@@ -24,7 +24,7 @@
     { "t": 18, "type": "finding", "ref": "F18" },
     { "t": 19, "type": "finding", "ref": "F20" },
     { "t": 20, "type": "finding", "ref": "F32" },
-    { "t": 21, "type": "instruction", "text": "the common-envelope story is our formation narrative - write the formation section around it",
+    { "t": 21, "type": "ratify", "target": "the common-envelope formation framing", "note": "write the formation section around it",
       "expect": "the CE direction is committed at the evidence grade F32 carries (moderate); prose does not outrun the maturity ladder" },
     { "t": 22, "type": "gesture", "verb": "alternatives", "target": "F32" },
     { "t": 23, "type": "distill" },

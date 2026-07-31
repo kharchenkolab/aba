@@ -11,7 +11,8 @@ from pathlib import Path
 
 GESTURE_VERBS = {"pin", "expand", "check", "fade", "corroborate",
                  "alternatives", "plan", "draft_claim", "hold"}
-EVENT_TYPES = {"session_start", "finding", "gesture", "instruction", "distill", "clock"}
+EVENT_TYPES = {"session_start", "finding", "gesture", "instruction",
+               "ratify", "dismiss", "distill", "clock"}
 ASSERT_KINDS = {"structure", "routing", "consent", "salience", "plan", "provenance"}
 STRENGTHS = {"weak", "moderate", "strong"}
 EVIDENCE_KINDS = {"figure", "table", "stat", "run"}
@@ -134,6 +135,8 @@ def check_scenario(path, scen, fset, deps):
                 err(f"{sid}: gesture targets unknown {e.get('target')!r}")
         if et == "instruction" and not e.get("expect"):
             warn(f"{sid}: instruction without 'expect'")
+        if et in ("ratify", "dismiss") and not e.get("target"):
+            err(f"{sid}: {et} missing 'target'")
     if not scen.get("assertions"):
         err(f"{sid}: no assertions")
     for a in scen.get("assertions", []):

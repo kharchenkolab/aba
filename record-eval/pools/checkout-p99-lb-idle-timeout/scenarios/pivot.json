@@ -2,7 +2,7 @@
   "id": "pivot",
   "pool": "checkout-p99-lb-idle-timeout",
   "stresses": "direction change mid-project: demotion/appendixing of the old arc; Class-3 consent",
-  "description": "The pricing-blame arc is deliberately allowed to earn real structure: the scientist commits the direction, pins the rollback result, and drafts the causal claim. Then the relapse and the two overturns land in one sitting and the committed direction must be demoted - proposed as Class-3, applied only at the explicit consent granted afterward, with the pricing material surviving as findable history and the redirected narrative citing the overturning evidence. Conventions: routine routing rows are accepted at each distill (veto-tier); decisions - claim drafts, addenda, Class-3 changes - are ratified only by explicit instruction events. A same-sitting demotion proposal is consistent with the §14.2 hysteresis rule because a controlled overturn (F16) is decisive evidence, not optimizer noise. Overturns supersede the claims' face-value readings; artifacts derived from them keep revised citations.",
+  "description": "The pricing-blame arc is deliberately allowed to earn real structure: the scientist commits the direction, pins the rollback result, and drafts the causal claim. Then the relapse and the two overturns land in one sitting and the committed direction must be demoted - proposed as Class-3, applied only at the explicit consent granted afterward, with the pricing material surviving as findable history and the redirected narrative citing the overturning evidence. Conventions: routine routing rows are accepted at each distill (veto-tier); decisions - claim drafts, addenda, Class-3 changes - are ratified only by explicit ratify events. A same-sitting demotion proposal is consistent with the §14.2 hysteresis rule because a controlled overturn (F16) is decisive evidence, not optimizer noise. Overturns supersede the claims' face-value readings; artifacts derived from them keep revised citations.",
   "events": [
     { "t": 1, "type": "session_start", "anchor": "Q1" },
     { "t": 2, "type": "finding", "ref": "F01" },
@@ -36,7 +36,7 @@
     { "t": 29, "type": "finding", "ref": "F14" },
     { "t": 30, "type": "finding", "ref": "F15" },
     { "t": 31, "type": "finding", "ref": "F16" },
-    { "t": 32, "type": "instruction", "text": "agreed - the pricing attribution is dead; move the pricing story to an appendix and keep the exoneration linked",
+    { "t": 32, "type": "ratify", "target": "the Class-3 demotion proposal: pricing story to appendix", "note": "keep the exoneration linked",
       "expect": "explicit Class-3 consent: the demotion/appendixing proposal is ratified and applied; the pricing material archives with its evidence and provenance links intact" },
     { "t": 33, "type": "distill" }
   ],

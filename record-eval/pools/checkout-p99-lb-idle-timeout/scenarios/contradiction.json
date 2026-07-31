@@ -2,7 +2,7 @@
   "id": "contradiction",
   "pool": "checkout-p99-lb-idle-timeout",
   "stresses": "overturns land mid-arc: narrative revises with provenance, never silently deletes",
-  "description": "Three revisions, staged so each cascade is live when it fires. The onset claim (F03) is explicitly ratified into prose, anchors the pricing attribution for two days - and then F20 overturns it while that attribution is still committed, so the dependent-chain re-examination must actually fire. Only afterward do F15/F16 kill the false fix and the suspect themselves. A never-revise policy and a delete-and-move-on policy must both fail. Conventions: routine routing rows are accepted at each distill; decisions (claim drafts, addenda) are ratified only by explicit instruction events; overturns supersede face-value readings, not derived artifacts.",
+  "description": "Three revisions, staged so each cascade is live when it fires. The onset claim (F03) is explicitly ratified into prose, anchors the pricing attribution for two days - and then F20 overturns it while that attribution is still committed, so the dependent-chain re-examination must actually fire. Only afterward do F15/F16 kill the false fix and the suspect themselves. A never-revise policy and a delete-and-move-on policy must both fail. Conventions: routine routing rows are accepted at each distill; decisions (claim drafts, addenda) are ratified only by explicit ratify events; overturns supersede face-value readings, not derived artifacts.",
   "events": [
     { "t": 1, "type": "session_start", "anchor": "Q1" },
     { "t": 2, "type": "finding", "ref": "F01" },
@@ -11,7 +11,7 @@
     { "t": 5, "type": "finding", "ref": "F04" },
     { "t": 6, "type": "finding", "ref": "F06" },
     { "t": 7, "type": "gesture", "verb": "draft_claim", "target": "F03" },
-    { "t": 8, "type": "instruction", "text": "yes - record the Jun 16 onset in the impact section",
+    { "t": 8, "type": "ratify", "target": "the Jun 16 onset claim draft, into the impact section",
       "expect": "the onset claim draft is ratified into Q1 prose; any later revision must arrive through the addendum grammar" },
     { "t": 9, "type": "distill" },
     { "t": 10, "type": "clock", "advance_days": 1 },
