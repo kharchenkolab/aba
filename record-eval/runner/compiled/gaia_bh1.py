@@ -190,13 +190,11 @@ COMPILED += _mk(P, "proactive-intent", [
 COMPILED += _mk(P, "slow-burn", [
     ("structure", "section_state", (24, 31),
      dict(question="Q4", no_child_section=True), ""),
-    ("structure", "section_promotion", (33, 41),
+    ("structure", "section_promotion", (33, 42),
      dict(question="Q4", exactly_once=True, none_before=True,
-          consent="pending_ok"),
-     "CORPUS BUG (flagged in REPORT): the stream contains no ratify event, "
-     "so the Class-3 promotion cannot be 'ratified no later than the distill "
-     "at event 41' under v1.1 consent semantics; compiled as "
-     "proposed-in-window, pending-or-accepted by t=41"),
+          consent="accepted"),
+     "corpus v1.2: the explicit ratify at t=42 consents the Class-3 "
+     "promotion; strict reading"),
     ("salience", "plan_item_state", (21, 22),
      dict(targets_any=("F21", "F22"), min_state="planned",
           forbid_prose_from=("F21", "F22"), max_prose_maturity="conjecture"),
@@ -213,7 +211,6 @@ COMPILED += _mk(P, "slow-burn", [
      "+ lifecycle checked, content not"),
     ("consent", "consent_conservation", None,
      dict(no_auto_ratify=True),
-     "CORPUS BUG (sibling of assertion 1): 'the Class-3 promotion carries "
-     "explicit consent' is unsatisfiable in a stream with no ratify event; "
-     "compiled as the general consent-conservation check"),
+     "corpus v1.2: promotion-specific consent is checked strictly in "
+     "assertion 1; this cell keeps the general conservation check"),
 ])

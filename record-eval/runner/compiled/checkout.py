@@ -198,11 +198,9 @@ COMPILED += _mk(P, "slow-burn", [
           provisional_target=True), ""),
     ("structure", "section_promotion", (18, 33),
      dict(question="Q2", exactly_once=True, none_before=True,
-          consent="pending_ok"),
-     "CORPUS BUG (flagged): the t=32 ratify targets the claim draft, not the "
-     "promotion; a Class-3 promotion cannot be 'ratified by the t=33 "
-     "distill' under v1.1 consent semantics - compiled as proposed-in-window "
-     "and pending-or-accepted by t=33"),
+          consent="accepted"),
+     "corpus v1.2: the t=32 ratify covers the claim draft and the "
+     "promotion; strict reading"),
     ("plan", "plan_item_state", (22, 24),
      dict(kinds=("check", "corroborate"), target="F17", min_state="absorbed",
           same_discharge_row=True, provisional_cleared=True), ""),
