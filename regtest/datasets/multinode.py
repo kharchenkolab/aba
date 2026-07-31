@@ -609,19 +609,33 @@ def _is_terminal(state: str) -> bool:
     return state in _TERMINAL
 
 
-def _submit_hpc_bg(pid: str, tid: str, code: str, title: str):
+def _submit_hpc_bg(pid: str, tid: str, code: str, title: str, *,
+                   env: str | None = "system"):
     """One background job on the cluster fixture, via the entry guide.py calls.
 
-    Returns `(job | None, error_text)`. A submit that DIES (env.realize_failed on
-    a cold fixture, say) is a true failure but not the scripted one — the caller
-    reports SETUP INVALID rather than letting a traceback read as a product
-    verdict.
+    `env="system"` — the node's own interpreter — ON PURPOSE. What these cases
+    test is ABA's BOOKKEEPING across a controller outage: whether reconcile reaps
+    a live row, whether a restart harvests a completion it never saw, whether a
+    failure keeps its cause. None of that depends on which interpreter ran the
+    code, so making the job depend on the base pack imported an irrelevant
+    variable — and on this fixture a decisive one, because the pack declares
+    [linux-64, osx-arm64] while the container is linux-aarch64. Every job then
+    failed its first attempt on env.platform_mismatch and the cases spent their
+    effort on SETUP INVALID and re-lock timing instead of on the question.
+    The BARE lane does no env realization at all (core/exec/kernels/weft.py), so
+    the platform simply stops being part of the setup.
+
+    (The re-lock path is worth testing — it is how a cross-platform site heals —
+    but that belongs to the env-lifecycle scenarios, not to restart survival.)
+
+    Returns `(job | None, error_text)`; a submit that DIES is reported as SETUP
+    INVALID by the caller rather than surfacing as a product verdict.
     """
     from core.jobs.submit import submit_python_job
     try:
         job = submit_python_job(code=code, title=title, focus_entity_id=None,
                                 timeout_s=600, project_id=pid, thread_id=tid,
-                                site="hpc")
+                                site="hpc", env=env)
         return job, ""
     except Exception as e:  # noqa: BLE001
         return None, f"{type(e).__name__}: {e}"
@@ -773,9 +787,12 @@ def mn_restart_finished_ok(client, pid, tid):
     checks.append((f"task reached a terminal state unwatched ({state}, "
                    f"site platform {_site_platform() or 'unknown'})",
                    _is_terminal(state)))
-    if not _is_terminal(state):
-        checks.append(("SETUP INVALID — the task never ended, so there is no "
-                       "unwatched completion to harvest", False))
+    # Strict again, now that the BARE lane removed the platform variable: this
+    # case is "completes, unwatched", so anything but DONE means the scripted
+    # setup did not happen and the harvest verdict would be meaningless.
+    if state != "DONE":
+        checks.append((f"SETUP INVALID — wanted DONE, substrate said "
+                       f"{state or 'unknown'}; harvest not graded", False))
         return [], checks
 
     _restart_controller()
