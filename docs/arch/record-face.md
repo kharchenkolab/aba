@@ -6,8 +6,10 @@ a projection of the entity graph, no new writes, no new entities — so any
 existing project can be viewed as a Record today, and the classic workspace
 and the Record stay two renderings of one substrate (§13.3 of the design).
 
-> Status: current as of 2026-08. Phase 1 (read-only face) only; phases 2–4
-> (shared triage, authoring strata, the spine) are design, not code.
+> Status: current as of 2026-08. Phase 1 (read-only face) + phase 2
+> (shared triage: tray from the proposals store, accept/dismiss/undo via
+> the classic endpoints, client-held what's-new cursor). Phases 3–4
+> (authoring strata, the spine) are design, not code.
 
 ## Aims & invariants
 
@@ -86,11 +88,10 @@ classic UI reads, handler-side.
   paragraphs rendered live carry the entity title and attribution only.
   Ratified-prose renditions arrive with phase 3 (revision machinery for
   narrative is also still figure/table-only — see `provenance.md`).
-- **The project header is the pid.** No project display-title in World v1.
 - **Trails, provenance drawer, briefing, RFC, gestures** render only on the
   fixture face; the API does not carry them yet.
 - **Leftovers ignore proposal mentions** (§13.1 wants "no proposal/mention";
   v1 checks edges + pin only).
-- **`whats_new` has no per-user cursor** — it is the raw event tail, and
-  `log_event` is best-effort; audit per-kind coverage before leaning on it
-  (entity-model known gap).
+- **`whats_new` rides `log_event`, which is best-effort** — audit per-kind
+  coverage before leaning on it (entity-model known gap). The per-user
+  cursor is client-held (localStorage), by design.
