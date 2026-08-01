@@ -423,6 +423,33 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
             b.kind === 'figure'
               ? <FigureEmbed key={i} figId={b.value} ctx={ctx} />
               : <p key={i}>{renderRefs(b.value, ctx)}</p>)}
+          {(p.evidence?.length ?? 0) > 0 && (
+            <div className="npara__evidence">
+              {p.evidence!.filter(e => e.artifact && w.artifactBase).map(e => (
+                <a key={e.id} href={`${w.artifactBase}${e.artifact}`}
+                   target="_blank" rel="noreferrer" className="npara__fig"
+                   title={`${e.title} — open full size`}>
+                  <img src={`${w.artifactBase}${e.artifact}`} alt={e.title}
+                       loading="lazy" />
+                  <span>{e.title}</span>
+                </a>
+              ))}
+              {p.evidence!.some(e => !e.artifact) && (
+                <div className="npara__evlinks"
+                     title="the artifacts the cited claims stand on — open in the workspace">
+                  evidence: {p.evidence!.filter(e => !e.artifact).map((e, i) => (
+                    <span key={e.id}>
+                      {i > 0 && ' · '}
+                      {w.threadHrefBase
+                        ? <a href={`/p/${w.threadHrefBase.split('/')[2]}/threads/e/${e.id}`}
+                             target="_blank" rel="noreferrer">{e.title}</a>
+                        : e.title}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           {(p.cites?.length ?? 0) > 0 && (
             <div className="npara__cites"
                  title="the claims this paragraph absorbed — live maturity; the evidence trail starts here">

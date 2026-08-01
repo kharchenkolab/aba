@@ -464,6 +464,18 @@ input { font: inherit; }
 .nsec__chat { font-family: var(--sans); font-size: 10.5px; color: var(--ink-3);
   text-decoration: none; white-space: nowrap; }
 .nsec__chat:hover { color: var(--teal); }
+/* figures are key: image-bearing evidence renders inline in the story */
+.npara__evidence { margin: 6px 0 2px; }
+.npara__fig { display: inline-block; margin: 0 10px 6px 0; text-decoration: none;
+  vertical-align: top; max-width: 46%; }
+.npara__fig img { max-width: 100%; max-height: 180px; border: 1px solid var(--rule);
+  border-radius: 6px; display: block; }
+.npara__fig span { font-family: var(--sans); font-size: 10.5px; color: var(--ink-3);
+  display: block; margin-top: 2px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.npara__evlinks { font-family: var(--sans); font-size: 11px; color: var(--ink-3); }
+.npara__evlinks a { color: var(--ink-3); text-decoration: underline dotted; }
+.npara__evlinks a:hover { color: var(--teal); }
 
 /* the org axis is recursive: a subquestion is the same organ one level
    down — indented, smaller heading, same strata inside */

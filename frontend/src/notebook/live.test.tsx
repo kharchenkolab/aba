@@ -211,6 +211,23 @@ describe('apiToWorld', () => {
     expect(w.sections[0].sessions?.[0].meta).toBe('2 runs')
   })
 
+  it('paragraph evidence rides the cited claims; images carry artifacts', () => {
+    const a = sample()
+    a.prose[0].body = 'Variance tracks batch (supported).'
+    a.prose[0].cites = ['C1']
+    a.supports_index = {
+      R1: { title: 'figs/monthly_offset.png', type: 'figure',
+            artifact: 'monthly_offset.png' },
+      R2: { title: 'regime summary table', type: 'result' },
+    }
+    const w = apiToWorld(a)
+    const ev = w.sections[0].paragraphs[0].evidence!
+    expect(ev.map(e => e.id)).toEqual(['R1', 'R2'])   // C1's supports
+    expect(ev[0].artifact).toBe('monthly_offset.png')
+    expect(ev[1].artifact).toBeUndefined()
+    expect(w.artifactBase).toBe('/artifacts/p-demo/')
+  })
+
   it('revisions carry their version; cited claims retire from the chips', () => {
     const a = sample()
     a.prose[0].body = 'Variance tracks batch (supported).'

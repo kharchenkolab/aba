@@ -200,6 +200,8 @@ export interface World {
   /** when set, each section links to its chat thread at `<base><sectionId>`
    *  (the classic workspace's canonical thread URL) */
   threadHrefBase?: string
+  /** base URL for inline evidence images: `<artifactBase><artifactName>` */
+  artifactBase?: string
   /** the live session's home locus — wears a standing "working here" state */
   anchorAt?: { session: string; elId: string }
   /** peripheral change signals: TOC pulse badges + delta-rail ticks.

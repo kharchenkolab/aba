@@ -345,6 +345,22 @@ def assemble_world(*, sediment_limit: int = 200,
     from core.graph.entities import get_entity
     ws = get_entity("workspace")
 
+    # titles for everything the claims stand on — the face renders evidence
+    # as NAMED links, never bare ids
+    support_ids = {sid for c in claims for sid in c["supports"]}
+    supports_index = {}
+    for sid in support_ids:
+        se = get_entity(sid)
+        if se:
+            row = {"title": se.get("title"), "type": se.get("type")}
+            # image-bearing evidence renders INLINE in the story — ship the
+            # servable artifact name (face builds /artifacts/<pid>/<name>)
+            ap = se.get("artifact_path")
+            if ap and str(ap).lower().endswith(
+                    (".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg")):
+                row["artifact"] = str(ap).rsplit("/", 1)[-1]
+            supports_index[sid] = row
+
     return {
         "version": 1,
         "project": {"title": (ws or {}).get("title")},
@@ -359,4 +375,5 @@ def assemble_world(*, sediment_limit: int = 200,
         "whats_new": events,
         "tray": list_proposals(status="pending"),
         "leftovers": _leftovers(),
+        "supports_index": supports_index,
     }

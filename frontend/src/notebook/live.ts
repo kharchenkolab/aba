@@ -61,6 +61,8 @@ export interface ApiWorld {
   tray: { id: number; kind: string; headline: string; status: string
           thread_id?: string | null }[]
   leftovers: { id: string; type: string; title: string | null }[]
+  supports_index?: Record<string, { title: string | null; type: string
+                                    artifact?: string }>
 }
 
 // ------------------------------------------------------------- the mapping
@@ -154,6 +156,22 @@ export function apiToWorld(a: ApiWorld): World {
           },
           ...(p?.versions && p.versions > 1 ? { versions: p.versions } : {}),
           ...(p?.cites?.length ? { cites: p.cites } : {}),
+          // figures are key: what the cited claims stand on rides with the
+          // paragraph — image-bearing evidence renders inline
+          ...(() => {
+            const idx = a.supports_index || {}
+            const ev = (p?.cites ?? [])
+              .flatMap(cid => claimById.get(cid)?.supports ?? [])
+              .filter((v, i, arr) => arr.indexOf(v) === i)
+              .map(sid => ({
+                id: sid,
+                title: idx[sid]?.title || sid,
+                type: idx[sid]?.type || 'evidence',
+                ...(idx[sid]?.artifact ? { artifact: idx[sid].artifact } : {}),
+              }))
+              .slice(0, 6)
+            return ev.length ? { evidence: ev } : {}
+          })(),
         }
       }),
       addenda: [],
@@ -294,7 +312,8 @@ export function apiToWorld(a: ApiWorld): World {
     // the chat thread behind each section, one click away (classic
     // workspace canonical URL, same origin)
     ...(a.project_id
-      ? { threadHrefBase: `/p/${a.project_id}/threads/t/` } : {}),
+      ? { threadHrefBase: `/p/${a.project_id}/threads/t/`,
+          artifactBase: `/artifacts/${a.project_id}/` } : {}),
     ...(allRuns.length > windowed.length
       ? { sedimentTotal: allRuns.length } : {}),
     // the triage band needs a desk; live sittings are all filed episodes, so
@@ -366,6 +385,8 @@ export async function fetchLiveWorld(api: string, projectId?: string):
   const res = await fetch(worldUrl(api, projectId, since))
   if (!res.ok) throw new Error(`world fetch failed: ${res.status}`)
   const world = apiToWorld(await res.json() as ApiWorld)
+  // artifact bytes are served by the API process, not the face's origin
+  if (world.artifactBase) world.artifactBase = api + world.artifactBase
   if (since && world.whatsNew) world.whatsNew.since = since.slice(0, 10)
   store()?.setItem(sinceKey(projectId), new Date().toISOString())
   return world

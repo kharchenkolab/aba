@@ -30,6 +30,9 @@ export interface Paragraph {
   /** claims this paragraph absorbed — rendered as a grounded-in chip line
    *  (the prose text itself is immutable; grounding rides beside it) */
   cites?: string[]
+  /** what the cited claims stand on — figures render inline (src built
+   *  from World.artifactBase + artifact), the rest as named links */
+  evidence?: { id: string; title: string; type: string; artifact?: string }[]
 }
 export interface Addendum {
   id: string
