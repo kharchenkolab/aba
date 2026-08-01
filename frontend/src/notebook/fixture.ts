@@ -27,6 +27,9 @@ export interface Paragraph {
   /** revision-chain length when this paragraph superseded earlier prose
    *  (never rewritten, never deleted — the chain stays in provenance) */
   versions?: number
+  /** claims this paragraph absorbed — rendered as a grounded-in chip line
+   *  (the prose text itself is immutable; grounding rides beside it) */
+  cites?: string[]
 }
 export interface Addendum {
   id: string
@@ -119,8 +122,14 @@ export interface SedimentEntry {
   trailRef?: string
   /** id of the working session that produced this run (▷/▶ chip) */
   sessionRef?: string
+  /** human name for the session chip — shown INSTEAD of the raw ref
+   *  (a distillation label); refs without a label render no chip text */
+  sessionLabel?: string
   /** the turn within that session that launched/reported this run */
   turnRef?: number
+  /** the named line of inquiry this run worked (thread-grain grouping) */
+  threadRef?: string
+  threadTitle?: string
   /** landed during the session on screen — highlighted as just-arrived */
   isNew?: boolean
 }

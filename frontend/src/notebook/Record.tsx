@@ -322,6 +322,13 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
           </span>
         )}
         <span className="nsec__phase" title="phase is per-question, derived from content — a young question in an old project is simply early">{phaseNote}</span>
+        {w.threadHrefBase && (
+          <a className="nsec__chat" href={`${w.threadHrefBase}${s.id}`}
+             target="_blank" rel="noreferrer"
+             title="open this line's chat thread in the workspace — the full conversation behind the section">
+            chat ▸
+          </a>
+        )}
         {s.charge && (
           <button className={`nsec__govtoggle ${govOpen ? 'is-on' : ''}`} onClick={() => setGovOpen(o => !o)}
                   title="the section's governing metadata — charge, budget, authorship, pin. Edited in place: the spine IS the map; there is no separate plan pane">
@@ -416,6 +423,12 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
             b.kind === 'figure'
               ? <FigureEmbed key={i} figId={b.value} ctx={ctx} />
               : <p key={i}>{renderRefs(b.value, ctx)}</p>)}
+          {(p.cites?.length ?? 0) > 0 && (
+            <div className="npara__cites"
+                 title="the claims this paragraph absorbed — live maturity; the evidence trail starts here">
+              grounded in {renderRefs(p.cites!.map(id => `[[claim:${id}]]`).join(' · '), ctx)}
+            </div>
+          )}
           <div className="npara__sig" title="ratified prose is immutable — the agent may propose, only you may write; a revision supersedes with provenance, never rewrites">
             {p.ratified.draftedBy ? `drafted by ${p.ratified.draftedBy} · ` : ''}
             {p.ratified.by && p.ratified.by !== '—'
@@ -686,9 +699,9 @@ function SedimentRow({ e, ctx, open, onToggle }: {
         {e.trailRef && <span className="sed__trail" title={`feeds trail ${e.trailRef}`}>⋱ {e.trailRef}</span>}
         {e.sessionRef && (
           <span className="sed__sess"
-                title={`produced in session “${e.sessionRef}”${e.turnRef ? ` — jump to turn ${e.turnRef}` : ' — open the session'}`}
+                title={`produced in session “${e.sessionLabel ?? e.sessionRef}”${e.turnRef ? ` — jump to turn ${e.turnRef}` : ' — open the session'}`}
                 onClick={ev => { ev.stopPropagation(); ctx.openSession(e.sessionRef!, e.turnRef) }}>
-            <SessGlyph live={sessionLive(ctx.w, e.sessionRef)} /> {e.sessionRef}
+            <SessGlyph live={sessionLive(ctx.w, e.sessionRef)} /> {e.sessionLabel ?? e.sessionRef}
           </span>
         )}
         <span className={`sed__ret sed__ret--${ret.cls}`}>{ret.label}</span>
@@ -1085,7 +1098,9 @@ function RecordDoc({ w, onAdvance, triage }: { w: World; onAdvance?: (t: string)
   // column (side-by-side working mode) — each converts into the other
   const [sessPage, setSessPage] = useState<{ id: string; turn?: number } | null>(w.openSession ?? null)
   const [sessDock, setSessDock] = useState<string | null>(null)
-  const [grain, setGrain] = useState<'run' | 'session'>(w.sedimentGrain ?? 'run')
+  const [grain, setGrain] = useState<'run' | 'session' | 'thread'>(w.sedimentGrain ?? 'run')
+  // thread grain: which named lines are unfolded to their run rows
+  const [openThreads, setOpenThreads] = useState<Set<string>>(new Set())
   const [lookingAt, setLookingAt] = useState<string | undefined>(undefined)
   const [held, setHeld] = useState<{ elId: string; label: string }[]>([])
   const docRef = useRef<HTMLElement | null>(null)
@@ -1773,11 +1788,18 @@ function RecordDoc({ w, onAdvance, triage }: { w: World; onAdvance?: (t: string)
             <em>{grain === 'session'
               ? 'every session and run · complete · leftovers counted, nothing lost'
               : 'every run · one line each · nothing lost, nothing demands reading'}</em>
-            {(w.sessions?.length ?? 0) > 0 && (
+            {((w.sessions?.length ?? 0) > 0 ||
+              w.sediment.some(e => e.threadRef)) && (
               <span className="sed-grain">
-                {(['run', 'session'] as const).map(g => (
+                {(['thread', 'session', 'run'] as const)
+                  .filter(g => g === 'run'
+                    || (g === 'thread' && w.sediment.some(e => e.threadRef))
+                    || (g === 'session' && (w.sessions?.length ?? 0) > 0))
+                  .map(g => (
                   <button key={g} className={`sed-grain__btn ${grain === g ? 'is-on' : ''}`}
-                          title={g === 'session' ? 'group the work by sitting — the session is the chain' : 'flat chronology of runs'}
+                          title={g === 'thread' ? 'one line per NAMED line of inquiry — open a line for its runs'
+                            : g === 'session' ? 'group the work by sitting — the session is the chain'
+                            : 'flat chronology of runs'}
                           onClick={() => setGrain(g)}>by {g}</button>
                 ))}
               </span>
@@ -1787,7 +1809,51 @@ function RecordDoc({ w, onAdvance, triage }: { w: World; onAdvance?: (t: string)
             <div className="sed-empty">nothing has run yet — the first run writes the first line</div>
           )}
           <div className="sed-list">
-            {grain === 'session' && (w.sessions?.length ?? 0) > 0 ? (
+            {grain === 'thread' && w.sediment.some(e => e.threadRef) ? (
+              (() => {
+                // one line per NAMED line of inquiry, newest activity first;
+                // runs are detail-on-demand behind each line. Unthreaded
+                // runs are background — machine work, one folded group.
+                const groups = new Map<string, SedimentEntry[]>()
+                for (const e of w.sediment) {
+                  const k = e.threadRef ?? '·background'
+                  groups.set(k, [...(groups.get(k) ?? []), e])
+                }
+                const rows = [...groups.entries()].sort((a, b) =>
+                  (b[1][b[1].length - 1].date).localeCompare(
+                    a[1][a[1].length - 1].date))
+                return rows.map(([k, es]) => {
+                  const bg = k === '·background'
+                  const title = bg ? 'background — automatic runs'
+                    : es[0].threadTitle || 'unnamed line'
+                  const fails = es.filter(e => e.state === 'failed').length
+                  const dist = es.find(e => e.sessionLabel)
+                  const open = openThreads.has(k)
+                  return (
+                    <div className={`sedthr ${bg ? 'sedthr--bg' : ''}`} key={k}>
+                      <button className="sedthr__head"
+                              onClick={() => setOpenThreads(x => toggle(x, k))}
+                              title={open ? 'fold this line back to one row'
+                                : 'open this line — every run under it, one row each'}>
+                        <span className="sedthr__arrow">{open ? '▾' : '▸'}</span>
+                        <span className="sedthr__title">{title}</span>
+                        <span className="sedthr__meta">
+                          {es.length} run{es.length === 1 ? '' : 's'}
+                          {fails > 0 ? ` · ${fails} ✗` : ''} ·{' '}
+                          {es[0].date}{es.length > 1 ? ` – ${es[es.length - 1].date}` : ''}
+                        </span>
+                        {dist && <span className="sedthr__dist" title="a distilled sitting on this line">▷ {dist.sessionLabel}</span>}
+                      </button>
+                      {open && es.map(e => (
+                        <SedimentRow key={e.id} e={e} ctx={ctx}
+                          open={openSed.has(e.id)}
+                          onToggle={() => setOpenSed(x => toggle(x, e.id))} />
+                      ))}
+                    </div>
+                  )
+                })
+              })()
+            ) : grain === 'session' && (w.sessions?.length ?? 0) > 0 ? (
               <>
                 {(w.sessions ?? []).map(s => {
                   const runs = w.sediment.filter(e => e.sessionRef === s.id)

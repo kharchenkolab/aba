@@ -77,7 +77,12 @@ describe('apiToWorld', () => {
     expect(w.sections).toHaveLength(2)
     const q1 = w.sections[0]
     expect(q1.question).toBe('what drives variance across siteA runs?')
-    expect(q1.open).toEqual(['batch effect?', 'calibration drift?'])
+    // open questions surface as the section PLAN (visible at every phase),
+    // not as a stub-only list
+    expect(q1.open).toEqual([])
+    expect(q1.plan?.map(p => p.text))
+      .toEqual(['batch effect?', 'calibration drift?'])
+    expect(q1.plan?.every(p => p.state === 'planned')).toBe(true)
     expect(q1.paragraphs[0].text).toBe('What we know about the variance')
     expect(q1.paragraphs[0].ratified.by).toBe('human:u1')
     // when the API ships a prose BODY, the paragraph reads it — the title
@@ -95,12 +100,22 @@ describe('apiToWorld', () => {
     expect(q2.dormant?.since).toBe('2026-03-04')
   })
 
-  it('maps runs to sediment with states and sitting refs', () => {
+  it('maps runs to sediment: states, named threads, human-only chips', () => {
     const w = apiToWorld(sample())
     expect(w.sediment.map(s => s.state)).toEqual(['ok', 'failed', 'running'])
-    expect(w.sediment[0].sessionRef).toBe('sit-Q1-1')
-    expect(w.sediment[2].sessionRef).toBeUndefined()  // background run
-    expect(w.sediment[0].title).toBe('guide #3')
+    // rows carry the NAMED line they worked; unthreaded runs carry none
+    expect(w.sediment[0].threadTitle).toBe('Q1 drivers of variance')
+    expect(w.sediment[2].threadRef).toBeUndefined()   // background run
+    expect(w.sedimentGrain).toBe('thread')
+    expect(w.sediment[0].title).toBe('guide · turn 3')
+    // an UNdistilled sitting puts no chip on the row (raw ids never render)
+    expect(w.sediment[0].sessionRef).toBeUndefined()
+    // a distilled one shows its label
+    const a = sample()
+    a.sittings[0].label = 'traced the reconnect path'
+    a.sittings[0].frozen = true
+    const w2 = apiToWorld(a)
+    expect(w2.sediment[0].sessionLabel).toBe('traced the reconnect path')
   })
 
   it('carries tray count, events, notes; empty organs stay empty', () => {

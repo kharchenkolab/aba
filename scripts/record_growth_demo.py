@@ -64,6 +64,19 @@ QUESTIONS = [  # (key, title, question, arrives_day)
      "are there earlier unexplained tail episodes with this signature?", 27),
 ]
 
+# Open questions ARE each line's plan — the distributed to-do list the
+# face renders under the section (resolved items show as produced).
+OPEN_QS = {
+    "q_cause": [
+        {"text": "measure the handshake cost distribution", "status": "resolved"},
+        {"text": "map the safe idle-window range", "status": "open"},
+    ],
+    "q_cap": [
+        {"text": "cost the 2.2x capacity proposal", "status": "open"},
+        {"text": "validate the model against a winter peak", "status": "open"},
+    ],
+}
+
 # The org axis is recursive: subquestions arrive UNDER a line and may be
 # promoted when their weight outgrows it. key -> (parent_key, promote_day):
 # before promote_day the node is seeded as a child; from promote_day on it
@@ -174,7 +187,8 @@ def seed_stage(name: str, horizon: int) -> None:
             pkey, promote_day = SUBQUESTIONS[key]
             if pkey in qids and (promote_day is None or horizon < promote_day):
                 parent = qids[pkey]
-        md = {"question": question, "open_questions": [],
+        md = {"question": question,
+              "open_questions": OPEN_QS.get(key, []),
               "lifecycle": lifecycle}
         if key == "q_lat":
             # verbatim first message until the distill proposal is accepted

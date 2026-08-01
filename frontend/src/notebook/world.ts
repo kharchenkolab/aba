@@ -196,7 +196,10 @@ export interface World {
   /** open this session's page on first render (storyboard scenes) */
   openSession?: { id: string; turn?: number }
   /** initial grain of the work-record stratum */
-  sedimentGrain?: 'run' | 'session'
+  sedimentGrain?: 'run' | 'session' | 'thread'
+  /** when set, each section links to its chat thread at `<base><sectionId>`
+   *  (the classic workspace's canonical thread URL) */
+  threadHrefBase?: string
   /** the live session's home locus — wears a standing "working here" state */
   anchorAt?: { session: string; elId: string }
   /** peripheral change signals: TOC pulse badges + delta-rail ticks.

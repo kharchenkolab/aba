@@ -105,8 +105,17 @@ export function apiToWorld(a: ApiWorld): World {
 
   const claimById = new Map(a.claims.map(c => [c.id, c]))
   const sections: Section[] = a.questions.map(q => {
+    // open questions ARE the section's plan (the distributed to-do list) —
+    // they render under the section at every phase, not only on the stub
     const open = (q.open_questions || []).map(o =>
-      typeof o === 'string' ? o : (o.text || '')).filter(Boolean)
+      typeof o === 'string' ? { text: o, status: '' }
+        : { text: o.text || '', status: (o as { status?: string }).status || '' })
+      .filter(o => o.text)
+    const planItems = open.map(o => ({
+      text: o.text,
+      state: (['resolved', 'done', 'closed'].includes(o.status)
+        ? 'produced' : 'planned') as 'produced' | 'planned',
+    }))
     const sits = sitsByThread.get(q.id) || []
     // a dormant line must say what it HOLDS — the strongest POSITIVE claim
     // under it (contested/refuted are terminal negatives, not high rungs),
@@ -130,6 +139,7 @@ export function apiToWorld(a: ApiWorld): World {
           text: p?.body || p?.title || pid,
           ratified: { by: p?.actor || '—', on: day(p?.created_at) },
           ...(p?.versions && p.versions > 1 ? { versions: p.versions } : {}),
+          ...(p?.cites?.length ? { cites: p.cites } : {}),
         }
       }),
       addenda: [],
@@ -141,7 +151,8 @@ export function apiToWorld(a: ApiWorld): World {
         const held = q.claims.filter(id => !cited.has(id))
         return held.length ? { claimsHeld: held.slice(0, 8) } : {}
       })(),
-      open,
+      open: [],
+      ...(planItems.length ? { plan: planItems } : {}),
       // recent sittings only — an old question's episode list must not grow
       // without bound (find the rest through the sediment). Labels are for
       // READING: a frozen sitting wears its distillation title; the rest
@@ -193,9 +204,15 @@ export function apiToWorld(a: ApiWorld): World {
     text: n.title || n.id,
   }))
 
-  const sitOfRun = new Map<string, string>()
+  const sitOfRun = new Map<string, { id: string; label?: string }>()
   for (const s of a.sittings)
-    for (const rid of s.run_ids) sitOfRun.set(rid, s.id)
+    for (const rid of s.run_ids)
+      sitOfRun.set(rid, { id: s.id,
+                          ...(s.frozen && s.label ? { label: s.label } : {}) })
+  // ABA names threads — sediment rows must read as WORK ON A NAMED LINE,
+  // never as opaque ids
+  const titleOfThread = new Map(a.questions.map(q =>
+    [q.id, q.title || q.question || q.id]))
 
   // scale face: the sediment shows a recent window; the total rides the
   // header ("N runs · showing recent") — legibility does not decay with age
@@ -203,19 +220,29 @@ export function apiToWorld(a: ApiWorld): World {
   const allRuns = a.sediment.runs
   const windowed = allRuns.slice(-SEDIMENT_WINDOW)
 
-  const sediment: SedimentEntry[] = windowed.map(r => ({
-    id: r.run_id,
-    date: day(r.started_at || r.updated_at),
-    title: [r.agent_spec_name || 'turn',
-            r.turn_index != null ? `#${r.turn_index}` : '']
-      .filter(Boolean).join(' '),
-    state: runState(r.state),
-    verdict: '',
-    nOutputs: 0,
-    shown: [],
-    retention: 'kept',
-    ...(sitOfRun.has(r.run_id) ? { sessionRef: sitOfRun.get(r.run_id) } : {}),
-  }))
+  const sediment: SedimentEntry[] = windowed.map(r => {
+    const sit = sitOfRun.get(r.run_id)
+    return {
+      id: r.run_id,
+      date: day(r.started_at || r.updated_at),
+      title: [r.agent_spec_name || 'turn',
+              r.turn_index != null ? `turn ${r.turn_index}` : '']
+        .filter(Boolean).join(' · '),
+      state: runState(r.state),
+      verdict: '',
+      nOutputs: 0,
+      shown: [],
+      retention: 'kept',
+      // the session chip shows only when it can say something HUMAN —
+      // a distillation label; raw sitting ids never reach the surface
+      ...(sit?.label
+        ? { sessionRef: sit.id, sessionLabel: sit.label } : {}),
+      ...(r.thread_id ? {
+        threadRef: r.thread_id,
+        threadTitle: titleOfThread.get(r.thread_id) || 'unnamed line',
+      } : {}),
+    }
+  })
 
   const events = a.whats_new.slice(0, 8)
 
@@ -247,7 +274,13 @@ export function apiToWorld(a: ApiWorld): World {
     benchFallback: [],
     onePager: null,
     bare: sections.length === 0 && allRuns.length === 0,
-    sedimentGrain: 'run',
+    // the navigable default: named lines, runs behind them; flat run
+    // chronology stays one toggle away
+    sedimentGrain: sediment.some(e => e.threadRef) ? 'thread' : 'run',
+    // the chat thread behind each section, one click away (classic
+    // workspace canonical URL, same origin)
+    ...(a.project_id
+      ? { threadHrefBase: `/p/${a.project_id}/threads/t/` } : {}),
     ...(allRuns.length > windowed.length
       ? { sedimentTotal: allRuns.length } : {}),
     // the triage band needs a desk; live sittings are all filed episodes, so
