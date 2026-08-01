@@ -40,7 +40,9 @@ export interface ApiWorld {
   }[]
   claims: {
     id: string; title: string | null; status?: string | null
+    maturity?: string | null
     rung: number | null; questions: string[]; supports: string[]
+    caveats?: string[]; evidence?: number
     actor?: string | null; created_at?: string; updated_at?: string
   }[]
   prose: { id: string; title: string | null; questions: string[]
@@ -84,8 +86,8 @@ export function apiToWorld(a: ApiWorld): World {
     claims[c.id] = {
       title: c.title || c.id,
       maturity: maturityWord(c.rung, a.maturity_ladder),
-      evidence: c.supports.length,
-      caveats: [],
+      evidence: c.evidence ?? c.supports.length,
+      caveats: c.caveats || [],
     }
   }
 
@@ -124,6 +126,9 @@ export function apiToWorld(a: ApiWorld): World {
         }
       }),
       addenda: [],
+      // pre-prose: surface held claims as chips (they retire into prose
+      // citations at phase 3); cap for legibility at scale
+      ...(q.claims.length ? { claimsHeld: q.claims.slice(0, 8) } : {}),
       open,
       // recent sittings only — an old question's episode list must not
       // grow without bound (find the rest through the sediment)

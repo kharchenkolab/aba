@@ -330,6 +330,12 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
           </button>
         )}
       </div>
+      {(s.claimsHeld?.length ?? 0) > 0 && (
+        <div className="nsec__holds"
+             title="what this question holds so far — claims at their current maturity; as prose lands and cites them, this strip retires">
+          holds {renderRefs(s.claimsHeld!.map(id => `[[claim:${id}]]`).join(' · '), ctx)}
+        </div>
+      )}
       {govOpen && s.charge && (
         <div className="nsec__gov">
           <div className="nsec__govrow"><b>charge</b><span>{s.charge}</span></div>

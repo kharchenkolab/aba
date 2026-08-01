@@ -227,6 +227,32 @@ class RecordWorldTest(unittest.TestCase):
         self.assertNotIn(self.a4, ids)       # archived
         self.assertNotIn(self.a5, ids)       # carries a claim (outbound supports)
 
+    def test_maturity_key_reads_metadata_not_status(self):
+        # packs that keep the ladder in metadata (e.g. confidence) register
+        # maturity_key; the platform status column stays lifecycle
+        cid = create_entity(entity_type="cc", title="metadata-graded claim",
+                            metadata={"grade": "firm", "thread_id": self.q1,
+                                      "caveats": ["n is small"],
+                                      "evidence_ids": ["x1", "x2"]})
+        try:
+            register_record_roles(ROLES, maturity_order=LADDER,
+                                  artifact_types=ARTS, maturity_key="grade")
+            w = assemble_world()
+            row = next(c for c in w["claims"] if c["id"] == cid)
+            self.assertEqual(row["maturity"], "firm")
+            self.assertEqual(row["rung"], 1)
+            self.assertEqual(row["caveats"], ["n is small"])
+            self.assertEqual(row["evidence"], 2)
+            # claims WITHOUT the metadata key fall back to platform status
+            c1 = next(c for c in w["claims"] if c["id"] == self.c1)
+            self.assertEqual(c1["maturity"], "draft")
+            self.assertEqual(c1["rung"], 0)
+        finally:
+            from core.graph.entities import delete_entity_hard
+            delete_entity_hard(cid)
+            register_record_roles(ROLES, maturity_order=LADDER,
+                                  artifact_types=ARTS)
+
     def test_unregistered_roles_yield_empty_skeleton(self):
         register_record_roles({})
         try:

@@ -42,8 +42,12 @@ GET /api/record/world  ──►  core/record/world.assemble_world()
 frontend notebook.html?live=1 ──► live.ts apiToWorld() ──► the mock renderer
 ```
 
-- **Maturity** = the claim type's status ladder, ordered at registration;
-  the assembler ships the rung, the renderer picks the glyph.
+- **Maturity** = the pack's ladder, ordered at registration. It may live in
+  entity metadata rather than the status column (`maturity_key` — bio's
+  claims keep it in `metadata.confidence`; the platform status column is
+  lifecycle). The assembler ships `maturity` + rung; the renderer picks the
+  glyph. Pre-prose, sections surface held claims as a chips strip
+  (`Section.claimsHeld`) that retires as prose lands and cites them.
 - **Leftovers** = the §13.1 edge-complement: artifact-typed entities
   (registry `is_artifact`, passed at registration) with no
   includes/supports edge either direction, unpinned, unarchived.
@@ -63,6 +67,18 @@ frontend notebook.html?live=1 ──► live.ts apiToWorld() ──► the mock 
 | `frontend/src/notebook/main.tsx` | `?live=1[&api=…][&project=…]` opt-in; fixture face is the default |
 | `tests/test_record_world.py` | the guard suite (gated): projection, sittings, tray, leftovers |
 | `frontend/src/notebook/live.test.tsx` | adapter mapping + renderer smoke over an adapted world |
+
+## Live-agent findings (2026-08, sandbox)
+
+Two turns of a real guide over a fresh project, viewed through this face,
+surfaced: (1) without Record advisor roles the agent models *lines of
+inquiry as claims* (the curation tool at hand) rather than threads/open
+questions — the §13.2-item-7 instructions gap, live; (2) the default
+thread absorbs the user's whole first message as its `question` (verbatim
+paragraph), so the face's section heading needs either upstream question
+distillation or a heading truncation policy; (3) shared triage verified
+end-to-end: dismiss/undo from this face flip the same proposals row the
+classic UI reads, handler-side.
 
 ## Known gaps
 

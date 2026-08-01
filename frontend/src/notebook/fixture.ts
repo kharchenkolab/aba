@@ -57,6 +57,10 @@ export interface Section {
   plan?: { text: string; state: 'planned' | 'taken-up' | 'produced' | 'absorbed'; meta?: string; mine?: boolean }[]
   /** the skeleton is still a proposal — awaiting "ratify the shape" */
   planDraft?: boolean
+  /** live mode: claims held under this question, rendered as a holds
+   *  strip with the SAME claim chips prose references use (the flat-grain
+   *  cousin of SpineQ.holds; prose citation replaces it as prose lands) */
+  claimsHeld?: string[]
   /** the section's governing metadata, edited IN PLACE (the spine is the
    *  map — there is no separate plan pane) */
   charge?: string

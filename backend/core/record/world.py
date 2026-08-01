@@ -27,6 +27,7 @@ from core.graph.runs_port import list_runs
 
 _ROLES: dict[str, str] = {}
 _MATURITY: tuple[str, ...] = ()
+_MATURITY_KEY: str = ""
 _ARTIFACT_TYPES: tuple[str, ...] = ()
 
 #: A sitting ends when attention moves — operationally, when the next run on
@@ -40,16 +41,20 @@ _CARRY_RELS = ("includes", "supports")
 
 def register_record_roles(roles: dict[str, str],
                           maturity_order: Sequence[str] = (),
-                          artifact_types: Sequence[str] = ()) -> None:
+                          artifact_types: Sequence[str] = (),
+                          maturity_key: str = "") -> None:
     """Content-pack registration: map Record roles to this pack's entity-type
-    names, order the claim-status ladder (index = maturity rung), and name
-    the artifact types the leftovers shelf sweeps (the pack typically derives
-    these from its registry's `is_artifact` capability). Re-registration
+    names, order the claim maturity ladder (index = rung), name the artifact
+    types the leftovers shelf sweeps (the pack typically derives these from
+    its registry's `is_artifact` capability), and — when the pack keeps its
+    ladder in entity metadata rather than the platform status column — the
+    metadata key that carries it (e.g. "confidence"). Re-registration
     replaces (same semantics as the type registry)."""
-    global _ROLES, _MATURITY, _ARTIFACT_TYPES
+    global _ROLES, _MATURITY, _ARTIFACT_TYPES, _MATURITY_KEY
     _ROLES = dict(roles)
     _MATURITY = tuple(maturity_order)
     _ARTIFACT_TYPES = tuple(artifact_types)
+    _MATURITY_KEY = maturity_key
 
 
 def record_roles() -> dict[str, str]:
@@ -189,11 +194,19 @@ def assemble_world(*, sediment_limit: int = 200,
     # "claim" here is the Record ROLE name (this module's own vocabulary);
     # which entity type plays it arrives via register_record_roles.
     for e in _of_role("claim"):  # noqa: seam
+        md = e.get("metadata") or {}
         row = _slim(e)
-        row["rung"] = _rung(e.get("status"))
+        # the ladder may live in metadata (maturity_key), not the platform
+        # status column — the status column is lifecycle, not confidence
+        row["maturity"] = (md.get(_MATURITY_KEY) if _MATURITY_KEY else None) \
+            or e.get("status")
+        row["rung"] = _rung(row["maturity"])
         row["questions"] = _question_ref(e, qids)
         row["supports"] = [ed["target_id"] for ed in edges_from(e["id"])
                            if ed["rel_type"] == "supports"]
+        row["caveats"] = md.get("caveats") or []
+        row["evidence"] = max(len(row["supports"]),
+                              len(md.get("evidence_ids") or []))
         claims.append(row)
 
     prose = [dict(_slim(e), questions=_question_ref(e, qids))

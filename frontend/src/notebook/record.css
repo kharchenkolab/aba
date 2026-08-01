@@ -1138,3 +1138,11 @@ input { font: inherit; }
   body { background: #fff; }
   .sed__line:hover { background: transparent; }
 }
+
+/* live: the section's holds strip — claims at maturity, pre-prose */
+.nsec__holds {
+  margin: 0.15rem 0 0.5rem;
+  font-size: 0.82rem;
+  color: var(--ink-3, #8a8578);
+  display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: baseline;
+}

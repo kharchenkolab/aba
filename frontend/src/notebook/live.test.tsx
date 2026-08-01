@@ -149,6 +149,17 @@ describe('apiToWorld', () => {
     expect(w.sections[0].sessions?.[5].meta).toBe('sit-Q1-9')  // most recent kept
   })
 
+  it('sections surface held claims as chips before prose cites them', () => {
+    const a = sample()
+    a.questions[0].prose = []            // no prose yet — chips must carry
+    const w = apiToWorld(a)
+    expect(w.sections[0].claimsHeld).toEqual(['C1', 'C2'])
+    const { container } = render(<Record world={w} />)
+    const holds = container.querySelector('.nsec__holds') as HTMLElement
+    expect(holds.textContent).toContain('variance tracks batch')
+    expect(holds.querySelectorAll('.ref--claim').length).toBe(2)
+  })
+
   it('an empty project renders the bare (day-0) face', () => {
     const a = sample()
     a.questions = []; a.claims = []; a.prose = []; a.notes = []

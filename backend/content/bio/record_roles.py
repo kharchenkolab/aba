@@ -18,4 +18,7 @@ register_record_roles(
                     "contested", "refuted"),
     # the leftovers shelf sweeps whatever this pack flags as an artifact
     artifact_types=sorted(types_with("is_artifact")),
+    # this pack keeps the ladder in metadata.confidence (claim.yaml: the
+    # platform status column is lifecycle, not confidence)
+    maturity_key="confidence",
 )
