@@ -28,6 +28,7 @@ from core.graph.runs_port import list_runs
 _ROLES: dict[str, str] = {}
 _MATURITY: tuple[str, ...] = ()
 _MATURITY_KEY: str = ""
+_PROSE_BODY_KEY: str = ""
 _ARTIFACT_TYPES: tuple[str, ...] = ()
 
 #: A sitting ends when attention moves — operationally, when the next run on
@@ -42,19 +43,23 @@ _CARRY_RELS = ("includes", "supports")
 def register_record_roles(roles: dict[str, str],
                           maturity_order: Sequence[str] = (),
                           artifact_types: Sequence[str] = (),
-                          maturity_key: str = "") -> None:
+                          maturity_key: str = "",
+                          prose_body_key: str = "") -> None:
     """Content-pack registration: map Record roles to this pack's entity-type
     names, order the claim maturity ladder (index = rung), name the artifact
     types the leftovers shelf sweeps (the pack typically derives these from
     its registry's `is_artifact` capability), and — when the pack keeps its
     ladder in entity metadata rather than the platform status column — the
-    metadata key that carries it (e.g. "confidence"). Re-registration
-    replaces (same semantics as the type registry)."""
-    global _ROLES, _MATURITY, _ARTIFACT_TYPES, _MATURITY_KEY
+    metadata key that carries it (e.g. "confidence"). `prose_body_key` names
+    the metadata key holding a prose entity's readable body (e.g. "text");
+    the story stratum renders it, so without it prose projects titles-only.
+    Re-registration replaces (same semantics as the type registry)."""
+    global _ROLES, _MATURITY, _ARTIFACT_TYPES, _MATURITY_KEY, _PROSE_BODY_KEY
     _ROLES = dict(roles)
     _MATURITY = tuple(maturity_order)
     _ARTIFACT_TYPES = tuple(artifact_types)
     _MATURITY_KEY = maturity_key
+    _PROSE_BODY_KEY = prose_body_key
 
 
 def record_roles() -> dict[str, str]:
@@ -209,8 +214,16 @@ def assemble_world(*, sediment_limit: int = 200,
                               len(md.get("evidence_ids") or []))
         claims.append(row)
 
-    prose = [dict(_slim(e), questions=_question_ref(e, qids))
-             for e in _of_role("prose")]
+    prose = []
+    for e in _of_role("prose"):
+        row = dict(_slim(e), questions=_question_ref(e, qids))
+        # the story stratum renders prose BODIES — metadata text, not
+        # artifact bytes, so the projection contract holds
+        if _PROSE_BODY_KEY:
+            body = (e.get("metadata") or {}).get(_PROSE_BODY_KEY)
+            if body:
+                row["body"] = body
+        prose.append(row)
     notes = [dict(_slim(e), questions=_question_ref(e, qids))
              for e in _of_role("note")]
 

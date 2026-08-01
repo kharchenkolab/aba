@@ -277,6 +277,7 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
   const phaseNote = { early: 'early — mostly noticing', mid: 'mid — condensing', late: 'late — writing up' }[s.phase]
   const [govOpen, setGovOpen] = useState(false)
   const [pinned, setPinned] = useState(!!s.pinned)
+  const [sessOpen, setSessOpen] = useState(false)
   // scale face: a dormant question is ONE quiet line — what it asks, what it
   // holds, since when — with a wake door; no dead scaffolding on screen
   if (s.dormant) {
@@ -352,12 +353,32 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
       )}
       {s.sessions && s.sessions.length > 0 && (
         <div className="nsec__sessions">
-          {s.sessions.map(x => (
-            <button key={x.label} className="sess" onClick={() => ctx.openSession(x.label)}
-                    title="the working exchange, filed under this question — the full episode: transcript, artifacts, leftovers; continuable">
-              <SessGlyph live={sessionLive(w, x.label)} /> {x.label} · {x.when} · {x.meta} — transcript
+          {/* the story stratum READS; episode history is a door, not a list.
+              Two rows at most sit inline — beyond that, one honest line. */}
+          {(s.sessions.length > 2 && !sessOpen) ? (
+            <button className="sess sess--sum" onClick={() => setSessOpen(true)}
+                    title="the working episodes filed under this question — expand for the recent ones; the full history lives in the work record below">
+              ▸ worked {(s.sessionsTotal ?? s.sessions.length)} times ·{' '}
+              {s.sessions[0].when} – {s.sessions[s.sessions.length - 1].when}
             </button>
-          ))}
+          ) : (
+            <>
+              {s.sessions.length > 2 && (
+                <button className="sess sess--sum" onClick={() => setSessOpen(false)}
+                        title="fold the episode list back to one line">
+                  ▾ worked {(s.sessionsTotal ?? s.sessions.length)} times{
+                    (s.sessionsTotal ?? 0) > s.sessions.length
+                      ? ` · recent ${s.sessions.length}` : ''}
+                </button>
+              )}
+              {s.sessions.map(x => (
+                <button key={`${x.label}·${x.when}`} className="sess" onClick={() => ctx.openSession(x.label)}
+                        title="the working exchange, filed under this question — the full episode: transcript, artifacts, leftovers; continuable">
+                  <SessGlyph live={sessionLive(w, x.label)} /> {x.label} · {x.when} · {x.meta} — transcript
+                </button>
+              ))}
+            </>
+          )}
         </div>
       )}
       {s.paragraphs.length === 0 && (
@@ -379,7 +400,9 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
               ? <FigureEmbed key={i} figId={b.value} ctx={ctx} />
               : <p key={i}>{renderRefs(b.value, ctx)}</p>)}
           <div className="npara__sig" title="ratified prose is immutable — the agent may propose, only you may write">
-            {p.ratified.draftedBy ? `drafted by ${p.ratified.draftedBy} · ` : ''}ratified by {p.ratified.by} · {p.ratified.on}
+            {p.ratified.draftedBy ? `drafted by ${p.ratified.draftedBy} · ` : ''}
+            {p.ratified.by && p.ratified.by !== '—'
+              ? `ratified by ${p.ratified.by} · ` : 'ratified · '}{p.ratified.on}
           </div>
           {methods && (
             <div className="npara__methods">
@@ -1534,7 +1557,7 @@ function RecordDoc({ w, onAdvance, triage }: { w: World; onAdvance?: (t: string)
         {w.whatsNew && (
           <section className={`wnew ${newOpen ? 'is-open' : ''}`}>
             <button className="wnew__head" onClick={() => setNewOpen(o => !o)}>
-              <span className="wnew__count">what's new since {w.whatsNew.since} · {w.whatsNew.items.length}</span>
+              <span className="wnew__count">what's new{w.whatsNew.since ? ` since ${w.whatsNew.since}` : ''} · {w.whatsNew.items.length}</span>
               <span className="wnew__peek">
                 {w.whatsNew.items.filter(i => i.loud || i.live).map((i, k) => (
                   <span key={k} className={`wnew__chip ${i.loud ? 'is-loud' : ''} ${i.live ? 'is-live' : ''}`}>

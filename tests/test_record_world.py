@@ -253,6 +253,34 @@ class RecordWorldTest(unittest.TestCase):
             register_record_roles(ROLES, maturity_order=LADDER,
                                   artifact_types=ARTS)
 
+    def test_prose_body_key_ships_readable_body(self):
+        # the story stratum renders prose BODIES; the pack names the
+        # metadata key (narrative packs: "text"). Without the key, or when
+        # the entity lacks it, the row stays title-only — honest projection.
+        pid = create_entity(entity_type="pp", title="stub with body",
+                            metadata={"question_id": self.q1,
+                                      "text": "Variance tracks the batch "
+                                              "assignment; calibration drift "
+                                              "is ruled out at siteA."})
+        try:
+            register_record_roles(ROLES, maturity_order=LADDER,
+                                  artifact_types=ARTS, prose_body_key="text")
+            w = assemble_world()
+            row = next(p for p in w["prose"] if p["id"] == pid)
+            self.assertIn("batch assignment", row["body"])
+            bare = next(p for p in w["prose"] if p["id"] == self.p1)
+            self.assertNotIn("body", bare)          # absent key -> no body
+            # unregistered key: NO prose row carries a body
+            register_record_roles(ROLES, maturity_order=LADDER,
+                                  artifact_types=ARTS)
+            w2 = assemble_world()
+            self.assertTrue(all("body" not in p for p in w2["prose"]))
+        finally:
+            from core.graph.entities import delete_entity_hard
+            delete_entity_hard(pid)
+            register_record_roles(ROLES, maturity_order=LADDER,
+                                  artifact_types=ARTS)
+
     def test_unregistered_roles_yield_empty_skeleton(self):
         register_record_roles({})
         try:

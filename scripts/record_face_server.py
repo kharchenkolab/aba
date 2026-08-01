@@ -49,6 +49,7 @@ def build_app(runtime: Path):
                         "contested", "refuted"),
         artifact_types=("figure", "table", "cell"),
         maturity_key="confidence",
+        prose_body_key="text",
     )
 
     app = FastAPI(title="record-face-sidecar")

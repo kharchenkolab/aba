@@ -41,6 +41,8 @@ export interface Section {
   open?: string[]
   /** archived working sessions filed under this question */
   sessions?: { label: string; when: string; meta: string }[]
+  /** honest total when `sessions` is a recent window of a longer history */
+  sessionsTotal?: number
   /** scale face: a dormant question compacts to ONE quiet line — question,
    *  what it holds, since when — with a ▷ wake door. No dead scaffolding. */
   dormant?: { since: string; holds?: string }

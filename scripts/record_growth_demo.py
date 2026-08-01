@@ -62,6 +62,38 @@ CLAIMS = [  # (title, question_key, day, status_by_stage_end)
     ("two prior episodes share the signature", "q_hist", 29, "preliminary"),
 ]
 
+NARRATIVES = [  # (question_key, day, title, text) — ratified prose, arriving
+    # as the story coheres; each paragraph written AT the maturity its day's
+    # evidence supports (the rubric's "prose tracks evidence", seeded)
+    ("q_lat", 4, "What we know so far",
+     "The p99 regression is confined to peak hours; p50 holds throughout "
+     "(supported). Onset roughly matches the config push, but the alignment "
+     "is contested — the push landed mid-window and the first bad quantile "
+     "precedes it by minutes."),
+    ("q_cause", 8, "The mechanism, as it stands",
+     "Idle connections pay a reconnect penalty on first use after a quiet "
+     "gap (supported). The timeout change armed that penalty at peak: "
+     "shortening the idle window turns warm pools cold between bursts, so "
+     "the first request of every burst eats a handshake (validated). This "
+     "is the load-bearing finding."),
+    ("q_lat", 12, "Where this line settled",
+     "Settled: the regression is the idle-timeout interaction, not a "
+     "capacity problem. The config-push timing question is closed as "
+     "coincidental. Line parked; active work continues under the "
+     "mechanism question."),
+    ("q_alert", 17, "Why the pager stayed quiet",
+     "The alert threshold averaged away the tail: a one-minute mean over "
+     "mixed traffic smooths sub-minute p99 spikes below the page line "
+     "(supported). A drafted claim on the averaging window is pending."),
+    ("q_retry", 24, "Early read on retry amplification",
+     "Retries fired past the client deadline double downstream exposure in "
+     "the replayed traces (preliminary — one load test, one trace day)."),
+    ("q_cap", 30, "Headroom after the fix",
+     "The capacity model puts stage-2 saturation at 1.8x current peak "
+     "(preliminary); the fix leaves roughly 1.6x headroom before the next "
+     "ceiling."),
+]
+
 STAGES = {  # stage name -> story horizon in days
     "stage1": -1,   # inception: nothing yet
     "stage2": 1,    # first sitting
@@ -109,10 +141,15 @@ def seed_stage(name: str, horizon: int) -> None:
         add_edge(fid, cid, "supports")
         n_claims += 1
 
-    if horizon >= 4:  # one narrative + a note once the story starts cohering
+    # the story stratum: ratified paragraphs arrive as the story coheres —
+    # metadata.text is the body the face reads (prose_body_key seam)
+    for qkey, day, title, text in NARRATIVES:
+        if day > horizon or qkey not in qids:
+            continue
         create_entity(entity_type="narrative",  # noqa: seam
-                      title="What we know so far",
-                      metadata={"thread_id": qids["q_lat"]})
+                      title=title,
+                      metadata={"thread_id": qids[qkey], "text": text})
+    if horizon >= 4:
         create_entity(entity_type="note",  # noqa: seam
                       title="check the connection-pool metrics next sweep",
                       metadata={"thread_id": qids.get("q_cause",
@@ -129,6 +166,24 @@ def seed_stage(name: str, horizon: int) -> None:
         add_proposal(thread_id=qids["q_alert"], kind="claim",
                      headline="draft: averaging window hides sub-minute tails",
                      signature=f"{name}-claim-1")
+
+    with _conn() as c:
+        # story-time stamps: the face reads dates off created_at/updated_at,
+        # so seeded rows must live in story time, not seeding time — and
+        # ratified prose names its ratifier
+        for qkey, day, title, _text in NARRATIVES:
+            if day > horizon or qkey not in qids:
+                continue
+            ts = f"2026-06-{day + 1:02d}T18:00:00Z"
+            c.execute("UPDATE entities SET created_at=?, updated_at=?, "
+                      "actor='human:you' WHERE type='narrative' AND title=?",
+                      (ts, ts, title))
+        if "q_lat" in qids and horizon >= 12:   # parked on day 12
+            c.execute("UPDATE entities SET updated_at=? WHERE id=?",
+                      ("2026-06-13T18:00:00Z", qids["q_lat"]))
+        c.execute("UPDATE entities SET created_at=?, updated_at=? "
+                  "WHERE type='note'", ("2026-06-06T11:00:00Z",) * 2)
+        c.commit()
 
     with _conn() as c:
         active = sorted(qids.values())
@@ -200,6 +255,15 @@ def check_worlds(fetch) -> None:
                 f"{name}: tray row {p['id']} off-question"
         for c in w["claims"]:
             assert c["questions"], f"{name}: claim {c['id']} unrouted"
+        # the story stratum READS: past the first days prose bodies exist,
+        # and no body ever leaks an internal id into the reading surface
+        if horizon >= 4:
+            assert any(p.get("body") for p in w["prose"]), \
+                f"{name}: story stratum empty — narrative missing"
+        for p in w["prose"]:
+            b = p.get("body") or ""
+            assert not any(t in b for t in ("thr_", "run_", "sit-")), \
+                f"{name}: internal id leaked into prose body"
         prev_titles, prev_counts = titles, n
         print(f"{name}: q={len(titles)} claims={n[0]} prose={n[1]} "
               f"notes={n[2]} runs={n[3]} sittings={len(w['sittings'])} "

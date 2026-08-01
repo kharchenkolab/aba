@@ -50,6 +50,18 @@ frontend notebook.html?live=1 ──► live.ts apiToWorld() ──► the mock 
   lifecycle). The assembler ships `maturity` + rung; the renderer picks the
   glyph. Pre-prose, sections surface held claims as a chips strip
   (`Section.claimsHeld`) that retires as prose lands and cites them.
+- **Prose bodies** ride the same seam: `prose_body_key` names the metadata
+  key carrying a prose entity's readable body (bio: `metadata.text`,
+  narrative.yaml). The World ships it as `body`; the face renders it as the
+  paragraph, title as stand-in when absent. The story stratum is therefore
+  REAL prose, not entity titles.
+- **The story stratum reads.** Per-section episode history renders as one
+  summary line ("worked N times · date range", expandable); row labels are
+  ordinal + date + size. Internal identifiers (`thr_…`, `sit-…`, `run_…`)
+  never appear inline in story sentences — they live in hovers, doors, and
+  the sediment table. `record-eval/READER_RUBRIC.md` is the content-eval
+  instrument: applied by reading each growth-arc stage as the scientist
+  would, at every face change.
 - **Leftovers** = the §13.1 edge-complement: artifact-typed entities
   (registry `is_artifact`, passed at registration) with no
   includes/supports edge either direction, unpinned, unarchived.
@@ -87,21 +99,25 @@ classic UI reads, handler-side.
 `content/bio/record_advisor.py` — the drafting-during-work role, v0
 deterministic: post-turn (on_stop), a thread with >=2 claims and no
 narrative gets a `record_draft` proposal (signature carries the claim
-count, so dismissal holds until the world changes). Accepting — from
-either face — creates the narrative stub (scheduler kind `record_draft`,
-undoable). Verified live end-to-end: agent turn -> advisor -> tray ->
-face accept -> stub renders under the question. The S6 charter
-(record-eval/runner/llm_policy.py) is the instruction set that later
-puts LLM drafting behind this same proposal kind.
+count, so dismissal holds until the world changes). The proposal payload
+carries DRAFTED PROSE (`compose_draft`: the thread's claims woven
+strongest-first at their maturity, negatives set apart); accepting — from
+either face — creates the narrative with `metadata.text` = that draft
+(scheduler kind `record_draft`, undoable), which the story stratum then
+renders as a real paragraph. Verified live end-to-end: agent turn ->
+advisor -> tray -> face accept -> prose renders under the question. The
+S6 charter (record-eval/runner/llm_policy.py) is the instruction set that
+later puts LLM drafting behind this same proposal kind.
 
 ## Known gaps
 
-- **Prose is titles-only.** `narrative` bodies live in artifact bytes; the
-  paragraphs rendered live carry the entity title and attribution only.
-  Ratified-prose renditions arrive with phase 3 (revision machinery for
-  narrative is also still figure/table-only — see `provenance.md`).
+- **Prose revision machinery** for narrative is still figure/table-only
+  (see `provenance.md`) — bodies render, but a ratified paragraph has no
+  revision/addendum trail through the face yet.
 - **Trails, provenance drawer, briefing, RFC, gestures** render only on the
-  fixture face; the API does not carry them yet.
+  fixture face; the API does not carry them yet. Project-level leftovers
+  ship in the World but have no live organ either — the shelf renders
+  per-session on the fixture face only.
 - **Leftovers ignore proposal mentions** (§13.1 wants "no proposal/mention";
   v1 checks edges + pin only).
 - **`whats_new` rides `log_event`, which is best-effort** — audit per-kind

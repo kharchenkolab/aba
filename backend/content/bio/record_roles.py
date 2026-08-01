@@ -21,4 +21,6 @@ register_record_roles(
     # this pack keeps the ladder in metadata.confidence (claim.yaml: the
     # platform status column is lifecycle, not confidence)
     maturity_key="confidence",
+    # narrative.yaml: metadata.text holds the prose body — the story stratum
+    prose_body_key="text",
 )

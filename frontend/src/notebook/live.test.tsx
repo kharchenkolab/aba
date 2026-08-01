@@ -80,7 +80,16 @@ describe('apiToWorld', () => {
     expect(q1.open).toEqual(['batch effect?', 'calibration drift?'])
     expect(q1.paragraphs[0].text).toBe('What we know about the variance')
     expect(q1.paragraphs[0].ratified.by).toBe('human:u1')
-    expect(q1.sessions?.[0].label).toBe('2 runs')
+    // when the API ships a prose BODY, the paragraph reads it — the title
+    // is only the stand-in for body-less rows
+    const withBody = sample()
+    withBody.prose[0].body =
+      'Variance tracks the batch assignment; drift is ruled out.'
+    expect(apiToWorld(withBody).sections[0].paragraphs[0].text)
+      .toBe('Variance tracks the batch assignment; drift is ruled out.')
+    // episode rows READ: ordinal label, size in meta — never a raw sit id
+    expect(q1.sessions?.[0].label).toBe('sitting 1')
+    expect(q1.sessions?.[0].meta).toBe('2 runs')
     const q2 = w.sections[1]
     expect(q2.question).toBe('Q2 parked line')   // falls back to title
     expect(q2.dormant?.since).toBe('2026-03-04')
@@ -146,7 +155,14 @@ describe('apiToWorld', () => {
     }))
     const w = apiToWorld(a)
     expect(w.sections[0].sessions?.length).toBe(6)
-    expect(w.sections[0].sessions?.[5].meta).toBe('sit-Q1-9')  // most recent kept
+    // the RECENT window is kept, ordinals stay honest against full history,
+    // and the raw sitting id appears in NO row field (reading surface clean)
+    expect(w.sections[0].sessions?.[5].label).toBe('sitting 10')
+    expect(w.sections[0].sessions?.[5].when).toBe('2026-06-10')
+    expect(w.sections[0].sessionsTotal).toBe(10)
+    for (const row of w.sections[0].sessions ?? [])
+      for (const v of [row.label, row.when, row.meta])
+        expect(v).not.toMatch(/sit-|thr_|run_/)
   })
 
   it('sections surface held claims as chips before prose cites them', () => {

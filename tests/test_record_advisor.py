@@ -64,6 +64,11 @@ class RecordAdvisorTest(unittest.TestCase):
                 if p["kind"] == "record_draft"]
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["advisor"], "record_drafter")
+        # the proposal carries the DRAFTED PROSE — a story, not a bare stub
+        text = (rows[0].get("payload") or {}).get("text", "")
+        self.assertIn("c1", text)
+        self.assertIn("c2", text)
+        self.assertIn("(preliminary)", text)
         # dedup: same world state, no re-nag
         self.assertIsNone(advisor.review_thread(self.t1))
         # the world changes (third claim) — a NEW signature may fire
@@ -74,6 +79,23 @@ class RecordAdvisorTest(unittest.TestCase):
         create_entity(entity_type="narrative", title="already drafted",
                       metadata={"thread_id": self.t2})
         self.assertIsNone(advisor.review_thread(self.t2))
+
+    def test_compose_draft_reads_strongest_first_negatives_apart(self):
+        mk = lambda t, conf: {"title": t, "metadata": {"confidence": conf}}
+        text = advisor.compose_draft([
+            mk("early hunch", "preliminary"),
+            mk("the load-bearing result", "validated"),
+            mk("ruled out path", "refuted"),
+            mk("a middling read", "supported"),
+        ])
+        # leads with the strongest positive, sets negatives apart, and the
+        # whole thing reads as sentences — no ids, no raw structures
+        self.assertTrue(text.startswith("the load-bearing result (validated)."))
+        self.assertIn("Also in hand: a middling read (supported); "
+                      "early hunch (preliminary).", text)
+        self.assertIn("Set aside: ruled out path (refuted).", text)
+        self.assertNotIn("thr_", text)
+        self.assertNotIn("{", text)
 
 
 if __name__ == "__main__":

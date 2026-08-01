@@ -338,13 +338,18 @@ def accept_proposal(pid: int) -> dict:
             m["question_source"] = payload.get("set_source", "guide")
             update_entity(tid, metadata=m)
     elif kind == "record_draft":
-        # phase-3 record-write: accepting drafts the story stub the Record
-        # face renders under this question (content current, undoable)
+        # phase-3 record-write: accepting drafts the story the Record face
+        # renders under this question (content current, undoable). The
+        # drafted prose rides payload.text into metadata.text (narrative.yaml)
+        # so the story stratum has a BODY, not a bare stub.
         from core.graph.entities import create_entity
+        md = {"thread_id": tid}
+        if payload.get("text"):
+            md["text"] = payload["text"]
         result_id = create_entity(
             entity_type="narrative",
             title=(payload.get("title") or "What we know so far"),
-            metadata={"thread_id": tid})
+            metadata=md)
         undo = {"archive_entity": result_id}
     elif kind == "subquestion":
         oqid = _file_oq(tid, payload.get("text", ""))

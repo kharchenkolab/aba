@@ -4,10 +4,10 @@
  * backend/core/record/world.py) onto the renderer's World.
  *
  * Coverage is HONEST: organs the API does not carry yet render empty — never
- * mimed. Prose paragraphs show the narrative entity's title (bytes stay in
- * the artifact store, phase 3 brings ratified prose); runs surface with the
- * facts the runs table holds. The fixture face remains the default; live
- * mode is opt-in per URL (`?live=1&api=…&project=…`).
+ * mimed. Prose paragraphs render the entity's body when the API ships one
+ * (`prose_body_key` registration), its title otherwise; runs surface with
+ * the facts the runs table holds. The fixture face remains the default;
+ * live mode is opt-in per URL (`?live=1&api=…&project=…`).
  */
 import type { World } from './world'
 import type { ClaimRef, Section, LooseNote, SedimentEntry } from './fixture'
@@ -46,6 +46,7 @@ export interface ApiWorld {
     actor?: string | null; created_at?: string; updated_at?: string
   }[]
   prose: { id: string; title: string | null; questions: string[]
+           body?: string | null
            actor?: string | null; created_at?: string }[]
   notes: { id: string; title: string | null; questions: string[]
            actor?: string | null; created_at?: string }[]
@@ -121,7 +122,9 @@ export function apiToWorld(a: ApiWorld): World {
         const p = proseById.get(pid)
         return {
           id: pid,
-          text: p?.title || pid,
+          // the story stratum reads: the prose BODY when the API carries it
+          // (phase 3), the title as an honest stand-in otherwise
+          text: p?.body || p?.title || pid,
           ratified: { by: p?.actor || '—', on: day(p?.created_at) },
         }
       }),
@@ -130,13 +133,16 @@ export function apiToWorld(a: ApiWorld): World {
       // citations at phase 3); cap for legibility at scale
       ...(q.claims.length ? { claimsHeld: q.claims.slice(0, 8) } : {}),
       open,
-      // recent sittings only — an old question's episode list must not
-      // grow without bound (find the rest through the sediment)
-      sessions: sits.slice(-6).map(s => ({
-        label: `${s.run_ids.length} run${s.run_ids.length === 1 ? '' : 's'}`,
+      // recent sittings only — an old question's episode list must not grow
+      // without bound (find the rest through the sediment). Labels are for
+      // READING: ordinal + date + size; the sitting id stays in the sediment
+      // stratum (sessionRef), never inline in the story.
+      sessions: sits.slice(-6).map((s, i) => ({
+        label: `sitting ${sits.length - Math.min(sits.length, 6) + i + 1}`,
         when: day(s.started_at),
-        meta: s.id,
+        meta: `${s.run_ids.length} run${s.run_ids.length === 1 ? '' : 's'}`,
       })),
+      ...(sits.length > 6 ? { sessionsTotal: sits.length } : {}),
       ...(q.lifecycle === 'parked'
         ? { dormant: { since: day(q.updated_at),
                        ...(holds ? { holds } : {}) } } : {}),

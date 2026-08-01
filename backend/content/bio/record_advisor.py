@@ -15,6 +15,11 @@ from __future__ import annotations
 from core.graph.entities import find_entities
 from core.graph.proposals_store import add_proposal
 
+# This pack's claim ladder (claim.yaml metadata.confidence); positives in
+# ladder order, then the terminal negatives — the draft reads strongest-first.
+_LADDER = ("preliminary", "supported", "validated", "contested", "refuted")
+_NEGATIVE = {"contested", "refuted"}
+
 
 def _of_thread(entity_type: str, tid: str) -> list[dict]:
     return [e for e in find_entities(type=entity_type, include_archived=False,
@@ -22,8 +27,39 @@ def _of_thread(entity_type: str, tid: str) -> list[dict]:
             if (e.get("metadata") or {}).get("thread_id") == tid]
 
 
+def _conf(c: dict) -> str:
+    return ((c.get("metadata") or {}).get("confidence")
+            or c.get("status") or "preliminary")
+
+
+def compose_draft(claims: list[dict]) -> str:
+    """Weave the thread's claims into a readable story draft — mechanical
+    v0 (titles at their maturity, strongest first, negatives set apart).
+    The scientist ratifies by accepting; LLM drafting rides the same
+    payload later."""
+    def rung(c):
+        try:
+            return _LADDER.index(_conf(c))
+        except ValueError:
+            return 0
+    pos = sorted((c for c in claims if _conf(c) not in _NEGATIVE),
+                 key=rung, reverse=True)
+    neg = [c for c in claims if _conf(c) in _NEGATIVE]
+    parts = []
+    if pos:
+        lead, rest = pos[0], pos[1:]
+        parts.append(f"{lead['title']} ({_conf(lead)}).")
+        if rest:
+            parts.append("Also in hand: " + "; ".join(
+                f"{c['title']} ({_conf(c)})" for c in rest) + ".")
+    if neg:
+        parts.append("Set aside: " + "; ".join(
+            f"{c['title']} ({_conf(c)})" for c in neg) + ".")
+    return " ".join(parts)
+
+
 def review_thread(tid: str):
-    """Propose a story stub when the record is behind the claims."""
+    """Propose a story draft when the record is behind the claims."""
     claims = _of_thread("claim", tid)
     if len(claims) < 2:
         return None
@@ -31,10 +67,11 @@ def review_thread(tid: str):
         return None
     return add_proposal(
         thread_id=tid, kind="record_draft", advisor="record_drafter",
-        headline=(f"the record is behind the work — draft the story stub "
+        headline=(f"the record is behind the work — draft the story "
                   f"for this line ({len(claims)} claims, no narrative yet)"),
         signature=f"record_draft:{tid}:{len(claims)}",
-        payload={"title": "What we know so far"},
+        payload={"title": "What we know so far",
+                 "text": compose_draft(claims)},
     )
 
 
