@@ -82,6 +82,18 @@ distillation or a heading truncation policy; (3) shared triage verified
 end-to-end: dismiss/undo from this face flip the same proposals row the
 classic UI reads, handler-side.
 
+## Phase-3 slice (2026-08): the first advisor + record-write kind
+
+`content/bio/record_advisor.py` — the drafting-during-work role, v0
+deterministic: post-turn (on_stop), a thread with >=2 claims and no
+narrative gets a `record_draft` proposal (signature carries the claim
+count, so dismissal holds until the world changes). Accepting — from
+either face — creates the narrative stub (scheduler kind `record_draft`,
+undoable). Verified live end-to-end: agent turn -> advisor -> tray ->
+face accept -> stub renders under the question. The S6 charter
+(record-eval/runner/llm_policy.py) is the instruction set that later
+puts LLM drafting behind this same proposal kind.
+
 ## Known gaps
 
 - **Prose is titles-only.** `narrative` bodies live in artifact bytes; the

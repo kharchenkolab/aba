@@ -19,7 +19,8 @@ from .files import layout    # noqa: F401  — registers per-type display_path c
 from . import viewers        # noqa: F401  — loads file-viewer registry
 from . import prompts        # noqa: F401  — registers named prompts (e.g. thread_summary)
 from . import services       # noqa: F401
-from . import record_roles   # noqa: F401  — maps this pack's types onto Record roles  — registers content services (language_sniffer, host_tool_names, plan_orientation_preamble)
+from . import record_roles   # noqa: F401  — maps this pack's types onto Record roles
+from . import record_advisor # noqa: F401  — the drafting-during-work advisor (phase 3)  — registers content services (language_sniffer, host_tool_names, plan_orientation_preamble)
 
 # Wire on_project_open hook for bio's display-path backfill (Phase C.4).
 from core.hooks.dispatcher import register as _register_hook

@@ -40,6 +40,7 @@ FILES=(
   tests/test_vision_refs.py
   # Record face (phase 1): world projection read-port + register seam
   tests/test_record_world.py
+  tests/test_record_advisor.py
   tests/test_env_integrity.py
   tests/test_env_resolution.py
   tests/test_env_resolution_honesty.py

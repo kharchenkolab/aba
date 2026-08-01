@@ -337,6 +337,15 @@ def accept_proposal(pid: int) -> dict:
             m["question"] = payload["question"]
             m["question_source"] = payload.get("set_source", "guide")
             update_entity(tid, metadata=m)
+    elif kind == "record_draft":
+        # phase-3 record-write: accepting drafts the story stub the Record
+        # face renders under this question (content current, undoable)
+        from core.graph.entities import create_entity
+        result_id = create_entity(
+            entity_type="narrative",
+            title=(payload.get("title") or "What we know so far"),
+            metadata={"thread_id": tid})
+        undo = {"archive_entity": result_id}
     elif kind == "subquestion":
         oqid = _file_oq(tid, payload.get("text", ""))
         undo = {"remove_oq": oqid}
