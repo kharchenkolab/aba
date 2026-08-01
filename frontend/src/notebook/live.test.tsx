@@ -123,6 +123,44 @@ describe('apiToWorld', () => {
     a.project = { title: 'Variance study' }
     expect(apiToWorld(a).project.title).toBe('Variance study')
   })
+
+  it('maps pending proposals into liveTray with section attribution', () => {
+    const a = sample()
+    a.tray = [
+      { id: 7, kind: 'route', headline: 'file it', status: 'pending',
+        thread_id: 'Q1' },
+      { id: 8, kind: 'claim', headline: 'draft a claim', status: 'pending',
+        thread_id: 'nope' },   // unknown thread → no section door
+    ]
+    const w = apiToWorld(a)
+    expect(w.liveTray).toEqual([
+      { id: 7, kind: 'route', headline: 'file it', sectionId: 'Q1' },
+      { id: 8, kind: 'claim', headline: 'draft a claim' },
+    ])
+  })
+
+  it('live proposals ride the tray: band count and rows agree', async () => {
+    const { fireEvent } = await import('@testing-library/react')
+    const a = sample()
+    a.tray = [
+      { id: 7, kind: 'route', headline: 'file the scatter', status: 'pending',
+        thread_id: 'Q1' },
+      { id: 8, kind: 'restructure', headline: 'split the section',
+        status: 'pending', thread_id: null },
+    ]
+    const { container } = render(<Record world={apiToWorld(a)} />)
+    const band = container.querySelector('.desk__needs') as HTMLElement
+    expect(band.textContent).toContain('2')
+    fireEvent.click(band)
+    const rows = container.querySelectorAll('.tray__row')
+    expect(rows.length).toBe(2)
+    const text = container.textContent || ''
+    expect(text).toContain('route — file the scatter')
+    expect(text).toContain('restructure — split the section')
+    // routing rows are veto-tier (routine), the restructure is a decision
+    expect(container.querySelectorAll('.tray__kind--routine').length).toBe(1)
+    expect(container.querySelectorAll('.tray__kind--decision').length).toBe(1)
+  })
 })
 
 describe('the since-cursor', () => {

@@ -52,7 +52,8 @@ export interface ApiWorld {
               started_at?: string | null; ended_at?: string | null }[]
   whats_new: { id: number; kind: string; entity_id?: string | null
                title?: string | null; ts: string }[]
-  tray: { id: number; kind: string; headline: string; status: string }[]
+  tray: { id: number; kind: string; headline: string; status: string
+          thread_id?: string | null }[]
   leftovers: { id: string; type: string; title: string | null }[]
 }
 
@@ -180,6 +181,19 @@ export function apiToWorld(a: ApiWorld): World {
     onePager: null,
     bare: sections.length === 0 && sediment.length === 0,
     sedimentGrain: 'run',
+    // the triage band needs a desk; live sittings are all filed episodes, so
+    // the line is a plain inventory (open-session tracking is a later organ)
+    desk: {
+      line: a.sittings.length
+        ? `${a.sittings.length} sitting${a.sittings.length === 1 ? '' : 's'} on record`
+        : 'no sittings yet',
+      items: [],
+    },
+    liveTray: a.tray.map(p => ({
+      id: p.id, kind: p.kind, headline: p.headline,
+      ...(p.thread_id && a.questions.some(q => q.id === p.thread_id)
+        ? { sectionId: p.thread_id } : {}),
+    })),
   }
 }
 

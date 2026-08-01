@@ -59,10 +59,12 @@ const sessionLive = (w: World, id?: string) =>
  *  with an undo window. Decisions (addenda, claim drafts) stay manual. */
 export interface PendingItem {
   key: string
-  kind: 'addendum' | 'fragment' | 'note' | 'claim draft' | 'plan'
+  kind: 'addendum' | 'fragment' | 'note' | 'claim draft' | 'plan' | 'proposal'
   label: string
   elId: string
   routine: boolean
+  /** live mode: the proposals-store row id this item mirrors */
+  liveId?: number
 }
 function derivePending(w: World): PendingItem[] {
   const out: PendingItem[] = []
@@ -84,6 +86,14 @@ function derivePending(w: World): PendingItem[] {
   }
   for (const n of w.looseNotes) if (n.draft) {
     out.push({ key: n.id, kind: 'note', label: `note — “${n.text.slice(0, 56)}…”`, elId: `el-note-${n.id}`, routine: true })
+  }
+  // live mode: shared-store proposals ride the same tray — routing rows are
+  // veto-tier (routine), everything else is a decision
+  for (const p of w.liveTray ?? []) {
+    out.push({ key: `live-${p.id}`, kind: 'proposal', liveId: p.id,
+               label: `${p.kind} — ${p.headline}`,
+               elId: p.sectionId ? `el-${p.sectionId}` : '',
+               routine: p.kind === 'route' })
   }
   // spine face: pending rides on the question lines — the band count, the
   // tray rows, and the amber ticks are still ONE derivation
