@@ -341,15 +341,24 @@ def accept_proposal(pid: int) -> dict:
         # phase-3 record-write: accepting drafts the story the Record face
         # renders under this question (content current, undoable). The
         # drafted prose rides payload.text into metadata.text (narrative.yaml)
-        # so the story stratum has a BODY, not a bare stub.
+        # so the story stratum has a BODY, not a bare stub. With
+        # payload.revises the new narrative SUPERSEDES an old one via a
+        # wasDerivedFrom edge — ratified prose is never rewritten.
         from core.graph.entities import create_entity
         md = {"thread_id": tid}
         if payload.get("text"):
             md["text"] = payload["text"]
+        if payload.get("cites"):
+            md["cites"] = list(payload["cites"])
+        if payload.get("drafted_claims") is not None:
+            md["drafted_claims"] = payload["drafted_claims"]
         result_id = create_entity(
             entity_type="narrative",
             title=(payload.get("title") or "What we know so far"),
             metadata=md)
+        if payload.get("revises"):
+            from core.graph.edges import add_edge
+            add_edge(result_id, payload["revises"], "wasDerivedFrom")
         undo = {"archive_entity": result_id}
     elif kind == "subquestion":
         oqid = _file_oq(tid, payload.get("text", ""))

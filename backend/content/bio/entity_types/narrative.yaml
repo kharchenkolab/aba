@@ -19,7 +19,10 @@ status_model:
     active: [archived]
 
 allowed_edges:
-  out: []
+  # A revision narrative points wasDerivedFrom at the narrative it
+  # supersedes — ratified prose is never rewritten; it is superseded
+  # with provenance.
+  out: [wasDerivedFrom]
   # Narratives are Result members (includes), derivation targets
   # (wasDerivedFrom), and evidence (supports).
   in:  [supports, includes, wasDerivedFrom]

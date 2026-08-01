@@ -112,21 +112,51 @@ def llm_draft(claims: list[dict]) -> str:
         return ""
 
 
+def _heads(narratives: list[dict]) -> list[dict]:
+    """Narratives not superseded by a revision (wasDerivedFrom points FROM
+    the revision AT the superseded one)."""
+    from core.graph.edges import edges_to
+    ids = {n["id"] for n in narratives}
+    superseded = set()
+    for n in narratives:
+        for ed in edges_to(n["id"]):
+            if ed["rel_type"] == "wasDerivedFrom" and ed["source_id"] in ids:
+                superseded.add(n["id"])
+    return [n for n in narratives if n["id"] not in superseded]
+
+
 def review_thread(tid: str):
-    """Propose a story draft when the record is behind the claims."""
+    """Propose a story draft when the record is behind the claims — a first
+    draft when no narrative stands, a REVISION when claims have landed
+    since the head was drafted (`drafted_claims` staleness)."""
     claims = _of_thread("claim", tid)
     if len(claims) < 2:
         return None
-    if _of_thread("narrative", tid):
-        return None
-    return add_proposal(
-        thread_id=tid, kind="record_draft", advisor="record_drafter",
-        headline=(f"the record is behind the work — draft the story "
-                  f"for this line ({len(claims)} claims, no narrative yet)"),
-        signature=f"record_draft:{tid}:{len(claims)}",
-        payload={"title": "What we know so far",
-                 "text": llm_draft(claims) or compose_draft(claims)},
-    )
+    text = llm_draft(claims) or compose_draft(claims)
+    payload = {"title": "What we know so far", "text": text,
+               "cites": [c["id"] for c in claims],
+               "drafted_claims": len(claims)}
+    heads = _heads(_of_thread("narrative", tid))
+    if not heads:
+        return add_proposal(
+            thread_id=tid, kind="record_draft", advisor="record_drafter",
+            headline=(f"the record is behind the work — draft the story "
+                      f"for this line ({len(claims)} claims, no narrative "
+                      f"yet)"),
+            signature=f"record_draft:{tid}:{len(claims)}",
+            payload=payload)
+    head = heads[-1]
+    seen = (head.get("metadata") or {}).get("drafted_claims")
+    if seen is not None and len(claims) > seen:
+        payload["revises"] = head["id"]
+        payload["title"] = head.get("title") or payload["title"]
+        return add_proposal(
+            thread_id=tid, kind="record_draft", advisor="record_drafter",
+            headline=(f"claims have landed since this story was drafted "
+                      f"({len(claims)} now, {seen} then) — revise it"),
+            signature=f"record_draft:{tid}:{len(claims)}",
+            payload=payload)
+    return None
 
 
 def _on_stop_record(ctx: dict) -> None:

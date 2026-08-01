@@ -74,11 +74,40 @@ class RecordAdvisorTest(unittest.TestCase):
         # the world changes (third claim) — a NEW signature may fire
         _claim(self.t1, "c3")
         self.assertIsNotNone(advisor.review_thread(self.t1))
-        # quiet when narrative exists
+        # quiet when a HAND-WRITTEN narrative exists (no drafted_claims
+        # marker -> the advisor never second-guesses human prose)
         _claim(self.t2, "d1"); _claim(self.t2, "d2")
         create_entity(entity_type="narrative", title="already drafted",
                       metadata={"thread_id": self.t2})
         self.assertIsNone(advisor.review_thread(self.t2))
+
+    def test_revision_lifecycle(self):
+        from core.graph.edges import add_edge
+        t3 = create_entity(entity_type="thread", title="line three",
+                           metadata={"question": "what sets the floor?"})
+        _claim(t3, "e1"); _claim(t3, "e2")
+        # a drafted head at 2 claims (as the scheduler would write it)
+        old = create_entity(entity_type="narrative", title="What we know",
+                            metadata={"thread_id": t3, "text": "two things",
+                                      "drafted_claims": 2})
+        self.assertIsNone(advisor.review_thread(t3))     # not stale
+        _claim(t3, "e3")                                 # the world moved
+        pid = advisor.review_thread(t3)
+        self.assertIsNotNone(pid)
+        row = [p for p in list_proposals(thread_id=t3)
+               if p["kind"] == "record_draft"][0]
+        self.assertEqual(row["payload"]["revises"], old)
+        self.assertEqual(row["payload"]["drafted_claims"], 3)
+        self.assertIn("revise", row["headline"])
+        self.assertIn("e3", row["payload"]["text"])
+        # simulate accept: revision + provenance edge -> head moves, quiet
+        new = create_entity(entity_type="narrative", title="What we know",
+                            metadata={"thread_id": t3, "text": "three things",
+                                      "drafted_claims": 3})
+        add_edge(new, old, "wasDerivedFrom")
+        self.assertEqual([h["id"] for h in advisor._heads(
+            advisor._of_thread("narrative", t3))], [new])
+        self.assertIsNone(advisor.review_thread(t3))
 
     def test_llm_draft_gate_and_flag(self):
         mk = lambda t, conf: {"title": t, "metadata": {"confidence": conf}}

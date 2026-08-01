@@ -409,10 +409,11 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
             b.kind === 'figure'
               ? <FigureEmbed key={i} figId={b.value} ctx={ctx} />
               : <p key={i}>{renderRefs(b.value, ctx)}</p>)}
-          <div className="npara__sig" title="ratified prose is immutable — the agent may propose, only you may write">
+          <div className="npara__sig" title="ratified prose is immutable — the agent may propose, only you may write; a revision supersedes with provenance, never rewrites">
             {p.ratified.draftedBy ? `drafted by ${p.ratified.draftedBy} · ` : ''}
             {p.ratified.by && p.ratified.by !== '—'
               ? `ratified by ${p.ratified.by} · ` : 'ratified · '}{p.ratified.on}
+            {(p.versions ?? 1) > 1 ? ` · revision ${p.versions}` : ''}
           </div>
           {methods && (
             <div className="npara__methods">

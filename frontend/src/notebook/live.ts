@@ -48,6 +48,7 @@ export interface ApiWorld {
   }[]
   prose: { id: string; title: string | null; questions: string[]
            body?: string | null
+           cites?: string[]; versions?: number; revises?: string
            actor?: string | null; created_at?: string }[]
   notes: { id: string; title: string | null; questions: string[]
            actor?: string | null; created_at?: string }[]
@@ -127,12 +128,18 @@ export function apiToWorld(a: ApiWorld): World {
           // (phase 3), the title as an honest stand-in otherwise
           text: p?.body || p?.title || pid,
           ratified: { by: p?.actor || '—', on: day(p?.created_at) },
+          ...(p?.versions && p.versions > 1 ? { versions: p.versions } : {}),
         }
       }),
       addenda: [],
-      // pre-prose: surface held claims as chips (they retire into prose
-      // citations at phase 3); cap for legibility at scale
-      ...(q.claims.length ? { claimsHeld: q.claims.slice(0, 8) } : {}),
+      // pre-prose: surface held claims as chips; a claim CITED by this
+      // question's live prose has retired into the story
+      ...(() => {
+        const cited = new Set(q.prose.flatMap(pid =>
+          proseById.get(pid)?.cites ?? []))
+        const held = q.claims.filter(id => !cited.has(id))
+        return held.length ? { claimsHeld: held.slice(0, 8) } : {}
+      })(),
       open,
       // recent sittings only — an old question's episode list must not grow
       // without bound (find the rest through the sediment). Labels are for

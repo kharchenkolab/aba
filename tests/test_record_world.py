@@ -300,6 +300,36 @@ class RecordWorldTest(unittest.TestCase):
             register_record_roles(ROLES, maturity_order=LADDER,
                                   artifact_types=ARTS)
 
+    def test_prose_revision_supersedes_never_deletes(self):
+        # a revision (wasDerivedFrom onto older prose) removes the old row
+        # from the question's reading list but keeps it in the prose rows;
+        # the head carries the chain length and its citations
+        old = create_entity(entity_type="pp", title="v1",
+                            metadata={"question_id": self.q1, "text": "one"})
+        new = create_entity(entity_type="pp", title="v2",
+                            metadata={"question_id": self.q1, "text": "two",
+                                      "cites": [self.c1]})
+        add_edge(new, old, "wasDerivedFrom")
+        try:
+            register_record_roles(ROLES, maturity_order=LADDER,
+                                  artifact_types=ARTS, prose_body_key="text")
+            w = assemble_world()
+            q1 = next(q for q in w["questions"] if q["id"] == self.q1)
+            self.assertIn(new, q1["prose"])
+            self.assertNotIn(old, q1["prose"])
+            rows = {p["id"]: p for p in w["prose"]}
+            self.assertIn(old, rows)                  # provenance kept
+            self.assertEqual(rows[new]["versions"], 2)
+            self.assertEqual(rows[new]["revises"], old)
+            self.assertEqual(rows[new]["cites"], [self.c1])
+            self.assertNotIn("versions", rows[old])
+        finally:
+            from core.graph.entities import delete_entity_hard
+            delete_entity_hard(new)
+            delete_entity_hard(old)
+            register_record_roles(ROLES, maturity_order=LADDER,
+                                  artifact_types=ARTS)
+
     def test_unregistered_roles_yield_empty_skeleton(self):
         register_record_roles({})
         try:

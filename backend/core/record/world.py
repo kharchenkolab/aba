@@ -215,7 +215,10 @@ def assemble_world(*, sediment_limit: int = 200,
         claims.append(row)
 
     prose = []
-    for e in _of_role("prose"):
+    superseded: dict[str, str] = {}   # old id -> the revision that replaced it
+    prose_entities = _of_role("prose")
+    prose_ids = {e["id"] for e in prose_entities}
+    for e in prose_entities:
         row = dict(_slim(e), questions=_question_ref(e, qids))
         # the story stratum renders prose BODIES — metadata text, not
         # artifact bytes, so the projection contract holds
@@ -223,7 +226,34 @@ def assemble_world(*, sediment_limit: int = 200,
             body = (e.get("metadata") or {}).get(_PROSE_BODY_KEY)
             if body:
                 row["body"] = body
+        # citations: which claims this prose absorbs (their chips retire)
+        cites = (e.get("metadata") or {}).get("cites")
+        if cites:
+            row["cites"] = list(cites)
+        # revision provenance: a wasDerivedFrom edge onto another prose
+        # entity marks THAT one superseded — never rewritten, never deleted
+        for ed in edges_from(e["id"]):
+            if ed["rel_type"] == "wasDerivedFrom" and \
+                    ed["target_id"] in prose_ids:
+                row["revises"] = ed["target_id"]
+                superseded[ed["target_id"]] = e["id"]
         prose.append(row)
+    # heads carry their chain length; questions cite heads only
+    def _versions(pid: str) -> int:
+        n, seen = 1, {pid}
+        row = next(p for p in prose if p["id"] == pid)
+        while row.get("revises") and row["revises"] not in seen:
+            seen.add(row["revises"])
+            n += 1
+            row = next((p for p in prose if p["id"] == row["revises"]), {})
+            if not row:
+                break
+        return n
+    for p in prose:
+        if p["id"] not in superseded:
+            v = _versions(p["id"])
+            if v > 1:
+                p["versions"] = v
     notes = [dict(_slim(e), questions=_question_ref(e, qids))
              for e in _of_role("note")]
 
@@ -231,7 +261,11 @@ def assemble_world(*, sediment_limit: int = 200,
     for q in questions:
         row = _slim(q, "question", "open_questions", "lifecycle")
         row["claims"] = [c["id"] for c in claims if q["id"] in c["questions"]]
-        row["prose"] = [p["id"] for p in prose if q["id"] in p["questions"]]
+        # the section reads HEADS only; superseded prose stays in the rows
+        # (provenance, search) but leaves the reading surface
+        row["prose"] = [p["id"] for p in prose
+                        if q["id"] in p["questions"]
+                        and p["id"] not in superseded]
         # the org axis is recursive: a question whose parent is itself a
         # question is a subquestion (platform parent_entity_id column —
         # threads carry no edges). A parent outside the question set is

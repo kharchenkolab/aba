@@ -112,6 +112,17 @@ NARRATIVES = [  # (question_key, day, title, text) — ratified prose, arriving
      "ones have not been costed."),
 ]
 
+REVISIONS = [  # (qkey, day, revises_title, text) — ratified prose is never
+    # rewritten: a revision SUPERSEDES its predecessor (wasDerivedFrom) and
+    # cites the thread's claims, retiring their chips into the story
+    ("q_cause", 19, "The mechanism, as it stands",
+     "Idle connections pay a reconnect penalty on first use after a quiet "
+     "gap (supported), and the timeout change armed that penalty at peak "
+     "(validated): shortening the idle window turns warm pools cold "
+     "between bursts, so the first request of every burst eats a "
+     "handshake. The tunable-window line below is mapping the safe range."),
+]
+
 STAGES = {  # stage name -> story horizon in days
     "stage1": -1,   # inception: nothing yet
     "stage2": 1,    # first sitting
@@ -153,12 +164,14 @@ def seed_stage(name: str, horizon: int) -> None:
                       "lifecycle": lifecycle})
 
     n_claims = 0
+    cids: dict[str, list[tuple[int, str]]] = {}   # qkey -> [(day, claim id)]
     for title, qkey, day, status in CLAIMS:
         if day > horizon or qkey not in qids:
             continue
         cid = create_entity(entity_type="claim", title=title,  # noqa: seam
                             metadata={"thread_id": qids[qkey]})
         update_entity(cid, status=status)
+        cids.setdefault(qkey, []).append((day, cid))
         # evidence artifacts: one figure per claim, edged supports
         fid = create_entity(entity_type="figure",  # noqa: seam
                             title=f"figs/{qkey}_d{day:02d}.png")
@@ -167,12 +180,32 @@ def seed_stage(name: str, horizon: int) -> None:
 
     # the story stratum: ratified paragraphs arrive as the story coheres —
     # metadata.text is the body the face reads (prose_body_key seam)
+    nar_by_title: dict[str, str] = {}
+    nar_stamps: list[tuple[str, str]] = []   # (entity id, story-time ts)
     for qkey, day, title, text in NARRATIVES:
         if day > horizon or qkey not in qids:
             continue
-        create_entity(entity_type="narrative",  # noqa: seam
-                      title=title,
-                      metadata={"thread_id": qids[qkey], "text": text})
+        nar_by_title[title] = create_entity(
+            entity_type="narrative",  # noqa: seam
+            title=title,
+            metadata={"thread_id": qids[qkey], "text": text})
+        nar_stamps.append((nar_by_title[title],
+                           f"2026-06-{day + 1:02d}T18:00:00Z"))
+    # revisions supersede with provenance; citing the thread's claims
+    # retires their chips into the story (the drafting loop's shape)
+    from core.graph.edges import add_edge as _add_edge
+    for qkey, day, revises_title, text in REVISIONS:
+        if day > horizon or revises_title not in nar_by_title:
+            continue
+        cited = [cid for d, cid in cids.get(qkey, []) if d <= day]
+        new = create_entity(
+            entity_type="narrative",  # noqa: seam
+            title=revises_title,
+            metadata={"thread_id": qids[qkey], "text": text,
+                      "cites": cited, "drafted_claims": len(cited)})
+        _add_edge(new, nar_by_title[revises_title], "wasDerivedFrom")
+        nar_by_title[revises_title] = new
+        nar_stamps.append((new, f"2026-06-{day + 1:02d}T18:00:00Z"))
     if horizon >= 4:
         create_entity(entity_type="note",  # noqa: seam
                       title="check the connection-pool metrics next sweep",
@@ -195,13 +228,9 @@ def seed_stage(name: str, horizon: int) -> None:
         # story-time stamps: the face reads dates off created_at/updated_at,
         # so seeded rows must live in story time, not seeding time — and
         # ratified prose names its ratifier
-        for qkey, day, title, _text in NARRATIVES:
-            if day > horizon or qkey not in qids:
-                continue
-            ts = f"2026-06-{day + 1:02d}T18:00:00Z"
+        for eid, ts in nar_stamps:
             c.execute("UPDATE entities SET created_at=?, updated_at=?, "
-                      "actor='human:you' WHERE type='narrative' AND title=?",
-                      (ts, ts, title))
+                      "actor='human:you' WHERE id=?", (ts, ts, eid))
         if "q_lat" in qids and horizon >= 12:   # parked on day 12
             c.execute("UPDATE entities SET updated_at=? WHERE id=?",
                       ("2026-06-13T18:00:00Z", qids["q_lat"]))
@@ -304,6 +333,24 @@ def check_worlds(fetch) -> None:
         if horizon >= 23:
             assert "Is the retry layer amplifying?" not in parents, \
                 f"{name}: q_retry should be promoted by day 23"
+        # the revision arc: from day 19 the mechanism section reads v2 ONLY
+        # (old prose superseded, kept in rows), and its citations cover the
+        # thread's claims so the chips retire into the story
+        mech = next((q for q in w["questions"]
+                     if q["title"] == "What is the mechanism?"), None)
+        if mech and horizon >= 19:
+            heads = [p for p in w["prose"] if p["id"] in mech["prose"]]
+            assert len(heads) == 1 and heads[0].get("versions") == 2, \
+                f"{name}: mechanism head should be revision 2"
+            assert set(heads[0].get("cites") or []) >= set(mech["claims"]), \
+                f"{name}: revision must cite the thread's claims"
+            assert len(w["prose"]) > len(
+                [p for q2 in w["questions"] for p in q2["prose"]]), \
+                f"{name}: superseded prose must stay in the rows"
+        elif mech and 8 <= horizon < 19:
+            heads = [p for p in w["prose"] if p["id"] in mech["prose"]]
+            assert heads and "versions" not in heads[0], \
+                f"{name}: mechanism should still be v1"
         prev_titles, prev_counts = titles, n
         print(f"{name}: q={len(titles)} claims={n[0]} prose={n[1]} "
               f"notes={n[2]} runs={n[3]} sittings={len(w['sittings'])} "

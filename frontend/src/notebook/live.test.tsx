@@ -187,6 +187,20 @@ describe('apiToWorld', () => {
     expect(w.sections[0].children?.[0].question).toBe('is the effect tunable?')
   })
 
+  it('revisions carry their version; cited claims retire from the chips', () => {
+    const a = sample()
+    a.prose[0].body = 'Variance tracks batch (supported).'
+    a.prose[0].versions = 2
+    a.prose[0].cites = ['C1']
+    const w = apiToWorld(a)
+    expect(w.sections[0].paragraphs[0].versions).toBe(2)
+    // C1 is cited by live prose -> retired; C2 still held
+    expect(w.sections[0].claimsHeld).toEqual(['C2'])
+    // all claims cited -> the strip retires entirely
+    a.prose[0].cites = ['C1', 'C2']
+    expect(apiToWorld(a).sections[0].claimsHeld).toBeUndefined()
+  })
+
   it('sections surface held claims as chips before prose cites them', () => {
     const a = sample()
     a.questions[0].prose = []            // no prose yet — chips must carry

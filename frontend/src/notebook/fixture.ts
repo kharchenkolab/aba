@@ -24,6 +24,9 @@ export interface Paragraph {
   id: string
   text: string
   ratified: { by: string; on: string; draftedBy?: string }
+  /** revision-chain length when this paragraph superseded earlier prose
+   *  (never rewritten, never deleted — the chain stays in provenance) */
+  versions?: number
 }
 export interface Addendum {
   id: string
