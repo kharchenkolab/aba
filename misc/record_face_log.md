@@ -92,3 +92,29 @@ showing two real ABA thread names. Open: guide doesn't file
 open_questions on request (rule gap next); confidence stated by the user
 doesn't carry into the claim (pack ladder starts preliminary — verify
 intended). Suites: 309 frontend, 22+5 guards, growth ALL OK.
+
+## 21 · Dataset re-analysis scenarios at scale (10h run, 2026-08-01)
+Real data, real analyses (agent runs code), Record read at every step.
+Findings -> fixes, all live-verified: (a) scratch-exec sessions file
+NOTHING — promotion.md rule alone measurably insufficient, so a
+deterministic on_stop detector rides the suggestion channel (tool-heavy
+turn + runs + zero products -> nudge; accept -> results+figures filed);
+(b) D2 convergence predated the result type (counted only pinned
+figures — could NEVER fire on modern projects); fixed, then fired live:
+'3 results point the same way' whose statement inferred the injected
+ground truth (component repaired mid-season); (c) findings/results were
+invisible to the face — claim role is now multi-type (claim+finding),
+statement keys are candidates, and unaddressed entities reach their
+question through the evidence they stand on (one-hop); (d) FIGURES
+render in the story: evidence images resolve finding->result->exec
+produced[] (the pin's (kind,idx) often addresses the text cell) and
+render inline above grounded-in chips; (e) tray rows are evaluable in
+place (proposal body as quoted detail) — and the popover had rendered
+NO label text at all (flex starvation again; wrap + basis floor);
+(f) D1 embedded volatile numbers in headings (stale +0.57 vs +0.397
+beneath) — prompt forbids; (g) changelog dedup (create+update pairs).
+Scenario arc: dataset -> characterize -> file -> threshold discovery ->
+season extension with regime change -> agent detects the TRANSIENT
+effect unprompted -> staleness revision -> cross-line check -> park with
+open questions -> 6 simulated weeks (178 runs -> 3 named sediment
+lines) -> week-away return reads as an 8-item deduped changelog.

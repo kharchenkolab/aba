@@ -277,7 +277,17 @@ export function apiToWorld(a: ApiWorld): World {
     }
   })
 
-  const events = a.whats_new.slice(0, 8)
+  // the changelog reads once per CHANGE, not once per event row — create/
+  // update pairs on the same entity collapse to the latest mention
+  // one row per READABLE change: same title = same change to the reader,
+  // whichever entities carried it (result + its figure, create + update)
+  const seen = new Set<string>()
+  const events = a.whats_new.filter(e => {
+    const k = e.title || `${e.entity_id ?? ''}·${e.kind}`
+    if (seen.has(k)) return false
+    seen.add(k)
+    return true
+  }).slice(0, 8)
 
   return {
     project: {
