@@ -101,15 +101,25 @@ frontend notebook.html?live=1 ──► live.ts apiToWorld() ──► the mock 
 
 ## Live-agent findings (2026-08, sandbox)
 
-Two turns of a real guide over a fresh project, viewed through this face,
-surfaced: (1) without Record advisor roles the agent models *lines of
-inquiry as claims* (the curation tool at hand) rather than threads/open
-questions — the §13.2-item-7 instructions gap, live; (2) the default
-thread absorbs the user's whole first message as its `question` (verbatim
-paragraph), so the face's section heading needs either upstream question
-distillation or a heading truncation policy; (3) shared triage verified
-end-to-end: dismiss/undo from this face flip the same proposals row the
-classic UI reads, handler-side.
+Multi-turn scenarios over fresh projects, each read through this face:
+(1) the default thread absorbs the user's whole first message as its
+`question` — healed by the pack's D1 detector from turn 2 once
+`_ask_json` was routed through core.llm credentials (it silently died
+under oauth_cc, which had also muted the convergence detector); the
+three-line heading clamp covers turn one. (2) The guide would not record
+findings on explicit request until promotion.md gained the
+"explicit ask IS the bar" clause — it obeyed the promote-sparingly rule
+faithfully; the rule was incomplete. (3) The guide's identity gates
+curation by domain: it declines to file claims for out-of-domain topics
+(scenarios must be data-analysis-shaped). (4) Claim display titles are
+hard 80-char truncations; drafting from them produced broken prose —
+hence `claim_statement_key`. (5) The full loop verified live end-to-end
+on an agent-built project: messy first message → crisp heading (D1) →
+claims on request → drafter proposal → accept → statement-grounded
+narrative → third claim → staleness revision → revision 2 citing all
+three. (6) Open-question filing on request still does not happen —
+plan items reach the face only when something writes `open_questions`;
+the next instructions gap to close.
 
 ## Phase-3 slice (2026-08): the first advisor + record-write kind
 

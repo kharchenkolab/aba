@@ -68,3 +68,27 @@ Rubric catches this pass: flex starvation was avoided (R1 reused wrap),
 and an IMPOSSIBLE DATE ('ratified · 2026-06-31') from day+1 arithmetic —
 found by reading the page, fixed with real calendar math. Suites: 309
 frontend, 21+5 record guards, growth-arc ALL OK, seam/census green.
+
+## 20 · Sediment redesign + live scenarios (8h autonomous, 2026-08-01)
+User verdict on sediment ("totally useless... gibberish") implemented:
+thread grain — one folded row per NAMED line (title, counts, dates,
+distilled label), runs behind a click, background grouped; raw ids off
+the surface entirely; 60 rows -> one screen. Plans: open_questions render
+as each section's plan block at every phase. Narrative links: grounded-in
+chip line per paragraph (word-boundary trimmed), chat ▸ per section
+(/p/<pid>/threads/t/<id>).
+Live scenarios (sandbox :8030, fresh projects, generic data-analysis
+domains) then drove FOUR platform fixes, each found by reading the face:
+_ask_json bypassed core.llm credentials (silent D1/D2 death under
+oauth_cc — chip filed for main); promotion.md lacked the explicit-ask
+clause (guide refused "record this" politely, twice); my distiller
+advisor duplicated D1 — removed per doctrine; claim titles are 80-char
+truncations — claim_statement_key ships full statements, drafts weave
+them (before: '...is driven by a (preliminary).'; after: real prose).
+Verified live: inception -> D1-healed heading -> claims on request ->
+drafter -> accept -> statement-grounded narrative -> staleness ->
+revision 2 citing 3 claims -> second named line -> thread-grain sediment
+showing two real ABA thread names. Open: guide doesn't file
+open_questions on request (rule gap next); confidence stated by the user
+doesn't carry into the claim (pack ladder starts preliminary — verify
+intended). Suites: 309 frontend, 22+5 guards, growth ALL OK.

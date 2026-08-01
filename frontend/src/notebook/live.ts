@@ -84,11 +84,19 @@ function runState(s: string | null | undefined): SedimentEntry['state'] {
 
 const day = (ts?: string | null) => (ts || '').slice(0, 10)
 
+// chips are READING matter: trim at a word boundary, never mid-word (pack
+// titles are often hard 80-char truncations of the full statement)
+function chipTitle(s: string, max = 64): string {
+  if (s.length <= max) return s
+  const cut = s.slice(0, max)
+  return `${cut.slice(0, cut.lastIndexOf(' ') > 20 ? cut.lastIndexOf(' ') : max)}…`
+}
+
 export function apiToWorld(a: ApiWorld): World {
   const claims: Record<string, ClaimRef> = {}
   for (const c of a.claims) {
     claims[c.id] = {
-      title: c.title || c.id,
+      title: chipTitle(c.title || c.id),
       maturity: maturityWord(c.rung, a.maturity_ladder),
       evidence: c.evidence ?? c.supports.length,
       caveats: c.caveats || [],
