@@ -197,6 +197,32 @@ export function apiToWorld(a: ApiWorld): World {
   }
 }
 
+// ------------------------------------------------------------- triage
+
+/** Phase-2 shared triage: the face calls the SAME proposal endpoints the
+ *  classic UI uses (accept fires the proposal's handler server-side; undo
+ *  reverses a recent decision). Only meaningful against a full backend —
+ *  the read-only sidecar does not mount these routes. */
+export interface TriageApi {
+  accept(id: number): Promise<void>
+  dismiss(id: number): Promise<void>
+  undo(id: number): Promise<void>
+}
+
+export function triageApi(api: string, projectId?: string): TriageApi {
+  const call = async (id: number, verb: string) => {
+    const q = projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''
+    const res = await fetch(`${api}/api/proposals/${id}/${verb}${q}`,
+                            { method: 'POST' })
+    if (!res.ok) throw new Error(`${verb} failed: ${res.status}`)
+  }
+  return {
+    accept: id => call(id, 'accept'),
+    dismiss: id => call(id, 'dismiss'),
+    undo: id => call(id, 'undo'),
+  }
+}
+
 // ------------------------------------------------------------- the fetch
 
 export function worldUrl(api: string, projectId?: string,

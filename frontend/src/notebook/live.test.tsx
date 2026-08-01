@@ -4,7 +4,8 @@
 import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import Record from './Record'
-import { apiToWorld, fetchLiveWorld, worldUrl, type ApiWorld } from './live'
+import { apiToWorld, fetchLiveWorld, triageApi, worldUrl,
+         type ApiWorld } from './live'
 
 const LADDER = ['preliminary', 'supported', 'validated', 'contested', 'refuted']
 
@@ -160,6 +161,84 @@ describe('apiToWorld', () => {
     // routing rows are veto-tier (routine), the restructure is a decision
     expect(container.querySelectorAll('.tray__kind--routine').length).toBe(1)
     expect(container.querySelectorAll('.tray__kind--decision').length).toBe(1)
+  })
+})
+
+describe('shared triage', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('triageApi posts to the classic proposal endpoints', async () => {
+    const seen: { url: string; method?: string }[] = []
+    vi.stubGlobal('fetch', (async (url: string, init?: RequestInit) => {
+      seen.push({ url: String(url), method: init?.method })
+      return { ok: true }
+    }) as unknown as typeof fetch)
+    const t = triageApi('http://x', 'p1')
+    await t.accept(7); await t.dismiss(8); await t.undo(7)
+    expect(seen).toEqual([
+      { url: 'http://x/api/proposals/7/accept?project_id=p1', method: 'POST' },
+      { url: 'http://x/api/proposals/8/dismiss?project_id=p1', method: 'POST' },
+      { url: 'http://x/api/proposals/7/undo?project_id=p1', method: 'POST' },
+    ])
+  })
+
+  it('accept removes the row, undo brings it back and calls the API', async () => {
+    const { fireEvent, waitFor } = await import('@testing-library/react')
+    const calls: string[] = []
+    const triage = {
+      accept: async (id: number) => { calls.push(`accept:${id}`) },
+      dismiss: async (id: number) => { calls.push(`dismiss:${id}`) },
+      undo: async (id: number) => { calls.push(`undo:${id}`) },
+    }
+    const a = sample()
+    a.tray = [{ id: 7, kind: 'route', headline: 'file the scatter',
+                status: 'pending', thread_id: 'Q1' }]
+    const { container } = render(
+      <Record world={apiToWorld(a)} triage={triage} />)
+    fireEvent.click(container.querySelector('.desk__needs') as HTMLElement)
+    expect(container.querySelectorAll('.tray__row').length).toBe(1)
+    fireEvent.click(screen.getByText('accept ✓'))
+    await waitFor(() =>
+      expect(container.querySelectorAll('.tray__row').length).toBe(0))
+    expect(calls).toEqual(['accept:7'])
+    const undo = container.querySelector('.tray__undo') as HTMLElement
+    expect(undo.textContent).toContain('accepted 1')
+    fireEvent.click(undo)
+    await waitFor(() =>
+      expect(container.querySelectorAll('.tray__row').length).toBe(1))
+    expect(calls).toEqual(['accept:7', 'undo:7'])
+  })
+
+  it('a failed accept keeps the row and says so', async () => {
+    const { fireEvent, waitFor } = await import('@testing-library/react')
+    const triage = {
+      accept: async () => { throw new Error('503') },
+      dismiss: async () => {}, undo: async () => {},
+    }
+    const a = sample()
+    a.tray = [{ id: 7, kind: 'route', headline: 'file the scatter',
+                status: 'pending', thread_id: 'Q1' }]
+    const { container } = render(
+      <Record world={apiToWorld(a)} triage={triage} />)
+    fireEvent.click(container.querySelector('.desk__needs') as HTMLElement)
+    fireEvent.click(screen.getByText('accept ✓'))
+    await waitFor(() => expect(
+      (container.querySelector('.tray__undo') as HTMLElement).textContent)
+      .toContain('failed'))
+    expect(container.querySelectorAll('.tray__row').length).toBe(1)
+  })
+
+  it('without a triage api, live rows are read-only doors', async () => {
+    const { fireEvent } = await import('@testing-library/react')
+    const a = sample()
+    a.tray = [{ id: 7, kind: 'route', headline: 'file the scatter',
+                status: 'pending', thread_id: 'Q1' }]
+    const { container } = render(<Record world={apiToWorld(a)} />)
+    fireEvent.click(container.querySelector('.desk__needs') as HTMLElement)
+    const row = container.querySelector('.tray__row') as HTMLElement
+    expect(row.textContent).toContain('go →')
+    expect(row.textContent).not.toContain('accept')
+    expect(row.textContent).not.toContain('file ✓')
   })
 })
 

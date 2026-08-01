@@ -1000,13 +1000,21 @@ function BareStart({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
 
 // ---------------------------------------------------------------------- root
 
-export default function Record(props: { world?: World; onAdvance?: (t: string) => void }) {
+export default function Record(props: { world?: World; onAdvance?: (t: string) => void
+                                        triage?: { accept(id: number): Promise<void>
+                                                   dismiss(id: number): Promise<void>
+                                                   undo(id: number): Promise<void> } }) {
   const w = props.world ?? coastalWorld
   if (w.bare) return <BareStart w={w} onAdvance={props.onAdvance} />
-  return <RecordDoc w={w} onAdvance={props.onAdvance} />
+  return <RecordDoc w={w} onAdvance={props.onAdvance} triage={props.triage} />
 }
 
-function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void }) {
+type TriageApi = { accept(id: number): Promise<void>
+                   dismiss(id: number): Promise<void>
+                   undo(id: number): Promise<void> }
+
+function RecordDoc({ w, onAdvance, triage }: { w: World; onAdvance?: (t: string) => void
+                                               triage?: TriageApi }) {
   const [benchFor, setBenchFor] = useState<{ id: string; label: string } | null>(null)
   // a session renders full-page (sifting/review) or docked in the right
   // column (side-by-side working mode) — each converts into the other
@@ -1023,7 +1031,8 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
   const [drafted, setDrafted] = useState<Set<string>>(new Set())
   const [accepted, setAccepted] = useState<Set<string>>(new Set())
   const [trayOpen, setTrayOpen] = useState(() => new URLSearchParams(window.location.search).get('tray') === '1')
-  const [undoable, setUndoable] = useState<{ keys: string[]; label: string } | null>(null)
+  const [undoable, setUndoable] = useState<{ keys: string[]; label: string
+                                             revert?: () => void } | null>(null)
   const [seenAcc, setSeenAcc] = useState<Set<string>>(new Set())
   const [omni, setOmni] = useState<{ open: boolean; q: string; asked: boolean }>({ open: false, q: '', asked: false })
   const [prevSyn, setPrevSyn] = useState(false)
@@ -1396,6 +1405,7 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
                   {undoable && (
                     <button className="tray__undo"
                             onClick={() => {
+                              undoable.revert?.()
                               setAccepted(s => { const n = new Set(s); undoable.keys.forEach(k => n.delete(k)); return n })
                               setRatified(s => { const n = new Set(s); undoable.keys.forEach(k => n.delete(k)); return n })
                               setUndoable(null)
@@ -1416,7 +1426,7 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
                         Ratify
                       </button>
                     )}
-                    {p.routine && (
+                    {p.routine && p.kind !== 'proposal' && (
                       <button className="btn"
                               onClick={() => { setAccepted(s => new Set(s).add(p.key)); setUndoable({ keys: [p.key], label: 'filed 1' }) }}>
                         file ✓
@@ -1428,6 +1438,34 @@ function RecordDoc({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
                               onClick={() => { setAccepted(s => new Set(s).add(p.key)); setUndoable({ keys: [p.key], label: 'planned 1 — filed as a planned item under its question' }) }}>
                         → plan
                       </button>
+                    )}
+                    {/* live proposals: the SAME row the classic UI triages —
+                        accept fires the handler server-side; undo is real */}
+                    {p.kind === 'proposal' && p.liveId != null && triage && (
+                      <>
+                        <button className="btn btn--primary"
+                                onClick={() => {
+                                  const id = p.liveId!
+                                  triage.accept(id).then(() => {
+                                    setAccepted(s => new Set(s).add(p.key))
+                                    setUndoable({ keys: [p.key], label: 'accepted 1',
+                                                  revert: () => { triage.undo(id).catch(() => {}) } })
+                                  }).catch(() => setUndoable({ keys: [], label: '⚠ accept failed — still pending' }))
+                                }}>
+                          accept ✓
+                        </button>
+                        <button className="btn"
+                                onClick={() => {
+                                  const id = p.liveId!
+                                  triage.dismiss(id).then(() => {
+                                    setAccepted(s => new Set(s).add(p.key))
+                                    setUndoable({ keys: [p.key], label: 'dismissed 1 — it will not re-nag until the world changes',
+                                                  revert: () => { triage.undo(id).catch(() => {}) } })
+                                  }).catch(() => setUndoable({ keys: [], label: '⚠ dismiss failed — still pending' }))
+                                }}>
+                          dismiss
+                        </button>
+                      </>
                     )}
                     <button className="btn" onClick={() => { setTrayOpen(false); scrollTo(p.elId) }}
                             title="see it in context before deciding">go →</button>
