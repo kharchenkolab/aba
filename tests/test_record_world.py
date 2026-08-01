@@ -300,6 +300,32 @@ class RecordWorldTest(unittest.TestCase):
             register_record_roles(ROLES, maturity_order=LADDER,
                                   artifact_types=ARTS)
 
+    def test_multi_type_claim_role_and_one_hop_reference(self):
+        # a role may be played by several types, statement keys are
+        # candidates in order, and an entity with NO direct question
+        # address reaches one through the evidence it stands on (one hop)
+        base = create_entity(entity_type="rr", title="base result",
+                             metadata={"thread_id": self.q1})
+        fnd = create_entity(entity_type="ff", title="derived finding",
+                            metadata={"text": "the derived full assertion"})
+        add_edge(fnd, base, "supports")
+        try:
+            register_record_roles(
+                {**ROLES, "claim": ("cc", "ff")},
+                maturity_order=LADDER, artifact_types=ARTS,
+                claim_statement_key=("statement", "text"))
+            w = assemble_world()
+            row = next(c for c in w["claims"] if c["id"] == fnd)
+            self.assertEqual(row["questions"], [self.q1])   # via the hop
+            self.assertEqual(row["statement"], "the derived full assertion")
+            self.assertTrue(any(c["id"] == self.c1 for c in w["claims"]))
+        finally:
+            from core.graph.entities import delete_entity_hard
+            delete_entity_hard(fnd)
+            delete_entity_hard(base)
+            register_record_roles(ROLES, maturity_order=LADDER,
+                                  artifact_types=ARTS)
+
     def test_claim_statement_key_ships_full_assertion(self):
         # display titles truncate; the registered statement key ships the
         # FULL assertion (absent when equal to the title — no duplication)

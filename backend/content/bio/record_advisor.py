@@ -27,16 +27,36 @@ def _of_thread(entity_type: str, tid: str) -> list[dict]:
             if (e.get("metadata") or {}).get("thread_id") == tid]
 
 
+def _claims_of_thread(tid: str) -> list[dict]:
+    """Everything playing the claim ROLE on this line: the direct
+    claim-type rows (always), plus whatever the role registration adds —
+    with the same one-hop reference resolution the face uses (a finding
+    reaches its question through the results it stands on)."""
+    rows = {e["id"]: e for e in _of_thread("claim", tid)}
+    from core.record.world import _of_role, _question_ref
+    for e in _of_role("claim"):
+        if e["id"] not in rows and tid in _question_ref(e, {tid}):
+            rows[e["id"]] = e
+    return list(rows.values())
+
+
+_PLATFORM_LIFECYCLE = {"active", "archived"}
+
+
 def _conf(c: dict) -> str:
-    return ((c.get("metadata") or {}).get("confidence")
-            or c.get("status") or "preliminary")
+    v = ((c.get("metadata") or {}).get("confidence")
+         or c.get("status") or "preliminary")
+    # the platform lifecycle column is NOT a maturity — an entity without
+    # a confidence starts at the ladder's floor, never "(active)"
+    return "preliminary" if v in _PLATFORM_LIFECYCLE else v
 
 
 def _stated(c: dict) -> str:
     """A claim's FULL assertion — packs truncate display titles, so the
     draft weaves metadata.statement when present (claim.yaml), title only
     as the fallback. A truncated sentence must never enter the story."""
-    return ((c.get("metadata") or {}).get("statement")
+    md = c.get("metadata") or {}
+    return (md.get("statement") or md.get("text")
             or c.get("title") or "").rstrip(".")
 
 
@@ -137,7 +157,7 @@ def review_thread(tid: str):
     """Propose a story draft when the record is behind the claims — a first
     draft when no narrative stands, a REVISION when claims have landed
     since the head was drafted (`drafted_claims` staleness)."""
-    claims = _of_thread("claim", tid)
+    claims = _claims_of_thread(tid)
     if len(claims) < 2:
         return None
     text = llm_draft(claims) or compose_draft(claims)

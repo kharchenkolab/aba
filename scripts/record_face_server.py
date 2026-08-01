@@ -43,14 +43,14 @@ def build_app(runtime: Path):
     # purpose: importing the pack would wire its on-project-open hooks,
     # which this sidecar exists to avoid. Keep in sync.
     register_record_roles(
-        {"question": "thread", "claim": "claim",
+        {"question": "thread", "claim": ("claim", "finding"),
          "prose": "narrative", "note": "note"},
         maturity_order=("preliminary", "supported", "validated",
                         "contested", "refuted"),
         artifact_types=("figure", "table", "cell"),
         maturity_key="confidence",
         prose_body_key="text",
-        claim_statement_key="statement",
+        claim_statement_key=("statement", "text"),
     )
 
     app = FastAPI(title="record-face-sidecar")

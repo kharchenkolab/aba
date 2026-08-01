@@ -10,7 +10,10 @@ from core.record.world import register_record_roles
 register_record_roles(
     {
         "question": "thread",
-        "claim": "claim",
+        # findings ARE claim-material ("a conclusion the scientist would
+        # cite" — promotion.md); they reach their question through the
+        # results they stand on (one-hop reference)
+        "claim": ("claim", "finding"),
         "prose": "narrative",
         "note": "note",
     },
@@ -23,7 +26,7 @@ register_record_roles(
     maturity_key="confidence",
     # narrative.yaml: metadata.text holds the prose body — the story stratum
     prose_body_key="text",
-    # claim.yaml: the display title truncates; the full assertion lives in
-    # metadata.statement — the story drafts from statements
-    claim_statement_key="statement",
+    # the full assertion: claims keep it in metadata.statement, findings in
+    # metadata.text — the story drafts from statements, never truncated titles
+    claim_statement_key=("statement", "text"),
 )

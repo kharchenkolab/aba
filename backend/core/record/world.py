@@ -25,11 +25,11 @@ from core.graph.edges import edges_from, edges_to
 from core.graph.proposals_store import list_proposals
 from core.graph.runs_port import list_runs
 
-_ROLES: dict[str, str] = {}
+_ROLES: dict = {}          # role -> type name OR sequence of type names
 _MATURITY: tuple[str, ...] = ()
 _MATURITY_KEY: str = ""
 _PROSE_BODY_KEY: str = ""
-_CLAIM_STATEMENT_KEY: str = ""
+_CLAIM_STATEMENT_KEY = ""   # str or sequence of candidate metadata keys
 _ARTIFACT_TYPES: tuple[str, ...] = ()
 
 #: A sitting ends when attention moves — operationally, when the next run on
@@ -41,12 +41,12 @@ SITTING_GAP_MINUTES = 45
 _CARRY_RELS = ("includes", "supports")
 
 
-def register_record_roles(roles: dict[str, str],
+def register_record_roles(roles: dict,
                           maturity_order: Sequence[str] = (),
                           artifact_types: Sequence[str] = (),
                           maturity_key: str = "",
                           prose_body_key: str = "",
-                          claim_statement_key: str = "") -> None:
+                          claim_statement_key="") -> None:
     """Content-pack registration: map Record roles to this pack's entity-type
     names, order the claim maturity ladder (index = rung), name the artifact
     types the leftovers shelf sweeps (the pack typically derives these from
@@ -100,16 +100,27 @@ def _slim(e: dict, *md_keys: str) -> dict:
 
 
 def _of_role(role: str) -> list[dict]:
+    """A role may be played by SEVERAL pack types (e.g. claim-role =
+    claims + findings): registration accepts a name or a sequence."""
     t = _ROLES.get(role)
     if not t:
         return []
-    return find_entities(type=t, include_archived=False, not_deleted=True)
+    types = [t] if isinstance(t, str) else list(t)
+    out: list[dict] = []
+    for ty in types:
+        out.extend(find_entities(type=ty, include_archived=False,
+                                 not_deleted=True))
+    return out
 
 
-def _question_ref(e: dict, question_ids: set[str]) -> list[str]:
+def _question_ref(e: dict, question_ids: set[str],
+                  hop: bool = True) -> list[str]:
     """Which questions an entity bears on: outgoing edges into a question
     entity, plus metadata thread_id/question_id. The anchor is an address,
-    not a container — multi-question references are expected."""
+    not a container — multi-question references are expected. When an
+    entity carries NO direct address, its reference rides the evidence it
+    stands on: one hop out along its edges (a finding built on a result
+    belongs where the result does)."""
     refs = [ed["target_id"] for ed in edges_from(e["id"])
             if ed["target_id"] in question_ids]
     md = e.get("metadata") or {}
@@ -117,6 +128,14 @@ def _question_ref(e: dict, question_ids: set[str]) -> list[str]:
         v = md.get(k)
         if v in question_ids and v not in refs:
             refs.append(v)
+    if not refs and hop:
+        from core.graph.entities import get_entity
+        for ed in edges_from(e["id"]):
+            base = get_entity(ed["target_id"])
+            if base:
+                for r in _question_ref(base, question_ids, hop=False):
+                    if r not in refs:
+                        refs.append(r)
     return refs
 
 
@@ -220,7 +239,10 @@ def assemble_world(*, sediment_limit: int = 200,
         row["evidence"] = max(len(row["supports"]),
                               len(md.get("evidence_ids") or []))
         if _CLAIM_STATEMENT_KEY:
-            stmt = md.get(_CLAIM_STATEMENT_KEY)
+            keys = ([_CLAIM_STATEMENT_KEY]
+                    if isinstance(_CLAIM_STATEMENT_KEY, str)
+                    else list(_CLAIM_STATEMENT_KEY))
+            stmt = next((md[k] for k in keys if md.get(k)), None)
             if stmt and stmt != row["title"]:
                 row["statement"] = stmt
         claims.append(row)
