@@ -43,6 +43,10 @@ export interface Section {
   sessions?: { label: string; when: string; meta: string }[]
   /** honest total when `sessions` is a recent window of a longer history */
   sessionsTotal?: number
+  /** the org axis is recursive: subquestions are Sections one level down —
+   *  same organs, same strata, rendered nested; a dormant parent collapses
+   *  its whole subtree to one line */
+  children?: Section[]
   /** scale face: a dormant question compacts to ONE quiet line — question,
    *  what it holds, since when — with a ▷ wake door. No dead scaffolding. */
   dormant?: { since: string; holds?: string }

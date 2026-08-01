@@ -43,6 +43,9 @@ QUESTIONS = [  # (key, title, question, arrives_day)
      "what turns idle time into tail latency?", 3),
     ("q_alert", "Why did alerting miss it?",
      "why did no page fire for a 5x tail regression?", 9),
+    ("q_tune", "Is the idle window tunable?",
+     "what idle-timeout value avoids the penalty without ballooning pools?",
+     10),
     ("q_retry", "Is the retry layer amplifying?",
      "do client retries double the damage past the deadline?", 14),
     ("q_cap", "Where is the capacity ceiling?",
@@ -51,6 +54,16 @@ QUESTIONS = [  # (key, title, question, arrives_day)
      "are there earlier unexplained tail episodes with this signature?", 27),
 ]
 
+# The org axis is recursive: subquestions arrive UNDER a line and may be
+# promoted when their weight outgrows it. key -> (parent_key, promote_day):
+# before promote_day the node is seeded as a child; from promote_day on it
+# stands top-level (flat order is creation order, so promotion never
+# reorders the accretion-consistency prefix).
+SUBQUESTIONS = {
+    "q_tune": ("q_cause", None),     # stays a subquestion through stage6
+    "q_retry": ("q_cause", 23),      # nested at stage5, promoted by stage6
+}
+
 CLAIMS = [  # (title, question_key, day, status_by_stage_end)
     ("p99 regression is peak-hour only", "q_lat", 2, "supported"),
     ("regression onset matches the config push", "q_lat", 4, "contested"),
@@ -58,6 +71,7 @@ CLAIMS = [  # (title, question_key, day, status_by_stage_end)
     ("timeout change armed the idle penalty", "q_cause", 8, "validated"),
     ("alert threshold averaged away the tail", "q_alert", 11, "supported"),
     ("retries past deadline double exposure", "q_retry", 16, "preliminary"),
+    ("120s idle keeps pools warm at peak", "q_tune", 20, "supported"),
     ("stage 2 saturates at 1.8x current peak", "q_cap", 23, "preliminary"),
     ("two prior episodes share the signature", "q_hist", 29, "preliminary"),
 ]
@@ -92,6 +106,10 @@ NARRATIVES = [  # (question_key, day, title, text) — ratified prose, arriving
      "The capacity model puts stage-2 saturation at 1.8x current peak "
      "(preliminary); the fix leaves roughly 1.6x headroom before the next "
      "ceiling."),
+    ("q_tune", 26, "Tuning readout",
+     "A 120-second idle window keeps pools warm through peak gaps "
+     "(supported); shorter windows re-arm the reconnect penalty, longer "
+     "ones have not been costed."),
 ]
 
 STAGES = {  # stage name -> story horizon in days
@@ -123,8 +141,14 @@ def seed_stage(name: str, horizon: int) -> None:
         lifecycle = "open"
         if key == "q_lat" and horizon >= 12:
             lifecycle = "parked"          # the pivot: settled, parked
+        parent = None
+        if key in SUBQUESTIONS:
+            pkey, promote_day = SUBQUESTIONS[key]
+            if pkey in qids and (promote_day is None or horizon < promote_day):
+                parent = qids[pkey]
         qids[key] = create_entity(
             entity_type="thread", title=title,  # noqa: seam
+            parent_entity_id=parent,
             metadata={"question": question, "open_questions": [],
                       "lifecycle": lifecycle})
 
@@ -264,6 +288,22 @@ def check_worlds(fetch) -> None:
             b = p.get("body") or ""
             assert not any(t in b for t in ("thr_", "run_", "sit-")), \
                 f"{name}: internal id leaked into prose body"
+        # the org axis: every parent resolves to a question in the same
+        # stage, and the promotion arc actually flips between stages
+        title_of = {q["id"]: q["title"] for q in w["questions"]}
+        parents = {q["title"]: title_of[q["parent"]]
+                   for q in w["questions"] if q.get("parent")}
+        for pid in (q["parent"] for q in w["questions"] if q.get("parent")):
+            assert pid in qid_set, f"{name}: dangling parent {pid}"
+        if 10 <= horizon:
+            assert parents.get("Is the idle window tunable?") == \
+                "What is the mechanism?", f"{name}: q_tune not nested"
+        if 14 <= horizon < 23:
+            assert "Is the retry layer amplifying?" in parents, \
+                f"{name}: q_retry should be nested pre-promotion"
+        if horizon >= 23:
+            assert "Is the retry layer amplifying?" not in parents, \
+                f"{name}: q_retry should be promoted by day 23"
         prev_titles, prev_counts = titles, n
         print(f"{name}: q={len(titles)} claims={n[0]} prose={n[1]} "
               f"notes={n[2]} runs={n[3]} sittings={len(w['sittings'])} "

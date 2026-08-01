@@ -253,6 +253,25 @@ class RecordWorldTest(unittest.TestCase):
             register_record_roles(ROLES, maturity_order=LADDER,
                                   artifact_types=ARTS)
 
+    def test_question_parent_only_within_question_set(self):
+        # the org axis is recursive: parent_entity_id onto ANOTHER question
+        # ships as `parent`; a parent outside the question set is not a
+        # tree edge and the row stays top-level (no parent key)
+        sub = create_entity(entity_type="qq", title="sub-line under Q1",
+                            parent_entity_id=self.q1)
+        stray = create_entity(entity_type="qq", title="stray parent",
+                              parent_entity_id=self.c1)   # a claim, not a question
+        try:
+            w = assemble_world()
+            rows = {q["id"]: q for q in w["questions"]}
+            self.assertEqual(rows[sub]["parent"], self.q1)
+            self.assertNotIn("parent", rows[stray])
+            self.assertNotIn("parent", rows[self.q1])
+        finally:
+            from core.graph.entities import delete_entity_hard
+            delete_entity_hard(sub)
+            delete_entity_hard(stray)
+
     def test_prose_body_key_ships_readable_body(self):
         # the story stratum renders prose BODIES; the pack names the
         # metadata key (narrative packs: "text"). Without the key, or when

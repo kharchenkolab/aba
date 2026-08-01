@@ -36,6 +36,7 @@ export interface ApiWorld {
     open_questions?: { text?: string }[] | string[] | null
     lifecycle?: string | null
     claims: string[]; prose: string[]
+    parent?: string
     created_at?: string; updated_at?: string
   }[]
   claims: {
@@ -149,6 +150,31 @@ export function apiToWorld(a: ApiWorld): World {
     }
   })
 
+  // the org axis is recursive: nest subquestions under their parents
+  // (creation order preserved at every level). A parent outside the set or
+  // a cyclic chain degrades to top-level — the face never loses a node.
+  const secById = new Map(sections.map(s => [s.id, s]))
+  const parentOf = new Map(a.questions.filter(q => q.parent)
+    .map(q => [q.id, q.parent!] as const))
+  const cyclic = (id: string) => {
+    const seen = new Set([id])
+    for (let p = parentOf.get(id); p; p = parentOf.get(p)) {
+      if (seen.has(p)) return true
+      seen.add(p)
+    }
+    return false
+  }
+  const roots: Section[] = []
+  for (const s of sections) {
+    const pid = parentOf.get(s.id)
+    if (pid && secById.has(pid) && !cyclic(s.id)) {
+      const parent = secById.get(pid)!
+      ;(parent.children ??= []).push(s)
+    } else {
+      roots.push(s)
+    }
+  }
+
   const looseNotes: LooseNote[] = a.notes.map(n => ({
     id: n.id,
     ts: day(n.created_at),
@@ -200,7 +226,7 @@ export function apiToWorld(a: ApiWorld): World {
       : null,
     pendingDrafts: a.tray.length,
     claims,
-    sections,
+    sections: roots,
     trails: [],
     looseNotes,
     sediment,

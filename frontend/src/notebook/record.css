@@ -452,6 +452,14 @@ input { font: inherit; }
 .sess:hover { color: var(--teal); }
 .sess--sum { color: var(--ink-4, var(--ink-3)); font-style: italic; }
 
+/* the org axis is recursive: a subquestion is the same organ one level
+   down — indented, smaller heading, same strata inside */
+.nsec__children { margin: 4px 0 6px 14px; padding-left: 14px; border-left: 1px solid var(--rule); }
+.nsec--sub > .nsec__head h3 { font-size: 16px; }
+.nsec--sub.nsec--dormant .nsec__dq { font-size: 13.5px; }
+.nsec__dsub { color: var(--ink-3); font-size: 10.5px; white-space: nowrap; }
+.toc__item--sub { padding-left: 26px; font-size: 11px; }
+
 .nsec__stub {
   border-left: 2px dotted var(--rule-strong); padding-left: 16px; margin-bottom: 14px;
 }

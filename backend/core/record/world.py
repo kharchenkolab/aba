@@ -232,6 +232,13 @@ def assemble_world(*, sediment_limit: int = 200,
         row = _slim(q, "question", "open_questions", "lifecycle")
         row["claims"] = [c["id"] for c in claims if q["id"] in c["questions"]]
         row["prose"] = [p["id"] for p in prose if q["id"] in p["questions"]]
+        # the org axis is recursive: a question whose parent is itself a
+        # question is a subquestion (platform parent_entity_id column —
+        # threads carry no edges). A parent outside the question set is
+        # not a tree edge; the row stays top-level.
+        parent = q.get("parent_entity_id")
+        if parent and parent in qids:
+            row["parent"] = parent
         q_rows.append(row)
 
     runs = list_runs(limit=sediment_limit)

@@ -165,6 +165,28 @@ describe('apiToWorld', () => {
         expect(v).not.toMatch(/sit-|thr_|run_/)
   })
 
+  it('nests subquestions under parents; cycles and unknowns degrade to top level', () => {
+    const a = sample()
+    a.questions.push(
+      { id: 'Q3', title: 'sub-line', question: 'is the effect tunable?',
+        open_questions: [], lifecycle: 'open', claims: [], prose: [],
+        parent: 'Q1' },
+      { id: 'Q4', title: 'orphan', question: null, open_questions: [],
+        lifecycle: 'open', claims: [], prose: [], parent: 'QX' },   // unknown
+      { id: 'Q5', title: 'loop-a', question: null, open_questions: [],
+        lifecycle: 'open', claims: [], prose: [], parent: 'Q6' },
+      { id: 'Q6', title: 'loop-b', question: null, open_questions: [],
+        lifecycle: 'open', claims: [], prose: [], parent: 'Q5' },
+    )
+    const w = apiToWorld(a)
+    const top = w.sections.map(s => s.id)
+    // Q3 nests under Q1; the orphan and BOTH cycle members stay top-level —
+    // the face never loses a node
+    expect(top).toEqual(['Q1', 'Q2', 'Q4', 'Q5', 'Q6'])
+    expect(w.sections[0].children?.map(c => c.id)).toEqual(['Q3'])
+    expect(w.sections[0].children?.[0].question).toBe('is the effect tunable?')
+  })
+
   it('sections surface held claims as chips before prose cites them', () => {
     const a = sample()
     a.questions[0].prose = []            // no prose yet — chips must carry

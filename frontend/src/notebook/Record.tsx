@@ -266,12 +266,15 @@ function FigureEmbed({ figId, ctx, caption }: { figId: string; ctx: RefCtx; capt
 
 // ------------------------------------------------------------------ sections
 
-function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWork }: {
+function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWork, depth = 0 }: {
   s: Section; ctx: RefCtx
   methods: boolean; onMethods: () => void
   onRatify: (id: string) => void
   ratified: Set<string>
   onWork?: (sectionId: string) => void
+  /** org depth — the Record is recursively hierarchical; a subquestion is
+   *  a Section one level down, same organs, nested render */
+  depth?: number
 }) {
   const { w } = ctx
   const phaseNote = { early: 'early — mostly noticing', mid: 'mid — condensing', late: 'late — writing up' }[s.phase]
@@ -281,10 +284,17 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
   // scale face: a dormant question is ONE quiet line — what it asks, what it
   // holds, since when — with a wake door; no dead scaffolding on screen
   if (s.dormant) {
+    // a dormant node collapses its WHOLE subtree to this one line — depth
+    // is the org axis, and parking acts on the node, children included
     return (
-      <section className="nsec nsec--dormant" id={`el-${s.id}`}>
+      <section className={`nsec nsec--dormant ${depth > 0 ? 'nsec--sub' : ''}`} id={`el-${s.id}`}>
         <span className="nsec__dq">{s.question}</span>
         {s.dormant.holds && <span className="nsec__dholds" title="the claim this question holds — live maturity">● {s.dormant.holds}</span>}
+        {(s.children?.length ?? 0) > 0 && (
+          <span className="nsec__dsub" title="subquestions folded under this dormant line — wake to expand">
+            +{s.children!.length} subline{s.children!.length === 1 ? '' : 's'}
+          </span>
+        )}
         <span className="nsec__dsince">dormant since {s.dormant.since}</span>
         {w.work && (
           <button className="nsec__work" onClick={() => onWork?.(s.id)}
@@ -297,7 +307,7 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
   // back, and where the work is landing stays unmistakable
   const anchored = w.anchorAt?.elId === s.id
   return (
-    <section className={`nsec ${anchored ? 'nsec--live' : ''}`} id={`el-${s.id}`}>
+    <section className={`nsec ${anchored ? 'nsec--live' : ''} ${depth > 0 ? 'nsec--sub' : ''}`} id={`el-${s.id}`}>
       {anchored && (
         <div className="nsec__livetag" title="this session's anchor — its products land here first; the state stands until the session closes">
           <SessGlyph live /> {w.anchorAt!.session} · working here
@@ -443,6 +453,16 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
         )
       })}
       <PlanBlock s={s} w={w} onWork={onWork} />
+      {(s.children?.length ?? 0) > 0 && (
+        <div className="nsec__children">
+          {s.children!.map(c => (
+            <NarrativeSection key={c.id} s={c} ctx={ctx} methods={methods}
+                              onMethods={onMethods} onRatify={onRatify}
+                              ratified={ratified} onWork={onWork}
+                              depth={depth + 1} />
+          ))}
+        </div>
+      )}
     </section>
   )
 }
@@ -835,6 +855,14 @@ function MarginBench({ w, target, onClose }: {
   )
 }
 
+// ------------------------------------------------------------------ the tree
+
+/** Depth-annotated walk of the section tree — the org axis is recursive,
+ *  and every flat consumer (TOC, anchors, search) must see every node. */
+function walkSections(list: Section[], depth = 0): { s: Section; depth: number }[] {
+  return list.flatMap(s => [{ s, depth }, ...walkSections(s.children ?? [], depth + 1)])
+}
+
 // -------------------------------------------------------------------- search
 
 interface Hit {
@@ -847,7 +875,7 @@ function searchRecord(w: World, q: string, scope: 'story' | 'noticed' | 'everyth
   const hits: Hit[] = []
   const has = (s: string) => s.toLowerCase().includes(needle)
   if (scope === 'story' || scope === 'everything') {
-    for (const s of w.sections) {
+    for (const { s } of walkSections(w.sections)) {
       for (const p of s.paragraphs) if (has(p.text) || has(s.question)) {
         hits.push({ domId: `el-${p.id}`, label: `${s.question} — §`, stratum: 'story' }); break
       }
@@ -1101,7 +1129,7 @@ function RecordDoc({ w, onAdvance, triage }: { w: World; onAdvance?: (t: string)
   const ANCHORS = w.spine
     ? [...w.spine.arcs.map(a => `el-${a.id}`), 'el-sediment']
     : [
-        ...w.sections.map(s => `el-${s.id}`),
+        ...walkSections(w.sections).map(({ s }) => `el-${s.id}`),
         ...w.trails.map(t => `el-${t.id}`),
         ...(w.looseNotes.length ? ['el-loose'] : []),
         'el-sediment',
@@ -1308,8 +1336,8 @@ function RecordDoc({ w, onAdvance, triage }: { w: World; onAdvance?: (t: string)
         ) : (
           <>
             {w.sections.length > 0 && <div className="toc__group">story so far</div>}
-            {w.sections.map(s => (
-              <button key={s.id} className={`toc__item ${activeAnchor === `el-${s.id}` ? 'is-active' : ''}`} onClick={() => scrollTo(`el-${s.id}`)}>
+            {walkSections(w.sections).map(({ s, depth }) => (
+              <button key={s.id} className={`toc__item ${depth > 0 ? 'toc__item--sub' : ''} ${activeAnchor === `el-${s.id}` ? 'is-active' : ''}`} onClick={() => scrollTo(`el-${s.id}`)}>
                 <span className={`toc__phase toc__phase--${s.phase}`} />
                 {s.question}
                 {deltaBadge(`el-${s.id}`)}
