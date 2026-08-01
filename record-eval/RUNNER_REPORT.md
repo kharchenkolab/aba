@@ -184,6 +184,35 @@ spend limit twice mid-build, and an LLM policy run would be metered against
 the same budget. The one-scenario smoke run the handoff suggests
 (2–3 scenarios, flag-gated) is a ~30-minute task once budget exists.
 
+## 6.5 · S6 addendum — llm_v0 measured (2026-08-01, laptop)
+
+`runner/llm_policy.py` implements the S6 policy (subscription OAuth via the
+backend's bearer resolution; registered in cli.POLICIES only when a token
+resolves; matrix still runs baselines only). Charter = a distilled
+editorial charter + a SELF-DESCRIBING op schema (introspected from ops.py).
+Five iterations were needed before the gate stopped killing replays, each
+one a named lesson now encoded in charter text or edge normalization:
+classes are strings; class-2/3 ops only inside propose payloads;
+apply_consented only for the moment's matched ids; proposal_cls must
+dominate its payload (computed, not asked); question/section references
+validated (models hallucinate Q5 in a 4-question pool). The edge guards
+mirror how a production advisor is shaped: only proposals leave at class 2+.
+
+Measured columns (assertions passed):
+
+| scenario | llm_v0 haiku-4.5 | llm_v0 sonnet-5 | baseline range | scripted |
+|---|---|---|---|---|
+| checkout/contradiction | 3/6 | 3/6 | 1–5/6 (obey=5) | 6/6 |
+| checkout/proactive-intent | 1/7 | — | 1/7 flat | — |
+
+Same totals, different organs: haiku fails plan lifecycle, sonnet gets it
+(PI1=planned) but malformed the claim-draft proposal; BOTH miss the
+Class-X interrupt addendum — the differential the corpus was sharpened
+for. proactive-intent ties the baseline floor: the v0 charter's
+intent-precedes-evidence coverage (declare -> stub + plan items) is one
+line where it needs a procedure; that is the next charter iteration, and
+exactly the phase-3 drafting-advisor instruction set.
+
 ## 7 · Suggested next steps
 
 1. **Run the LLM policy** on checkout/contradiction, checkout/pivot, and

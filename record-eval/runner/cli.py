@@ -25,6 +25,11 @@ from .scripted_good import POOL_ID as SG_POOL, SCENARIO_ID as SG_SCENARIO, Scrip
 
 POLICIES = dict(BASELINES)
 POLICIES[ScriptedGood.name] = ScriptedGood
+try:                                    # S6: present only when a bearer is
+    from .llm_policy import LLMPolicy  # resolvable; matrix never runs it
+    POLICIES[LLMPolicy.name] = LLMPolicy
+except Exception:
+    pass
 
 
 def default_pools_root() -> str:
