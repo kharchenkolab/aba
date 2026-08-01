@@ -139,6 +139,29 @@ def _question_ref(e: dict, question_ids: set[str],
     return refs
 
 
+_IMG_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg")
+
+
+def _image_of(e: dict) -> Optional[str]:
+    """The servable image name behind an entity, if any: a direct
+    artifact_path, or an exec-produced artifact addressed as
+    (exec_id, kind, idx) — the face builds /artifacts/<pid>/<name>."""
+    ap = e.get("artifact_path")
+    if ap and str(ap).lower().endswith(_IMG_SUFFIXES):
+        return str(ap).rsplit("/", 1)[-1]
+    if e.get("exec_id"):
+        # exec-produced entities: the first image the exec produced (the
+        # pin's own (kind, idx) tuple often addresses the text cell, while
+        # the figure sits beside it in the same produced[] list)
+        from core.graph import exec_records
+        rec = exec_records.get(e["exec_id"]) or {}
+        for p in rec.get("produced") or []:
+            u = str(p.get("url") or "")
+            if u.lower().endswith(_IMG_SUFFIXES):
+                return u.rsplit("/", 1)[-1]
+    return None
+
+
 def _parse_ts(s: Optional[str]) -> Optional[datetime]:
     if not s:
         return None
@@ -353,12 +376,20 @@ def assemble_world(*, sediment_limit: int = 200,
         se = get_entity(sid)
         if se:
             row = {"title": se.get("title"), "type": se.get("type")}
-            # image-bearing evidence renders INLINE in the story — ship the
-            # servable artifact name (face builds /artifacts/<pid>/<name>)
-            ap = se.get("artifact_path")
-            if ap and str(ap).lower().endswith(
-                    (".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg")):
-                row["artifact"] = str(ap).rsplit("/", 1)[-1]
+            img = _image_of(se)
+            if img is None:
+                # a container support (result) carries its image one hop
+                # down — the first image among what it includes/supports
+                for ed in edges_from(se["id"]):
+                    if ed["rel_type"] not in _CARRY_RELS:
+                        continue
+                    child = get_entity(ed["target_id"])
+                    if child:
+                        img = _image_of(child)
+                        if img:
+                            break
+            if img:
+                row["artifact"] = img
             supports_index[sid] = row
 
     return {
