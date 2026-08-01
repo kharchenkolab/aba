@@ -23,4 +23,7 @@ register_record_roles(
     maturity_key="confidence",
     # narrative.yaml: metadata.text holds the prose body — the story stratum
     prose_body_key="text",
+    # claim.yaml: the display title truncates; the full assertion lives in
+    # metadata.statement — the story drafts from statements
+    claim_statement_key="statement",
 )

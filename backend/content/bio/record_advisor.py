@@ -32,6 +32,14 @@ def _conf(c: dict) -> str:
             or c.get("status") or "preliminary")
 
 
+def _stated(c: dict) -> str:
+    """A claim's FULL assertion — packs truncate display titles, so the
+    draft weaves metadata.statement when present (claim.yaml), title only
+    as the fallback. A truncated sentence must never enter the story."""
+    return ((c.get("metadata") or {}).get("statement")
+            or c.get("title") or "").rstrip(".")
+
+
 def compose_draft(claims: list[dict]) -> str:
     """Weave the thread's claims into a readable story draft — mechanical
     v0 (titles at their maturity, strongest first, negatives set apart).
@@ -48,13 +56,13 @@ def compose_draft(claims: list[dict]) -> str:
     parts = []
     if pos:
         lead, rest = pos[0], pos[1:]
-        parts.append(f"{lead['title']} ({_conf(lead)}).")
+        parts.append(f"{_stated(lead)} ({_conf(lead)}).")
         if rest:
             parts.append("Also in hand: " + "; ".join(
-                f"{c['title']} ({_conf(c)})" for c in rest) + ".")
+                f"{_stated(c)} ({_conf(c)})" for c in rest) + ".")
     if neg:
         parts.append("Set aside: " + "; ".join(
-            f"{c['title']} ({_conf(c)})" for c in neg) + ".")
+            f"{_stated(c)} ({_conf(c)})" for c in neg) + ".")
     return " ".join(parts)
 
 
@@ -98,7 +106,7 @@ def llm_draft(claims: list[dict]) -> str:
         from core.config import MODEL
         from core.llm import (_CC_MARKER_BLOCK, _wants_cc_marker,
                               sync_anthropic_client)
-        rows = "\n".join(f"- {c['title']} ({_conf(c)})" for c in claims)
+        rows = "\n".join(f"- {_stated(c)} ({_conf(c)})" for c in claims)
         system = ([dict(_CC_MARKER_BLOCK),
                    {"type": "text", "text": _DRAFT_CHARTER}]
                   if _wants_cc_marker() else _DRAFT_CHARTER)
@@ -159,80 +167,12 @@ def review_thread(tid: str):
     return None
 
 
-# ---------------------------------------------------------------- question
-# The default thread absorbs the user's whole first message as its question
-# (live finding, record-face.md). The face's heading needs ONE crisp
-# question; the distiller proposes it (kind "question" — accept rewrites
-# with undo, question_source flips to guide).
-
-_VERBATIM_LEN = 140
-
-
-def _extract_question(text: str) -> str:
-    """Mechanical distillation: the first sentence that asks — honest and
-    dumb. No question mark, no fabrication (return empty, stay quiet)."""
-    for part in text.replace("\n", " ").split("?"):
-        part = part.strip()
-        if not part:
-            continue
-        # take the trailing clause of the part (after the last full stop)
-        q = part.split(". ")[-1].split("! ")[-1].strip()
-        if q and len(q) <= _VERBATIM_LEN:
-            return q[0].lower() + q[1:] + "?"
-        return ""
-    return ""
-
-
-def _llm_distill(text: str) -> str:
-    import os
-    if os.environ.get("RECORD_LLM_DRAFTS") != "1":
-        return ""
-    try:
-        from core.config import MODEL
-        from core.llm import (_CC_MARKER_BLOCK, _wants_cc_marker,
-                              sync_anthropic_client)
-        charter = ("Distill the scientist's message into the ONE question "
-                   "this line of inquiry asks. Reply with a single crisp "
-                   "question (<=120 characters, ends with '?'), nothing "
-                   "else. Use only what the message states.")
-        system = ([dict(_CC_MARKER_BLOCK), {"type": "text", "text": charter}]
-                  if _wants_cc_marker() else charter)
-        r = sync_anthropic_client().messages.create(
-            model=MODEL, max_tokens=120, system=system,
-            messages=[{"role": "user", "content": text}])
-        out = " ".join(b.text for b in r.content
-                       if getattr(b, "type", "") == "text").strip()
-        if out.endswith("?") and len(out) <= 160 and \
-                not any(t in out for t in ("thr_", "run_", "sit-")):
-            return out
-    except Exception:  # noqa: BLE001 — advisory path
-        pass
-    return ""
-
-
-def distill_question(tid: str):
-    """Propose a crisp heading when the question is a verbatim paragraph."""
-    from core.graph.entities import get_entity
-    thr = get_entity(tid)
-    if not thr:
-        return None
-    md = thr.get("metadata") or {}
-    q = (md.get("question") or "").strip()
-    if len(q) <= _VERBATIM_LEN and "\n" not in q:
-        return None
-    if md.get("question_source") == "guide":
-        return None                      # already distilled, never re-nag
-    crisp = _llm_distill(q) or _extract_question(q)
-    if not crisp or crisp.rstrip("?").strip().lower() == \
-            q.rstrip("?").strip().lower():
-        return None
-    return add_proposal(
-        thread_id=tid, kind="question", advisor="record_drafter",
-        headline=f"this line reads as your whole message — retitle it: "
-                 f"“{crisp}”",
-        signature=f"question_distill:{tid}:{len(q)}",
-        payload={"question": crisp, "set_source": "guide"},
-    )
+# NOTE on question naming: the verbatim-first-message heading fixes itself
+# — the pack's D1 detector (proposals/scheduler._detect_title_question)
+# already refines guide-owned questions silently from the second assistant
+# turn, and suggests (ephemeral, self-expiring) on user-owned ones. This
+# advisor deliberately does NOT duplicate it; the face's heading clamp is
+# the turn-one display defense.
 
 
 def _on_stop_record(ctx: dict) -> None:
@@ -241,7 +181,6 @@ def _on_stop_record(ctx: dict) -> None:
         return
     from core import projects
     projects.spawn(review_thread, tid)
-    projects.spawn(distill_question, tid)
 
 
 from core.hooks.dispatcher import register as _register  # noqa: E402

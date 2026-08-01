@@ -26,7 +26,7 @@ import hashlib
 import json as _json
 from typing import Optional
 
-from core.config import FAKE_SESSION, API_KEY, MODEL
+from core.config import FAKE_SESSION, MODEL
 from core.graph._schema import gen_entity_id, WORKSPACE_ID
 from core.graph.edges import add_edge
 from core.graph.entities import get_entity, update_entity, create_entity, archive_entity, list_entities
@@ -185,12 +185,17 @@ def _ask_json(system: str, prompt: str, fake: Optional[dict] = None) -> Optional
     if FAKE_SESSION:
         return fake
     import time
-    import anthropic
-    client = anthropic.Anthropic(api_key=API_KEY)
+    # Route through core.llm's credential resolution — a bare
+    # Anthropic(api_key=...) dies silently under subscription OAuth
+    # (oauth_cc has no API key), which killed D1/D2 on such deployments.
+    from core.llm import _CC_MARKER_BLOCK, _wants_cc_marker, sync_anthropic_client
+    client = sync_anthropic_client()
+    sys_payload = ([dict(_CC_MARKER_BLOCK), {"type": "text", "text": system}]
+                   if _wants_cc_marker() else system)
     text = None
     for attempt in range(3):
         try:
-            msg = client.messages.create(model=MODEL, max_tokens=220, system=system,
+            msg = client.messages.create(model=MODEL, max_tokens=220, system=sys_payload,
                                          messages=[{"role": "user", "content": prompt}])
             text = "".join(b.text for b in msg.content if getattr(b, "type", None) == "text")
             break

@@ -300,6 +300,29 @@ class RecordWorldTest(unittest.TestCase):
             register_record_roles(ROLES, maturity_order=LADDER,
                                   artifact_types=ARTS)
 
+    def test_claim_statement_key_ships_full_assertion(self):
+        # display titles truncate; the registered statement key ships the
+        # FULL assertion (absent when equal to the title — no duplication)
+        cid = create_entity(entity_type="cc", title="short display title",
+                            metadata={"thread_id": self.q1,
+                                      "statement": "the full assertion, "
+                                      "much longer than any display title, "
+                                      "stated as a complete sentence"})
+        try:
+            register_record_roles(ROLES, maturity_order=LADDER,
+                                  artifact_types=ARTS,
+                                  claim_statement_key="statement")
+            w = assemble_world()
+            row = next(c for c in w["claims"] if c["id"] == cid)
+            self.assertIn("complete sentence", row["statement"])
+            c1 = next(c for c in w["claims"] if c["id"] == self.c1)
+            self.assertNotIn("statement", c1)
+        finally:
+            from core.graph.entities import delete_entity_hard
+            delete_entity_hard(cid)
+            register_record_roles(ROLES, maturity_order=LADDER,
+                                  artifact_types=ARTS)
+
     def test_distillation_freezes_a_sitting(self):
         # a note carrying sitting_of becomes a FROZEN sitting: it wears its
         # title, owns its runs (clustering never redraws them), and leaves

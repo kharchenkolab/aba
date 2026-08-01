@@ -127,13 +127,13 @@ advisor -> tray -> face accept -> prose renders under the question.
 The advisor also handles the STALENESS half: when claims land after the
 head narrative was drafted (`drafted_claims` marker), it proposes a
 REVISION (payload `revises` + recomposed text + `cites`); hand-written
-prose — no marker — is never second-guessed. And it distills verbatim
-questions (`distill_question`): a thread whose `question` is the user's
-whole first message (the live finding) gets a kind-`question` proposal
-with the crisp heading (mechanical first-?-sentence extraction; LLM
-behind the same flag); accepting rewrites with undo and flips
-`question_source` to guide, so it never re-nags. The face defends
-display-side too: paragraph-length headings clamp to three lines.
+prose — no marker — is never second-guessed. Question naming is NOT this
+advisor's job: the pack's D1 detector
+(`proposals/scheduler._detect_title_question`) already refines guide-owned
+questions silently from the second assistant turn and offers ephemeral
+suggestions on user-owned ones — so the verbatim-first-message heading is
+a one-turn transient, and the face's three-line heading clamp is the
+turn-one display defense.
 
 LLM drafting rides the SAME kind, flag-gated (`RECORD_LLM_DRAFTS=1`):
 `llm_draft` prompts with a charter distilled from S6 (prose tracks

@@ -125,37 +125,6 @@ class RecordAdvisorTest(unittest.TestCase):
             advisor._gate_draft("A finding (supported) via thr_ab12.", cs), "")
         self.assertEqual(advisor._gate_draft("", cs), "")
 
-    def test_question_distillation(self):
-        os.environ.pop("RECORD_LLM_DRAFTS", None)
-        blob = ("I have been watching the batch dashboards since the deploy "
-                "and the numbers drift apart every afternoon while mornings "
-                "look fine. What actually drives the afternoon divergence "
-                "at siteA? Also the weekly report never flagged it.")
-        t = create_entity(entity_type="thread", title="afternoon drift",
-                          metadata={"question": blob})
-        pid = advisor.distill_question(t)
-        self.assertIsNotNone(pid)
-        row = [p for p in list_proposals(thread_id=t)
-               if p["kind"] == "question"][0]
-        self.assertEqual(row["payload"]["question"],
-                         "what actually drives the afternoon divergence "
-                         "at siteA?")
-        self.assertEqual(row["payload"]["set_source"], "guide")
-        # dedup: same verbatim question, no re-nag
-        self.assertIsNone(advisor.distill_question(t))
-        # crisp questions stay untouched; distilled ones never re-nag
-        t2 = create_entity(entity_type="thread", title="crisp",
-                           metadata={"question": "where is the ceiling?"})
-        self.assertIsNone(advisor.distill_question(t2))
-        t3 = create_entity(entity_type="thread", title="already done",
-                           metadata={"question": "x" * 200,
-                                     "question_source": "guide"})
-        self.assertIsNone(advisor.distill_question(t3))
-        # no question mark anywhere -> nothing trustworthy to propose
-        t4 = create_entity(entity_type="thread", title="statement",
-                           metadata={"question": "y" * 200})
-        self.assertIsNone(advisor.distill_question(t4))
-
     def test_compose_draft_reads_strongest_first_negatives_apart(self):
         mk = lambda t, conf: {"title": t, "metadata": {"confidence": conf}}
         text = advisor.compose_draft([
@@ -167,6 +136,19 @@ class RecordAdvisorTest(unittest.TestCase):
         # leads with the strongest positive, sets negatives apart, and the
         # whole thing reads as sentences — no ids, no raw structures
         self.assertTrue(text.startswith("the load-bearing result (validated)."))
+        # a truncated display title must never enter the story — the full
+        # metadata.statement wins when present
+        t2 = advisor.compose_draft([
+            {"title": "the divergence is driven by a",     # truncated
+             "metadata": {"confidence": "supported",
+                          "statement": "the divergence is driven by a "
+                                       "timezone-shifted aggregation window."}},
+            {"title": "b", "metadata": {"confidence": "preliminary",
+                                        "statement": "a small residual gap "
+                                        "remains in afternoon readings."}},
+        ])
+        self.assertIn("timezone-shifted aggregation window (supported).", t2)
+        self.assertNotIn("driven by a (supported)", t2)
         self.assertIn("Also in hand: a middling read (supported); "
                       "early hunch (preliminary).", text)
         self.assertIn("Set aside: ruled out path (refuted).", text)

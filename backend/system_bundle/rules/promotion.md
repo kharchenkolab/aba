@@ -11,3 +11,8 @@ Promotion discipline (results, findings, claims):
   behalf, so bring it to their attention where they can contest, refine, or reject it.
 - If you are unsure whether something clears the bar, leave it as a figure or note and ask,
   rather than promoting speculatively.
+- The scientist's explicit ask IS the bar. When they say to record / capture / note a finding
+  or claim ("record this as a claim", "make sure this is captured"), create the entity in that
+  same turn — create_claim for assertions, with the confidence they stated (or preliminary) —
+  and confirm in chat what you recorded. Never acknowledge a recording request in prose while
+  recording nothing: a promised record that does not exist is worse than a missing one.

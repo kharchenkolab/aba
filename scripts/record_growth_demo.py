@@ -37,8 +37,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[0]))
 # arrives as weeks of runs. All content generic.
 
 # The default thread absorbs the user's whole first message as its question
-# (live finding); the distiller proposes the crisp heading (stage3 tray) and
-# from stage4 the line reads distilled (question_source: guide).
+# (live finding); the pack's D1 detector refines it silently from turn 2 —
+# stage2-3 show the verbatim heading (clamped), stage4+ read distilled.
 VERBATIM_Q = (
     "I noticed during yesterday's peak that checkout latency graphs look "
     "terrible again even though the median seems fine, and honestly the "
@@ -258,12 +258,8 @@ def seed_stage(name: str, horizon: int) -> None:
                      kind="route", headline="file the reconnect-penalty "
                      "figure under the mechanism question",
                      signature=f"{name}-route-1")
-    if 5 <= horizon < 12:
-        # the distiller's proposal stands in the tray until accepted
-        add_proposal(thread_id=qids["q_lat"], kind="question",
-                     headline=("this line reads as your whole message — "
-                               f"retitle it: “{CRISP_Q}”"),
-                     signature=f"question_distill:{qids['q_lat']}")
+    # (the verbatim->crisp question arc leaves no tray trace: the pack's D1
+    # detector refines guide-owned questions SILENTLY from the second turn)
     if horizon >= 12:
         add_proposal(thread_id=qids["q_alert"], kind="claim",
                      headline="draft: averaging window hides sub-minute tails",

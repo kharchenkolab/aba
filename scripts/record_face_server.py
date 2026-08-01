@@ -50,6 +50,7 @@ def build_app(runtime: Path):
         artifact_types=("figure", "table", "cell"),
         maturity_key="confidence",
         prose_body_key="text",
+        claim_statement_key="statement",
     )
 
     app = FastAPI(title="record-face-sidecar")

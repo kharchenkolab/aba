@@ -29,6 +29,7 @@ _ROLES: dict[str, str] = {}
 _MATURITY: tuple[str, ...] = ()
 _MATURITY_KEY: str = ""
 _PROSE_BODY_KEY: str = ""
+_CLAIM_STATEMENT_KEY: str = ""
 _ARTIFACT_TYPES: tuple[str, ...] = ()
 
 #: A sitting ends when attention moves — operationally, when the next run on
@@ -44,7 +45,8 @@ def register_record_roles(roles: dict[str, str],
                           maturity_order: Sequence[str] = (),
                           artifact_types: Sequence[str] = (),
                           maturity_key: str = "",
-                          prose_body_key: str = "") -> None:
+                          prose_body_key: str = "",
+                          claim_statement_key: str = "") -> None:
     """Content-pack registration: map Record roles to this pack's entity-type
     names, order the claim maturity ladder (index = rung), name the artifact
     types the leftovers shelf sweeps (the pack typically derives these from
@@ -53,13 +55,18 @@ def register_record_roles(roles: dict[str, str],
     metadata key that carries it (e.g. "confidence"). `prose_body_key` names
     the metadata key holding a prose entity's readable body (e.g. "text");
     the story stratum renders it, so without it prose projects titles-only.
+    `claim_statement_key` names the metadata key holding a claim's FULL
+    assertion (packs often truncate the display title) — the story stratum
+    drafts from statements, never from truncated titles.
     Re-registration replaces (same semantics as the type registry)."""
-    global _ROLES, _MATURITY, _ARTIFACT_TYPES, _MATURITY_KEY, _PROSE_BODY_KEY
+    global _ROLES, _MATURITY, _ARTIFACT_TYPES, _MATURITY_KEY, \
+        _PROSE_BODY_KEY, _CLAIM_STATEMENT_KEY
     _ROLES = dict(roles)
     _MATURITY = tuple(maturity_order)
     _ARTIFACT_TYPES = tuple(artifact_types)
     _MATURITY_KEY = maturity_key
     _PROSE_BODY_KEY = prose_body_key
+    _CLAIM_STATEMENT_KEY = claim_statement_key
 
 
 def record_roles() -> dict[str, str]:
@@ -212,6 +219,10 @@ def assemble_world(*, sediment_limit: int = 200,
         row["caveats"] = md.get("caveats") or []
         row["evidence"] = max(len(row["supports"]),
                               len(md.get("evidence_ids") or []))
+        if _CLAIM_STATEMENT_KEY:
+            stmt = md.get(_CLAIM_STATEMENT_KEY)
+            if stmt and stmt != row["title"]:
+                row["statement"] = stmt
         claims.append(row)
 
     prose = []
