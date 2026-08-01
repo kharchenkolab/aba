@@ -80,6 +80,22 @@ class RecordAdvisorTest(unittest.TestCase):
                       metadata={"thread_id": self.t2})
         self.assertIsNone(advisor.review_thread(self.t2))
 
+    def test_llm_draft_gate_and_flag(self):
+        mk = lambda t, conf: {"title": t, "metadata": {"confidence": conf}}
+        cs = [mk("a finding", "supported"), mk("a hunch", "preliminary")]
+        # flag off -> NO network path, empty string (deterministic backstop)
+        os.environ.pop("RECORD_LLM_DRAFTS", None)
+        self.assertEqual(advisor.llm_draft(cs), "")
+        # the mechanical gate: plain prose naming a maturity passes; lists,
+        # maturity-free prose, and id leaks are rejected whole
+        ok = "A finding holds (supported); a hunch remains (preliminary)."
+        self.assertEqual(advisor._gate_draft(ok, cs), ok)
+        self.assertEqual(advisor._gate_draft("- a finding (supported)", cs), "")
+        self.assertEqual(advisor._gate_draft("A finding holds.", cs), "")
+        self.assertEqual(
+            advisor._gate_draft("A finding (supported) via thr_ab12.", cs), "")
+        self.assertEqual(advisor._gate_draft("", cs), "")
+
     def test_compose_draft_reads_strongest_first_negatives_apart(self):
         mk = lambda t, conf: {"title": t, "metadata": {"confidence": conf}}
         text = advisor.compose_draft([

@@ -105,9 +105,20 @@ strongest-first at their maturity, negatives set apart); accepting — from
 either face — creates the narrative with `metadata.text` = that draft
 (scheduler kind `record_draft`, undoable), which the story stratum then
 renders as a real paragraph. Verified live end-to-end: agent turn ->
-advisor -> tray -> face accept -> prose renders under the question. The
-S6 charter (record-eval/runner/llm_policy.py) is the instruction set that
-later puts LLM drafting behind this same proposal kind.
+advisor -> tray -> face accept -> prose renders under the question.
+
+LLM drafting rides the SAME kind, flag-gated (`RECORD_LLM_DRAFTS=1`):
+`llm_draft` prompts with a charter distilled from S6 (prose tracks
+evidence; maturity named, never exceeded; negatives apart), then a
+mechanical gate (`_gate_draft`) rejects lists, maturity-free prose, and
+id leaks whole — the deterministic composer backstops every failure.
+Live content evaluation drove three charter iterations: the model first
+added confirmation/success language, then invented a mechanism clause;
+the shipped charter forbids BOTH by name ("include nothing the claims do
+not state"), and the resulting drafts ground every clause in a claim.
+Residual risk — ungrounded inference a regex cannot catch — is held by
+the consent architecture: a draft is a proposal; the scientist reads
+before it becomes record.
 
 ## Known gaps
 

@@ -58,6 +58,60 @@ def compose_draft(claims: list[dict]) -> str:
     return " ".join(parts)
 
 
+# Distilled from the S6 charter (record-eval/runner/llm_policy.py): prose
+# tracks evidence — never ahead of it; the scientist ratifies, never the model.
+_DRAFT_CHARTER = (
+    "You draft the story paragraph of a scientist's lab-notebook Record. "
+    "Weave the claims below into ONE short readable paragraph (2-4 "
+    "sentences). Rules: prose tracks evidence — state each finding AT its "
+    "given maturity, naming it in parentheses, never stronger; order for "
+    "reading (chronology or mechanism), but the strongest finding must be "
+    "unmistakably the center; set contested/refuted material apart at the "
+    "end; no headings, no lists, no identifiers. Include NOTHING the "
+    "listed claims do not state: no analysis, confirmation, or success "
+    "language, no mechanisms or consequences of your own — connect the "
+    "claims plainly and stop. Reply with the paragraph only.")
+
+
+def _gate_draft(text: str, claims: list[dict]) -> str:
+    """Mechanical acceptance gate on model output (the S6 lesson: sanitize
+    edges, never trust shape): a usable draft is plain prose that names at
+    least one maturity and leaks no internal ids."""
+    text = (text or "").strip()
+    if not text or text.startswith(("#", "-", "*")):
+        return ""
+    if not any(f"({_conf(c)})" in text for c in claims):
+        return ""
+    if any(t in text for t in ("thr_", "run_", "sit-", "prj_")):
+        return ""
+    return text
+
+
+def llm_draft(claims: list[dict]) -> str:
+    """LLM drafting behind the SAME proposal kind — flag-gated
+    (RECORD_LLM_DRAFTS=1), empty on any failure so the deterministic
+    composer always backstops it."""
+    import os
+    if os.environ.get("RECORD_LLM_DRAFTS") != "1":
+        return ""
+    try:
+        from core.config import MODEL
+        from core.llm import (_CC_MARKER_BLOCK, _wants_cc_marker,
+                              sync_anthropic_client)
+        rows = "\n".join(f"- {c['title']} ({_conf(c)})" for c in claims)
+        system = ([dict(_CC_MARKER_BLOCK),
+                   {"type": "text", "text": _DRAFT_CHARTER}]
+                  if _wants_cc_marker() else _DRAFT_CHARTER)
+        r = sync_anthropic_client().messages.create(
+            model=MODEL, max_tokens=300, system=system,
+            messages=[{"role": "user", "content": rows}])
+        text = " ".join(b.text for b in r.content
+                        if getattr(b, "type", "") == "text")
+        return _gate_draft(text, claims)
+    except Exception:  # noqa: BLE001 — advisory path; silence is the failure mode
+        return ""
+
+
 def review_thread(tid: str):
     """Propose a story draft when the record is behind the claims."""
     claims = _of_thread("claim", tid)
@@ -71,7 +125,7 @@ def review_thread(tid: str):
                   f"for this line ({len(claims)} claims, no narrative yet)"),
         signature=f"record_draft:{tid}:{len(claims)}",
         payload={"title": "What we know so far",
-                 "text": compose_draft(claims)},
+                 "text": llm_draft(claims) or compose_draft(claims)},
     )
 
 
