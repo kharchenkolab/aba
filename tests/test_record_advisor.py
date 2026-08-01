@@ -125,6 +125,32 @@ class RecordAdvisorTest(unittest.TestCase):
             advisor._gate_draft("A finding (supported) via thr_ab12.", cs), "")
         self.assertEqual(advisor._gate_draft("", cs), "")
 
+    def test_unfiled_session_suggestion(self):
+        from core.graph._schema import _conn
+        t = create_entity(entity_type="thread", title="bare analysis line",
+                          metadata={"question": "what is the spread?"})
+        with _conn() as c:
+            for i in range(2):
+                c.execute("INSERT INTO runs (run_id, thread_id, state, "
+                          "started_at, updated_at) VALUES (?,?,'done',?,?)",
+                          (f"r-bare-{i}", t,
+                           f"2026-05-01T0{i}:00:00Z", f"2026-05-01T0{i}:00:00Z"))
+            c.commit()
+        # tool-heavy turn, runs present, nothing filed -> suggestion fires
+        ctx = {"thread_id": t, "total_tool_calls": 3, "suggestion": None}
+        advisor._unfiled_session_note(ctx, t)
+        self.assertIn("record is behind", ctx["suggestion"])
+        # armed the other way: once ANY product exists on the line, quiet
+        create_entity(entity_type="result", title="spread summary",
+                      metadata={"thread_id": t, "interpretation": "tight"})
+        ctx2 = {"thread_id": t, "total_tool_calls": 3, "suggestion": None}
+        advisor._unfiled_session_note(ctx2, t)
+        self.assertIsNone(ctx2["suggestion"])
+        # a chat-only turn (no tools) never nags
+        ctx3 = {"thread_id": t, "total_tool_calls": 0, "suggestion": None}
+        advisor._unfiled_session_note(ctx3, t)
+        self.assertIsNone(ctx3["suggestion"])
+
     def test_compose_draft_reads_strongest_first_negatives_apart(self):
         mk = lambda t, conf: {"title": t, "metadata": {"confidence": conf}}
         text = advisor.compose_draft([

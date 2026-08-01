@@ -195,10 +195,35 @@ def review_thread(tid: str):
 # the turn-one display defense.
 
 
+def _unfiled_session_note(ctx: dict, tid: str) -> None:
+    """Prose rules don't guarantee filing (measured live: an analysis turn
+    left nothing behind twice, rule present both times) — so detect the
+    state mechanically and ride the end-of-session suggestion channel:
+    tool-heavy turn, runs on the line, zero products reachable from it."""
+    if (ctx.get("total_tool_calls") or 0) < 2 or ctx.get("suggestion"):
+        return
+    try:
+        from core.graph.runs_port import list_runs
+        if len(list_runs(thread_id=tid)) < 2:
+            return
+        if _claims_of_thread(tid):
+            return
+        for t in ("result", "figure"):
+            if _of_thread(t, tid):
+                return
+        ctx["suggestion"] = (
+            "The record is behind this session's work: analyses ran on this "
+            "line but nothing was filed. Keep the key figure and file the "
+            "main conclusion as a result with a one-line interpretation.")
+    except Exception:  # noqa: BLE001 — advisory; never break the turn
+        pass
+
+
 def _on_stop_record(ctx: dict) -> None:
     tid = ctx.get("thread_id")
     if not tid:
         return
+    _unfiled_session_note(ctx, tid)      # synchronous: rides ctx.suggestion
     from core import projects
     projects.spawn(review_thread, tid)
 

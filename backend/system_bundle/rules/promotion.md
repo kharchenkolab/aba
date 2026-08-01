@@ -16,3 +16,9 @@ Promotion discipline (results, findings, claims):
   same turn — create_claim for assertions, with the confidence they stated (or preliminary) —
   and confirm in chat what you recorded. Never acknowledge a recording request in prose while
   recording nothing: a promised record that does not exist is worse than a missing one.
+- An analysis session leaves a record of its OWN products. When a run of yours produces a
+  load-bearing figure or a quantitative conclusion the conversation then relies on, file it in
+  the same turn — the key figure kept, the conclusion as a result with a one-line interpretation
+  — without waiting to be asked. Chat prose is not the record: a session that analyzed real data
+  and filed nothing has silently discarded its evidence. Promote-sparingly still governs HOW MUCH
+  (the one or two products the discussion stands on, not every intermediate).
