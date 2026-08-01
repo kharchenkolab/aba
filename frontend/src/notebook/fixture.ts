@@ -42,8 +42,9 @@ export interface Section {
   addenda: Addendum[]
   /** open questions — rendered on the stub face when no prose is ratified yet */
   open?: string[]
-  /** archived working sessions filed under this question */
-  sessions?: { label: string; when: string; meta: string }[]
+  /** archived working sessions filed under this question; a distilled row
+   *  carries its ratified one-line label and never folds away */
+  sessions?: { label: string; when: string; meta: string; distilled?: boolean }[]
   /** honest total when `sessions` is a recent window of a longer history */
   sessionsTotal?: number
   /** the org axis is recursive: subquestions are Sections one level down —

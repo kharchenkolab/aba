@@ -254,8 +254,14 @@ def assemble_world(*, sediment_limit: int = 200,
             v = _versions(p["id"])
             if v > 1:
                 p["versions"] = v
+    # a note carrying `sitting_of` is a DISTILLATION record — the moment a
+    # sitting owns one it becomes an entity and its boundary freezes
+    # (record-face invariant); it leaves the loose-notes stream
+    note_entities = _of_role("note")
+    distills = [e for e in note_entities
+                if (e.get("metadata") or {}).get("sitting_of")]
     notes = [dict(_slim(e), questions=_question_ref(e, qids))
-             for e in _of_role("note")]
+             for e in note_entities if e not in distills]
 
     q_rows = []
     for q in questions:
@@ -277,6 +283,28 @@ def assemble_world(*, sediment_limit: int = 200,
 
     runs = list_runs(limit=sediment_limit)
 
+    # frozen sittings first: each distillation names its runs and wears the
+    # human label; owned runs leave the clustering pool, so heuristics
+    # never redraw a frozen boundary
+    run_by_id = {r["run_id"]: r for r in runs}
+    frozen, owned = [], set()
+    for e in distills:
+        md = e.get("metadata") or {}
+        have = [rid for rid in (md.get("run_ids") or [])
+                if rid in run_by_id]
+        owned.update(have)
+        times = sorted(t for t in
+                       ((run_by_id[r].get("started_at") or
+                         run_by_id[r].get("updated_at")) for r in have) if t)
+        frozen.append({"id": e["id"], "thread_id": md["sitting_of"],
+                       "run_ids": have,
+                       "started_at": times[0] if times else None,
+                       "ended_at": times[-1] if times else None,
+                       "label": e.get("title"), "frozen": True})
+    sittings = frozen + derive_sittings(
+        [r for r in runs if r["run_id"] not in owned])
+    sittings.sort(key=lambda s: (s["started_at"] or "", s["id"]))
+
     events = list_events(limit=100)
     if since:
         events = [e for e in events if (e.get("ts") or "") > since]
@@ -294,7 +322,7 @@ def assemble_world(*, sediment_limit: int = 200,
         "prose": prose,
         "notes": notes,
         "sediment": {"runs": runs},
-        "sittings": derive_sittings(runs),
+        "sittings": sittings,
         "whats_new": events,
         "tray": list_proposals(status="pending"),
         "leftovers": _leftovers(),

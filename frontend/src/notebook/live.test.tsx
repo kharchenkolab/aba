@@ -187,6 +187,15 @@ describe('apiToWorld', () => {
     expect(w.sections[0].children?.[0].question).toBe('is the effect tunable?')
   })
 
+  it('a frozen sitting wears its distillation label in the episode row', () => {
+    const a = sample()
+    a.sittings[0].label = 'traced the reconnect path'
+    a.sittings[0].frozen = true
+    const w = apiToWorld(a)
+    expect(w.sections[0].sessions?.[0].label).toBe('traced the reconnect path')
+    expect(w.sections[0].sessions?.[0].meta).toBe('2 runs')
+  })
+
   it('revisions carry their version; cited claims retire from the chips', () => {
     const a = sample()
     a.prose[0].body = 'Variance tracks batch (supported).'

@@ -260,6 +260,24 @@ def seed_stage(name: str, horizon: int) -> None:
                          "guide", i, t0, t0))
         c.commit()
 
+    # a distillation record freezes the day-8 morning sitting: it owns its
+    # runs (clustering never redraws them) and wears a human label on the
+    # face — the record-face invariant, seeded
+    if horizon >= 8 and qids:
+        active = sorted(qids.values())
+        frozen_tid = active[8 % len(active)]
+        did = create_entity(
+            entity_type="note",  # noqa: seam
+            title="traced the reconnect path end-to-end",
+            metadata={"sitting_of": frozen_tid,
+                      "run_ids": [f"r-d08-0-{i}"
+                                  for i in range(RUNS_PER_DAY)]})
+        with _conn() as c:
+            c.execute("UPDATE entities SET created_at=?, updated_at=?, "
+                      "actor='human:you' WHERE id=?",
+                      ("2026-06-09T12:00:00Z",) * 2 + (did,))
+            c.commit()
+
 
 def build_runtime(root: Path) -> None:
     import os
@@ -333,6 +351,24 @@ def check_worlds(fetch) -> None:
         if horizon >= 23:
             assert "Is the retry layer amplifying?" not in parents, \
                 f"{name}: q_retry should be promoted by day 23"
+        # the freeze: from day 8 exactly one sitting is a distillation
+        # entity — labeled, its runs owned by it alone, and its record
+        # absent from the loose-notes stream
+        frozen = [s for s in w["sittings"] if s.get("frozen")]
+        if horizon >= 8:
+            assert len(frozen) == 1 and \
+                frozen[0]["label"] == "traced the reconnect path end-to-end", \
+                f"{name}: frozen sitting missing or unlabeled"
+            fr = set(frozen[0]["run_ids"])
+            assert fr and fr <= run_ids, f"{name}: frozen runs unresolved"
+            for s in w["sittings"]:
+                if not s.get("frozen"):
+                    assert not (fr & set(s["run_ids"])), \
+                        f"{name}: frozen runs re-clustered"
+            assert all("sitting_of" not in str(n) for n in w["notes"]), \
+                f"{name}: distillation leaked into loose notes"
+        else:
+            assert not frozen, f"{name}: premature frozen sitting"
         # the revision arc: from day 19 the mechanism section reads v2 ONLY
         # (old prose superseded, kept in rows), and its citations cover the
         # thread's claims so the chips retire into the story

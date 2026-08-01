@@ -300,6 +300,29 @@ class RecordWorldTest(unittest.TestCase):
             register_record_roles(ROLES, maturity_order=LADDER,
                                   artifact_types=ARTS)
 
+    def test_distillation_freezes_a_sitting(self):
+        # a note carrying sitting_of becomes a FROZEN sitting: it wears its
+        # title, owns its runs (clustering never redraws them), and leaves
+        # the loose-notes stream; unknown run ids drop silently
+        did = create_entity(entity_type="nn", title="traced the early runs",
+                            metadata={"sitting_of": self.q1,
+                                      "run_ids": ["r-early", "r-ghost"]})
+        try:
+            w = assemble_world()
+            frozen = [s for s in w["sittings"] if s.get("frozen")]
+            self.assertEqual(len(frozen), 1)
+            self.assertEqual(frozen[0]["label"], "traced the early runs")
+            self.assertEqual(frozen[0]["run_ids"], ["r-early"])
+            self.assertEqual(frozen[0]["thread_id"], self.q1)
+            # the owned run appears in NO derived sitting
+            for s in w["sittings"]:
+                if not s.get("frozen"):
+                    self.assertNotIn("r-early", s["run_ids"])
+            self.assertNotIn(did, [n["id"] for n in w["notes"]])
+        finally:
+            from core.graph.entities import delete_entity_hard
+            delete_entity_hard(did)
+
     def test_prose_revision_supersedes_never_deletes(self):
         # a revision (wasDerivedFrom onto older prose) removes the old row
         # from the question's reading list but keeps it in the prose rows;

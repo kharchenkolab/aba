@@ -361,36 +361,43 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
           </div>
         </div>
       )}
-      {s.sessions && s.sessions.length > 0 && (
-        <div className="nsec__sessions">
-          {/* the story stratum READS; episode history is a door, not a list.
-              Two rows at most sit inline — beyond that, one honest line. */}
-          {(s.sessions.length > 2 && !sessOpen) ? (
-            <button className="sess sess--sum" onClick={() => setSessOpen(true)}
-                    title="the working episodes filed under this question — expand for the recent ones; the full history lives in the work record below">
-              ▸ worked {(s.sessionsTotal ?? s.sessions.length)} times ·{' '}
-              {s.sessions[0].when} – {s.sessions[s.sessions.length - 1].when}
-            </button>
-          ) : (
-            <>
-              {s.sessions.length > 2 && (
-                <button className="sess sess--sum" onClick={() => setSessOpen(false)}
-                        title="fold the episode list back to one line">
-                  ▾ worked {(s.sessionsTotal ?? s.sessions.length)} times{
-                    (s.sessionsTotal ?? 0) > s.sessions.length
-                      ? ` · recent ${s.sessions.length}` : ''}
-                </button>
-              )}
-              {s.sessions.map(x => (
-                <button key={`${x.label}·${x.when}`} className="sess" onClick={() => ctx.openSession(x.label)}
-                        title="the working exchange, filed under this question — the full episode: transcript, artifacts, leftovers; continuable">
-                  <SessGlyph live={sessionLive(w, x.label)} /> {x.label} · {x.when} · {x.meta} — transcript
-                </button>
-              ))}
-            </>
-          )}
-        </div>
-      )}
+      {s.sessions && s.sessions.length > 0 && (() => {
+        // the story stratum READS; episode history is a door, not a list.
+        // DISTILLED sittings are ratified one-liners and never fold; the
+        // undistilled rest folds to one honest line beyond two rows.
+        const dist = s.sessions.filter(x => x.distilled)
+        const rest = s.sessions.filter(x => !x.distilled)
+        const row = (x: NonNullable<Section['sessions']>[number]) => (
+          <button key={`${x.label}·${x.when}`} className={`sess ${x.distilled ? 'sess--dist' : ''}`} onClick={() => ctx.openSession(x.label)}
+                  title="the working exchange, filed under this question — the full episode: transcript, artifacts, leftovers; continuable">
+            <SessGlyph live={sessionLive(w, x.label)} /> {x.label} · {x.when} · {x.meta} — transcript
+          </button>
+        )
+        return (
+          <div className="nsec__sessions">
+            {dist.map(row)}
+            {(rest.length > 2 && !sessOpen) ? (
+              <button className="sess sess--sum" onClick={() => setSessOpen(true)}
+                      title="the working episodes filed under this question — expand for the recent ones; the full history lives in the work record below">
+                ▸ worked {(s.sessionsTotal ?? s.sessions.length)} times ·{' '}
+                {rest[0].when} – {rest[rest.length - 1].when}
+              </button>
+            ) : (
+              <>
+                {rest.length > 2 && (
+                  <button className="sess sess--sum" onClick={() => setSessOpen(false)}
+                          title="fold the episode list back to one line">
+                    ▾ worked {(s.sessionsTotal ?? s.sessions.length)} times{
+                      (s.sessionsTotal ?? 0) > s.sessions.length
+                        ? ` · recent ${s.sessions.length}` : ''}
+                  </button>
+                )}
+                {rest.map(row)}
+              </>
+            )}
+          </div>
+        )
+      })()}
       {s.paragraphs.length === 0 && (
         <div className="nsec__stub">
           <p>{s.plan?.length

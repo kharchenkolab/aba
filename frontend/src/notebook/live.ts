@@ -54,7 +54,8 @@ export interface ApiWorld {
            actor?: string | null; created_at?: string }[]
   sediment: { runs: ApiRun[] }
   sittings: { id: string; thread_id: string; run_ids: string[]
-              started_at?: string | null; ended_at?: string | null }[]
+              started_at?: string | null; ended_at?: string | null
+              label?: string | null; frozen?: boolean }[]
   whats_new: { id: number; kind: string; entity_id?: string | null
                title?: string | null; ts: string }[]
   tray: { id: number; kind: string; headline: string; status: string
@@ -143,12 +144,15 @@ export function apiToWorld(a: ApiWorld): World {
       open,
       // recent sittings only — an old question's episode list must not grow
       // without bound (find the rest through the sediment). Labels are for
-      // READING: ordinal + date + size; the sitting id stays in the sediment
+      // READING: a frozen sitting wears its distillation title; the rest
+      // get ordinal + date + size. Raw sitting ids stay in the sediment
       // stratum (sessionRef), never inline in the story.
       sessions: sits.slice(-6).map((s, i) => ({
-        label: `sitting ${sits.length - Math.min(sits.length, 6) + i + 1}`,
+        label: s.label ||
+          `sitting ${sits.length - Math.min(sits.length, 6) + i + 1}`,
         when: day(s.started_at),
         meta: `${s.run_ids.length} run${s.run_ids.length === 1 ? '' : 's'}`,
+        ...(s.frozen && s.label ? { distilled: true } : {}),
       })),
       ...(sits.length > 6 ? { sessionsTotal: sits.length } : {}),
       ...(q.lifecycle === 'parked'

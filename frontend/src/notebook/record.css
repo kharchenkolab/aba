@@ -451,6 +451,7 @@ input { font: inherit; }
 }
 .sess:hover { color: var(--teal); }
 .sess--sum { color: var(--ink-4, var(--ink-3)); font-style: italic; }
+.sess--dist { color: var(--ink-2); font-weight: 600; }
 
 /* the org axis is recursive: a subquestion is the same organ one level
    down — indented, smaller heading, same strata inside */
