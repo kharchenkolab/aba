@@ -175,8 +175,13 @@ def _leftovers() -> list[dict]:
     return rows
 
 
-def assemble_world(*, sediment_limit: int = 200) -> dict:
-    """One project's Record World. Read-only; call under a bound project."""
+def assemble_world(*, sediment_limit: int = 200,
+                   since: Optional[str] = None) -> dict:
+    """One project's Record World. Read-only; call under a bound project.
+
+    `since` (ISO timestamp) filters what's-new to events after the caller's
+    last visit — the per-user cursor lives with the caller (the face keeps
+    it client-side); the substrate stays cursor-free."""
     questions = _of_role("question")
     qids = {q["id"] for q in questions}
 
@@ -205,8 +210,16 @@ def assemble_world(*, sediment_limit: int = 200) -> dict:
 
     runs = list_runs(limit=sediment_limit)
 
+    events = list_events(limit=100)
+    if since:
+        events = [e for e in events if (e.get("ts") or "") > since]
+
+    from core.graph.entities import get_entity
+    ws = get_entity("workspace")
+
     return {
         "version": 1,
+        "project": {"title": (ws or {}).get("title")},
         "roles": record_roles(),
         "maturity_ladder": list(_MATURITY),
         "questions": q_rows,
@@ -215,7 +228,7 @@ def assemble_world(*, sediment_limit: int = 200) -> dict:
         "notes": notes,
         "sediment": {"runs": runs},
         "sittings": derive_sittings(runs),
-        "whats_new": list_events(limit=100),
+        "whats_new": events,
         "tray": list_proposals(status="pending"),
         "leftovers": _leftovers(),
     }

@@ -77,10 +77,11 @@ def projects_list():
 
 
 @app.get("/api/record/world")
-def record_world(project_id: str, sediment_limit: int = 200):
+def record_world(project_id: str, sediment_limit: int = 200,
+                 since: str | None = None):
     token = bind_active_db(_db_of(project_id))
     try:
-        world = assemble_world(sediment_limit=sediment_limit)
+        world = assemble_world(sediment_limit=sediment_limit, since=since)
     finally:
         _active_db_path.reset(token)
     world["project_id"] = project_id

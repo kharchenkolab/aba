@@ -13,7 +13,8 @@ router = APIRouter()
 
 @router.get("/api/record/world")
 def record_world(pid: str = Depends(require_project),
-                 sediment_limit: int = 200):
-    world = assemble_world(sediment_limit=sediment_limit)
+                 sediment_limit: int = 200,
+                 since: str | None = None):
+    world = assemble_world(sediment_limit=sediment_limit, since=since)
     world["project_id"] = pid
     return world

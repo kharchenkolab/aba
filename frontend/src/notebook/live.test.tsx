@@ -1,10 +1,10 @@
 /** Live-World adapter guards: API World v1 → renderer World mapping, and a
  *  smoke render of the real Record component over an adapted world. Honest
  *  coverage: what the API lacks must come out EMPTY, not mimed. */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import Record from './Record'
-import { apiToWorld, type ApiWorld } from './live'
+import { apiToWorld, fetchLiveWorld, worldUrl, type ApiWorld } from './live'
 
 const LADDER = ['preliminary', 'supported', 'validated', 'contested', 'refuted']
 
@@ -116,5 +116,57 @@ describe('apiToWorld', () => {
     const text = container.textContent || ''
     expect(text).toContain('what drives variance across siteA runs?')
     expect(text).toContain('p-demo')
+  })
+
+  it('prefers the project display title when the API carries one', () => {
+    const a = sample()
+    a.project = { title: 'Variance study' }
+    expect(apiToWorld(a).project.title).toBe('Variance study')
+  })
+})
+
+describe('the since-cursor', () => {
+  // this happy-dom build ships no localStorage; give window a real-enough one
+  beforeAll(() => {
+    const mem = new Map<string, string>()
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: {
+        getItem: (k: string) => mem.get(k) ?? null,
+        setItem: (k: string, v: string) => { mem.set(k, String(v)) },
+        removeItem: (k: string) => { mem.delete(k) },
+        clear: () => { mem.clear() },
+      },
+    })
+  })
+  afterEach(() => { vi.unstubAllGlobals(); window.localStorage.clear() })
+
+  it('worldUrl threads project and since', () => {
+    expect(worldUrl('http://x', 'p1', '2026-01-01T00:00:00Z'))
+      .toBe('http://x/api/record/world?project_id=p1&since=2026-01-01T00%3A00%3A00Z')
+    expect(worldUrl('http://x')).toBe('http://x/api/record/world')
+  })
+
+  it('fetchLiveWorld sends the stored cursor and advances it on success', async () => {
+    window.localStorage.setItem('record:lastVisit:p1', '2026-01-05T00:00:00Z')
+    const seen: string[] = []
+    vi.stubGlobal('fetch', (async (url: string) => {
+      seen.push(String(url))
+      return { ok: true, json: async () => sample() }
+    }) as unknown as typeof fetch)
+    const w = await fetchLiveWorld('http://x', 'p1')
+    expect(seen[0]).toContain('since=2026-01-05')
+    expect(w.whatsNew?.since).toBe('2026-01-05')
+    const stored = window.localStorage.getItem('record:lastVisit:p1')!
+    expect(stored > '2026-01-05T00:00:00Z').toBe(true)
+  })
+
+  it('a failed fetch leaves the cursor untouched', async () => {
+    window.localStorage.setItem('record:lastVisit:p1', '2026-01-05T00:00:00Z')
+    vi.stubGlobal('fetch', (async () =>
+      ({ ok: false, status: 503 })) as unknown as typeof fetch)
+    await expect(fetchLiveWorld('http://x', 'p1')).rejects.toThrow('503')
+    expect(window.localStorage.getItem('record:lastVisit:p1'))
+      .toBe('2026-01-05T00:00:00Z')
   })
 })

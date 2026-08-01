@@ -28,6 +28,7 @@ export interface ApiRun {
 export interface ApiWorld {
   version: number
   project_id?: string
+  project?: { title?: string | null }
   roles: Record<string, string>
   maturity_ladder: string[]
   questions: {
@@ -152,7 +153,7 @@ export function apiToWorld(a: ApiWorld): World {
 
   return {
     project: {
-      title: a.project_id || 'project',
+      title: a.project?.title || a.project_id || 'project',
       started: day(a.sediment.runs[0]?.started_at),
       lastVisit: '',
     },
@@ -184,10 +185,32 @@ export function apiToWorld(a: ApiWorld): World {
 
 // ------------------------------------------------------------- the fetch
 
+export function worldUrl(api: string, projectId?: string,
+                         since?: string | null): string {
+  const p = new URLSearchParams()
+  if (projectId) p.set('project_id', projectId)
+  if (since) p.set('since', since)
+  const q = p.toString()
+  return `${api}/api/record/world${q ? `?${q}` : ''}`
+}
+
+/** The per-user what's-new cursor lives client-side (design §13.3 phase 2:
+ *  a last-visit cursor, not a substrate change). Stored per project;
+ *  advanced only after a successful fetch, so a failed load loses nothing. */
+const sinceKey = (pid?: string) => `record:lastVisit:${pid || 'default'}`
+
+function store(): Storage | undefined {
+  try { return typeof window !== 'undefined' ? window.localStorage : undefined }
+  catch { return undefined }
+}
+
 export async function fetchLiveWorld(api: string, projectId?: string):
     Promise<World> {
-  const q = projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''
-  const res = await fetch(`${api}/api/record/world${q}`)
+  const since = store()?.getItem(sinceKey(projectId)) ?? null
+  const res = await fetch(worldUrl(api, projectId, since))
   if (!res.ok) throw new Error(`world fetch failed: ${res.status}`)
-  return apiToWorld(await res.json() as ApiWorld)
+  const world = apiToWorld(await res.json() as ApiWorld)
+  if (since && world.whatsNew) world.whatsNew.since = since.slice(0, 10)
+  store()?.setItem(sinceKey(projectId), new Date().toISOString())
+  return world
 }

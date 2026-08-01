@@ -204,6 +204,20 @@ class RecordWorldTest(unittest.TestCase):
         titles = [e["title"] for e in w["whats_new"]]
         self.assertIn("seeded-event", titles)
 
+    def test_whats_new_since_cursor(self):
+        # armed: without a cursor the event is present (proven above);
+        # a past cursor keeps it, a future cursor filters it out
+        past = assemble_world(since="2000-01-01T00:00:00Z")
+        self.assertIn("seeded-event", [e["title"] for e in past["whats_new"]])
+        future = assemble_world(since="2999-01-01T00:00:00Z")
+        self.assertEqual(future["whats_new"], [])
+
+    def test_project_title_from_workspace_entity(self):
+        w = assemble_world()
+        # the schema bootstrap seeds a default workspace row; live projects
+        # get their real name healed onto it at open (core/projects.py)
+        self.assertEqual(w["project"]["title"], "Workspace")
+
     def test_leftovers_edge_complement(self):
         w = assemble_world()
         ids = {r["id"] for r in w["leftovers"]}
