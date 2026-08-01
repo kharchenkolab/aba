@@ -118,3 +118,10 @@ season extension with regime change -> agent detects the TRANSIENT
 effect unprompted -> staleness revision -> cross-line check -> park with
 open questions -> 6 simulated weeks (178 runs -> 3 named sediment
 lines) -> week-away return reads as an 8-item deduped changelog.
+(h) update_open_questions tool added — NO agent-side oq tool existed, so
+the plan could never be agent-maintained; resolve matches the model's
+own paraphrase (first live attempt missed on a longer paraphrase —
+bidirectional + word-overlap match); verified: wake parked line ->
+answer -> resolve + add new oq -> face plan shows produced/planned.
+Triage round-trips exercised live: accept (draft/revision/convergence),
+dismiss -> undo -> dismiss (rename suggestion).
