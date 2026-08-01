@@ -61,6 +61,9 @@ export interface PendingItem {
   key: string
   kind: 'addendum' | 'fragment' | 'note' | 'claim draft' | 'plan' | 'proposal'
   label: string
+  /** the proposal's substance (proposed text) — rendered under the label
+   *  so a row is evaluable without opening anything */
+  detail?: string
   elId: string
   routine: boolean
   /** live mode: the proposals-store row id this item mirrors */
@@ -92,6 +95,7 @@ function derivePending(w: World): PendingItem[] {
   for (const p of w.liveTray ?? []) {
     out.push({ key: `live-${p.id}`, kind: 'proposal', liveId: p.id,
                label: `${p.kind} — ${p.headline}`,
+               ...(p.body ? { detail: p.body } : {}),
                elId: p.sectionId ? `el-${p.sectionId}` : '',
                routine: p.kind === 'route' })
   }
@@ -1525,7 +1529,10 @@ function RecordDoc({ w, onAdvance, triage }: { w: World; onAdvance?: (t: string)
                 {pending.map(p => (
                   <div key={p.key} className="tray__row">
                     <span className={`tray__kind tray__kind--${p.routine ? 'routine' : 'decision'}`}>{p.kind}</span>
-                    <span className="tray__label">{p.label}</span>
+                    <span className="tray__label">
+                      {p.label}
+                      {p.detail && <span className="tray__detail">“{p.detail}”</span>}
+                    </span>
                     {(p.kind === 'addendum' || p.kind === 'plan') && (
                       <button className="btn btn--primary"
                               title={p.kind === 'plan' ? 'ratify the SHAPE — one consent, spent up front; filling it happens at lowered ceremony' : undefined}

@@ -59,6 +59,7 @@ export interface ApiWorld {
   whats_new: { id: number; kind: string; entity_id?: string | null
                title?: string | null; ts: string }[]
   tray: { id: number; kind: string; headline: string; status: string
+          body?: string | null
           thread_id?: string | null }[]
   leftovers: { id: string; type: string; title: string | null }[]
   supports_index?: Record<string, { title: string | null; type: string
@@ -326,6 +327,7 @@ export function apiToWorld(a: ApiWorld): World {
     },
     liveTray: a.tray.map(p => ({
       id: p.id, kind: p.kind, headline: p.headline,
+      ...(p.body ? { body: p.body } : {}),
       ...(p.thread_id && a.questions.some(q => q.id === p.thread_id)
         ? { sectionId: p.thread_id } : {}),
     })),

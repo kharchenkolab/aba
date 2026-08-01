@@ -186,7 +186,10 @@ export interface World {
   /** live mode: pending proposals from the shared store, rendered into the
    *  SAME tray as the derived pending items (one derivation discipline —
    *  §13.3 phase 2: ratifying here and in the classic UI is the same row) */
-  liveTray?: { id: number; kind: string; headline: string; sectionId?: string }[]
+  liveTray?: { id: number; kind: string; headline: string; sectionId?: string
+               /** the proposal's substance (e.g. the proposed text) — a
+                *  headline alone is often unevaluable */
+               body?: string }[]
   /** the desk strip — open/last sessions, the resume point */
   desk?: DeskState
   /** a working panel open over the document */
