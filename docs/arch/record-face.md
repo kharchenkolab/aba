@@ -8,8 +8,10 @@ and the Record stay two renderings of one substrate (§13.3 of the design).
 
 > Status: current as of 2026-08. Phase 1 (read-only face) + phase 2
 > (shared triage: tray from the proposals store, accept/dismiss/undo via
-> the classic endpoints, client-held what's-new cursor). Phases 3–4
-> (authoring strata, the spine) are design, not code.
+> the classic endpoints, client-held what's-new cursor) + phase 3
+> authoring strata (recursive org axis, prose bodies + revision lifecycle,
+> drafting/distilling advisors, sitting freeze v0). "The spine" is not a
+> separate organ: it is the org axis viewed from the root — see below.
 
 ## Aims & invariants
 
@@ -23,11 +25,26 @@ and the Record stay two renderings of one substrate (§13.3 of the design).
 - **Honest projection.** Organs the substrate can't fill yet render empty,
   never mimed — the fixture face (frontend `notebook.html` without `?live`)
   remains the design-complete reference.
-- **Sittings are derived, provisionally.** Threads conflate a question with
-  its one conversation; the Record's episode grain (sittings) is clustered
-  from run rows by attention gap (`SITTING_GAP_MINUTES`). Boundaries stay
-  heuristic until a sitting owns a distillation record — then it becomes an
-  entity and freezes (phase 3; §13.2.5 of the design).
+- **The org axis is recursive.** A subquestion is a question whose
+  `parent_entity_id` is another question (threads carry no edges); the
+  World ships `parent`, the adapter nests cycle-safe (a broken chain
+  degrades to top-level — no node is ever lost), and ONE renderer draws
+  any depth. Dormant parents fold their whole subtree to one line.
+  Promotion/demotion are moves in depth, not schema changes. The strata
+  (story/notes/sediment) are NOT levels — they exist at every node; the
+  attention organs (tray, what's-new, desk) are reader-scoped and never
+  multiply per node.
+- **Sittings are derived until distilled.** The episode grain is clustered
+  from run rows by attention gap (`SITTING_GAP_MINUTES`). A note carrying
+  `sitting_of` + `run_ids` is a DISTILLATION record: that sitting is an
+  entity — frozen boundary (its runs leave the clustering pool), human
+  label on the face (a ratified one-liner that never folds), and it exits
+  the loose-notes stream.
+- **Ratified prose is never rewritten.** A revision is a new prose entity
+  pointing `wasDerivedFrom` at the one it supersedes; sections read heads
+  only ("revision N" in the signature) while superseded rows stay for
+  provenance and search. Prose `cites` claims; a cited claim's chip
+  retires into the story.
 
 ## The model
 
@@ -107,6 +124,17 @@ either face — creates the narrative with `metadata.text` = that draft
 renders as a real paragraph. Verified live end-to-end: agent turn ->
 advisor -> tray -> face accept -> prose renders under the question.
 
+The advisor also handles the STALENESS half: when claims land after the
+head narrative was drafted (`drafted_claims` marker), it proposes a
+REVISION (payload `revises` + recomposed text + `cites`); hand-written
+prose — no marker — is never second-guessed. And it distills verbatim
+questions (`distill_question`): a thread whose `question` is the user's
+whole first message (the live finding) gets a kind-`question` proposal
+with the crisp heading (mechanical first-?-sentence extraction; LLM
+behind the same flag); accepting rewrites with undo and flips
+`question_source` to guide, so it never re-nags. The face defends
+display-side too: paragraph-length headings clamp to three lines.
+
 LLM drafting rides the SAME kind, flag-gated (`RECORD_LLM_DRAFTS=1`):
 `llm_draft` prompts with a charter distilled from S6 (prose tracks
 evidence; maturity named, never exceeded; negatives apart), then a
@@ -122,9 +150,12 @@ before it becomes record.
 
 ## Known gaps
 
-- **Prose revision machinery** for narrative is still figure/table-only
-  (see `provenance.md`) — bodies render, but a ratified paragraph has no
-  revision/addendum trail through the face yet.
+- **Structure ops are substrate moves, not proposals yet.** Promotion/
+  demotion happen by editing `parent_entity_id` directly; the class-3
+  propose→ratify grammar for them (S6 charter) has no proposal kinds.
+  Superseded prose has no face-side "show previous versions" door.
+- **Distillation records are written by hand** (or future wrap flows); no
+  advisor proposes closing a sitting with a distillation yet.
 - **Trails, provenance drawer, briefing, RFC, gestures** render only on the
   fixture face; the API does not carry them yet. Project-level leftovers
   ship in the World but have no live organ either — the shelf renders

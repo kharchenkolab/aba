@@ -41,3 +41,30 @@ S6 pattern); v3 forbids both by name and grounds every clause in a claim.
 Residual (inference no regex catches) is held by consent: drafts are
 proposals. Verified end-to-end via real scheduler + face on the sidecar.
 Suites: 306 frontend, 18+3 record guards, runner 114, census/seam green.
+
+## 19 · The recursive Record (autonomous run, 2026-08-01, cont.)
+User reframe adopted: the spine is not an organ — the Record is
+progressively hierarchical and the top level is just one org level. Four
+OODA tranches, each rubric-read on the growth arc before commit:
+R1 recursion — parent_entity_id within the question set ships as
+`parent`; adapter nests cycle-safe (orphans/cycles degrade to top-level);
+one renderer any depth; TOC indents; dormant folds subtrees (+N). Demo:
+q_tune stays nested with its own ratified paragraph, q_retry arrives
+nested and is promoted by day 23 (creation-ordered flat list keeps the
+accretion prefix stable through promotion).
+R2 prose lifecycle — revisions supersede via wasDerivedFrom (narrative
+gains the out-edge), heads-only reading surface + 'revision N' sig,
+superseded rows kept for provenance; cites retire chips; advisor
+staleness (drafted_claims) proposes revision, hand prose untouched. Demo:
+mechanism v1+chips (st4) -> v2, chips retired (st5+).
+R3 sitting freeze v0 — a note with sitting_of/run_ids IS the sitting
+entity: frozen boundary, human label, out of loose notes; face renders
+distilled rows as never-folding ratified one-liners. R4 distiller —
+verbatim-paragraph questions (the live finding) get a kind-`question`
+proposal with the crisp heading; mechanical ?-extraction, LLM behind the
+flag; headings clamp to 3 lines as display defense. Demo: stage3 shows
+the pasted-message heading + retitle in tray; stage4+ reads distilled.
+Rubric catches this pass: flex starvation was avoided (R1 reused wrap),
+and an IMPOSSIBLE DATE ('ratified · 2026-06-31') from day+1 arithmetic —
+found by reading the page, fixed with real calendar math. Suites: 309
+frontend, 21+5 record guards, growth-arc ALL OK, seam/census green.

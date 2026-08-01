@@ -71,6 +71,8 @@ input { font: inherit; }
   display: flex; align-items: baseline; gap: 7px;
   text-align: left; padding: 4px 6px; border-radius: 6px;
   color: var(--ink-2); width: 100%;
+  /* undistilled paragraph-questions must not eat the map either */
+  max-height: 4.6em; overflow: hidden;
 }
 .toc__item:hover { background: var(--paper); color: var(--ink); }
 .toc__item.is-active {
@@ -177,7 +179,12 @@ input { font: inherit; }
 /* ------------------------------------------------ narrative */
 .nsec { margin-bottom: 26px; }
 .nsec__head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
-.nsec__head h3 { font-size: 19px; margin: 0; font-weight: 650; }
+/* headings clamp: an undistilled question (a whole pasted message) must
+   not eat the page — display truncates, the DOM keeps the full text for
+   search, and the distiller's proposal is the real fix */
+.nsec__head h3 { font-size: 19px; margin: 0; font-weight: 650;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+  overflow: hidden; }
 .nsec__phase { font-family: var(--sans); font-size: 10.5px; color: var(--ink-3); flex: 1; }
 .nsec__methods {
   font-family: var(--sans); font-size: 10.5px; color: var(--ink-3);

@@ -36,9 +36,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[0]))
 # Questions arrive over time; claims mature; a pivot parks a line; scale
 # arrives as weeks of runs. All content generic.
 
+# The default thread absorbs the user's whole first message as its question
+# (live finding); the distiller proposes the crisp heading (stage3 tray) and
+# from stage4 the line reads distilled (question_source: guide).
+VERBATIM_Q = (
+    "I noticed during yesterday's peak that checkout latency graphs look "
+    "terrible again even though the median seems fine, and honestly the "
+    "deploy on Monday is the only thing that changed. Why did p99 regress "
+    "5x at peak while p50 held? Please also check whether the dashboards "
+    "are even measuring the same window.")
+CRISP_Q = "why did p99 regress 5x at peak while p50 held?"
+
 QUESTIONS = [  # (key, title, question, arrives_day)
-    ("q_lat", "What regressed in checkout latency?",
-     "why did p99 regress 5x at peak while p50 held?", 0),
+    ("q_lat", "What regressed in checkout latency?", CRISP_Q, 0),
     ("q_cause", "What is the mechanism?",
      "what turns idle time into tail latency?", 3),
     ("q_alert", "Why did alerting miss it?",
@@ -135,6 +145,13 @@ RUNS_PER_DAY = 3            # sediment mass
 SITTING_SPACING_H = 4       # two bursts a day → distinct sittings
 
 
+def story_date(day: int) -> str:
+    """Story day N as a real calendar date (day 0 = 2026-06-01; rolls into
+    July past day 29 — June has no 31st)."""
+    from datetime import date, timedelta
+    return (date(2026, 6, 1) + timedelta(days=day)).isoformat()
+
+
 def seed_stage(name: str, horizon: int) -> None:
     """Build one project = the story up to `horizon` days, deterministically."""
     from core.graph._schema import _conn, init_db
@@ -157,11 +174,19 @@ def seed_stage(name: str, horizon: int) -> None:
             pkey, promote_day = SUBQUESTIONS[key]
             if pkey in qids and (promote_day is None or horizon < promote_day):
                 parent = qids[pkey]
+        md = {"question": question, "open_questions": [],
+              "lifecycle": lifecycle}
+        if key == "q_lat":
+            # verbatim first message until the distill proposal is accepted
+            # (between stage3 and stage4)
+            if horizon < 12:
+                md["question"] = VERBATIM_Q
+            else:
+                md["question_source"] = "guide"
         qids[key] = create_entity(
             entity_type="thread", title=title,  # noqa: seam
             parent_entity_id=parent,
-            metadata={"question": question, "open_questions": [],
-                      "lifecycle": lifecycle})
+            metadata=md)
 
     n_claims = 0
     cids: dict[str, list[tuple[int, str]]] = {}   # qkey -> [(day, claim id)]
@@ -190,7 +215,7 @@ def seed_stage(name: str, horizon: int) -> None:
             title=title,
             metadata={"thread_id": qids[qkey], "text": text})
         nar_stamps.append((nar_by_title[title],
-                           f"2026-06-{day + 1:02d}T18:00:00Z"))
+                           f"{story_date(day)}T18:00:00Z"))
     # revisions supersede with provenance; citing the thread's claims
     # retires their chips into the story (the drafting loop's shape)
     from core.graph.edges import add_edge as _add_edge
@@ -205,7 +230,7 @@ def seed_stage(name: str, horizon: int) -> None:
                       "cites": cited, "drafted_claims": len(cited)})
         _add_edge(new, nar_by_title[revises_title], "wasDerivedFrom")
         nar_by_title[revises_title] = new
-        nar_stamps.append((new, f"2026-06-{day + 1:02d}T18:00:00Z"))
+        nar_stamps.append((new, f"{story_date(day)}T18:00:00Z"))
     if horizon >= 4:
         create_entity(entity_type="note",  # noqa: seam
                       title="check the connection-pool metrics next sweep",
@@ -219,6 +244,12 @@ def seed_stage(name: str, horizon: int) -> None:
                      kind="route", headline="file the reconnect-penalty "
                      "figure under the mechanism question",
                      signature=f"{name}-route-1")
+    if 5 <= horizon < 12:
+        # the distiller's proposal stands in the tray until accepted
+        add_proposal(thread_id=qids["q_lat"], kind="question",
+                     headline=("this line reads as your whole message — "
+                               f"retitle it: “{CRISP_Q}”"),
+                     signature=f"question_distill:{qids['q_lat']}")
     if horizon >= 12:
         add_proposal(thread_id=qids["q_alert"], kind="claim",
                      headline="draft: averaging window hides sub-minute tails",
@@ -250,7 +281,7 @@ def seed_stage(name: str, horizon: int) -> None:
                     tid = (active[(day + burst) % len(active)]
                            if active else None)
                     hh = 9 + burst * SITTING_SPACING_H
-                    t0 = f"2026-06-{day + 1:02d}T{hh:02d}:{i * 7:02d}:00Z"
+                    t0 = f"{story_date(day)}T{hh:02d}:{i * 7:02d}:00Z"
                     c.execute(
                         "INSERT INTO runs (run_id, thread_id, state, "
                         "agent_spec_name, turn_index, started_at, updated_at)"
