@@ -97,10 +97,20 @@ export function apiToWorld(a: ApiWorld): World {
     sitsByThread.set(s.thread_id, arr)
   }
 
+  const claimById = new Map(a.claims.map(c => [c.id, c]))
   const sections: Section[] = a.questions.map(q => {
     const open = (q.open_questions || []).map(o =>
       typeof o === 'string' ? o : (o.text || '')).filter(Boolean)
     const sits = sitsByThread.get(q.id) || []
+    // a dormant line must say what it HOLDS — the strongest POSITIVE claim
+    // under it (contested/refuted are terminal negatives, not high rungs),
+    // else its prose title, else any claim — never silently nothing
+    const qClaims = q.claims.map(id => claimById.get(id)!).filter(Boolean)
+    const pos = (r: number | null) => (r === null || r >= 3 ? -1 : r)
+    const best = [...qClaims].sort((x, y) => pos(y.rung) - pos(x.rung))[0]
+    const holds = (best && pos(best.rung) >= 0 ? best.title : undefined)
+      || proseById.get(q.prose[0] || '')?.title
+      || qClaims[0]?.title
     return {
       id: q.id,
       question: q.question || q.title || q.id,
@@ -115,13 +125,16 @@ export function apiToWorld(a: ApiWorld): World {
       }),
       addenda: [],
       open,
-      sessions: sits.map(s => ({
+      // recent sittings only — an old question's episode list must not
+      // grow without bound (find the rest through the sediment)
+      sessions: sits.slice(-6).map(s => ({
         label: `${s.run_ids.length} run${s.run_ids.length === 1 ? '' : 's'}`,
         when: day(s.started_at),
         meta: s.id,
       })),
       ...(q.lifecycle === 'parked'
-        ? { dormant: { since: day(q.updated_at) } } : {}),
+        ? { dormant: { since: day(q.updated_at),
+                       ...(holds ? { holds } : {}) } } : {}),
     }
   })
 
@@ -136,7 +149,13 @@ export function apiToWorld(a: ApiWorld): World {
   for (const s of a.sittings)
     for (const rid of s.run_ids) sitOfRun.set(rid, s.id)
 
-  const sediment: SedimentEntry[] = a.sediment.runs.map(r => ({
+  // scale face: the sediment shows a recent window; the total rides the
+  // header ("N runs · showing recent") — legibility does not decay with age
+  const SEDIMENT_WINDOW = 60
+  const allRuns = a.sediment.runs
+  const windowed = allRuns.slice(-SEDIMENT_WINDOW)
+
+  const sediment: SedimentEntry[] = windowed.map(r => ({
     id: r.run_id,
     date: day(r.started_at || r.updated_at),
     title: [r.agent_spec_name || 'turn',
@@ -179,8 +198,10 @@ export function apiToWorld(a: ApiWorld): World {
     bench: {},
     benchFallback: [],
     onePager: null,
-    bare: sections.length === 0 && sediment.length === 0,
+    bare: sections.length === 0 && allRuns.length === 0,
     sedimentGrain: 'run',
+    ...(allRuns.length > windowed.length
+      ? { sedimentTotal: allRuns.length } : {}),
     // the triage band needs a desk; live sittings are all filed episodes, so
     // the line is a plain inventory (open-session tracking is a later organ)
     desk: {

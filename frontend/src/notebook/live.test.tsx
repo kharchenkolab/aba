@@ -104,6 +104,51 @@ describe('apiToWorld', () => {
     expect(w.bare).toBe(false)
   })
 
+  it('a dormant question says what it holds — strongest POSITIVE claim first', () => {
+    const a = sample()
+    a.questions[1].claims = ['C1', 'C2']      // supported beats refuted
+    expect(apiToWorld(a).sections[1].dormant?.holds)
+      .toBe('variance tracks batch')
+    const only = sample()
+    only.questions[1].claims = ['C2']         // a lone negative still shows
+    expect(apiToWorld(only).sections[1].dormant?.holds)
+      .toBe('terminal negative')
+    const b = sample()
+    b.questions[1].prose = ['P1']             // no claims → prose stands in
+    expect(apiToWorld(b).sections[1].dormant?.holds)
+      .toBe('What we know about the variance')
+    // with neither, holds stays absent (no invented content)
+    expect(apiToWorld(sample()).sections[1].dormant?.holds).toBeUndefined()
+  })
+
+  it('sediment windows at scale and reports the total', () => {
+    const a = sample()
+    a.sediment.runs = Array.from({ length: 130 }, (_, i) => ({
+      run_id: `r${i}`, thread_id: 'Q1', state: 'done',
+      started_at: `2026-06-01T00:${String(i % 60).padStart(2, '0')}:00Z`,
+      updated_at: null,
+    }))
+    const w = apiToWorld(a)
+    expect(w.sediment.length).toBe(60)
+    expect(w.sediment[59].id).toBe('r129')     // the RECENT window
+    expect(w.sedimentTotal).toBe(130)
+    expect(w.bare).toBe(false)                 // windowing must not fake day-0
+    // small projects: no windowing, no total banner
+    expect(apiToWorld(sample()).sedimentTotal).toBeUndefined()
+  })
+
+  it('per-section sitting lists window to the recent six', () => {
+    const a = sample()
+    a.sittings = Array.from({ length: 10 }, (_, i) => ({
+      id: `sit-Q1-${i}`, thread_id: 'Q1', run_ids: [`r${i}`],
+      started_at: `2026-06-${String(i + 1).padStart(2, '0')}T09:00:00Z`,
+      ended_at: null,
+    }))
+    const w = apiToWorld(a)
+    expect(w.sections[0].sessions?.length).toBe(6)
+    expect(w.sections[0].sessions?.[5].meta).toBe('sit-Q1-9')  // most recent kept
+  })
+
   it('an empty project renders the bare (day-0) face', () => {
     const a = sample()
     a.questions = []; a.claims = []; a.prose = []; a.notes = []
