@@ -42,6 +42,22 @@ def register_curation_tools(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
+    def update_open_questions(add: list[str] | None = None,
+                              resolve: list[str] | None = None,
+                              thread_id: str | None = None,
+                              aba_ctx_id: str | None = None) -> dict:
+        """Maintain this line's open questions (its visible to-do list):
+        `add` files new ones; `resolve` marks existing ones answered
+        (by id or text substring). Use when follow-ups emerge or when a
+        result settles a standing question."""
+        from core.runtime.tool_ctx import peek_ctx
+        from content.bio.tools.curation import update_open_questions_tool
+        return update_open_questions_tool(
+            {"add": add, "resolve": resolve, "thread_id": thread_id},
+            peek_ctx(aba_ctx_id),
+        )
+
+    @mcp.tool()
     def create_finding(result_ids: list[str], text: str,
                        title: str | None = None,
                        aba_ctx_id: str | None = None) -> dict:

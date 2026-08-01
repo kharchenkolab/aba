@@ -1693,3 +1693,54 @@ def _archive_entity_tool(input_: dict, ctx: dict | None = None) -> dict:
         return {"status": "error", "note": "archive failed (workspace cannot be archived)"}
     return {"status": "ok", "entity_id": eid, "title": out.get("title"),
             "note": f"Archived. Reversible via restore_entity (UI: Restore on the archived entity)."}
+
+
+def update_open_questions_tool(input_: dict, ctx: dict | None = None) -> dict:
+    """Maintain a thread's open questions — the line's to-do list the
+    scientist sees as the section plan on the record. `add` files new open
+    questions; `resolve` marks existing ones resolved (matched by id or
+    case-insensitive substring)."""
+    from datetime import datetime, timezone
+    from core.graph._schema import gen_entity_id
+    from core.graph.entities import get_entity, update_entity
+    tid = (input_.get("thread_id") or _ctx_thread(ctx) or "").strip()
+    thr = get_entity(tid) if tid else None
+    if not thr or thr.get("type") != "thread":
+        return {"error": f"no thread in context ({tid or 'none'})"}
+    m = dict(thr.get("metadata") or {})
+    oqs = list(m.get("open_questions") or [])
+    added, resolved, missed = [], [], []
+    for text in (input_.get("add") or []):
+        text = (text or "").strip()
+        if not text:
+            continue
+        oqid = gen_entity_id("oq")
+        oqs.append({"id": oqid, "text": text, "status": "open",
+                    "source": "guide",
+                    "at": datetime.now(timezone.utc).isoformat()})
+        added.append(oqid)
+    def _matches(ref_l: str, text_l: str) -> bool:
+        # models recall a question in their OWN words — match either
+        # containment direction, else a word-overlap majority
+        if ref_l in text_l or text_l in ref_l:
+            return True
+        rw = {w for w in ref_l.split() if len(w) > 3}
+        tw = {w for w in text_l.split() if len(w) > 3}
+        return bool(tw) and len(rw & tw) / len(tw) >= 0.6
+    for ref in (input_.get("resolve") or []):
+        ref_l = (ref or "").strip().lower()
+        hit = next((o for o in oqs
+                    if o.get("id") == ref
+                    or (ref_l and _matches(ref_l,
+                                           (o.get("text") or "").lower()))),
+                   None)
+        if hit and hit.get("status") != "resolved":
+            hit["status"] = "resolved"
+            resolved.append(hit["id"])
+        elif not hit:
+            missed.append(ref)
+    m["open_questions"] = oqs
+    update_entity(tid, metadata=m)
+    return {"status": "ok", "thread_id": tid, "added": added,
+            "resolved": resolved, **({"not_found": missed} if missed else {}),
+            "open": sum(1 for o in oqs if o.get("status") == "open")}
