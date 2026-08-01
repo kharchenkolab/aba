@@ -145,7 +145,13 @@ export function apiToWorld(a: ApiWorld): World {
           // the story stratum reads: the prose BODY when the API carries it
           // (phase 3), the title as an honest stand-in otherwise
           text: p?.body || p?.title || pid,
-          ratified: { by: p?.actor || '—', on: day(p?.created_at) },
+          // platform default actors are not names — "ratified · date" reads
+          // honestly; a real user/agent actor renders as itself
+          ratified: {
+            by: (p?.actor && !['legacy', 'system'].includes(p.actor))
+              ? p.actor : '—',
+            on: day(p?.created_at),
+          },
           ...(p?.versions && p.versions > 1 ? { versions: p.versions } : {}),
           ...(p?.cites?.length ? { cites: p.cites } : {}),
         }

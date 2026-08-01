@@ -70,9 +70,12 @@ _QNAME_SYSTEM = (
     "You name scientific investigation threads. Given a thread's recent "
     "conversation, produce a SHORT title (a label of at most 5 words — NOT a "
     "restatement of the question) and a crisp one-sentence QUESTION capturing "
-    "what the thread investigates. Only set changed=true if your version is "
-    "clearly better than the current title/question; otherwise changed=false. "
-    "Output only the JSON object, no prose: "
+    "what the thread investigates. Never embed specific numeric estimates in "
+    "the title or question (magnitudes move as analysis proceeds and a stale "
+    "number in a heading contradicts the text beneath it) — name the "
+    "phenomenon, not the current value. Only set changed=true if your version "
+    "is clearly better than the current title/question; otherwise "
+    'changed=false. Output only the JSON object, no prose: '
     '{"title": "...", "question": "...", "changed": true|false}'
 )
 
@@ -221,13 +224,17 @@ def _ask_json(system: str, prompt: str, fake: Optional[dict] = None) -> Optional
 
 
 def _thread_results(thread_id: str) -> list[dict]:
-    """Pinned, keepable results tagged to this thread (figures/tables)."""
+    """Results on this thread: first-class `result` entities, plus the
+    legacy shape this detector was built on (pinned figure/table tagged to
+    the thread) — D2 predated the result type and never migrated, so on
+    modern projects convergence could never fire."""
     out = []
     for e in list_entities(include_archived=False):
-        if e.get("type") not in ("figure", "table"):
-            continue
+        t = e.get("type")
         m = e.get("metadata") or {}
-        if m.get("thread_id") == thread_id and e.get("pinned"):
+        if m.get("thread_id") != thread_id:
+            continue
+        if t == "result" or (t in ("figure", "table") and e.get("pinned")):
             out.append(e)
     return out
 
