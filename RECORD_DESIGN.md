@@ -832,6 +832,88 @@ and the end state may well be a recombination of faces rather than a
 winner — which the shared-organ architecture (§11) accommodates by
 construction.
 
+### 13.5 The cockpit projection — the work loop over the live substrate
+
+The first hands-on user test of the live face returned a verdict the
+rollout plan above had made inevitable: *"useless — both as an
+explanation of the current state of the analysis, and as a
+navigation/control tool for running the analysis itself."* Phases 1–3
+project the READING strata (world → render, triage, drafts) and stop;
+the work loop (§5) and live anchoring (§6) — the half of this design
+that makes the page a place where analysis *happens* — were never given
+a phase. They shipped only as fixture theater behind a `w.work` flag the
+live face never sets, so every act-affordance the design specifies
+(`▷ work`, the docked panel, gestures, receipts) is invisible exactly
+where it matters. A reader face bolted onto a conversational analysis
+tool fails the scientist on the tool's core promise: plan → work →
+evidence → story, without leaving the page.
+
+The repair is not new design; it is *projection* of §5/§6 onto the
+substrate, and the substrate turns out to be nearly sufficient. The
+mapping, audited endpoint-by-endpoint:
+
+| §5/§6 element | live substrate | delta |
+|---|---|---|
+| session summoned from its anchor | `POST /api/chat {text, thread_id, focus_entity_id}` — a sitting rides its anchor question's thread (§5: working never creates a thread); entity anchors ride `focus_entity_id` | wire only |
+| docked panel, live turn | the same call streams SSE; reattach via `GET /api/turns/{run}/stream?since=`, discovery via `GET /api/threads/{tid}/active-turn` | wire only |
+| amber awaiting-you | turn state `awaiting_user` + `POST /api/turns/{run}/resume` | wire only |
+| stop / abandon | `POST /api/turns/{run}/cancel` | wire only |
+| one ▶ · `▷ work` parks the prior sitting | single-panel invariant; episode boundaries already clustered by gap in the world assembler | face only |
+| runs land in sediment at launch | world refresh while a turn is active (poll v1; SSE deltas later) | face only |
+| turn-grade links everywhere | message row ids exist for exactly this (`messages.py`); the workspace's scroll-and-flash machinery exists but has no URL form | `?msg=` param, ~3 lines in the workspace shell |
+| transcript stitched to its products | exec records carry `produced[]` per run; render produced figures inline at their working-steps | adapter work |
+| claim dossier (evidence, itemized) | `supports` + `supports_index` already in the world payload; `/provenance` per support | face only |
+| figure focus | `/api/entities/{id}/provenance`, `/history`, `PATCH` title/interpretation; full card at `/p/<pid>/results/e/<id>` | face only |
+| investigation gestures compile to typed plan items | `POST /api/threads/{tid}/open-questions` (+ a `kind` field for check/corroborate/alternatives/expand); `…/promote` already spins an item into a thread | tiny backend |
+| pin (message → note, filed directly) | `keep_message` exists agent-side only | thin user-facing endpoint |
+| distillation routing table at close | distillation freeze exists; the at-close advisor is §13.2 item 7 | moderate, later |
+| fade / salience model · drag-on-section deixis | no substrate | deferred, unchanged |
+
+Rollout, continuing §13.3's numbering — each phase leaves the face
+strictly more of a cockpit, and every phase ends with the hands-on walk
+(the reader rubric's interaction half) before the next begins:
+
+5. **Truth and copy.** The reading face stops lying before the working
+   face arrives: the drafting gate refuses mid-sentence truncation;
+   "claim" is the only word (maturity is a qualifier, never a synonym);
+   the plan block speaks plainly (legend visible, edit explicit,
+   ✓ labeled honestly); sediment rows either show their outputs or show
+   no affordance; one right panel at a time, Escape closes it.
+6. **The instrument docks.** THE phase. One panel, summonable from
+   every noun — question, plan item, claim, figure, sediment row — per
+   §5: scope chips name what the agent already has; the anchor's
+   header renders its kind (dossier for a claim, figure + provenance
+   for a figure, question + plan for a section); below it the real
+   transcript (rendered markdown, produced figures inline, addressable
+   turns); at the foot, always, the composer — and the composer RUNS:
+   the turn streams back into the panel, cancel and awaiting-you
+   surfaced, `▷ work` anywhere retargets the one ▶.
+7. **The page tracks the work** (§6 v1). Working-here banner on the
+   anchor section; teal accretion / amber awaiting-you / red condition
+   derived from run + proposal + turn state; TOC pulses; sediment
+   accretes at launch; plan items flip by real transitions (taken-up at
+   launch, produced when the landing discharges them); evidence
+   counters move while you watch.
+8. **Gestures v1.** The investigation family (check · corroborate ·
+   alternatives · expand · → plan) as one-tap typed-plan-item
+   constructors on every claim, figure, and result; pin on transcript
+   messages (thin endpoint over the existing keep machinery); ⌖ hold
+   client-side; draft-claim through the existing proposal kind.
+   Receipts on everything: each gesture leaves a chip that is a door.
+9. **Prose weaving.** The drafter cites claims inline and emits
+   `[[figure:…]]` at mention points (the renderer already honors
+   them); captions carry the result's interpretation; the trailing
+   evidence grid holds only what the prose does not mention.
+10. **Distill & route** (stretch). "Distill so far" produces the
+    routing table through the tray; the leftovers shelf goes live.
+
+The acceptance bar for the whole arc is §5's loop run entirely from
+the Record on a live project: notice something in the prose, summon a
+sitting from it, direct the analysis, watch evidence land in the
+sediment and discharge a planned item, ratify the revised story — and
+at every step, the trail back (statement → evidence → run → turn) is
+one click.
+
 ## 14 · Editorial governance — inertia, consent, and the scientist's hand
 
 *Distilled 2026-07 from two external design reviews of the living-manuscript
