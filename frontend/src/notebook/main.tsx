@@ -39,9 +39,11 @@ const root = createRoot(document.getElementById('root')!)
 root.render(
   <StrictMode>
     {params.get('live')
-      ? <Live api={params.get('api') || 'http://localhost:8000'}
+      /* api defaults to SAME ORIGIN (the serving backend) — never to a
+         hardcoded host; cross-origin use passes ?api= explicitly */
+      ? <Live api={params.get('api') || ''}
               project={params.get('project') || undefined}
-              triage={params.get('triage') === '1'} />
+              triage={params.get('triage') !== '0'} />
       : <Record />}
   </StrictMode>,
 )

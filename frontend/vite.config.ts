@@ -1,6 +1,10 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import http from 'node:http'
+import { fileURLToPath } from 'node:url'
+import { dirname, resolve } from 'node:path'
+
+const _dir = dirname(fileURLToPath(import.meta.url))
 
 // Dev-proxy hang fix (2026-05-31):
 //  Without explicit agent options, http-proxy uses Node's default agent
@@ -33,6 +37,16 @@ export default defineConfig({
   // at session start (set ABA_OOD_BASE=/__OOD_PREFIX__/ for `npm run build`).
   base: process.env.ABA_OOD_BASE || '/',
   plugins: [react()],
+  // two entries: the classic workspace (index.html) and the Record face
+  // (notebook.html) — one build serves both from the same origin
+  build: {
+    rollupOptions: {
+      input: {
+        main: resolve(_dir, 'index.html'),
+        notebook: resolve(_dir, 'notebook.html'),
+      },
+    },
+  },
   server: withProxy ? {
     proxy: {
       '/api': {
