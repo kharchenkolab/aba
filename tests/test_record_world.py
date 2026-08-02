@@ -300,6 +300,38 @@ class RecordWorldTest(unittest.TestCase):
             register_record_roles(ROLES, maturity_order=LADDER,
                                   artifact_types=ARTS)
 
+    def test_runs_carry_their_ask(self):
+        # a run row says what the run WAS: the last user TEXT message on
+        # its thread at/before its start; tool-result user rows are noise
+        from core.graph.messages import append_message
+        m1 = append_message("user", [{"type": "text",
+                                      "text": "map the variance drivers"}],
+                            thread_id=self.q1)
+        m2 = append_message("user", [{"type": "tool_result",
+                                      "content": "irrelevant"}],
+                            thread_id=self.q1)
+        m3 = append_message("user", [{"type": "text",
+                                      "text": "now check the calibration"}],
+                            thread_id=self.q1)
+        with _conn() as c:
+            c.execute("UPDATE messages SET ts='2026-01-01T09:00:00Z' WHERE id=?", (m1,))
+            c.execute("UPDATE messages SET ts='2026-01-01T09:30:00Z' WHERE id=?", (m2,))
+            c.execute("UPDATE messages SET ts='2026-01-02T09:00:00Z' WHERE id=?", (m3,))
+            c.commit()
+        try:
+            w = assemble_world()
+            byid = {r["run_id"]: r for r in w["sediment"]["runs"]}
+            self.assertEqual(byid["r-early"]["ask"],
+                             "map the variance drivers")   # not the tool_result
+            self.assertEqual(byid["r-late"]["ask"],
+                             "now check the calibration")
+            self.assertNotIn("ask", byid["r-mid"])         # background run
+        finally:
+            with _conn() as c:
+                c.execute("DELETE FROM messages WHERE id IN (?,?,?)",
+                          (m1, m2, m3))
+                c.commit()
+
     def test_multi_type_claim_role_and_one_hop_reference(self):
         # a role may be played by several types, statement keys are
         # candidates in order, and an entity with NO direct question

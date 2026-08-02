@@ -205,6 +205,10 @@ export interface World {
   threadHrefBase?: string
   /** base URL for inline evidence images: `<artifactBase><artifactName>` */
   artifactBase?: string
+  /** live mode: API origin ('' = same origin) + the bound project — the
+   *  face's own fetches (transcripts, plan edits) ride these */
+  apiBase?: string
+  projectId?: string
   /** the live session's home locus — wears a standing "working here" state */
   anchorAt?: { session: string; elId: string }
   /** peripheral change signals: TOC pulse badges + delta-rail ticks.

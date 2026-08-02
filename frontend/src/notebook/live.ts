@@ -23,6 +23,8 @@ export interface ApiRun {
   thread_id?: string | null
   started_at?: string | null
   updated_at?: string | null
+  /** the user ask that launched this run (last user text at/before start) */
+  ask?: string
 }
 
 export interface ApiWorld {
@@ -119,13 +121,16 @@ export function apiToWorld(a: ApiWorld): World {
     // open questions ARE the section's plan (the distributed to-do list) —
     // they render under the section at every phase, not only on the stub
     const open = (q.open_questions || []).map(o =>
-      typeof o === 'string' ? { text: o, status: '' }
-        : { text: o.text || '', status: (o as { status?: string }).status || '' })
+      typeof o === 'string' ? { text: o, status: '', id: '' }
+        : { text: o.text || '',
+            status: (o as { status?: string }).status || '',
+            id: (o as { id?: string }).id || '' })
       .filter(o => o.text)
     const planItems = open.map(o => ({
       text: o.text,
-      state: (['resolved', 'done', 'closed'].includes(o.status)
+      state: (['resolved', 'done', 'closed', 'answered'].includes(o.status)
         ? 'produced' : 'planned') as 'produced' | 'planned',
+      ...(o.id ? { oqId: o.id } : {}),
     }))
     const sits = sitsByThread.get(q.id) || []
     // a dormant line must say what it HOLDS — the strongest POSITIVE claim
@@ -197,6 +202,10 @@ export function apiToWorld(a: ApiWorld): World {
         when: day(s.started_at),
         meta: `${s.run_ids.length} run${s.run_ids.length === 1 ? '' : 's'}`,
         ...(s.frozen && s.label ? { distilled: true } : {}),
+        // the row opens the REAL transcript, scoped to this sitting
+        threadRef: q.id,
+        ...(s.started_at ? { from: s.started_at } : {}),
+        ...(s.ended_at ? { to: s.ended_at } : {}),
       })),
       ...(sits.length > 6 ? { sessionsTotal: sits.length } : {}),
       ...(q.lifecycle === 'parked'
@@ -258,8 +267,10 @@ export function apiToWorld(a: ApiWorld): World {
     return {
       id: r.run_id,
       date: day(r.started_at || r.updated_at),
-      title: [r.agent_spec_name || 'turn',
-              r.turn_index != null ? `turn ${r.turn_index}` : '']
+      // the row says what the run WAS — the ask that launched it; the
+      // agent/turn plumbing is the fallback, not the headline
+      title: r.ask || [r.agent_spec_name || 'turn',
+                       r.turn_index != null ? `turn ${r.turn_index}` : '']
         .filter(Boolean).join(' · '),
       state: runState(r.state),
       verdict: '',
@@ -324,7 +335,8 @@ export function apiToWorld(a: ApiWorld): World {
     // workspace canonical URL, same origin)
     ...(a.project_id
       ? { threadHrefBase: `/p/${a.project_id}/threads/t/`,
-          artifactBase: `/artifacts/${a.project_id}/` } : {}),
+          artifactBase: `/artifacts/${a.project_id}/`,
+          apiBase: '', projectId: a.project_id } : {}),
     ...(allRuns.length > windowed.length
       ? { sedimentTotal: allRuns.length } : {}),
     // the triage band needs a desk; live sittings are all filed episodes, so
@@ -397,8 +409,10 @@ export async function fetchLiveWorld(api: string, projectId?: string):
   const res = await fetch(worldUrl(api, projectId, since))
   if (!res.ok) throw new Error(`world fetch failed: ${res.status}`)
   const world = apiToWorld(await res.json() as ApiWorld)
-  // artifact bytes are served by the API process, not the face's origin
+  // artifact bytes and the face's own fetches go to the API process, not
+  // the face's origin
   if (world.artifactBase) world.artifactBase = api + world.artifactBase
+  if (world.apiBase !== undefined) world.apiBase = api
   if (since && world.whatsNew) world.whatsNew.since = since.slice(0, 10)
   store()?.setItem(sinceKey(projectId), new Date().toISOString())
   return world

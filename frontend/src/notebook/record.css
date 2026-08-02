@@ -71,8 +71,12 @@ input { font: inherit; }
   display: flex; align-items: baseline; gap: 7px;
   text-align: left; padding: 4px 6px; border-radius: 6px;
   color: var(--ink-2); width: 100%;
-  /* undistilled paragraph-questions must not eat the map either */
-  max-height: 4.6em; overflow: hidden;
+}
+/* map entries clamp CLEANLY (ellipsis, never a mid-word chop); the full
+   question rides the hover title */
+.toc__text {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; min-width: 0;
 }
 .toc__item:hover { background: var(--paper); color: var(--ink); }
 .toc__item.is-active {
@@ -478,6 +482,40 @@ input { font: inherit; }
 .npara__evlinks a:hover { color: var(--teal); }
 .tray__detail { display: block; font-size: 11px; color: var(--ink-3);
   font-style: italic; margin-top: 1px; }
+
+/* live transcript drawer — the real conversation behind a line */
+.ltx {
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(440px, 92vw);
+  background: var(--paper, #faf8f4); border-left: 1px solid var(--rule-strong);
+  box-shadow: -12px 0 32px rgba(30, 30, 28, 0.12); z-index: 60;
+  display: flex; flex-direction: column;
+}
+.ltx__head {
+  display: flex; align-items: baseline; gap: 10px; padding: 12px 14px 8px;
+  border-bottom: 1px solid var(--rule);
+}
+.ltx__title { font-family: var(--serif); font-size: 14.5px; font-weight: 650;
+  color: var(--ink); flex: 1; }
+.ltx__close { color: var(--ink-3); font-size: 13px; }
+.ltx__close:hover { color: var(--ink); }
+.ltx__body { flex: 1; overflow-y: auto; padding: 10px 14px; }
+.ltx__err { font-family: var(--sans); font-size: 12px; color: var(--ink-3);
+  font-style: italic; padding: 8px 0; }
+.ltx__msg { margin-bottom: 12px; }
+.ltx__who { font-family: var(--sans); font-size: 10px; font-weight: 700;
+  letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-3);
+  margin-bottom: 2px; }
+.ltx__msg--you .ltx__who { color: var(--teal); }
+.ltx__text { font-size: 13px; line-height: 1.5; color: var(--ink-2);
+  white-space: pre-wrap; word-break: break-word; }
+.ltx__steps { font-family: var(--sans); font-size: 10.5px; color: var(--ink-3);
+  font-style: italic; margin-top: 4px; }
+.ltx__continue {
+  display: block; padding: 10px 14px; border-top: 1px solid var(--rule);
+  font-family: var(--sans); font-size: 12px; font-weight: 600;
+  color: var(--teal); text-decoration: none;
+}
+.ltx__continue:hover { background: var(--teal-soft); }
 
 /* the org axis is recursive: a subquestion is the same organ one level
    down — indented, smaller heading, same strata inside */

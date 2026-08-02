@@ -138,6 +138,9 @@ interface RefCtx {
   scrollTo: (domId: string) => void
   /** open a session — its full page by default, at a specific turn when known */
   openSession: (id: string, turn?: number) => void
+  /** live mode: open the REAL conversation behind a line (optionally
+   *  scoped to a sitting's time window) in the transcript drawer */
+  openTranscript?: (t: LiveTranscriptTarget) => void
   /** deixis, doc → chat: clicking an element makes it the conversation's subject */
   look: (label: string) => void
   /** hold an excerpt on the desk for the session's duration (two-locus work) */
@@ -300,6 +303,11 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
           </span>
         )}
         <span className="nsec__dsince">dormant since {s.dormant.since}</span>
+        {ctx.openTranscript && (
+          <button className="nsec__work"
+                  onClick={() => ctx.openTranscript!({ threadId: s.id, title: s.question })}
+                  title="read the conversation behind this parked line"><SessGlyph /> thread</button>
+        )}
         {w.work && (
           <button className="nsec__work" onClick={() => onWork?.(s.id)}
                   title="the play button, pointed at a sleeping question — a sitting opens with the question and its whole history in scope. Working never creates a thread: the question IS the thread; a sitting is a bounded episode on it"><SessGlyph /> wake</button>
@@ -326,12 +334,12 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
           </span>
         )}
         <span className="nsec__phase" title="phase is per-question, derived from content — a young question in an old project is simply early">{phaseNote}</span>
-        {w.threadHrefBase && (
-          <a className="nsec__chat" href={`${w.threadHrefBase}${s.id}`}
-             target="_blank" rel="noreferrer"
-             title="open this line's chat thread in the workspace — the full conversation behind the section">
-            chat ▸
-          </a>
+        {ctx.openTranscript && (
+          <button className="nsec__work"
+                  onClick={() => ctx.openTranscript!({ threadId: s.id, title: s.question })}
+                  title="open this line's conversation right here — read the exchange behind the section; a link inside continues it in the workspace">
+            <SessGlyph /> open thread
+          </button>
         )}
         {s.charge && (
           <button className={`nsec__govtoggle ${govOpen ? 'is-on' : ''}`} onClick={() => setGovOpen(o => !o)}
@@ -379,8 +387,13 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
         const dist = s.sessions.filter(x => x.distilled)
         const rest = s.sessions.filter(x => !x.distilled)
         const row = (x: NonNullable<Section['sessions']>[number]) => (
-          <button key={`${x.label}·${x.when}`} className={`sess ${x.distilled ? 'sess--dist' : ''}`} onClick={() => ctx.openSession(x.label)}
-                  title="the working exchange, filed under this question — the full episode: transcript, artifacts, leftovers; continuable">
+          <button key={`${x.label}·${x.when}`} className={`sess ${x.distilled ? 'sess--dist' : ''}`}
+                  onClick={() => x.threadRef && ctx.openTranscript
+                    ? ctx.openTranscript({ threadId: x.threadRef,
+                                           title: `${x.label} · ${x.when}`,
+                                           from: x.from, to: x.to })
+                    : ctx.openSession(x.label)}
+                  title="the working exchange, filed under this question — opens the real transcript">
             <SessGlyph live={sessionLive(w, x.label)} /> {x.label} · {x.when} · {x.meta} — transcript
           </button>
         )
@@ -532,8 +545,32 @@ function PlanBlock({ s, w, onWork }: { s: Section; w: World; onWork?: (id: strin
   const [editing, setEditing] = useState<number | null>(null)
   const [editText, setEditText] = useState('')
   const [parked, setParked] = useState<{ item: PlanItem; at: number } | null>(null)
+  // live mode: the plan IS the thread's open questions — every edit
+  // persists through the same API the workspace uses (never local-only:
+  // an edit that vanishes on reload is a lie)
+  const live = w.apiBase !== undefined
+  const oqUrl = (oqId?: string) => {
+    const q = w.projectId ? `?project_id=${encodeURIComponent(w.projectId)}` : ''
+    return `${w.apiBase}/api/threads/${s.id}/open-questions${oqId ? `/${oqId}` : ''}${q}`
+  }
+  const oqAdd = async (text: string): Promise<string | undefined> => {
+    if (!live) return undefined
+    try {
+      const r = await fetch(oqUrl(), { method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, source: 'user' }) })
+      if (r.ok) return ((await r.json()) as { id?: string }).id
+    } catch { /* the row stays local; next reload reconciles */ }
+    return undefined
+  }
+  const oqPatch = (oqId: string | undefined, body: object) => {
+    if (!live || !oqId) return
+    fetch(oqUrl(oqId), { method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body) }).catch(() => {})
+  }
 
-  if (items.length === 0 && !w.work) return null
+  if (items.length === 0 && !w.work && !live) return null
   const done = items.filter(p => p.state === 'produced' || p.state === 'absorbed').length
   const mark = { planned: '○', 'taken-up': '▷', produced: '✓', absorbed: '↑' }
   const markTitle = {
@@ -547,9 +584,14 @@ function PlanBlock({ s, w, onWork }: { s: Section; w: World; onWork?: (id: strin
     if (!text) return
     setItems(xs => [...xs, { text, state: 'planned', mine: true }])
     setDraft('')
+    void oqAdd(text).then(oqId => {
+      if (oqId) setItems(xs => xs.map(x =>
+        x.text === text && !x.oqId ? { ...x, oqId } : x))
+    })
   }
   const commitEdit = (i: number) => {
     const text = editText.trim()
+    if (text) oqPatch(items[i]?.oqId, { text })
     setItems(xs => text ? xs.map((x, k) => k === i ? { ...x, text, mine: true } : x) : xs)
     setEditing(null)
   }
@@ -595,8 +637,14 @@ function PlanBlock({ s, w, onWork }: { s: Section; w: World; onWork?: (id: strin
                   <SessGlyph /> work
                 </button>
               )}
+              {live && (
+                <button className="plan__x" title="mark answered — the record shows it as produced"
+                        onClick={() => { oqPatch(p.oqId, { status: 'answered' }); setItems(xs => xs.map((x, k) => k === i ? { ...x, state: 'produced' } : x)) }}>
+                  ✓
+                </button>
+              )}
               <button className="plan__x" title="park it — off the plan, remembered, one-click undo"
-                      onClick={() => { setParked({ item: p, at: i }); setItems(xs => xs.filter((_, k) => k !== i)) }}>
+                      onClick={() => { oqPatch(p.oqId, { status: 'parked' }); setParked({ item: p, at: i }); setItems(xs => xs.filter((_, k) => k !== i)) }}>
                 ✕
               </button>
             </span>
@@ -605,11 +653,11 @@ function PlanBlock({ s, w, onWork }: { s: Section; w: World; onWork?: (id: strin
       ))}
       {parked && (
         <button className="plan__undo"
-                onClick={() => { setItems(xs => { const n = [...xs]; n.splice(Math.min(parked.at, n.length), 0, parked.item); return n }); setParked(null) }}>
+                onClick={() => { oqPatch(parked.item.oqId, { status: 'open' }); setItems(xs => { const n = [...xs]; n.splice(Math.min(parked.at, n.length), 0, parked.item); return n }); setParked(null) }}>
           parked “{parked.item.text.slice(0, 44)}…” — undo
         </button>
       )}
-      {w.work && (
+      {(w.work || live) && (
         <div className="plan__composer">
           <input placeholder={items.length === 0 ? '+ plan an analysis for this question…' : '+ add a planned analysis…'}
                  value={draft} onChange={e => setDraft(e.target.value)}
@@ -907,6 +955,89 @@ function MarginBench({ w, target, onClose }: {
   )
 }
 
+// ------------------------------------------------------------- live transcript
+
+/** The conversation behind a line, IN the face — fetched from the real
+ *  message store, filtered to the human exchange (tool plumbing collapses
+ *  to a quiet step count). Every door that says "transcript" opens THIS;
+ *  no door ever opens an empty room. */
+export interface LiveTranscriptTarget {
+  threadId: string
+  title: string
+  from?: string
+  to?: string
+}
+
+function LiveTranscript({ w, target, onClose }: {
+  w: World; target: LiveTranscriptTarget; onClose: () => void
+}) {
+  const [msgs, setMsgs] = useState<{ role: string; text: string; ts: string
+                                     steps?: number }[] | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  useEffect(() => {
+    const q = new URLSearchParams()
+    if (w.projectId) q.set('project_id', w.projectId)
+    q.set('thread_id', target.threadId)
+    fetch(`${w.apiBase ?? ''}/api/entities/workspace/messages?${q}`)
+      .then(r => { if (!r.ok) throw new Error(`${r.status}`); return r.json() })
+      .then((rows: { role: string; content: unknown; ts?: string }[]) => {
+        const out: { role: string; text: string; ts: string; steps?: number }[] = []
+        let steps = 0
+        for (const m of rows) {
+          const ts = m.ts || ''
+          if (target.from && ts && ts < target.from) continue
+          if (target.to && ts && ts > target.to) continue
+          const text = typeof m.content === 'string' ? m.content
+            : Array.isArray(m.content)
+              ? m.content.filter((b): b is { type: string; text: string } =>
+                  !!b && (b as { type?: string }).type === 'text')
+                  .map(b => b.text).join('\n').trim()
+              : ''
+          if (!text) { steps++; continue }
+          if (steps > 0 && out.length) {
+            out[out.length - 1].steps = (out[out.length - 1].steps ?? 0) + steps
+          }
+          steps = 0
+          out.push({ role: m.role, text, ts })
+        }
+        setMsgs(out)
+      })
+      .catch(e => setErr(String(e)))
+  }, [w.apiBase, w.projectId, target.threadId, target.from, target.to])
+  return (
+    <aside className="ltx" aria-label="transcript">
+      <div className="ltx__head">
+        <span className="ltx__title">{target.title}</span>
+        <button className="ltx__close" onClick={onClose} title="close">✕</button>
+      </div>
+      <div className="ltx__body">
+        {err && <div className="ltx__err">could not load the transcript ({err})</div>}
+        {!err && msgs === null && <div className="ltx__err">loading…</div>}
+        {!err && msgs !== null && msgs.length === 0 && (
+          <div className="ltx__err">no messages in this window — the work
+            here was tool runs only</div>
+        )}
+        {(msgs ?? []).map((m, i) => (
+          <div key={i} className={`ltx__msg ltx__msg--${m.role === 'user' ? 'you' : 'guide'}`}>
+            <div className="ltx__who">{m.role === 'user' ? 'you' : 'guide'} · {m.ts.slice(0, 16).replace('T', ' ')}</div>
+            <div className="ltx__text">{m.text}</div>
+            {(m.steps ?? 0) > 0 && (
+              <div className="ltx__steps" title="tool runs between messages — every one is a sediment line">· {m.steps} working steps ·</div>
+            )}
+          </div>
+        ))}
+      </div>
+      {w.threadHrefBase && (
+        <a className="ltx__continue" target="_blank" rel="noreferrer"
+           href={`${w.threadHrefBase}${target.threadId}`}
+           title="open this line in the workspace to WRITE — the panel here is the record's read view">
+          continue this line in the workspace ↗
+        </a>
+      )}
+    </aside>
+  )
+}
+
 // ------------------------------------------------------------------ the tree
 
 /** Depth-annotated walk of the section tree — the org axis is recursive,
@@ -1128,6 +1259,8 @@ function RecordDoc({ w, onAdvance, triage }: { w: World; onAdvance?: (t: string)
   // a session renders full-page (sifting/review) or docked in the right
   // column (side-by-side working mode) — each converts into the other
   const [sessPage, setSessPage] = useState<{ id: string; turn?: number } | null>(w.openSession ?? null)
+  // live transcript drawer — the real conversation behind a line
+  const [liveTx, setLiveTx] = useState<LiveTranscriptTarget | null>(null)
   const [sessDock, setSessDock] = useState<string | null>(null)
   const [grain, setGrain] = useState<'run' | 'session' | 'thread'>(w.sedimentGrain ?? 'run')
   // thread grain: which named lines are unfolded to their run rows
@@ -1230,6 +1363,8 @@ function RecordDoc({ w, onAdvance, triage }: { w: World; onAdvance?: (t: string)
     disclosed,
     scrollTo,
     openSession: (id, turn) => { if (findSession(id)) { setSessDock(null); setSessPage({ id, turn }) } },
+    ...(w.apiBase !== undefined
+      ? { openTranscript: (t: LiveTranscriptTarget) => setLiveTx(t) } : {}),
     look: label => setLookingAt(label),
     hold: (elId, label) => setHeld(h => h.some(x => x.elId === elId) ? h : [...h, { elId, label }]),
     accepted,
@@ -1391,9 +1526,10 @@ function RecordDoc({ w, onAdvance, triage }: { w: World; onAdvance?: (t: string)
           <>
             {w.sections.length > 0 && <div className="toc__group">story so far</div>}
             {walkSections(w.sections).map(({ s, depth }) => (
-              <button key={s.id} className={`toc__item ${depth > 0 ? 'toc__item--sub' : ''} ${activeAnchor === `el-${s.id}` ? 'is-active' : ''}`} onClick={() => scrollTo(`el-${s.id}`)}>
+              <button key={s.id} className={`toc__item ${depth > 0 ? 'toc__item--sub' : ''} ${activeAnchor === `el-${s.id}` ? 'is-active' : ''}`}
+                      title={s.question} onClick={() => scrollTo(`el-${s.id}`)}>
                 <span className={`toc__phase toc__phase--${s.phase}`} />
-                {s.question}
+                <span className="toc__text">{s.question}</span>
                 {deltaBadge(`el-${s.id}`)}
               </button>
             ))}
@@ -1956,6 +2092,7 @@ function RecordDoc({ w, onAdvance, triage }: { w: World; onAdvance?: (t: string)
       {/* ---------- right margin: bench / working session / docked transcript ---------- */}
       {/* keyed by anchor: each element's margin conversation is its own —
           switching targets must never carry the previous exchange along */}
+      {liveTx && <LiveTranscript w={w} target={liveTx} onClose={() => setLiveTx(null)} />}
       {showRight}
 
       {/* ---------- ⌘K omnibox: ask or find, from anywhere ---------- */}

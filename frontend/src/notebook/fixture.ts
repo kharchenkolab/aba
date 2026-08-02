@@ -49,8 +49,10 @@ export interface Section {
   /** open questions — rendered on the stub face when no prose is ratified yet */
   open?: string[]
   /** archived working sessions filed under this question; a distilled row
-   *  carries its ratified one-line label and never folds away */
-  sessions?: { label: string; when: string; meta: string; distilled?: boolean }[]
+   *  carries its ratified one-line label and never folds away. Live rows
+   *  carry the thread + time window so the row opens the REAL transcript. */
+  sessions?: { label: string; when: string; meta: string; distilled?: boolean
+               threadRef?: string; from?: string; to?: string }[]
   /** honest total when `sessions` is a recent window of a longer history */
   sessionsTotal?: number
   /** the org axis is recursive: subquestions are Sections one level down —
@@ -70,7 +72,10 @@ export interface Section {
    *  the scientist's most direct control surface — their own additions,
    *  edits, and parkings carry NO ceremony (the propose→ratify gate
    *  exists for the agent's writes, not the user's intent). */
-  plan?: { text: string; state: 'planned' | 'taken-up' | 'produced' | 'absorbed'; meta?: string; mine?: boolean }[]
+  plan?: { text: string; state: 'planned' | 'taken-up' | 'produced' | 'absorbed'; meta?: string; mine?: boolean
+           /** live mode: the open-question id behind this item — edits,
+            *  additions, and resolutions persist through the thread API */
+           oqId?: string }[]
   /** the skeleton is still a proposal — awaiting "ratify the shape" */
   planDraft?: boolean
   /** live mode: claims held under this question, rendered as a holds

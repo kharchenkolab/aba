@@ -339,6 +339,55 @@ def assemble_world(*, sediment_limit: int = 200,
 
     runs = list_runs(limit=sediment_limit)
 
+    # a run row must say what the run WAS: the user ask that launched it
+    # (the last user text message on its thread at or before its start).
+    # "guide · turn 3" tells a reader nothing.
+    from core.graph.messages import get_messages
+    asks_by_thread: dict[str, list[tuple[str, str]]] = {}
+
+    def _text_of(content) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return " ".join(b.get("text", "") for b in content
+                            if isinstance(b, dict) and b.get("type") == "text")
+        return ""
+
+    def _asks(tid: str) -> list[tuple[str, str]]:
+        if tid not in asks_by_thread:
+            rows = []
+            try:
+                for m in get_messages(thread_id=tid):
+                    if m.get("role") != "user":
+                        continue
+                    txt = _text_of(m.get("content")).strip()
+                    if txt:
+                        rows.append((m.get("ts") or "", txt))
+            except Exception:  # noqa: BLE001 — enrichment, never load-bearing
+                pass
+            asks_by_thread[tid] = rows
+        return asks_by_thread[tid]
+
+    for r in runs:
+        tid, start = r.get("thread_id"), r.get("started_at") or ""
+        if not tid:
+            continue
+        best = None
+        for ts, txt in _asks(tid):
+            if not start or ts <= start:
+                best = txt
+            elif best is None:
+                # the launching message is logged moments AFTER the run row
+                # opens — a small forward window closes the ordering skew
+                t0, t1 = _parse_ts(start), _parse_ts(ts)
+                if t0 and t1 and (t1 - t0).total_seconds() <= 120:
+                    best = txt
+                break
+            else:
+                break
+        if best:
+            r["ask"] = best[:117] + ("…" if len(best) > 117 else "")
+
     # frozen sittings first: each distillation names its runs and wears the
     # human label; owned runs leave the clustering pool, so heuristics
     # never redraw a frozen boundary
