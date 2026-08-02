@@ -168,13 +168,14 @@ function renderRefs(text: string, ctx: RefCtx): ReactNode[] {
         </button>)
     } else if (kind === 'claim') {
       const c = w.claims[id]
+      const mat = c?.maturityLabel ?? c?.maturity
       out.push(
         <button key={k++} className="ref ref--claim"
-                title={c ? `${c.maturity} · ${c.evidence} evidence · caveats: ${c.caveats.join('; ')}` : id}
+                title={c ? `claim · ${mat} · ${c.evidence} evidence · caveats: ${c.caveats.join('; ')}` : id}
                 onClick={() => ctx.openBench(id, c?.title ?? id)}>
           <span className="ref__dot">{MATURITY_GLYPH[c?.maturity ?? 'conjecture']}</span>
           {label ?? c?.title ?? id}
-          <span className="ref__mat">{c?.maturity}</span>
+          <span className="ref__mat">{mat}</span>
         </button>)
     } else if (kind === 'run') {
       out.push(
@@ -470,7 +471,7 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
           {(p.cites?.length ?? 0) > 0 && (
             <div className="npara__cites"
                  title="the claims this paragraph absorbed — live maturity; the evidence trail starts here">
-              grounded in {renderRefs(p.cites!.map(id => `[[claim:${id}]]`).join(' · '), ctx)}
+              grounded in {renderRefs(p.cites!.map(id => `[[claim:${id}]]`).join(' '), ctx)}
             </div>
           )}
           <div className="npara__sig" title="ratified prose is immutable — the agent may propose, only you may write; a revision supersedes with provenance, never rewrites">
@@ -604,11 +605,16 @@ function PlanBlock({ s, w, onWork }: { s: Section; w: World; onWork?: (id: strin
         <div className="plan__head">
           <span>{s.planDraft
             ? 'draft plan — proposed by Guide · ratify the shape, not prose'
-            : 'the plan — structure ahead of the evidence, honestly future-tense'}</span>
+            : 'planned analyses'}</span>
           <span className="plan__gap"
                 title="the gap between declared importance and present evidence is an honest, visible state — never thin prose pretending otherwise">
-            evidence {done} of {items.length} planned analyses
+            evidence in hand for {done} of {items.length}
           </span>
+        </div>
+      )}
+      {items.length > 0 && (
+        <div className="plan__legend">
+          ○ planned · ▷ in progress · ✓ evidence in hand · ↑ absorbed into prose
         </div>
       )}
       {items.map((p, i) => (
@@ -619,11 +625,6 @@ function PlanBlock({ s, w, onWork }: { s: Section; w: World; onWork?: (id: strin
                    onChange={e => setEditText(e.target.value)}
                    onKeyDown={e => { if (e.key === 'Enter') commitEdit(i); if (e.key === 'Escape') setEditing(null) }}
                    onBlur={() => commitEdit(i)} />
-          ) : p.state === 'planned' ? (
-            <button className="plan__text plan__text--editable" onClick={() => { setEditing(i); setEditText(p.text) }}
-                    title="your plan — click to reword it, no ceremony">
-              {p.text}
-            </button>
           ) : (
             <span className="plan__text">{p.text}</span>
           )}
@@ -637,8 +638,12 @@ function PlanBlock({ s, w, onWork }: { s: Section; w: World; onWork?: (id: strin
                   <SessGlyph /> work
                 </button>
               )}
+              <button className="plan__x" title="reword this item"
+                      onClick={() => { setEditing(i); setEditText(p.text) }}>
+                ✎
+              </button>
               {live && (
-                <button className="plan__x" title="mark answered — the record shows it as produced"
+                <button className="plan__x" title="mark done — evidence for this exists elsewhere (work launched from here marks itself)"
                         onClick={() => { oqPatch(p.oqId, { status: 'answered' }); setItems(xs => xs.map((x, k) => k === i ? { ...x, state: 'produced' } : x)) }}>
                   ✓
                 </button>
@@ -767,7 +772,12 @@ function SedimentRow({ e, ctx, open, onToggle }: {
   }[e.retention]
   return (
     <div className={`sed ${e.state === 'failed' ? 'sed--failed' : ''} ${e.isNew ? 'sed--new' : ''}`} id={`el-${e.id}`}>
-      <button className="sed__line" onClick={onToggle} title={open ? 'collapse' : `expand ${e.nOutputs} outputs`}>
+      {/* a row with nothing to expand offers no expand — dead toggles teach
+          the reader that clicking does nothing */}
+      <button className="sed__line" onClick={e.nOutputs > 0 ? onToggle : undefined}
+              disabled={e.nOutputs === 0}
+              title={e.nOutputs === 0 ? undefined
+                : open ? 'collapse' : `expand ${e.nOutputs} outputs`}>
         <span className="sed__date">{e.date}</span>
         <span className={`sed__state sed__state--${e.state}`}>
           {e.state === 'running' ? '▶' : e.state === 'failed' ? '✗' : '·'}
@@ -787,14 +797,24 @@ function SedimentRow({ e, ctx, open, onToggle }: {
       </button>
       {open && e.shown.length > 0 && (
         <div className="sed__grid">
-          {e.shown.map(o => (
-            <button key={o.id} className={`sed__thumb ${o.flagged ? 'sed__thumb--flag' : ''}`}
-                    onClick={() => ctx.toggleDisclose(o.id)}
-                    title={o.flagged ? `${o.title} — flagged by QC` : o.title}>
-              <img src={ART(o.id)} alt={o.title} />
-              <span>{o.flagged ? '⚑ ' : ''}{o.title}</span>
-            </button>
-          ))}
+          {e.shown.map(o => {
+            const src = o.artifact && ctx.w.artifactBase
+              ? `${ctx.w.artifactBase}${o.artifact}` : ART(o.id)
+            return o.artifact ? (
+              <a key={o.id} className="sed__thumb" href={src}
+                 target="_blank" rel="noreferrer" title={o.title}>
+                <img src={src} alt={o.title} />
+                <span>{o.title}</span>
+              </a>
+            ) : (
+              <button key={o.id} className={`sed__thumb ${o.flagged ? 'sed__thumb--flag' : ''}`}
+                      onClick={() => ctx.toggleDisclose(o.id)}
+                      title={o.flagged ? `${o.title} — flagged by QC` : o.title}>
+                <img src={src} alt={o.title} />
+                <span>{o.flagged ? '⚑ ' : ''}{o.title}</span>
+              </button>
+            )
+          })}
           {e.nOutputs > e.shown.length && (
             <div className="sed__more">+{e.nOutputs - e.shown.length} more outputs — none demanded reading; nothing was lost</div>
           )}
@@ -936,7 +956,7 @@ function MarginBench({ w, target, onClose }: {
       <aside className="bench">
         <div className="bench__head">
           <div>
-            <div className="bench__kicker">claim · {liveClaim.maturity}</div>
+            <div className="bench__kicker">claim · {liveClaim.maturityLabel ?? liveClaim.maturity}</div>
             <div className="bench__target">{target.label}</div>
           </div>
           <button className="bench__close" onClick={onClose} title="close">✕</button>
@@ -948,7 +968,7 @@ function MarginBench({ w, target, onClose }: {
           </div>
           <div className="bmsg bmsg--guide">
             <span className="bmsg__who">standing</span>
-            <p>{liveClaim.maturity} · {liveClaim.evidence} piece{liveClaim.evidence === 1 ? '' : 's'} of evidence</p>
+            <p>{liveClaim.maturityLabel ?? liveClaim.maturity} · {liveClaim.evidence} piece{liveClaim.evidence === 1 ? '' : 's'} of evidence</p>
           </div>
           {liveClaim.caveats.length > 0 && (
             <div className="bmsg bmsg--guide">
@@ -1293,7 +1313,10 @@ function RecordDoc({ w, onAdvance, triage }: { w: World; onAdvance?: (t: string)
   // a session renders full-page (sifting/review) or docked in the right
   // column (side-by-side working mode) — each converts into the other
   const [sessPage, setSessPage] = useState<{ id: string; turn?: number } | null>(w.openSession ?? null)
-  // live transcript drawer — the real conversation behind a line
+  // live transcript drawer — the real conversation behind a line.
+  // ONE right panel at a time: opening the transcript closes the bench and
+  // vice versa (two stacked fixed panels made clicks appear to do nothing),
+  // and Escape closes whichever is open.
   const [liveTx, setLiveTx] = useState<LiveTranscriptTarget | null>(null)
   const [sessDock, setSessDock] = useState<string | null>(null)
   const [grain, setGrain] = useState<'run' | 'session' | 'thread'>(w.sedimentGrain ?? 'run')
@@ -1339,7 +1362,13 @@ function RecordDoc({ w, onAdvance, triage }: { w: World; onAdvance?: (t: string)
         e.preventDefault()
         setOmni(o => ({ open: !o.open, q: '', asked: false }))
       }
-      if (e.key === 'Escape') setOmni(o => o.open ? { ...o, open: false } : o)
+      if (e.key === 'Escape') {
+        setOmni(o => o.open ? { ...o, open: false } : o)
+        // Escape also closes the right panels — a fixed panel with a
+        // single tiny ✕ as its only exit traps the reader
+        setLiveTx(null)
+        setBenchFor(null)
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -1392,13 +1421,13 @@ function RecordDoc({ w, onAdvance, triage }: { w: World; onAdvance?: (t: string)
     (w.sessions ?? []).find(s => s.id === id || s.label === id)
   const ctx: RefCtx = {
     w,
-    openBench: (id, label) => setBenchFor({ id, label }),
+    openBench: (id, label) => { setLiveTx(null); setBenchFor({ id, label }) },
     toggleDisclose: id => setDisclosed(s => toggle(s, id)),
     disclosed,
     scrollTo,
     openSession: (id, turn) => { if (findSession(id)) { setSessDock(null); setSessPage({ id, turn }) } },
     ...(w.apiBase !== undefined
-      ? { openTranscript: (t: LiveTranscriptTarget) => setLiveTx(t) } : {}),
+      ? { openTranscript: (t: LiveTranscriptTarget) => { setBenchFor(null); setLiveTx(t) } } : {}),
     look: label => setLookingAt(label),
     hold: (elId, label) => setHeld(h => h.some(x => x.elId === elId) ? h : [...h, { elId, label }]),
     accepted,

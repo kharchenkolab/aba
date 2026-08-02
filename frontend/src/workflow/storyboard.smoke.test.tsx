@@ -192,7 +192,7 @@ describe('workflow storyboard', () => {
     getByText('committed direction · Mar 04')                       // the intent marker
     getByText(/prose follows the evidence; the shape below is the plan/)
     getByText(/draft plan — proposed by Guide · ratify the shape, not prose/)
-    getByText(/evidence 0 of 4 planned analyses/)                   // the honest gap
+    getByText(/evidence in hand for 0 of 4/)                   // the honest gap
     expect(container.querySelectorAll('.plan__item').length).toBe(4)
     // the draft shape is a pending DECISION: it rides the tray with Ratify
     fireEvent.click(getByText(/2 need you/))
@@ -207,11 +207,12 @@ describe('workflow storyboard', () => {
     const input = getAllByPlaceholderText(/add a planned analysis/)[0] as HTMLInputElement
     fireEvent.change(input, { target: { value: 'Night-time subset — does the cluster persist?' } })
     fireEvent.keyDown(input, { key: 'Enter' })
-    getByText(/evidence 0 of 5 planned analyses/)
+    getByText(/evidence in hand for 0 of 5/)
     getByText('Night-time subset — does the cluster persist?')
     getByText('yours')
-    // reword: click the item, edit in place
-    fireEvent.click(getByText('Detector-bias check on storm days'))
+    // reword: the explicit ✎ button on the item's row
+    const row = getByText('Detector-bias check on storm days').closest('.plan__item')!
+    fireEvent.click(row.querySelector('button[title="reword this item"]')!)
     const edit = getByDisplayValue('Detector-bias check on storm days')
     fireEvent.change(edit, { target: { value: 'Detector-bias check on storm AND service days' } })
     fireEvent.keyDown(edit, { key: 'Enter' })
@@ -219,9 +220,9 @@ describe('workflow storyboard', () => {
     // park: ✕ removes, the undo line restores
     const xs = container.querySelectorAll('.plan__x')
     fireEvent.click(xs[xs.length - 1])
-    getByText(/evidence 0 of 4 planned analyses/)
+    getByText(/evidence in hand for 0 of 4/)
     fireEvent.click(getByText(/— undo/))
-    getByText(/evidence 0 of 5 planned analyses/)
+    getByText(/evidence in hand for 0 of 5/)
     // a plan-less stub gets a seed composer: any question can start a plan
     expect(getAllByPlaceholderText(/plan an analysis for this question/).length).toBeGreaterThan(0)
     unmount()
@@ -239,7 +240,7 @@ describe('workflow storyboard', () => {
   it('M1 the mature Q2 wears its intent and its plan remnant (2 of 4 absorbed)', () => {
     const { getByText, unmount } = render(<Record world={scene('m1').world} />)
     getByText('committed direction · Mar 04')
-    getByText(/evidence 2 of 4 planned analyses/)
+    getByText(/evidence in hand for 2 of 4/)
     unmount()
   })
 

@@ -16,7 +16,7 @@ Roles (all optional — an unregistered role simply yields empty lists):
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Sequence
 
 from core.graph.audit import list_events
@@ -251,9 +251,15 @@ def assemble_world(*, sediment_limit: int = 200,
         md = e.get("metadata") or {}
         row = _slim(e)
         # the ladder may live in metadata (maturity_key), not the platform
-        # status column — the status column is lifecycle, not confidence
-        row["maturity"] = (md.get(_MATURITY_KEY) if _MATURITY_KEY else None) \
+        # status column — the status column is lifecycle, not confidence.
+        # A claim WITHOUT a ladder word starts at the ladder's floor: the
+        # lifecycle words ("active"/"archived") must never reach a reader
+        # as if they were maturities.
+        mat = (md.get(_MATURITY_KEY) if _MATURITY_KEY else None) \
             or e.get("status")
+        if mat in ("active", "archived"):
+            mat = _MATURITY[0] if _MATURITY else None
+        row["maturity"] = mat
         row["rung"] = _rung(row["maturity"])
         row["questions"] = _question_ref(e, qids)
         row["supports"] = [ed["target_id"] for ed in edges_from(e["id"])
@@ -387,6 +393,65 @@ def assemble_world(*, sediment_limit: int = 200,
                 break
         if best:
             r["ask"] = best[:117] + ("…" if len(best) > 117 else "")
+
+    # a run row must also show what the run LEFT: its produced images
+    # (exec records carry produced[] urls). Without them the sediment's
+    # expand affordance opens onto nothing — a door into an empty room.
+    # Joining is two-tier: by run_id when the writer knew it, else by
+    # thread + time window — in production the id spaces differ (turn
+    # runs are run_…, analysis sessions ana_…), so the window join is
+    # the one that actually fires on live projects.
+    from core.graph import exec_records as _xr
+    _x_by_thread: dict[str, list[dict]] = {}
+
+    def _x_of(tid: str) -> list[dict]:
+        if tid not in _x_by_thread:
+            try:
+                _x_by_thread[tid] = _xr.list_by_thread(tid, limit=300)
+            except Exception:  # noqa: BLE001
+                _x_by_thread[tid] = []
+        return _x_by_thread[tid]
+
+    _rec_cache: dict[str, dict] = {}
+
+    def _rec(eid: str) -> dict:
+        if eid not in _rec_cache:
+            try:
+                _rec_cache[eid] = _xr.get(eid) or {}
+            except Exception:  # noqa: BLE001
+                _rec_cache[eid] = {}
+        return _rec_cache[eid]
+
+    for r in runs:
+        idxs: list[dict] = []
+        try:
+            idxs = _xr.list_by_run(r["run_id"], limit=6)
+        except Exception:  # noqa: BLE001
+            pass
+        if not idxs and r.get("thread_id"):
+            t0 = _parse_ts(r.get("started_at"))
+            t1 = _parse_ts(r.get("updated_at")) or t0
+            if t0:
+                lo = t0 - timedelta(seconds=5)
+                hi = (t1 or t0) + timedelta(seconds=5)
+                idxs = [ix for ix in _x_of(r["thread_id"])
+                        if (xt := _parse_ts(ix.get("started_at")))
+                        and lo <= xt <= hi][:6]
+        outs: list[str] = []
+        seen: set[str] = set()
+        for ix in idxs:
+            # index rows carry no produced[] — hydrate the sidecar (cached;
+            # bounded by the caller's sediment window and the 6-record cap)
+            for p in _rec(ix["exec_id"]).get("produced") or []:
+                u = str((p or {}).get("url") or "")
+                if not u.lower().endswith(_IMG_SUFFIXES):
+                    continue
+                name = u.rsplit("/", 1)[-1]
+                if name and name not in seen:
+                    seen.add(name)
+                    outs.append(name)
+        if outs:
+            r["outputs"] = outs[:8]
 
     # frozen sittings first: each distillation names its runs and wears the
     # human label; owned runs leave the clustering pool, so heuristics

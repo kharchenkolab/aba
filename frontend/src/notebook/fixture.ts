@@ -16,6 +16,9 @@
 export interface ClaimRef {
   title: string
   maturity: 'conjecture' | 'supported' | 'cross-checked' | 'robust' | 'contested'
+  /** display word in the SUBSTRATE's vocabulary (live packs say
+   *  "preliminary", never "conjecture"); glyph geometry keeps `maturity` */
+  maturityLabel?: string
   evidence: number
   caveats: string[]
   /** the FULL assertion (display titles truncate) — the claim card reads it */
@@ -118,7 +121,11 @@ export interface LooseNote {
   draft?: boolean
 }
 
-export interface SedimentOutput { id: string; kind: 'figure' | 'table'; title: string; flagged?: boolean }
+export interface SedimentOutput {
+  id: string; kind: 'figure' | 'table'; title: string; flagged?: boolean
+  /** full image URL for live outputs (fixture outputs resolve by id) */
+  artifact?: string
+}
 export interface SedimentEntry {
   id: string
   date: string

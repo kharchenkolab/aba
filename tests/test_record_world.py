@@ -247,6 +247,21 @@ class RecordWorldTest(unittest.TestCase):
             c1 = next(c for c in w["claims"] if c["id"] == self.c1)
             self.assertEqual(c1["maturity"], "draft")
             self.assertEqual(c1["rung"], 0)
+            # …but the lifecycle words are NOT maturities: a claim whose
+            # status is "active" starts at the ladder's floor, never
+            # reaching a reader as "(active)"
+            act = create_entity(entity_type="cc", title="lifecycle-only",
+                                metadata={"thread_id": self.q1})
+            from core.graph.entities import update_entity
+            update_entity(act, status="active")
+            try:
+                w2 = assemble_world()
+                row2 = next(c for c in w2["claims"] if c["id"] == act)
+                self.assertEqual(row2["maturity"], LADDER[0])
+                self.assertEqual(row2["rung"], 0)
+            finally:
+                from core.graph.entities import delete_entity_hard
+                delete_entity_hard(act)
         finally:
             from core.graph.entities import delete_entity_hard
             delete_entity_hard(cid)
@@ -331,6 +346,31 @@ class RecordWorldTest(unittest.TestCase):
                 c.execute("DELETE FROM messages WHERE id IN (?,?,?)",
                           (m1, m2, m3))
                 c.commit()
+
+    def test_runs_carry_their_produced_images(self):
+        # a run row shows what the run LEFT: image basenames from its exec
+        # records' produced[] — the sediment expand affordance must open
+        # onto something real (non-image outputs stay out). PRODUCTION
+        # SHAPE: exec records attach to ANALYSIS ids (ana_…), never to the
+        # turn run ids in the runs table — the join that must fire is
+        # thread + time window, so the fixture uses a MISMATCHED run_id.
+        import tempfile
+        from core.graph import exec_records
+        with tempfile.TemporaryDirectory() as td:
+            exec_records.create(
+                thread_id=self.q1, run_id="ana_elsewhere",
+                tool_name="run_python", status="ok",
+                started_at="2026-01-01T10:00:01Z", cwd=td,
+                payload={"produced": [
+                    {"url": "/artifacts/p/figs/scatter.png"},
+                    {"url": "/artifacts/p/table.csv"},
+                    {"url": "/artifacts/p/figs/scatter.png"},   # dedup
+                    {"url": None},                              # env file
+                ]})
+            w = assemble_world()
+            byid = {r["run_id"]: r for r in w["sediment"]["runs"]}
+            self.assertEqual(byid["r-early"]["outputs"], ["scatter.png"])
+            self.assertNotIn("outputs", byid["r-mid"])
 
     def test_multi_type_claim_role_and_one_hop_reference(self):
         # a role may be played by several types, statement keys are

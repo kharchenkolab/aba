@@ -341,7 +341,9 @@ input { font: inherit; }
 .sed__state--running { color: var(--ok); animation: rec-pulse 2s infinite; }
 .sed__state--failed { color: var(--red); }
 .sed__state--ok { color: var(--ink-3); }
-.sed__title { font-weight: 600; white-space: nowrap; }
+.sed__title { font-weight: 600; white-space: nowrap; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sed__line:disabled { cursor: default; }
+.sed__line:disabled:hover { background: transparent; }
 .sed__verdict { color: var(--ink-2); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sed--failed .sed__verdict { color: var(--red); }
 .sed__n { color: var(--ink-3); font-size: 11px; white-space: nowrap; }
@@ -664,7 +666,8 @@ input { font: inherit; }
 }
 .sedthr__head:hover { background: var(--paper); }
 .sedthr__arrow { color: var(--ink-3); font-size: 10px; }
-.sedthr__title { font-weight: 600; color: var(--ink-2); }
+.sedthr__title { font-weight: 600; color: var(--ink-2); flex: 0 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sedthr--bg .sedthr__title { font-weight: 400; font-style: italic; color: var(--ink-3); }
 .sedthr__meta { color: var(--ink-3); font-size: 11px; white-space: nowrap; }
 .sedthr__dist { color: var(--teal); font-size: 11px; margin-left: auto;
@@ -962,6 +965,7 @@ input { font: inherit; }
   color: var(--ink-3); font-weight: 700; margin-bottom: 6px;
 }
 .plan__gap { margin-left: auto; color: var(--amber); text-transform: none; letter-spacing: 0; font-style: italic; font-weight: 600; }
+.plan__legend { font-size: 10.5px; color: var(--ink-3); margin: -2px 0 6px; }
 .plan__item { display: flex; gap: 8px; align-items: baseline; font-size: 12.5px; color: var(--ink-2); padding: 2px 0; }
 .plan__mark { flex-shrink: 0; width: 14px; text-align: center; color: var(--ink-3); }
 .plan__item--produced .plan__mark, .plan__item--absorbed .plan__mark { color: var(--ok); }

@@ -45,6 +45,7 @@ function sample(): ApiWorld {
       runs: [
         { run_id: 'r1', thread_id: 'Q1', state: 'done',
           agent_spec_name: 'guide', turn_index: 3,
+          outputs: ['scatter.png', 'profile.svg'],
           started_at: '2026-01-01T10:00:00Z', updated_at: '2026-01-01T10:05:00Z' },
         { run_id: 'r2', thread_id: 'Q1', state: 'failed',
           started_at: '2026-01-01T10:10:00Z', updated_at: '2026-01-01T10:11:00Z' },
@@ -70,6 +71,26 @@ describe('apiToWorld', () => {
     expect(w.claims['C1'].evidence).toBe(2)
     expect(w.claims['C2'].maturity).toBe('contested')  // terminal negative
     expect(w.claims['C3'].maturity).toBe('conjecture') // off-ladder floor
+  })
+
+  it('shows the pack\'s OWN maturity word, never the fixture ladder\'s', () => {
+    const a = sample()
+    a.claims[0].maturity = 'preliminary'
+    const w = apiToWorld(a)
+    // glyph geometry keeps the renderer rung; the READER sees ABA's word
+    expect(w.claims['C1'].maturityLabel).toBe('preliminary')
+    expect(w.claims['C3'].maturityLabel).toBeUndefined()
+  })
+
+  it('carries per-run produced images into expandable sediment rows', () => {
+    const w = apiToWorld(sample())
+    const r1 = w.sediment.find(e => e.id === 'r1')!
+    expect(r1.nOutputs).toBe(2)
+    expect(r1.shown.map(o => o.artifact)).toEqual(['scatter.png', 'profile.svg'])
+    // a run the API ships without outputs stays honestly un-expandable
+    const r2 = w.sediment.find(e => e.id === 'r2')!
+    expect(r2.nOutputs).toBe(0)
+    expect(r2.shown).toEqual([])
   })
 
   it('builds sections with open questions, prose stubs, sittings, dormancy', () => {

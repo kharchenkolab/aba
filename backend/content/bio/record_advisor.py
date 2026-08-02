@@ -90,8 +90,9 @@ def compose_draft(claims: list[dict]) -> str:
 # tracks evidence — never ahead of it; the scientist ratifies, never the model.
 _DRAFT_CHARTER = (
     "You draft the story paragraph of a scientist's lab-notebook Record. "
-    "Weave the claims below into ONE short readable paragraph (2-4 "
-    "sentences). Rules: prose tracks evidence — state each finding AT its "
+    "Weave the claims below into ONE readable paragraph (2-6 sentences, "
+    "scaling with the claims; always COMPLETE the final sentence). Rules: "
+    "prose tracks evidence — state each finding AT its "
     "given maturity, naming it in parentheses, never stronger; order for "
     "reading (chronology or mechanism), but the strongest finding must be "
     "unmistakably the center; set contested/refuted material apart at the "
@@ -107,13 +108,17 @@ _DRAFT_CHARTER = (
 def _gate_draft(text: str, claims: list[dict]) -> str:
     """Mechanical acceptance gate on model output (the S6 lesson: sanitize
     edges, never trust shape): a usable draft is plain prose that names at
-    least one maturity and leaks no internal ids."""
+    least one maturity, leaks no internal ids, and ENDS — a draft cut at
+    the token cap reads as a truncated sentence on the face (measured
+    live: two of three ratified narratives ended mid-clause)."""
     text = (text or "").strip()
     if not text or text.startswith(("#", "-", "*")):
         return ""
     if not any(f"({_conf(c)})" in text for c in claims):
         return ""
     if any(t in text for t in ("thr_", "run_", "sit-", "prj_")):
+        return ""
+    if not text.rstrip(")”\"'").endswith((".", "!", "?")):
         return ""
     return text
 
@@ -133,8 +138,10 @@ def llm_draft(claims: list[dict]) -> str:
         system = ([dict(_CC_MARKER_BLOCK),
                    {"type": "text", "text": _DRAFT_CHARTER}]
                   if _wants_cc_marker() else _DRAFT_CHARTER)
+        # headroom, not a target — the charter caps length at 2-4 sentences;
+        # a tight cap TRUNCATES instead (the gate now refuses those drafts)
         r = sync_anthropic_client().messages.create(
-            model=MODEL, max_tokens=300, system=system,
+            model=MODEL, max_tokens=1024, system=system,
             messages=[{"role": "user", "content": rows}])
         text = " ".join(b.text for b in r.content
                         if getattr(b, "type", "") == "text")

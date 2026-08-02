@@ -25,6 +25,8 @@ export interface ApiRun {
   updated_at?: string | null
   /** the user ask that launched this run (last user text at/before start) */
   ask?: string
+  /** basenames of images the run produced (served from the artifact root) */
+  outputs?: string[]
 }
 
 export interface ApiWorld {
@@ -103,6 +105,9 @@ export function apiToWorld(a: ApiWorld): World {
     claims[c.id] = {
       title: chipTitle(c.title || c.id),
       maturity: maturityWord(c.rung, a.maturity_ladder),
+      // display uses the pack's OWN maturity word ("preliminary", not the
+      // fixture ladder's "conjecture") — the reader sees ABA's vocabulary
+      ...(c.maturity ? { maturityLabel: c.maturity } : {}),
       evidence: c.evidence ?? c.supports.length,
       caveats: c.caveats || [],
       ...((c as { statement?: string }).statement
@@ -264,6 +269,12 @@ export function apiToWorld(a: ApiWorld): World {
   const allRuns = a.sediment.runs
   const windowed = allRuns.slice(-SEDIMENT_WINDOW)
 
+  // artifact basename → filed entity title (supports_index) — expanded run
+  // outputs read as NAMES where the artifact was filed, never as hashes
+  const artTitle = new Map<string, string>()
+  for (const v of Object.values(a.supports_index || {}))
+    if (v.artifact && v.title) artTitle.set(v.artifact, v.title)
+
   const sediment: SedimentEntry[] = windowed.map(r => {
     const sit = sitOfRun.get(r.run_id)
     return {
@@ -276,8 +287,15 @@ export function apiToWorld(a: ApiWorld): World {
         .filter(Boolean).join(' · '),
       state: runState(r.state),
       verdict: '',
-      nOutputs: 0,
-      shown: [],
+      // the run's produced images (world ships basenames; the face serves
+      // them from the project's artifact root) — an expandable row must
+      // have something to expand
+      nOutputs: (r.outputs || []).length,
+      shown: (r.outputs || []).map((name, i) => ({
+        id: `${r.run_id}-out-${i}`, kind: 'figure' as const,
+        title: artTitle.get(name) || `output ${i + 1}`,
+        artifact: name,
+      })),
       retention: 'kept',
       // the session chip shows only when it can say something HUMAN —
       // a distillation label; raw sitting ids never reach the surface

@@ -124,6 +124,12 @@ class RecordAdvisorTest(unittest.TestCase):
         self.assertEqual(
             advisor._gate_draft("A finding (supported) via thr_ab12.", cs), "")
         self.assertEqual(advisor._gate_draft("", cs), "")
+        # a draft cut at the token cap ends mid-clause — refused whole
+        self.assertEqual(advisor._gate_draft(
+            "A finding holds (supported), with September hot", cs), "")
+        # trailing close-quote after terminal punctuation still passes
+        self.assertEqual(advisor._gate_draft(
+            "A finding holds (supported).”", cs), "A finding holds (supported).”")
 
     def test_unfiled_session_suggestion(self):
         from core.graph._schema import _conn
