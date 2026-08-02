@@ -1243,3 +1243,102 @@ input { font: inherit; }
   color: var(--ink-3, #8a8578);
   display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: baseline;
 }
+
+/* ------------------------------------------------------------- work dock
+   §5/§6's docked instrument: one right panel, summonable from every noun;
+   anchor pane on top, the line's real transcript in the middle, and a
+   composer that RUNS at the foot. */
+.dk {
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(480px, 94vw);
+  background: var(--paper, #faf8f4); border-left: 1px solid var(--rule-strong);
+  box-shadow: -12px 0 32px rgba(30, 30, 28, 0.12); z-index: 60;
+  display: flex; flex-direction: column;
+}
+.dk__head {
+  display: flex; align-items: baseline; gap: 10px; padding: 12px 14px 8px;
+  border-bottom: 1px solid var(--rule);
+}
+.dk__kicker { font-family: var(--sans); font-size: 10px; font-weight: 700;
+  letter-spacing: 0.06em; text-transform: uppercase; color: var(--teal);
+  white-space: nowrap; }
+.dk__title { font-family: var(--serif); font-size: 14px; font-weight: 650;
+  color: var(--ink); flex: 1; min-width: 0; }
+.dk__close { color: var(--ink-3); font-size: 13px; }
+.dk__close:hover { color: var(--ink); }
+
+.dk__pane { padding: 10px 14px; border-bottom: 1px solid var(--rule);
+  font-family: var(--sans); max-height: 42vh; overflow-y: auto; }
+.dk__statement { font-family: var(--serif); font-size: 13.5px; line-height: 1.5;
+  color: var(--ink); margin: 0 0 6px; }
+.dk__standing { font-size: 11px; color: var(--terra); font-weight: 600;
+  margin-bottom: 8px; }
+.dk__evidence { display: flex; flex-direction: column; gap: 6px; }
+.dk__ev { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.dk__ev img { max-height: 54px; max-width: 96px; border: 1px solid var(--rule);
+  border-radius: 4px; background: #fff; }
+.dk__evtitle { flex: 1; min-width: 0; color: var(--ink-2); }
+.dk__evtype { font-size: 10px; color: var(--ink-3); white-space: nowrap; }
+.dk__caveats { margin-top: 8px; font-size: 11px; color: var(--ink-3);
+  font-style: italic; }
+.dk__figimg { max-width: 100%; max-height: 220px; border: 1px solid var(--rule);
+  border-radius: 6px; background: #fff; display: block; margin-bottom: 6px; }
+.dk__prov { font-size: 11px; color: var(--ink-3); margin-bottom: 4px; }
+.dk__card { font-size: 11.5px; color: var(--teal); }
+
+.dk__body { flex: 1; overflow-y: auto; padding: 10px 14px; }
+.dk__err { font-family: var(--sans); font-size: 12px; color: var(--ink-3);
+  padding: 10px 0; }
+.dk__msg { margin-bottom: 12px; }
+.dk__who { font-family: var(--sans); font-size: 10px; font-weight: 700;
+  letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-3);
+  margin-bottom: 2px; }
+.dk__msg--you .dk__who { color: var(--teal); }
+.dk__text { font-size: 13px; line-height: 1.5; color: var(--ink-2);
+  overflow-wrap: anywhere; }
+.dk__text p { margin: 0 0 6px; }
+.dk__text ul { margin: 0 0 6px 18px; padding: 0; }
+.dk__text li { margin-bottom: 2px; }
+.dk__text code { font-family: var(--mono); font-size: 11.5px;
+  background: var(--paper-2); padding: 0 3px; border-radius: 3px; }
+.dk__h { font-family: var(--sans); font-size: 11px; font-weight: 700;
+  letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink);
+  margin: 8px 0 4px; }
+.dk__steps { font-family: var(--sans); font-size: 10.5px; color: var(--ink-3);
+  margin: 6px 0; }
+.dk__outs { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
+.dk__outs img { max-height: 72px; max-width: 130px; border: 1px solid var(--rule);
+  border-radius: 4px; background: #fff; }
+.dk__working { font-family: var(--sans); font-size: 11.5px; color: var(--ok);
+  padding: 6px 0; display: flex; align-items: center; gap: 10px;
+  animation: rec-pulse 2s infinite; }
+.dk__cancel { font-size: 10.5px; color: var(--ink-3); border: 1px solid var(--rule);
+  border-radius: 6px; padding: 1px 8px; animation: none; }
+.dk__awaiting { font-family: var(--sans); font-size: 11.5px; color: var(--amber);
+  font-weight: 600; padding: 6px 0; }
+.dk__senderr { font-family: var(--sans); font-size: 11px; color: var(--red);
+  padding: 4px 14px; }
+
+.dk__composer { border-top: 1px solid var(--rule-strong); padding: 10px 14px 6px; }
+.dk__composer textarea {
+  width: 100%; resize: vertical; font-family: var(--serif); font-size: 13px;
+  line-height: 1.45; color: var(--ink); background: #fff;
+  border: 1px solid var(--rule-strong); border-radius: 8px; padding: 8px 10px;
+}
+.dk__composer textarea:focus { outline: none; border-color: var(--teal); }
+.dk__cactions { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.dk__hint { font-family: var(--sans); font-size: 10px; color: var(--ink-3); flex: 1; }
+.dk__send { font-family: var(--sans); font-size: 12px; font-weight: 600;
+  color: #fff; background: var(--teal); border-radius: 8px; padding: 4px 14px; }
+.dk__send:disabled { opacity: 0.4; }
+
+.dk__continue {
+  display: block; text-align: center; font-family: var(--sans); font-size: 11px;
+  color: var(--teal); padding: 7px; border-top: 1px solid var(--rule);
+}
+.dk__continue:hover { background: var(--teal-soft); }
+
+/* the sediment thread head's play control (span — the head is a button) */
+.sedthr__go { display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10.5px; color: var(--teal); border: 1px solid var(--teal);
+  border-radius: 7px; padding: 1px 8px; white-space: nowrap; cursor: pointer; }
+.sedthr__go:hover { background: var(--teal-soft); }

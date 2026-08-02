@@ -33,6 +33,7 @@ import { type Section, type Trail, type SedimentEntry } from './fixture'
 import { coastalWorld, type World, type SessionRec } from './world'
 import WorkPanel from './WorkPanel'
 import SessionPage from './SessionPage'
+import WorkDock, { type DockAnchor } from './dock'
 
 const ART = (id: string) => `/artifacts/coastal/${id}.svg`
 
@@ -138,9 +139,10 @@ interface RefCtx {
   scrollTo: (domId: string) => void
   /** open a session — its full page by default, at a specific turn when known */
   openSession: (id: string, turn?: number) => void
-  /** live mode: open the REAL conversation behind a line (optionally
-   *  scoped to a sitting's time window) in the transcript drawer */
-  openTranscript?: (t: LiveTranscriptTarget) => void
+  /** live mode: summon the work dock on a line — the anchor names what
+   *  summoned it (question / plan / claim / figure / thread), optionally
+   *  scoped to a sitting's time window */
+  openTranscript?: (t: DockAnchor) => void
   /** deixis, doc → chat: clicking an element makes it the conversation's subject */
   look: (label: string) => void
   /** hold an excerpt on the desk for the session's duration (two-locus work) */
@@ -306,7 +308,7 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
         <span className="nsec__dsince">dormant since {s.dormant.since}</span>
         {ctx.openTranscript && (
           <button className="nsec__work"
-                  onClick={() => ctx.openTranscript!({ threadId: s.id, title: s.question })}
+                  onClick={() => ctx.openTranscript!({ kind: 'question', threadId: s.id, title: s.question })}
                   title="read the conversation behind this parked line"><SessGlyph /> thread</button>
         )}
         {w.work && (
@@ -337,8 +339,8 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
         <span className="nsec__phase" title="phase is per-question, derived from content — a young question in an old project is simply early">{phaseNote}</span>
         {ctx.openTranscript && (
           <button className="nsec__work"
-                  onClick={() => ctx.openTranscript!({ threadId: s.id, title: s.question })}
-                  title="open this line's conversation right here — read the exchange behind the section; a link inside continues it in the workspace">
+                  onClick={() => ctx.openTranscript!({ kind: 'question', threadId: s.id, title: s.question })}
+                  title="this line's conversation, right here — read it, and the composer at its foot continues it">
             <SessGlyph /> open thread
           </button>
         )}
@@ -444,13 +446,28 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
           {(p.evidence?.length ?? 0) > 0 && (
             <div className="npara__evidence">
               {p.evidence!.filter(e => e.artifact && w.artifactBase).map(e => (
-                <a key={e.id} href={`${w.artifactBase}${e.artifact}`}
-                   target="_blank" rel="noreferrer" className="npara__fig"
-                   title={`${e.title} — open full size`}>
-                  <img src={`${w.artifactBase}${e.artifact}`} alt={e.title}
-                       loading="lazy" />
-                  <span>{e.title}</span>
-                </a>
+                // the figure is a DOOR, never a dead image: it summons the
+                // dock — provenance, the producing moment, the full card,
+                // and a composer to refine it — full-size lives inside
+                ctx.openTranscript ? (
+                  <button key={e.id} className="npara__fig"
+                          onClick={() => ctx.openTranscript!({
+                            kind: 'figure', threadId: s.id,
+                            entityId: e.id, title: e.title })}
+                          title={`${e.title} — provenance, the conversation behind it, refine`}>
+                    <img src={`${w.artifactBase}${e.artifact}`} alt={e.title}
+                         loading="lazy" />
+                    <span>{e.title}</span>
+                  </button>
+                ) : (
+                  <a key={e.id} href={`${w.artifactBase}${e.artifact}`}
+                     target="_blank" rel="noreferrer" className="npara__fig"
+                     title={`${e.title} — open full size`}>
+                    <img src={`${w.artifactBase}${e.artifact}`} alt={e.title}
+                         loading="lazy" />
+                    <span>{e.title}</span>
+                  </a>
+                )
               ))}
               {p.evidence!.some(e => !e.artifact) && (
                 <div className="npara__evlinks"
@@ -518,7 +535,12 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
           </div>
         )
       })}
-      <PlanBlock s={s} w={w} onWork={onWork} />
+      <PlanBlock s={s} w={w} onWork={onWork}
+                 onLaunch={ctx.openTranscript
+                   ? text => ctx.openTranscript!({
+                       kind: 'plan', threadId: s.id, title: s.question,
+                       seed: text })
+                   : undefined} />
       {(s.children?.length ?? 0) > 0 && (
         <div className="nsec__children">
           {s.children!.map(c => (
@@ -540,7 +562,11 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
 // user's own intent and carries no ceremony (the propose→ratify gate
 // exists for the agent's writes); every planned item launches (▷ work).
 type PlanItem = NonNullable<Section['plan']>[number]
-function PlanBlock({ s, w, onWork }: { s: Section; w: World; onWork?: (id: string) => void }) {
+function PlanBlock({ s, w, onWork, onLaunch }: {
+  s: Section; w: World; onWork?: (id: string) => void
+  /** live: ▷ work on an item — the dock opens on this line with the item
+   *  seeded in the composer (reviewed, then sent — never auto-fired) */
+  onLaunch?: (text: string) => void }) {
   const [items, setItems] = useState<PlanItem[]>(() => (s.plan ?? []).map(p => ({ ...p })))
   const [draft, setDraft] = useState('')
   const [editing, setEditing] = useState<number | null>(null)
@@ -632,7 +658,13 @@ function PlanBlock({ s, w, onWork }: { s: Section; w: World; onWork?: (id: strin
           {p.meta && <span className="plan__meta">{p.meta}</span>}
           {p.state === 'planned' && (
             <span className="plan__acts">
-              {w.work && (
+              {onLaunch && (
+                <button className="nsec__work" onClick={() => onLaunch(p.text)}
+                        title="the play button, pointed at this planned item — the dock opens on this question's line with the item as the ask; review it, then send to launch">
+                  <SessGlyph /> work
+                </button>
+              )}
+              {w.work && !onLaunch && (
                 <button className="nsec__work" onClick={() => onWork?.(s.id)}
                         title="the play button, pointed at this planned line — a sitting opens scoped by the stub: its charge, its intent, the evidence so far, and this item; it rides the question's thread. Ask for a fuller technical plan first if you want one; it returns through the same ratification gate">
                   <SessGlyph /> work
@@ -1297,18 +1329,24 @@ function BareStart({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void
 export default function Record(props: { world?: World; onAdvance?: (t: string) => void
                                         triage?: { accept(id: number): Promise<void>
                                                    dismiss(id: number): Promise<void>
-                                                   undo(id: number): Promise<void> } }) {
+                                                   undo(id: number): Promise<void> }
+                                        /** live: refetch the world (a turn changed it) */
+                                        onRefresh?: () => void }) {
   const w = props.world ?? coastalWorld
   if (w.bare) return <BareStart w={w} onAdvance={props.onAdvance} />
-  return <RecordDoc w={w} onAdvance={props.onAdvance} triage={props.triage} />
+  return <RecordDoc w={w} onAdvance={props.onAdvance} triage={props.triage}
+                    onRefresh={props.onRefresh} />
 }
 
 type TriageApi = { accept(id: number): Promise<void>
                    dismiss(id: number): Promise<void>
                    undo(id: number): Promise<void> }
 
-function RecordDoc({ w, onAdvance, triage }: { w: World; onAdvance?: (t: string) => void
-                                               triage?: TriageApi }) {
+function RecordDoc({ w, onAdvance, triage, onRefresh }: {
+  w: World; onAdvance?: (t: string) => void
+  triage?: TriageApi
+  /** live mode: a turn just finished — refetch the world above the dock */
+  onRefresh?: () => void }) {
   const [benchFor, setBenchFor] = useState<{ id: string; label: string } | null>(null)
   // a session renders full-page (sifting/review) or docked in the right
   // column (side-by-side working mode) — each converts into the other
@@ -1317,7 +1355,7 @@ function RecordDoc({ w, onAdvance, triage }: { w: World; onAdvance?: (t: string)
   // ONE right panel at a time: opening the transcript closes the bench and
   // vice versa (two stacked fixed panels made clicks appear to do nothing),
   // and Escape closes whichever is open.
-  const [liveTx, setLiveTx] = useState<LiveTranscriptTarget | null>(null)
+  const [liveTx, setLiveTx] = useState<DockAnchor | null>(null)
   const [sessDock, setSessDock] = useState<string | null>(null)
   const [grain, setGrain] = useState<'run' | 'session' | 'thread'>(w.sedimentGrain ?? 'run')
   // thread grain: which named lines are unfolded to their run rows
@@ -1421,13 +1459,25 @@ function RecordDoc({ w, onAdvance, triage }: { w: World; onAdvance?: (t: string)
     (w.sessions ?? []).find(s => s.id === id || s.label === id)
   const ctx: RefCtx = {
     w,
-    openBench: (id, label) => { setLiveTx(null); setBenchFor({ id, label }) },
+    // live mode: a claim chip summons the dock ON ITS LINE (dossier +
+    // transcript + composer); the fixture's mock bench stays fixture-only
+    openBench: (id, label) => {
+      const tid = w.apiBase !== undefined ? w.claimThreads?.[id] : undefined
+      if (tid) {
+        setBenchFor(null)
+        setLiveTx({ kind: 'claim', threadId: tid, entityId: id,
+                    title: w.claims[id]?.title ?? label })
+      } else {
+        setLiveTx(null)
+        setBenchFor({ id, label })
+      }
+    },
     toggleDisclose: id => setDisclosed(s => toggle(s, id)),
     disclosed,
     scrollTo,
     openSession: (id, turn) => { if (findSession(id)) { setSessDock(null); setSessPage({ id, turn }) } },
     ...(w.apiBase !== undefined
-      ? { openTranscript: (t: LiveTranscriptTarget) => { setBenchFor(null); setLiveTx(t) } } : {}),
+      ? { openTranscript: (t: DockAnchor) => { setBenchFor(null); setLiveTx(t) } } : {}),
     look: label => setLookingAt(label),
     hold: (elId, label) => setHeld(h => h.some(x => x.elId === elId) ? h : [...h, { elId, label }]),
     accepted,
@@ -2076,6 +2126,15 @@ function RecordDoc({ w, onAdvance, triage }: { w: World; onAdvance?: (t: string)
                           {es[0].date}{es.length > 1 ? ` – ${es[es.length - 1].date}` : ''}
                         </span>
                         {dist && <span className="sedthr__dist" title="a distilled sitting on this line">▷ {dist.sessionLabel}</span>}
+                        {!bg && ctx.openTranscript && (
+                          <span className="sedthr__go" role="button"
+                                onClick={ev => { ev.stopPropagation()
+                                  ctx.openTranscript!({ kind: 'thread',
+                                    threadId: k, title }) }}
+                                title="this line's conversation — read it and continue it, right here">
+                            <SessGlyph /> open
+                          </span>
+                        )}
                       </button>
                       {open && es.map(e => (
                         <SedimentRow key={e.id} e={e} ctx={ctx}
@@ -2152,10 +2211,15 @@ function RecordDoc({ w, onAdvance, triage }: { w: World; onAdvance?: (t: string)
       </main>
       )}
 
-      {/* ---------- right margin: bench / working session / docked transcript ---------- */}
+      {/* ---------- right margin: bench / working session / the work dock ---------- */}
       {/* keyed by anchor: each element's margin conversation is its own —
           switching targets must never carry the previous exchange along */}
-      {liveTx && <LiveTranscript w={w} target={liveTx} onClose={() => setLiveTx(null)} />}
+      {liveTx && (
+        <WorkDock key={`${liveTx.threadId}·${liveTx.entityId ?? ''}·${liveTx.kind ?? ''}`}
+                  w={w} anchor={liveTx}
+                  onClose={() => setLiveTx(null)}
+                  onWorldStale={onRefresh} />
+      )}
       {showRight}
 
       {/* ---------- ⌘K omnibox: ask or find, from anywhere ---------- */}

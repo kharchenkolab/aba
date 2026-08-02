@@ -209,6 +209,9 @@ export interface World {
    *  face's own fetches (transcripts, plan edits) ride these */
   apiBase?: string
   projectId?: string
+  /** claim id → the thread it rides (live) — a claim chip summons the
+   *  dock ON ITS LINE, wherever on the page it was clicked */
+  claimThreads?: Record<string, string>
   /** the live session's home locus — wears a standing "working here" state */
   anchorAt?: { session: string; elId: string }
   /** peripheral change signals: TOC pulse badges + delta-rail ticks.

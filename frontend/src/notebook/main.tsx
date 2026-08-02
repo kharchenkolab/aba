@@ -16,7 +16,7 @@ function Live(props: { api: string; project?: string; triage?: boolean }) {
   const [err, setErr] = useState<string | null>(null)
   const [projects, setProjects] = useState<
     { id: string; name?: string; last_touched?: string }[] | null>(null)
-  useEffect(() => {
+  const load = () => {
     fetchLiveWorld(props.api, props.project)
       .then(setWorld)
       .catch(e => {
@@ -32,7 +32,9 @@ function Live(props: { api: string; project?: string; triage?: boolean }) {
             .catch(() => {})
         }
       })
-  }, [props.api, props.project])
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(load, [props.api, props.project])
   if (err) {
     if (projects?.length) {
       return (
@@ -62,6 +64,7 @@ function Live(props: { api: string; project?: string; triage?: boolean }) {
   }
   if (!world) return <div style={{ padding: '2rem' }}>assembling the record…</div>
   return <Record world={world}
+                 onRefresh={load}
                  triage={props.triage
                    ? triageApi(props.api, props.project) : undefined} />
 }

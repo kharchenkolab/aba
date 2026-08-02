@@ -246,6 +246,20 @@ export default function App() {
         history.replaceState(null, '', u.toString())
       }
     } catch { /* ignore malformed */ }
+    // companion deep links (the Record face): ?msg=<row id> scrolls the
+    // thread to that message (the SearchModal machinery), ?draft=<text>
+    // prefills the composer. Both strip themselves once consumed.
+    try {
+      const qp = new URLSearchParams(location.search)
+      const msg = qp.get('msg'); const draft = qp.get('draft')
+      if (msg && /^\d+$/.test(msg)) setPendingScrollMsg(Number(msg))
+      if (draft) setPrefill(draft.slice(0, 4000))
+      if (msg || draft) {
+        const u = new URL(location.href)
+        u.searchParams.delete('msg'); u.searchParams.delete('draft')
+        history.replaceState(null, '', u.toString())
+      }
+    } catch { /* ignore malformed */ }
     return () => window.removeEventListener('message', onMsg)
   }, [])
   // Phase 4.6: prime the entity-type catalog once on app mount so

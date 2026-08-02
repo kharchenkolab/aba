@@ -101,6 +101,7 @@ function chipTitle(s: string, max = 64): string {
 
 export function apiToWorld(a: ApiWorld): World {
   const claims: Record<string, ClaimRef> = {}
+  const sidx = a.supports_index || {}
   for (const c of a.claims) {
     claims[c.id] = {
       title: chipTitle(c.title || c.id),
@@ -112,6 +113,13 @@ export function apiToWorld(a: ApiWorld): World {
       caveats: c.caveats || [],
       ...((c as { statement?: string }).statement
         ? { statement: (c as { statement?: string }).statement } : {}),
+      // the dossier lists evidence BY NAME with doors — never a bare count
+      supportRefs: c.supports.map(sid => ({
+        id: sid,
+        title: sidx[sid]?.title || sid,
+        type: sidx[sid]?.type || 'evidence',
+        ...(sidx[sid]?.artifact ? { artifact: sidx[sid].artifact } : {}),
+      })),
     }
   }
 
@@ -280,6 +288,7 @@ export function apiToWorld(a: ApiWorld): World {
     return {
       id: r.run_id,
       date: day(r.started_at || r.updated_at),
+      ...(r.started_at ? { ts: r.started_at } : {}),
       // the row says what the run WAS — the ask that launched it; the
       // agent/turn plumbing is the fallback, not the headline
       title: r.ask || [r.agent_spec_name || 'turn',
@@ -357,6 +366,10 @@ export function apiToWorld(a: ApiWorld): World {
       ? { threadHrefBase: `/p/${a.project_id}/threads/t/`,
           artifactBase: `/artifacts/${a.project_id}/`,
           apiBase: '', projectId: a.project_id } : {}),
+    // a claim chip summons the dock ON ITS LINE from anywhere on the page
+    claimThreads: Object.fromEntries(
+      a.claims.filter(c => c.questions.length)
+        .map(c => [c.id, c.questions[0]])),
     ...(allRuns.length > windowed.length
       ? { sedimentTotal: allRuns.length } : {}),
     // the triage band needs a desk; live sittings are all filed episodes, so

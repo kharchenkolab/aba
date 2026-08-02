@@ -23,6 +23,10 @@ export interface ClaimRef {
   caveats: string[]
   /** the FULL assertion (display titles truncate) — the claim card reads it */
   statement?: string
+  /** the itemized evidence (live): each support resolved to a name and,
+   *  when image-bearing, its artifact — the dossier lists these, never
+   *  a bare count */
+  supportRefs?: { id: string; title: string; type: string; artifact?: string }[]
 }
 
 export interface Paragraph {
@@ -149,6 +153,9 @@ export interface SedimentEntry {
   threadTitle?: string
   /** landed during the session on screen — highlighted as just-arrived */
   isNew?: boolean
+  /** precise start timestamp (live) — the dock stitches run outputs into
+   *  the transcript's working-step gaps by time */
+  ts?: string
 }
 
 export interface Prov {
