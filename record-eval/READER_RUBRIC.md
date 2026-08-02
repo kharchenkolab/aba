@@ -55,6 +55,14 @@ affordance (button, link, chip, glyph, row, composer):
 10. **Walk it at every stage.** Repeat the click-walk on a fresh project
     (turn 1), a cohering one, and a mature one — affordances that only
     make sense at one scale fail the arc.
+11. **Every noun offers its verb.** The cockpit contract (design §13.5):
+    a question offers *continue this line* (a composer that RUNS);
+    a plan item offers *▷ launch* (and flips in-progress at launch);
+    a claim opens its dossier (evidence itemized, gestures to plan
+    scrutiny); a figure opens provenance + the conversation behind it
+    + refine; a sediment line offers *play*; a run row expands to what
+    it produced; a transcript answer offers *pin*. Reading a thing and
+    acting on it must never require different surfaces.
 
 ## Discipline
 
