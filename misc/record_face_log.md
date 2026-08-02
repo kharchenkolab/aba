@@ -125,3 +125,65 @@ bidirectional + word-overlap match); verified: wake parked line ->
 answer -> resolve + add new oq -> face plan shows produced/planned.
 Triage round-trips exercised live: accept (draft/revision/convergence),
 dismiss -> undo -> dismiss (rename suggestion).
+
+## 22 · The cockpit projection lands (phases 5–9) (+8h)
+
+The first hands-on user test returned the verdict the rollout had made
+inevitable: "useless — both as an explanation of the current state of
+the analysis, and as a navigation/control tool for running the analysis
+itself." Root-cause: §13.3's phases 1–3 project the READING strata and
+stop; the work loop (§5) and live anchoring (§6) had shipped only as
+fixture theater behind `w.work`. §13.5 now maps §5/§6 onto the real
+substrate (audited endpoint-by-endpoint — nearly everything needed
+already existed) and schedules phases 5–10; this round built 5–9:
+
+- **P5 truth & copy.** The drafting gate refuses mid-sentence
+  truncation (two of three ratified narratives ended mid-clause at the
+  old max_tokens=300); heads re-drafted through the normal
+  proposal→accept path. Lifecycle words ("active") no longer
+  impersonate maturities anywhere (world floors them to the ladder's
+  first rung); chips show the pack's OWN vocabulary ("preliminary",
+  never the fixture's "conjecture"). Plan block: plain words, visible
+  glyph legend, explicit ✎. Sediment run rows ship their REAL produced
+  images (exec-record join is thread+time-window — the id spaces differ
+  in production: turn runs run_…, analysis sessions ana_…; the run_id
+  join never fires. The first unit test used a matching id — a fake
+  more permissive than reality) and rows with nothing to show offer no
+  affordance. One right panel at a time; Escape closes.
+- **P6 the instrument docks.** WorkDock: one panel, summonable from
+  every noun — question, plan item, claim, figure, sediment line. The
+  anchor's kind renders its pane (claim dossier with evidence ITEMIZED
+  by name/thumbnail; figure with provenance + full-card link), below it
+  the line's real transcript (markdown rendered; run outputs stitched
+  into the working-step gaps by time), and at the foot the composer
+  that RUNS: POST /api/chat, active-turn polling, cancel, awaiting-you
+  → resume. Turn end → the world refetches. Workspace shell gained
+  ?msg= (scroll-and-flash, machinery existed) and ?draft= (composer
+  prefill).
+- **P7 the page tracks the work.** Live-line lamps derive from real
+  turn state (section banner + TOC ▶); the world refetches on a slow
+  cadence while lines are hot (sediment accretes at launch); ▷ work on
+  a plan item flips it taken_up at LAUNCH (dock onLaunched), acts stay
+  available. Found + fixed en route: notebook.html was served cacheable
+  — every rebuild stranded browsers on a deleted bundle hash (an hour
+  of ghost-chasing; the "bug" in the launch flow was a stale bundle).
+- **P8 gestures v1.** The investigation family (check · corroborate ·
+  alternatives · expand) on the claim dossier — one-tap TYPED
+  plan-item constructors (open-questions gained `kind`), receipts in
+  place, items wear their verb. Pin on transcript answers files a note
+  directly via /api/record/pin (typed by the pack's registered note
+  role — core stays neutral).
+- **P9 prose weaving.** The drafter receives the claims' image-bearing
+  evidence (one-hop resolution, exactly as supports_index) and places
+  [[figure:id]] markers at the point of mention; the gate treats
+  markers as markup — strips them before the id-leak check, drops
+  unknown ids, still demands complete prose and named maturities — with
+  ONE corrective retry (measured failure: weaving dilutes attention and
+  the maturity parentheticals drop). Live FigureEmbed resolves served
+  artifacts and summons the dock; mentioned figures leave the trailing
+  strip. The mature section now reads as a manuscript: statement →
+  figure at its mention → next statement.
+- **BareStart is real.** The day-0 box creates the first line and fires
+  the first turn (threads + chat, two calls); the page leaves bare and
+  wears the working lamp — the whole §5 loop now runs from the Record
+  on a fresh project with no workspace visit.

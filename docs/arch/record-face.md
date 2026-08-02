@@ -10,8 +10,10 @@ and the Record stay two renderings of one substrate (§13.3 of the design).
 > (shared triage: tray from the proposals store, accept/dismiss/undo via
 > the classic endpoints, client-held what's-new cursor) + phase 3
 > authoring strata (recursive org axis, prose bodies + revision lifecycle,
-> drafting/distilling advisors, sitting freeze v0). "The spine" is not a
-> separate organ: it is the org axis viewed from the root — see below.
+> drafting/distilling advisors, sitting freeze v0) + phases 5-9 of the
+> COCKPIT projection (design §13.5): the work dock, live turn tracking,
+> gesture constructors, pin, and manuscript figure weaving. "The spine"
+> is not a separate organ: it is the org axis viewed from the root.
 
 ## Aims & invariants
 
@@ -45,6 +47,27 @@ and the Record stay two renderings of one substrate (§13.3 of the design).
   only ("revision N" in the signature) while superseded rows stay for
   provenance and search. Prose `cites` claims; a cited claim's chip
   retires into the story.
+- **The face ACTS through the workspace's own endpoints — never its own
+  write path.** The dock's composer posts `/api/chat` (SSE fired, then
+  polled home via `active-turn`; cancel and `awaiting_user`→resume
+  surfaced); plan items launch through the same call and flip
+  `taken_up` at launch; gestures write typed `open-questions`; the bare
+  face's begin is `POST /api/threads` + `/api/chat`. The one Record-own
+  write is `POST /api/record/pin` (message excerpt → note, typed by the
+  registered note role). Ratifying, dismissing, planning here and in
+  the classic UI are the same rows.
+- **One right panel, summonable from every noun.** The WorkDock's anchor
+  names what summoned it (question / plan item / claim / figure /
+  thread); the anchor's kind renders its pane — a claim opens as a
+  DOSSIER (statement, standing, evidence itemized by name with
+  thumbnails), a figure opens with provenance + a full-card deep link —
+  and below every pane: the line's real transcript (markdown rendered,
+  run outputs stitched into the working-step gaps by time) and the
+  composer. Escape closes; opening elsewhere retargets (one ▶).
+- **The page tracks the work.** Live-line lamps derive from real turn
+  state (section banner + TOC ▶, probed per section); while any line is
+  hot the world refetches on a slow cadence, so sediment accretes at
+  launch and evidence counters move while you watch.
 
 ## The model
 
@@ -95,6 +118,7 @@ frontend notebook.html?live=1 ──► live.ts apiToWorld() ──► the mock 
 | `core/web/routers/record.py` | `GET /api/record/world` (+ `require_project`) |
 | `content/bio/record_roles.py` | this pack's role map: thread/claim/narrative/note + `is_artifact` sweep |
 | `frontend/src/notebook/live.ts` | API World → renderer World adapter; `fetchLiveWorld` |
+| `frontend/src/notebook/dock.tsx` | the WorkDock: anchor panes, transcript, gestures, pin, the composer that runs turns |
 | `frontend/src/notebook/main.tsx` | `?live=1[&api=…][&project=…]` opt-in; fixture face is the default |
 | `tests/test_record_world.py` | the guard suite (gated): projection, sittings, tray, leftovers |
 | `frontend/src/notebook/live.test.tsx` | adapter mapping + renderer smoke over an adapted world |
@@ -148,8 +172,17 @@ turn-one display defense.
 LLM drafting rides the SAME kind, flag-gated (`RECORD_LLM_DRAFTS=1`):
 `llm_draft` prompts with a charter distilled from S6 (prose tracks
 evidence; maturity named, never exceeded; negatives apart), then a
-mechanical gate (`_gate_draft`) rejects lists, maturity-free prose, and
-id leaks whole — the deterministic composer backstops every failure.
+mechanical gate (`_gate_draft`) rejects lists, maturity-free prose,
+id leaks, and INCOMPLETE prose (a draft cut at the token cap reads as a
+truncated sentence on the face) whole — the deterministic composer
+backstops every failure. The drafter also receives the claims'
+image-bearing evidence (`_figures_of`, one-hop resolution exactly as
+`supports_index`) and places `[[figure:id]]` markers at the point of
+mention — the renderer embeds the figure there, mentioned figures leave
+the trailing evidence strip, and the gate treats markers as markup:
+stripped before the id-leak check, unknown ids dropped, one corrective
+retry for the measured failure mode (weaving dilutes attention and the
+maturity parentheticals drop).
 Live content evaluation drove three charter iterations: the model first
 added confirmation/success language, then invented a mechanism clause;
 the shipped charter forbids BOTH by name ("include nothing the claims do
@@ -166,8 +199,13 @@ before it becomes record.
   Superseded prose has no face-side "show previous versions" door.
 - **Distillation records are written by hand** (or future wrap flows); no
   advisor proposes closing a sitting with a distillation yet.
-- **Trails, provenance drawer, briefing, RFC, gestures** render only on the
-  fixture face; the API does not carry them yet. Project-level leftovers
+- **Trails, briefing, RFC** render only on the fixture face; the API does
+  not carry them yet. Gestures v1 (investigation family + pin) ARE live;
+  fade / ⌖ hold / drag-on-section remain fixture-only.
+- **`open_questions` live in thread metadata as a blob** — concurrent
+  writers (a running turn's title evolution vs. a face-side PATCH) are
+  last-writer-wins. Small window, real hazard; a typed store is the
+  eventual home. Project-level leftovers
   ship in the World but have no live organ either — the shelf renders
   per-session on the fixture face only.
 - **Leftovers ignore proposal mentions** (§13.1 wants "no proposal/mention";

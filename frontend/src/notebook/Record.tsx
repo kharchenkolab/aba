@@ -1342,20 +1342,63 @@ function DeltaRail({ deltas, seen, docRef, onJump }: {
 // ------------------------------------------------------------------ day zero
 
 /** The day-0 face: a new project is a composer, not a document. */
-function BareStart({ w, onAdvance }: { w: World; onAdvance?: (t: string) => void }) {
+function BareStart({ w, onAdvance, onRefresh }: {
+  w: World; onAdvance?: (t: string) => void
+  /** live: the first ask just launched — refetch, the page leaves bare */
+  onRefresh?: () => void }) {
   const [draft, setDraft] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const live = w.apiBase !== undefined
+  // live begin is REAL: the question becomes the project's first line and
+  // the ask fires its first turn — the box is the whole interface, honestly
+  const begin = async () => {
+    if (!live) { onAdvance?.('start'); return }
+    const text = draft.trim()
+    if (!text || busy) return
+    setBusy(true)
+    setErr(null)
+    try {
+      const q = w.projectId ? `?project_id=${encodeURIComponent(w.projectId)}` : ''
+      const tr = await fetch(`${w.apiBase}/api/threads${q}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: text.slice(0, 60), question: text,
+                               question_source: 'user' }),
+      })
+      if (!tr.ok) throw new Error(`threads ${tr.status}`)
+      const t = (await tr.json()) as { id: string }
+      const cr = await fetch(`${w.apiBase}/api/chat`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, thread_id: t.id,
+                               ...(w.projectId ? { project_id: w.projectId } : {}) }),
+      })
+      if (!cr.ok) throw new Error(`chat ${cr.status}`)
+      cr.body?.cancel()
+      onRefresh?.()
+    } catch (e) {
+      setErr(String(e))
+      setBusy(false)
+    }
+  }
   return (
     <div className="bare">
       <div className="bare__box">
         <h1>{w.project.title}</h1>
         <div className="bare__sub">a record co-written by you and Guide · started today</div>
         <div className="bare__composer">
-          <input autoFocus value={draft}
+          <input autoFocus value={draft} disabled={busy}
                  placeholder="What are we working with? Describe the study, point at data, or ask the first question…"
                  onChange={e => setDraft(e.target.value)}
-                 onKeyDown={e => { if (e.key === 'Enter') onAdvance?.('start') }} />
-          <button className="btn btn--primary" onClick={() => onAdvance?.('start')}>begin ↑</button>
+                 onKeyDown={e => { if (e.key === 'Enter') begin() }} />
+          <button className="btn btn--primary" disabled={busy} onClick={begin}>
+            {busy ? 'beginning…' : 'begin ↑'}
+          </button>
         </div>
+        {err && <div className="bare__note" style={{ color: 'var(--red)' }}>
+          could not begin ({err}) — is the backend up?</div>}
+        {busy && !err && <div className="bare__note">
+          the first line is opening — the guide takes it from here; the page
+          follows the work in a moment</div>}
         <div className="bare__note">
           There is nothing to set up and nothing to fill in. The document will build
           itself from the work — the first run lands in the sediment the moment it
@@ -1376,7 +1419,8 @@ export default function Record(props: { world?: World; onAdvance?: (t: string) =
                                         /** live: refetch the world (a turn changed it) */
                                         onRefresh?: () => void }) {
   const w = props.world ?? coastalWorld
-  if (w.bare) return <BareStart w={w} onAdvance={props.onAdvance} />
+  if (w.bare) return <BareStart w={w} onAdvance={props.onAdvance}
+                                onRefresh={props.onRefresh} />
   return <RecordDoc w={w} onAdvance={props.onAdvance} triage={props.triage}
                     onRefresh={props.onRefresh} />
 }
