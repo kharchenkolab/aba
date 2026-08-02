@@ -38,6 +38,24 @@ sentence about THIS page, not a checkbox.
    claims, richer prose) or only *length* (more identical rows)? Repeated
    near-identical lines are sediment and belong below the fold.
 
+## The interaction half (added after the first hands-on user test)
+
+Reading is not enough: walk the page WITH A MOUSE. For every visible
+affordance (button, link, chip, glyph, row, composer):
+
+8. **Every door leads somewhere real.** Clicking must produce the thing
+   the affordance names — a transcript door opens the actual conversation,
+   never an empty panel; a composer that accepts input must persist it
+   (an edit that vanishes on reload is a lie); a chip opens the thing's
+   card. An affordance that cannot deliver in live mode must not render.
+9. **The next action is visible.** From any organ, the reader can see how
+   to ACT on what they read: open the line's conversation, continue it in
+   the workspace, add/resolve a plan item, triage a proposal. If acting
+   requires knowledge of another surface, fail.
+10. **Walk it at every stage.** Repeat the click-walk on a fresh project
+    (turn 1), a cohering one, and a mature one — affordances that only
+    make sense at one scale fail the arc.
+
 ## Discipline
 
 - Evaluate from a screenshot or the live page — never from the World JSON.
