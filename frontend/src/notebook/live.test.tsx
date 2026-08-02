@@ -82,6 +82,24 @@ describe('apiToWorld', () => {
     expect(w.claims['C3'].maturityLabel).toBeUndefined()
   })
 
+  it('inline [[figure:id]] embeds resolve and leave the evidence strip', () => {
+    const a = sample()
+    a.supports_index = {
+      R1: { title: 'batch scatter', type: 'result', artifact: 'scatter.png' },
+      R2: { title: 'anova table', type: 'result' },
+    }
+    a.prose[0].body = 'The scatter shows it.\n[[figure:R1]]\nDone (preliminary).'
+    a.prose[0].cites = ['C1']
+    const w = apiToWorld(a)
+    // the embed resolves: title + artifact + the line to summon the dock on
+    expect(w.figureTitles['R1']).toBe('batch scatter')
+    expect(w.figureArts?.['R1']).toBe('scatter.png')
+    expect(w.figureThreads?.['R1']).toBe('Q1')
+    // mentioned once, shown once: R1 left the trailing strip, R2 remains
+    const ev = w.sections[0].paragraphs[0].evidence ?? []
+    expect(ev.map(e => e.id)).toEqual(['R2'])
+  })
+
   it('carries per-run produced images into expandable sediment rows', () => {
     const w = apiToWorld(sample())
     const r1 = w.sediment.find(e => e.id === 'r1')!

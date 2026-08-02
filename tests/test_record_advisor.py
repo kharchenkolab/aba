@@ -130,6 +130,18 @@ class RecordAdvisorTest(unittest.TestCase):
         # trailing close-quote after terminal punctuation still passes
         self.assertEqual(advisor._gate_draft(
             "A finding holds (supported).”", cs), "A finding holds (supported).”")
+        # [[figure:ID]] markers are MARKUP: kept when the id is known,
+        # dropped when unknown, and never counted as an id leak
+        woven = "A finding holds (supported).\n[[figure:res_1]]\nDone (preliminary)."
+        self.assertEqual(
+            advisor._gate_draft(woven, cs, figure_ids=("res_1",)), woven)
+        self.assertEqual(
+            advisor._gate_draft(woven, cs, figure_ids=("res_2",)),
+            "A finding holds (supported).\n\nDone (preliminary).")
+        # markers do not rescue a truncated draft (prose still must END)
+        self.assertEqual(advisor._gate_draft(
+            "A finding (supported), cut\n[[figure:res_1]]", cs,
+            figure_ids=("res_1",)), "")
 
     def test_unfiled_session_suggestion(self):
         from core.graph._schema import _conn

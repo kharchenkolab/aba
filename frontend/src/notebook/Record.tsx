@@ -256,22 +256,40 @@ function ProvDrawer({ figId, ctx }: { figId: string; ctx: RefCtx }) {
 function FigureEmbed({ figId, ctx, caption }: { figId: string; ctx: RefCtx; caption?: string }) {
   const open = ctx.disclosed.has(figId)
   const title = ctx.w.figureTitles[figId] ?? figId
+  // live worlds resolve figure entities to served artifacts; the fixture
+  // resolves by id convention
+  const liveArt = ctx.w.figureArts?.[figId]
+  const src = liveArt && ctx.w.artifactBase ? `${ctx.w.artifactBase}${liveArt}` : ART(figId)
+  const liveThread = ctx.w.apiBase !== undefined
+    ? ctx.w.figureThreads?.[figId] : undefined
   return (
     <figure className="fig" id={`el-${figId}`}>
-      <img src={ART(figId)} alt={title} onClick={() => ctx.look(title)}
-           title="click to make this the conversation's subject (looking at:)" />
+      <img src={src} alt={title}
+           onClick={() => liveThread && ctx.openTranscript
+             ? ctx.openTranscript({ kind: 'figure', threadId: liveThread,
+                                    entityId: figId, title })
+             : ctx.look(title)}
+           title={liveThread
+             ? 'open this figure — provenance, the conversation behind it, refine'
+             : 'click to make this the conversation\'s subject (looking at:)'} />
       <figcaption>
         <span>{caption ?? title}</span>
         <span className="fig__actions">
-          <button onClick={() => ctx.toggleDisclose(figId)} title="the technical record: producing run, code, params, environment, log">
-            {open ? 'close ▴' : 'how was this made? ▾'}
-          </button>
-          <button onClick={() => ctx.openBench(figId, title)} title="open the margin bench on this element">
+          {!liveArt && (
+            <button onClick={() => ctx.toggleDisclose(figId)} title="the technical record: producing run, code, params, environment, log">
+              {open ? 'close ▴' : 'how was this made? ▾'}
+            </button>
+          )}
+          <button onClick={() => liveThread && ctx.openTranscript
+                    ? ctx.openTranscript({ kind: 'figure', threadId: liveThread,
+                                           entityId: figId, title })
+                    : ctx.openBench(figId, title)}
+                  title="open this figure's card — ask, refine, trace">
             ask ✦
           </button>
         </span>
       </figcaption>
-      {open && <ProvDrawer figId={figId} ctx={ctx} />}
+      {open && !liveArt && <ProvDrawer figId={figId} ctx={ctx} />}
     </figure>
   )
 }

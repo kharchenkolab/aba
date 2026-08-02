@@ -102,31 +102,95 @@ _DRAFT_CHARTER = (
     "record reads as prose, not as a database. Include NOTHING the "
     "listed claims do not state: no analysis, confirmation, or success "
     "language, no mechanisms or consequences of your own — connect the "
-    "claims plainly and stop. Reply with the paragraph only.")
+    "claims plainly and stop. "
+    "FIGURES: when a FIGURES list is provided (ID → title), place each "
+    "figure where the prose discusses its finding by writing its marker "
+    "[[figure:ID]] alone on its own line between sentences — a manuscript "
+    "shows evidence at the point of mention, never dumped at the end. "
+    "Refer to figures in prose by TITLE; the ID appears only inside the "
+    "marker. Use only listed IDs. "
+    "Reply with the paragraph (and markers) only.")
 
 
-def _gate_draft(text: str, claims: list[dict]) -> str:
+def _strip_markers(text: str) -> str:
+    import re
+    return re.sub(r"\[\[figure:[^\]]+\]\]", "", text)
+
+
+def _gate_draft(text: str, claims: list[dict],
+                figure_ids: tuple[str, ...] = ()) -> str:
     """Mechanical acceptance gate on model output (the S6 lesson: sanitize
     edges, never trust shape): a usable draft is plain prose that names at
     least one maturity, leaks no internal ids, and ENDS — a draft cut at
     the token cap reads as a truncated sentence on the face (measured
-    live: two of three ratified narratives ended mid-clause)."""
+    live: two of three ratified narratives ended mid-clause).
+
+    [[figure:ID]] markers are MARKUP, not prose — the renderer embeds the
+    figure at that point. They are stripped before the id-leak check, and
+    markers naming unknown ids are dropped whole (never trusted)."""
+    import re
     text = (text or "").strip()
+    if figure_ids:
+        text = re.sub(
+            r"\[\[figure:([^\]]+)\]\]",
+            lambda m: m.group(0) if m.group(1) in figure_ids else "",
+            text)
+    else:
+        text = _strip_markers(text)
+    text = text.strip()
     if not text or text.startswith(("#", "-", "*")):
         return ""
-    if not any(f"({_conf(c)})" in text for c in claims):
+    prose = _strip_markers(text)
+    if not any(f"({_conf(c)})" in prose for c in claims):
         return ""
-    if any(t in text for t in ("thr_", "run_", "sit-", "prj_")):
+    if any(t in prose for t in ("thr_", "run_", "sit-", "prj_")):
         return ""
-    if not text.rstrip(")”\"'").endswith((".", "!", "?")):
+    if not prose.rstrip(")”\"' \n").endswith((".", "!", "?")):
         return ""
     return text
 
 
-def llm_draft(claims: list[dict]) -> str:
+def _figures_of(claims: list[dict]) -> list[tuple[str, str]]:
+    """(id, title) of the image-bearing evidence the claims stand on —
+    the drafter weaves these inline at their point of mention. A container
+    support (result) carries its image one hop down, exactly as the world's
+    supports_index resolves it."""
+    from core.graph.edges import edges_from
+    from core.graph.entities import get_entity
+    from core.record.world import _CARRY_RELS, _image_of
+    seen: set[str] = set()
+    out: list[tuple[str, str]] = []
+    for c in claims:
+        for ed in edges_from(c["id"]):
+            if ed["rel_type"] != "supports":
+                continue
+            sid = ed["target_id"]
+            if sid in seen:
+                continue
+            seen.add(sid)
+            e = get_entity(sid)
+            if not e:
+                continue
+            img = _image_of(e)
+            if img is None:
+                for ed2 in edges_from(e["id"]):
+                    if ed2["rel_type"] not in _CARRY_RELS:
+                        continue
+                    child = get_entity(ed2["target_id"])
+                    if child and _image_of(child):
+                        img = _image_of(child)
+                        break
+            if img:
+                out.append((sid, e.get("title") or sid))
+    return out
+
+
+def llm_draft(claims: list[dict],
+              figures: list[tuple[str, str]] | None = None) -> str:
     """LLM drafting behind the SAME proposal kind — flag-gated
     (RECORD_LLM_DRAFTS=1), empty on any failure so the deterministic
-    composer always backstops it."""
+    composer always backstops it. With `figures`, the charter invites
+    [[figure:ID]] markers at the point of mention — manuscript-style."""
     import os
     if os.environ.get("RECORD_LLM_DRAFTS") != "1":
         return ""
@@ -135,17 +199,33 @@ def llm_draft(claims: list[dict]) -> str:
         from core.llm import (_CC_MARKER_BLOCK, _wants_cc_marker,
                               sync_anthropic_client)
         rows = "\n".join(f"- {_stated(c)} ({_conf(c)})" for c in claims)
+        if figures:
+            rows += "\n\nFIGURES:\n" + "\n".join(
+                f"- {fid} → {title}" for fid, title in figures)
         system = ([dict(_CC_MARKER_BLOCK),
                    {"type": "text", "text": _DRAFT_CHARTER}]
                   if _wants_cc_marker() else _DRAFT_CHARTER)
-        # headroom, not a target — the charter caps length at 2-4 sentences;
-        # a tight cap TRUNCATES instead (the gate now refuses those drafts)
-        r = sync_anthropic_client().messages.create(
-            model=MODEL, max_tokens=1024, system=system,
-            messages=[{"role": "user", "content": rows}])
-        text = " ".join(b.text for b in r.content
-                        if getattr(b, "type", "") == "text")
-        return _gate_draft(text, claims)
+        fig_ids = tuple(fid for fid, _ in (figures or []))
+
+        def _attempt(user: str) -> str:
+            # headroom, not a target — the charter caps length at 2-6
+            # sentences; a tight cap TRUNCATES (the gate refuses those)
+            r = sync_anthropic_client().messages.create(
+                model=MODEL, max_tokens=1024, system=system,
+                messages=[{"role": "user", "content": user}])
+            text = "\n".join(b.text for b in r.content
+                             if getattr(b, "type", "") == "text")
+            return _gate_draft(text, claims, fig_ids)
+
+        out = _attempt(rows)
+        if not out:
+            # ONE corrective retry — measured failure mode: weaving figures
+            # dilutes attention and the maturity parentheticals get dropped
+            out = _attempt(
+                rows + "\n\nREMINDER: state each finding AT its maturity, "
+                "naming the maturity in parentheses exactly as listed, "
+                "e.g. (preliminary) — and COMPLETE the final sentence.")
+        return out
     except Exception:  # noqa: BLE001 — advisory path; silence is the failure mode
         return ""
 
@@ -170,7 +250,7 @@ def review_thread(tid: str):
     claims = _claims_of_thread(tid)
     if len(claims) < 2:
         return None
-    text = llm_draft(claims) or compose_draft(claims)
+    text = llm_draft(claims, _figures_of(claims)) or compose_draft(claims)
     payload = {"title": "What we know so far", "text": text,
                "cites": [c["id"] for c in claims],
                "drafted_claims": len(claims)}

@@ -183,12 +183,16 @@ export function apiToWorld(a: ApiWorld): World {
           ...(p?.versions && p.versions > 1 ? { versions: p.versions } : {}),
           ...(p?.cites?.length ? { cites: p.cites } : {}),
           // figures are key: what the cited claims stand on rides with the
-          // paragraph — image-bearing evidence renders inline
+          // paragraph — image-bearing evidence renders inline. Evidence the
+          // PROSE already places ([[figure:id]] markers, manuscript-style)
+          // stays out of the trailing strip: mentioned once, shown once.
           ...(() => {
             const idx = a.supports_index || {}
+            const body = p?.body || ''
             const ev = (p?.cites ?? [])
               .flatMap(cid => claimById.get(cid)?.supports ?? [])
               .filter((v, i, arr) => arr.indexOf(v) === i)
+              .filter(sid => !body.includes(`[[figure:${sid}]]`))
               .map(sid => ({
                 id: sid,
                 title: idx[sid]?.title || sid,
@@ -357,7 +361,21 @@ export function apiToWorld(a: ApiWorld): World {
     looseNotes,
     sediment,
     provenance: {},
-    figureTitles: {},
+    // inline [[figure:id]] embeds resolve through these (drafter weaving)
+    ...(() => {
+      const figureTitles: Record<string, string> = {}
+      const figureArts: Record<string, string> = {}
+      const figureThreads: Record<string, string> = {}
+      for (const [sid, v] of Object.entries(a.supports_index || {})) {
+        if (v.title) figureTitles[sid] = v.title
+        if (v.artifact) figureArts[sid] = v.artifact
+      }
+      for (const c of a.claims)
+        for (const sid of c.supports)
+          if (c.questions[0] && !figureThreads[sid])
+            figureThreads[sid] = c.questions[0]
+      return { figureTitles, figureArts, figureThreads }
+    })(),
     bench: {},
     benchFallback: [],
     onePager: null,

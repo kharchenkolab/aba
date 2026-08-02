@@ -212,6 +212,10 @@ export interface World {
   /** claim id → the thread it rides (live) — a claim chip summons the
    *  dock ON ITS LINE, wherever on the page it was clicked */
   claimThreads?: Record<string, string>
+  /** figure entity id → served artifact basename (live inline embeds) */
+  figureArts?: Record<string, string>
+  /** figure entity id → the thread whose prose mentions it (live) */
+  figureThreads?: Record<string, string>
   /** the live session's home locus — wears a standing "working here" state */
   anchorAt?: { session: string; elId: string }
   /** peripheral change signals: TOC pulse badges + delta-rail ticks.
