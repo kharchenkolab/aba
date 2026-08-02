@@ -136,10 +136,11 @@ export function apiToWorld(a: ApiWorld): World {
     // open questions ARE the section's plan (the distributed to-do list) —
     // they render under the section at every phase, not only on the stub
     const open = (q.open_questions || []).map(o =>
-      typeof o === 'string' ? { text: o, status: '', id: '' }
+      typeof o === 'string' ? { text: o, status: '', id: '', kind: '' }
         : { text: o.text || '',
             status: (o as { status?: string }).status || '',
-            id: (o as { id?: string }).id || '' })
+            id: (o as { id?: string }).id || '',
+            kind: (o as { kind?: string }).kind || '' })
       .filter(o => o.text)
     const planItems = open.map(o => ({
       text: o.text,
@@ -148,6 +149,8 @@ export function apiToWorld(a: ApiWorld): World {
         : o.status === 'taken_up' ? 'taken-up'
         : 'planned') as 'produced' | 'planned' | 'taken-up',
       ...(o.id ? { oqId: o.id } : {}),
+      // typed items (gesture-constructed) wear their verb as the tag
+      ...(o.kind ? { meta: o.kind } : {}),
     }))
     const sits = sitsByThread.get(q.id) || []
     // a dormant line must say what it HOLDS — the strongest POSITIVE claim

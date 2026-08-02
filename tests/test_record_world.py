@@ -491,6 +491,55 @@ class RecordWorldTest(unittest.TestCase):
         self.assertEqual(w["project_id"], "p-test")
         self.assertEqual(w["version"], 1)
 
+    def test_pin_files_a_note_on_the_line(self):
+        # §6's universal gesture: pin → note, filed DIRECTLY, typed by the
+        # pack's registered note role — core never names a pack type
+        from core.web.routers.record import PinRequest, record_pin
+        r = record_pin(PinRequest(
+            thread_id=self.q1,
+            text="the fit is only valid within the calibrated range",
+            ts="2026-01-05T10:00:00Z"), _pid="p-test")
+        try:
+            from core.graph.entities import get_entity
+            e = get_entity(r["id"])
+            self.assertEqual(e["type"], ROLES["note"])
+            md = e["metadata"]
+            self.assertEqual(md["thread_id"], self.q1)
+            self.assertEqual(md["source"], "record_pin")
+            self.assertEqual(md["pinned_at_ts"], "2026-01-05T10:00:00Z")
+            # …and the note reaches the world under its line
+            w = assemble_world()
+            self.assertIn(r["id"], [n["id"] for n in w["notes"]])
+        finally:
+            from core.graph.entities import delete_entity_hard
+            delete_entity_hard(r["id"])
+
+    def test_open_question_kind_rides_through(self):
+        # gesture-constructed items are TYPED (kind) — the constructor
+        # stores it and the world ships it back untouched. The router
+        # requires platform "thread" typing, so this test registers the
+        # question role onto real threads.
+        from core.web.routers.threads import OpenQRequest, oq_add, oq_delete
+        tid = create_entity(entity_type="thread", title="a real line")
+        try:
+            register_record_roles({**ROLES, "question": "thread"},
+                                  maturity_order=LADDER, artifact_types=ARTS)
+            oq = oq_add(tid, OpenQRequest(
+                text="corroborate independently: the variance claim",
+                source="user", kind="corroborate"), _pid="p-test")
+            self.assertEqual(oq["kind"], "corroborate")
+            w = assemble_world()
+            row = next(q for q in w["questions"] if q["id"] == tid)
+            mine = [o for o in row["open_questions"]
+                    if isinstance(o, dict) and o.get("id") == oq["id"]]
+            self.assertEqual(mine[0]["kind"], "corroborate")
+            oq_delete(tid, oq["id"], _pid="p-test")
+        finally:
+            from core.graph.entities import delete_entity_hard
+            delete_entity_hard(tid)
+            register_record_roles(ROLES, maturity_order=LADDER,
+                                  artifact_types=ARTS)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

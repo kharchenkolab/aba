@@ -271,6 +271,9 @@ export default function WorkDock({ w, anchor, onClose, onWorldStale }: {
           <div className="dk__standing">
             {claim.maturityLabel ?? claim.maturity} · {claim.evidence} piece{claim.evidence === 1 ? '' : 's'} of evidence
           </div>
+          <GestureBar w={w} threadId={anchor.threadId}
+                      subject={claim.statement || claim.title}
+                      onFiled={onWorldStale} />
           {(claim.supportRefs?.length ?? 0) > 0 && (
             <div className="dk__evidence">
               {claim.supportRefs!.map(s => (
@@ -309,7 +312,11 @@ export default function WorkDock({ w, anchor, onClose, onWorldStale }: {
             : []
           return (
             <div key={i} className={`dk__msg dk__msg--${m.role === 'user' ? 'you' : 'guide'}`}>
-              <div className="dk__who">{m.role === 'user' ? 'you' : 'guide'} · {m.ts.slice(0, 16).replace('T', ' ')}</div>
+              <div className="dk__who">{m.role === 'user' ? 'you' : 'guide'} · {m.ts.slice(0, 16).replace('T', ' ')}
+                {m.role !== 'user' && (
+                  <PinButton w={w} threadId={anchor.threadId} text={m.text} ts={m.ts} />
+                )}
+              </div>
               <div className="dk__text">{mdBlocks(m.text)}</div>
               {(m.steps ?? 0) > 0 && (
                 <div className="dk__steps" title="tool runs between messages — each is a sediment line">
@@ -369,6 +376,88 @@ export default function WorkDock({ w, anchor, onClose, onWorldStale }: {
         </a>
       )}
     </aside>
+  )
+}
+
+// ---------------------------------------------------------------- gestures
+// The investigation family (§6): one-tap TYPED planned-item constructors.
+// Gestures never execute — each writes a plan item on the claim's line,
+// with its own ▷ work; the scrutiny ladder is requested by hand:
+//   check — is it sound?  corroborate — is it real?
+//   alternatives — is it rightly explained?  expand — grow the direction.
+
+const GESTURES: { verb: string; hint: string; tpl: (s: string) => string }[] = [
+  { verb: 'check', hint: 'is this result SOUND? error-hunting on the immediate analysis',
+    tpl: s => `check the soundness of: ${s} — robustness, spec sensitivity, the mundane explanation` },
+  { verb: 'corroborate', hint: 'is it REAL? an independent line of evidence — different method or data',
+    tpl: s => `corroborate independently: ${s} — a different design, method, or data slice` },
+  { verb: 'alternatives', hint: 'is it rightly EXPLAINED? rival hypotheses and the discriminating test',
+    tpl: s => `rival explanations for: ${s} — enumerate them and design the discriminating test` },
+  { verb: 'expand', hint: 'this is interesting — GROW the direction',
+    tpl: s => `expand the direction opened by: ${s}` },
+]
+
+function GestureBar({ w, threadId, subject, onFiled }: {
+  w: World; threadId: string; subject: string; onFiled?: () => void
+}) {
+  const [receipt, setReceipt] = useState<string | null>(null)
+  const file = async (verb: string, tpl: (s: string) => string) => {
+    const q = w.projectId ? `?project_id=${encodeURIComponent(w.projectId)}` : ''
+    try {
+      const short = subject.length > 140 ? `${subject.slice(0, 137)}…` : subject
+      const r = await fetch(`${w.apiBase ?? ''}/api/threads/${threadId}/open-questions${q}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: tpl(short), source: 'user', kind: verb }),
+      })
+      if (!r.ok) throw new Error(`${r.status}`)
+      setReceipt(`→ planned on this line · ${verb} — launch it from the section's plan`)
+      onFiled?.()
+    } catch (e) {
+      setReceipt(`could not file (${String(e)})`)
+    }
+  }
+  return (
+    <div className="dk__gestures">
+      {GESTURES.map(g => (
+        <button key={g.verb} className="dk__gesture" title={g.hint}
+                onClick={() => file(g.verb, g.tpl)}>
+          {g.verb}
+        </button>
+      ))}
+      {receipt && <div className="dk__receipt">{receipt}</div>}
+    </div>
+  )
+}
+
+// --------------------------------------------------------------------- pin
+// THE universal curation gesture (§6): "this matters; don't lose it."
+// A pinned answer files DIRECTLY as a note on this line — the user's own
+// noticing needs no ratification — and the receipt is the button itself.
+
+function PinButton({ w, threadId, text, ts }: {
+  w: World; threadId: string; text: string; ts?: string
+}) {
+  const [state, setState] = useState<'idle' | 'pinned' | 'failed'>('idle')
+  const pin = async () => {
+    if (state === 'pinned') return
+    const q = w.projectId ? `?project_id=${encodeURIComponent(w.projectId)}` : ''
+    try {
+      const r = await fetch(`${w.apiBase ?? ''}/api/record/pin${q}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ thread_id: threadId, text, ...(ts ? { ts } : {}) }),
+      })
+      if (!r.ok) throw new Error(`${r.status}`)
+      setState('pinned')
+    } catch { setState('failed') }
+  }
+  return (
+    <button className={`dk__pin ${state === 'pinned' ? 'dk__pin--on' : ''}`}
+            onClick={pin}
+            title={state === 'pinned'
+              ? 'pinned — filed as a note on this line'
+              : 'pin — this reasoning must not evaporate into the transcript; files as a note on this line, no ceremony'}>
+      {state === 'pinned' ? '📌 pinned → note' : state === 'failed' ? 'pin ✗' : 'pin'}
+    </button>
   )
 }
 

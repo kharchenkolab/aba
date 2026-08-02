@@ -147,6 +147,40 @@ describe('WorkDock', () => {
     await waitFor(() => expect(launched).toHaveBeenCalledOnce())
   })
 
+  it('investigation gestures compile into TYPED plan items — never execute', async () => {
+    const f = mockFetch({ '/messages?': [], '/active-turn': null,
+                          '/open-questions': { id: 'oq_1' } })
+    vi.stubGlobal('fetch', f)
+    render(
+      <WorkDock w={liveWorld()}
+                anchor={{ kind: 'claim', threadId: 'Q1', entityId: 'C1', title: 't' }}
+                onClose={() => {}} />)
+    fireEvent.click(screen.getByText('corroborate'))
+    await waitFor(() => screen.getByText(/→ planned on this line · corroborate/))
+    const call = f.mock.calls.find(c => String(c[0]).includes('/open-questions'))
+    const body = JSON.parse(String((call![1] as RequestInit).body))
+    expect(body.kind).toBe('corroborate')
+    expect(body.text).toContain('variance tracks batch, full statement')
+    // nothing ran: no /api/chat call
+    expect(f.mock.calls.some(c => String(c[0]).includes('/api/chat'))).toBe(false)
+  })
+
+  it('pin files the answer as a note on this line, directly', async () => {
+    const f = mockFetch({ '/messages?': MSGS, '/active-turn': null,
+                          '/api/record/pin': { id: 'nn_1' } })
+    vi.stubGlobal('fetch', f)
+    render(
+      <WorkDock w={liveWorld()} anchor={{ threadId: 'Q1', title: 'Q1?' }}
+                onClose={() => {}} />)
+    await waitFor(() => screen.getAllByText('pin'))
+    fireEvent.click(screen.getAllByText('pin')[0])
+    await waitFor(() => screen.getByText(/pinned → note/))
+    const call = f.mock.calls.find(c => String(c[0]).includes('/api/record/pin'))
+    const body = JSON.parse(String((call![1] as RequestInit).body))
+    expect(body.thread_id).toBe('Q1')
+    expect(body.text).toContain('Snapshot')
+  })
+
   it('a turn already live on the line surfaces as working on open', async () => {
     vi.stubGlobal('fetch', mockFetch({
       '/messages?': [], '/active-turn': { run_id: 'rr1', state: 'running' },

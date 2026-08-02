@@ -84,6 +84,9 @@ def threads_patch(tid: str, req: ThreadPatch, _pid: str = Depends(require_projec
 class OpenQRequest(BaseModel):
     text: str = ""
     source: str = "user"
+    # typed planned-item constructors (the Record's investigation gestures:
+    # check / corroborate / alternatives / expand) — plain items omit it
+    kind: str | None = None
 
 
 class OpenQPatch(BaseModel):
@@ -112,6 +115,7 @@ def oq_add(tid: str, req: OpenQRequest, _pid: str = Depends(require_project)):
     oqs = list((ent.get("metadata") or {}).get("open_questions") or [])
     oq = {"id": gen_entity_id("oq"), "text": req.text.strip(),
           "status": "open", "source": req.source,
+          **({"kind": req.kind} if req.kind else {}),
           "at": datetime.now(timezone.utc).isoformat()}
     oqs.append(oq)
     _save_oqs(tid, ent, oqs)

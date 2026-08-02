@@ -1346,3 +1346,16 @@ input { font: inherit; }
 /* live-line lamps (P7): derived from real turn state */
 .toc__live { color: var(--ok); font-size: 9px; margin-left: 4px;
   animation: rec-pulse 2s infinite; }
+
+/* gestures (P8): the investigation family + pin */
+.dk__gestures { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 8px; }
+.dk__gesture { font-family: var(--sans); font-size: 10.5px; color: var(--teal);
+  border: 1px solid var(--teal); border-radius: 7px; padding: 1px 9px; }
+.dk__gesture:hover { background: var(--teal-soft); }
+.dk__receipt { flex-basis: 100%; font-family: var(--sans); font-size: 10.5px;
+  color: var(--ok); }
+.dk__pin { font-family: var(--sans); font-size: 9.5px; color: var(--ink-3);
+  border: 1px solid var(--rule); border-radius: 6px; padding: 0 6px;
+  margin-left: 8px; text-transform: none; letter-spacing: 0; }
+.dk__pin:hover { color: var(--terra); border-color: var(--terra); }
+.dk__pin--on { color: var(--terra); border-color: var(--terra); }
