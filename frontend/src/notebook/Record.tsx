@@ -1410,6 +1410,53 @@ function BareStart({ w, onAdvance, onRefresh }: {
   )
 }
 
+/** The growth door on a LIVE page: any question can open its own line at
+ *  any age — the day-0 box's grammar, kept quiet at the story's foot.
+ *  Working never creates a thread; QUESTIONS create threads (§5). */
+function NewLine({ w, onRefresh }: { w: World; onRefresh?: () => void }) {
+  const [draft, setDraft] = useState('')
+  const [busy, setBusy] = useState(false)
+  const open = async () => {
+    const text = draft.trim()
+    if (!text || busy) return
+    setBusy(true)
+    try {
+      const q = w.projectId ? `?project_id=${encodeURIComponent(w.projectId)}` : ''
+      const tr = await fetch(`${w.apiBase}/api/threads${q}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: text.slice(0, 60), question: text,
+                               question_source: 'user' }),
+      })
+      if (!tr.ok) throw new Error(`threads ${tr.status}`)
+      const t = (await tr.json()) as { id: string }
+      const cr = await fetch(`${w.apiBase}/api/chat`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, thread_id: t.id,
+                               ...(w.projectId ? { project_id: w.projectId } : {}) }),
+      })
+      if (!cr.ok) throw new Error(`chat ${cr.status}`)
+      cr.body?.cancel()
+      setDraft('')
+      onRefresh?.()
+    } catch { /* the draft stays; retry is a keystroke */ }
+    setBusy(false)
+  }
+  return (
+    <div className="newline"
+         title="a new line of inquiry — its question becomes a section, its work a named sediment line; the first turn starts now">
+      <input value={draft} disabled={busy}
+             placeholder="+ open a new line of inquiry — ask, and the work starts…"
+             onChange={e => setDraft(e.target.value)}
+             onKeyDown={e => { if (e.key === 'Enter') open() }} />
+      {draft.trim() && (
+        <button className="nsec__work" disabled={busy} onClick={open}>
+          <SessGlyph /> {busy ? 'opening…' : 'open line'}
+        </button>
+      )}
+    </div>
+  )
+}
+
 // ---------------------------------------------------------------------- root
 
 export default function Record(props: { world?: World; onAdvance?: (t: string) => void
@@ -2143,6 +2190,7 @@ function RecordDoc({ w, onAdvance, triage, onRefresh }: {
                 ratified={ratified}
                 onWork={id => onAdvance?.(`work:${id}`)} />
             ))}
+            {isLive && <NewLine w={w} onRefresh={onRefresh} />}
           </div>
         )}
 

@@ -1361,3 +1361,12 @@ input { font: inherit; }
   margin-left: 8px; text-transform: none; letter-spacing: 0; }
 .dk__pin:hover { color: var(--terra); border-color: var(--terra); }
 .dk__pin--on { color: var(--terra); border-color: var(--terra); }
+
+/* the growth door — a quiet new-line composer at the story's foot */
+.newline { display: flex; gap: 8px; align-items: center; margin: 14px 0 4px; }
+.newline input {
+  flex: 1; font-family: var(--serif); font-size: 13px; font-style: italic;
+  color: var(--ink-2); background: transparent; padding: 7px 10px;
+  border: 1px dashed var(--rule-strong); border-radius: 8px;
+}
+.newline input:focus { outline: none; border-color: var(--teal); font-style: normal; }
