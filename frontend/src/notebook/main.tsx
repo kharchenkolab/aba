@@ -14,12 +14,44 @@ import './record.css'
 function Live(props: { api: string; project?: string; triage?: boolean }) {
   const [world, setWorld] = useState<World | null>(null)
   const [err, setErr] = useState<string | null>(null)
+  const [projects, setProjects] = useState<
+    { id: string; name?: string; last_touched?: string }[] | null>(null)
   useEffect(() => {
     fetchLiveWorld(props.api, props.project)
       .then(setWorld)
-      .catch(e => setErr(String(e)))
+      .catch(e => {
+        setErr(String(e))
+        // no project bound (fresh server, bare URL) — the face offers the
+        // project list instead of an error: an entrance, not a wall
+        if (!props.project) {
+          fetch(`${props.api}/api/projects`)
+            .then(r => r.ok ? r.json() : [])
+            .then((rows: { id: string; name?: string; last_touched?: string }[]) =>
+              setProjects([...rows].sort((a, b) =>
+                (b.last_touched || '').localeCompare(a.last_touched || ''))))
+            .catch(() => {})
+        }
+      })
   }, [props.api, props.project])
   if (err) {
+    if (projects?.length) {
+      return (
+        <div style={{ padding: '2.5rem', fontFamily: 'Georgia, serif', maxWidth: 560 }}>
+          <h2 style={{ marginTop: 0 }}>The Record</h2>
+          <p style={{ color: '#666' }}>which project shall we open?</p>
+          {projects.map(p => (
+            <p key={p.id} style={{ margin: '0.4rem 0' }}>
+              <a href={`/notebook.html?live=1&project=${p.id}`}
+                 style={{ color: '#1a7f74' }}>
+                {p.name || p.id}
+              </a>
+              {p.last_touched &&
+                <span style={{ color: '#999', fontSize: '0.85em' }}> · last touched {p.last_touched.slice(0, 10)}</span>}
+            </p>
+          ))}
+        </div>
+      )
+    }
     return (
       <div style={{ padding: '2rem', fontFamily: 'monospace' }}>
         <p>live world unavailable — {err}</p>
