@@ -56,6 +56,7 @@ export function mdBlocks(text: string): ReactNode[] {
   const lines = text.split('\n')
   let para: string[] = []
   let list: string[] = []
+  let table: string[][] = []
   let k = 0
   const flushPara = () => {
     if (para.length) { out.push(<p key={`p${k++}`}>{mdInline(para.join(' '))}</p>); para = [] }
@@ -66,16 +67,39 @@ export function mdBlocks(text: string): ReactNode[] {
       list = []
     }
   }
+  const flushTable = () => {
+    if (table.length) {
+      const [head, ...rows] = table
+      out.push(
+        <div className="dk__tablewrap" key={`t${k++}`}>
+          <table className="dk__table">
+            <thead><tr>{head.map((c, i) => <th key={i}>{mdInline(c)}</th>)}</tr></thead>
+            <tbody>{rows.map((r, ri) =>
+              <tr key={ri}>{r.map((c, ci) => <td key={ci}>{mdInline(c)}</td>)}</tr>)}</tbody>
+          </table>
+        </div>)
+      table = []
+    }
+  }
   for (const raw of lines) {
     const line = raw.trimEnd()
     const h = /^(#{1,4})\s+(.*)$/.exec(line)
     const li = /^\s*[-*]\s+(.*)$/.exec(line)
+    const tr = /^\s*\|(.+)\|\s*$/.exec(line)
+    if (tr) {
+      flushPara(); flushList()
+      const cells = tr[1].split('|').map(c => c.trim())
+      // the |---|---| separator row is table CHROME, not a row
+      if (!cells.every(c => /^:?-{2,}:?$/.test(c) || c === '')) table.push(cells)
+      continue
+    }
+    flushTable()
     if (h) { flushPara(); flushList(); out.push(<div className="dk__h" key={`h${k++}`}>{mdInline(h[2])}</div>) }
     else if (li) { flushPara(); list.push(li[1]) }
     else if (!line.trim()) { flushPara(); flushList() }
     else { flushList(); para.push(line) }
   }
-  flushPara(); flushList()
+  flushPara(); flushList(); flushTable()
   return out
 }
 

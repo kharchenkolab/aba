@@ -1370,3 +1370,10 @@ input { font: inherit; }
   border: 1px dashed var(--rule-strong); border-radius: 8px;
 }
 .newline input:focus { outline: none; border-color: var(--teal); font-style: normal; }
+
+/* dock transcript tables (agent output) — scroll inside, never overflow */
+.dk__tablewrap { overflow-x: auto; margin: 4px 0 8px; }
+.dk__table { border-collapse: collapse; font-family: var(--sans); font-size: 11px; }
+.dk__table th, .dk__table td { border: 1px solid var(--rule); padding: 2px 7px;
+  text-align: left; white-space: nowrap; color: var(--ink-2); }
+.dk__table th { background: var(--paper-2); font-weight: 600; }

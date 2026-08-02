@@ -65,6 +65,16 @@ describe('mdBlocks', () => {
     expect(container.textContent).not.toContain('##')
     expect(container.textContent).not.toContain('**')
   })
+
+  it('renders pipe tables as tables, dropping the separator row', () => {
+    const { container } = render(<div>{mdBlocks(
+      '| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n\nafter')}</div>)
+    const t = container.querySelector('.dk__table')!
+    expect(t.querySelectorAll('th').length).toBe(2)
+    expect(t.querySelectorAll('tbody tr').length).toBe(2)
+    expect(container.textContent).not.toContain('---')
+    expect(container.textContent).toContain('after')
+  })
 })
 
 describe('WorkDock', () => {
