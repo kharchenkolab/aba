@@ -1255,14 +1255,16 @@ input { font: inherit; }
   display: flex; flex-direction: column;
 }
 .dk__head {
-  display: flex; align-items: baseline; gap: 10px; padding: 12px 14px 8px;
+  display: grid; grid-template-columns: 1fr auto; column-gap: 10px;
+  align-items: start; padding: 12px 14px 8px;
   border-bottom: 1px solid var(--rule);
 }
 .dk__kicker { font-family: var(--sans); font-size: 10px; font-weight: 700;
   letter-spacing: 0.06em; text-transform: uppercase; color: var(--teal);
-  white-space: nowrap; }
+  grid-column: 1; }
 .dk__title { font-family: var(--serif); font-size: 14px; font-weight: 650;
-  color: var(--ink); flex: 1; min-width: 0; }
+  color: var(--ink); grid-column: 1; min-width: 0; }
+.dk__close { grid-column: 2; grid-row: 1 / span 2; }
 .dk__close { color: var(--ink-3); font-size: 13px; }
 .dk__close:hover { color: var(--ink); }
 

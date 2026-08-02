@@ -293,8 +293,14 @@ def _unfiled_session_note(ctx: dict, tid: str) -> None:
     if (ctx.get("total_tool_calls") or 0) < 2 or ctx.get("suggestion"):
         return
     try:
+        # "analysis happened here": turn runs OR exec records — one long
+        # turn with many execs is the COMMON unfiled shape (measured live:
+        # a 7-exec first turn filed nothing and the runs-only gate never
+        # armed, so the nudge never fired)
+        from core.graph import exec_records
         from core.graph.runs_port import list_runs
-        if len(list_runs(thread_id=tid)) < 2:
+        if (len(list_runs(thread_id=tid)) < 2
+                and len(exec_records.list_by_thread(tid, limit=3)) < 2):
             return
         if _claims_of_thread(tid):
             return

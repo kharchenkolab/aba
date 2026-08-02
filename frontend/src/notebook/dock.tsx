@@ -196,10 +196,17 @@ export default function WorkDock({ w, anchor, onClose, onWorldStale }: {
     return () => clearInterval(iv)
   }, [turn.phase, activeTurn, onWorldStale])
 
-  // auto-follow the tail while a turn streams in
+  // the dock opens where the line LEFT OFF — the tail; and keeps
+  // following it while a turn streams in
+  const sawFirst = useRef(false)
+  useEffect(() => { sawFirst.current = false },
+    [anchor.threadId, anchor.from, anchor.to])
   useEffect(() => {
-    if (turn.phase === 'working' && bodyRef.current)
+    if (!bodyRef.current || msgs === null) return
+    if (!sawFirst.current || turn.phase === 'working') {
       bodyRef.current.scrollTop = bodyRef.current.scrollHeight
+      sawFirst.current = true
+    }
   }, [msgs, turn.phase])
 
   const send = async () => {
