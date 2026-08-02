@@ -18,6 +18,8 @@ export interface ClaimRef {
   maturity: 'conjecture' | 'supported' | 'cross-checked' | 'robust' | 'contested'
   evidence: number
   caveats: string[]
+  /** the FULL assertion (display titles truncate) — the claim card reads it */
+  statement?: string
 }
 
 export interface Paragraph {

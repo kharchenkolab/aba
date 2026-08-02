@@ -927,6 +927,40 @@ function MarginBench({ w, target, onClose }: {
       { role: 'guide', text: 'Canned in the prototype — but note what did NOT happen: you never had to say which element you meant. The margin opened with it focused.' }])
     setDraft('')
   }
+  // live mode: a claim chip opens the claim's CARD — its full statement,
+  // maturity, evidence, caveats — never a mock chat (a composer that
+  // pretends to send is a door to an empty room)
+  const liveClaim = w.apiBase !== undefined ? w.claims[target.id] : undefined
+  if (liveClaim) {
+    return (
+      <aside className="bench">
+        <div className="bench__head">
+          <div>
+            <div className="bench__kicker">claim · {liveClaim.maturity}</div>
+            <div className="bench__target">{target.label}</div>
+          </div>
+          <button className="bench__close" onClick={onClose} title="close">✕</button>
+        </div>
+        <div className="bench__msgs">
+          <div className="bmsg bmsg--guide">
+            <span className="bmsg__who">statement</span>
+            <p>{liveClaim.statement || liveClaim.title}</p>
+          </div>
+          <div className="bmsg bmsg--guide">
+            <span className="bmsg__who">standing</span>
+            <p>{liveClaim.maturity} · {liveClaim.evidence} piece{liveClaim.evidence === 1 ? '' : 's'} of evidence</p>
+          </div>
+          {liveClaim.caveats.length > 0 && (
+            <div className="bmsg bmsg--guide">
+              <span className="bmsg__who">caveats</span>
+              <p>{liveClaim.caveats.join(' · ')}</p>
+            </div>
+          )}
+        </div>
+        <div className="bench__note">to contest or refine this claim, take it up on its line — the chat door on its section</div>
+      </aside>
+    )
+  }
   return (
     <aside className="bench">
       <div className="bench__head">

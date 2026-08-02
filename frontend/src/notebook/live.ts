@@ -105,6 +105,8 @@ export function apiToWorld(a: ApiWorld): World {
       maturity: maturityWord(c.rung, a.maturity_ladder),
       evidence: c.evidence ?? c.supports.length,
       caveats: c.caveats || [],
+      ...((c as { statement?: string }).statement
+        ? { statement: (c as { statement?: string }).statement } : {}),
     }
   }
 
