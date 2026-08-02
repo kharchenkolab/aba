@@ -1342,3 +1342,7 @@ input { font: inherit; }
   font-size: 10.5px; color: var(--teal); border: 1px solid var(--teal);
   border-radius: 7px; padding: 1px 8px; white-space: nowrap; cursor: pointer; }
 .sedthr__go:hover { background: var(--teal-soft); }
+
+/* live-line lamps (P7): derived from real turn state */
+.toc__live { color: var(--ok); font-size: 9px; margin-left: 4px;
+  animation: rec-pulse 2s infinite; }

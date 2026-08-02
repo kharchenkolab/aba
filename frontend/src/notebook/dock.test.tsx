@@ -133,6 +133,20 @@ describe('WorkDock', () => {
     screen.getByText('▷ launch')
   })
 
+  it('a plan launch fires onLaunched exactly at SEND (taken-up at launch)', async () => {
+    const f = mockFetch({ '/messages?': [], '/active-turn': null, '/api/chat': {} })
+    vi.stubGlobal('fetch', f)
+    const launched = vi.fn()
+    render(
+      <WorkDock w={liveWorld()}
+                anchor={{ kind: 'plan', threadId: 'Q1', title: 'Q1?',
+                          seed: 'shade comparison', onLaunched: launched }}
+                onClose={() => {}} />)
+    expect(launched).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByText('▷ launch'))
+    await waitFor(() => expect(launched).toHaveBeenCalledOnce())
+  })
+
   it('a turn already live on the line surfaces as working on open', async () => {
     vi.stubGlobal('fetch', mockFetch({
       '/messages?': [], '/active-turn': { run_id: 'rr1', state: 'running' },

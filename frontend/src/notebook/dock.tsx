@@ -26,6 +26,9 @@ export interface DockAnchor {
   /** transcript scoping for frozen sittings */
   from?: string
   to?: string
+  /** fires when a plan anchor's seeded ask is actually SENT — the item
+   *  flips to taken-up at launch, not at click */
+  onLaunched?: () => void
 }
 
 // ------------------------------------------------------------ tiny markdown
@@ -226,6 +229,7 @@ export default function WorkDock({ w, anchor, onClose, onWorldStale }: {
       })
       if (!r.ok) throw new Error(`chat ${r.status}`)
       r.body?.cancel()
+      if (anchor.kind === 'plan') anchor.onLaunched?.()
       setTurn({ phase: 'working' })
       setRefreshKey(k => k + 1)
     } catch (e) {

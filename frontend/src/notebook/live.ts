@@ -144,7 +144,9 @@ export function apiToWorld(a: ApiWorld): World {
     const planItems = open.map(o => ({
       text: o.text,
       state: (['resolved', 'done', 'closed', 'answered'].includes(o.status)
-        ? 'produced' : 'planned') as 'produced' | 'planned',
+        ? 'produced'
+        : o.status === 'taken_up' ? 'taken-up'
+        : 'planned') as 'produced' | 'planned' | 'taken-up',
       ...(o.id ? { oqId: o.id } : {}),
     }))
     const sits = sitsByThread.get(q.id) || []

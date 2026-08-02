@@ -1738,6 +1738,12 @@ if (_FRONTEND_DIST / "index.html").is_file():
             raise HTTPException(404, "not found")
         candidate = _FRONTEND_DIST / full_path
         if full_path and candidate.is_file():
+            # EVERY html bootstrap needs the no-cache treatment, not just
+            # the fallback shell — notebook.html is a real file on disk and
+            # was being cached indefinitely, stranding browsers on a bundle
+            # hash deleted by the next build.
+            if candidate.suffix == ".html":
+                return FileResponse(str(candidate), headers=_INDEX_NO_CACHE)
             return FileResponse(str(candidate))
         return FileResponse(str(_FRONTEND_DIST / "index.html"),
                             headers=_INDEX_NO_CACHE)

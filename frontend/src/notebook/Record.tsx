@@ -150,6 +150,8 @@ interface RefCtx {
   /** routine drafts are veto-tier: file in place, undoable */
   accepted: Set<string>
   accept: (key: string) => void
+  /** live: lines with a turn running NOW — sections wear the ▶ lamp */
+  liveLines?: Set<string>
 }
 
 /** Render prose with [[kind:id|label]] live references. Block-level
@@ -319,13 +321,17 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
     )
   }
   // the live session's home locus wears a STANDING state — scroll away and
-  // back, and where the work is landing stays unmistakable
-  const anchored = w.anchorAt?.elId === s.id
+  // back, and where the work is landing stays unmistakable. In live mode
+  // the lamp derives from REAL turn state (a turn running on this line).
+  const turnLive = ctx.liveLines?.has(s.id) ?? false
+  const anchored = w.anchorAt?.elId === s.id || turnLive
   return (
     <section className={`nsec ${anchored ? 'nsec--live' : ''} ${depth > 0 ? 'nsec--sub' : ''}`} id={`el-${s.id}`}>
       {anchored && (
         <div className="nsec__livetag" title="this session's anchor — its products land here first; the state stands until the session closes">
-          <SessGlyph live /> {w.anchorAt!.session} · working here
+          <SessGlyph live /> {w.anchorAt?.elId === s.id
+            ? `${w.anchorAt!.session} · working here`
+            : 'working here now — steps land in the sediment as they finish'}
         </div>
       )}
       <div className="nsec__head">
@@ -537,9 +543,9 @@ function NarrativeSection({ s, ctx, methods, onMethods, onRatify, ratified, onWo
       })}
       <PlanBlock s={s} w={w} onWork={onWork}
                  onLaunch={ctx.openTranscript
-                   ? text => ctx.openTranscript!({
+                   ? (text, mark) => ctx.openTranscript!({
                        kind: 'plan', threadId: s.id, title: s.question,
-                       seed: text })
+                       seed: text, onLaunched: mark })
                    : undefined} />
       {(s.children?.length ?? 0) > 0 && (
         <div className="nsec__children">
@@ -565,8 +571,9 @@ type PlanItem = NonNullable<Section['plan']>[number]
 function PlanBlock({ s, w, onWork, onLaunch }: {
   s: Section; w: World; onWork?: (id: string) => void
   /** live: ▷ work on an item — the dock opens on this line with the item
-   *  seeded in the composer (reviewed, then sent — never auto-fired) */
-  onLaunch?: (text: string) => void }) {
+   *  seeded in the composer (reviewed, then sent — never auto-fired);
+   *  `mark` fires at actual LAUNCH and flips the item to taken-up */
+  onLaunch?: (text: string, mark: () => void) => void }) {
   const [items, setItems] = useState<PlanItem[]>(() => (s.plan ?? []).map(p => ({ ...p })))
   const [draft, setDraft] = useState('')
   const [editing, setEditing] = useState<number | null>(null)
@@ -656,10 +663,28 @@ function PlanBlock({ s, w, onWork, onLaunch }: {
           )}
           {p.mine && <span className="plan__meta">yours</span>}
           {p.meta && <span className="plan__meta">{p.meta}</span>}
+          {p.state === 'taken-up' && (
+            <span className="plan__acts">
+              {live && (
+                <button className="plan__x" title="mark done — evidence for this exists elsewhere"
+                        onClick={() => { oqPatch(p.oqId, { status: 'answered' }); setItems(xs => xs.map((x, k) => k === i ? { ...x, state: 'produced' } : x)) }}>
+                  ✓
+                </button>
+              )}
+              <button className="plan__x" title="park it — off the plan, remembered, one-click undo"
+                      onClick={() => { oqPatch(p.oqId, { status: 'parked' }); setParked({ item: p, at: i }); setItems(xs => xs.filter((_, k) => k !== i)) }}>
+                ✕
+              </button>
+            </span>
+          )}
           {p.state === 'planned' && (
             <span className="plan__acts">
               {onLaunch && (
-                <button className="nsec__work" onClick={() => onLaunch(p.text)}
+                <button className="nsec__work"
+                        onClick={() => onLaunch(p.text, () => {
+                          oqPatch(p.oqId, { status: 'taken_up' })
+                          setItems(xs => xs.map((x, k) => k === i ? { ...x, state: 'taken-up' } : x))
+                        })}
                         title="the play button, pointed at this planned item — the dock opens on this question's line with the item as the ask; review it, then send to launch">
                   <SessGlyph /> work
                 </button>
@@ -1357,6 +1382,11 @@ function RecordDoc({ w, onAdvance, triage, onRefresh }: {
   // and Escape closes whichever is open.
   const [liveTx, setLiveTx] = useState<DockAnchor | null>(null)
   const [sessDock, setSessDock] = useState<string | null>(null)
+  // P7 — the page tracks the work: which lines have a turn running NOW.
+  // Lamps derive from real turn state (§6 rule 7), checked on load and on
+  // a slow cadence while anything is live; the world refetches on the
+  // same cadence so sediment accretes at launch, not at reload.
+  const [liveLines, setLiveLines] = useState<Set<string>>(new Set())
   const [grain, setGrain] = useState<'run' | 'session' | 'thread'>(w.sedimentGrain ?? 'run')
   // thread grain: which named lines are unfolded to their run rows
   const [openThreads, setOpenThreads] = useState<Set<string>>(new Set())
@@ -1392,6 +1422,34 @@ function RecordDoc({ w, onAdvance, triage, onRefresh }: {
       !(p.kind === 'claim draft' && drafted.has(p.key.replace('-nudge', '')))),
     [w, ratified, accepted, drafted])
   const deltas = useMemo(() => effectiveDeltas(w, pending), [w, pending])
+
+  // which lines are working right now (live mode) — one active-turn probe
+  // per section; cheap (sections are few), re-armed while any line is hot
+  const isLive = w.apiBase !== undefined
+  useEffect(() => {
+    if (!isLive) return
+    let on = true
+    const check = async () => {
+      const q = w.projectId ? `?project_id=${encodeURIComponent(w.projectId)}` : ''
+      const ids = walkSections(w.sections).map(({ s }) => s.id)
+      const hot = await Promise.all(ids.map(async id => {
+        try {
+          const r = await fetch(`${w.apiBase}/api/threads/${id}/active-turn${q}`)
+          if (!r.ok) return null
+          return (await r.json()) ? id : null
+        } catch { return null }
+      }))
+      if (on) setLiveLines(new Set(hot.filter((x): x is string => !!x)))
+    }
+    check()
+    const iv = setInterval(async () => {
+      await check()
+      // sediment accretes at launch — while lines are hot, the world
+      // refreshes itself (the closure sees the latest liveLines via check)
+      setLiveLines(cur => { if (cur.size > 0) onRefresh?.(); return cur })
+    }, 15000)
+    return () => { on = false; clearInterval(iv) }
+  }, [isLive, w.apiBase, w.projectId, w.sections, onRefresh])
 
   // ⌘K — the fast entry: ask or find, from anywhere
   useEffect(() => {
@@ -1477,7 +1535,8 @@ function RecordDoc({ w, onAdvance, triage, onRefresh }: {
     scrollTo,
     openSession: (id, turn) => { if (findSession(id)) { setSessDock(null); setSessPage({ id, turn }) } },
     ...(w.apiBase !== undefined
-      ? { openTranscript: (t: DockAnchor) => { setBenchFor(null); setLiveTx(t) } } : {}),
+      ? { openTranscript: (t: DockAnchor) => { setBenchFor(null); setLiveTx(t) },
+          liveLines } : {}),
     look: label => setLookingAt(label),
     hold: (elId, label) => setHeld(h => h.some(x => x.elId === elId) ? h : [...h, { elId, label }]),
     accepted,
@@ -1643,6 +1702,9 @@ function RecordDoc({ w, onAdvance, triage, onRefresh }: {
                       title={s.question} onClick={() => scrollTo(`el-${s.id}`)}>
                 <span className={`toc__phase toc__phase--${s.phase}`} />
                 <span className="toc__text">{s.question}</span>
+                {liveLines.has(s.id) && (
+                  <span className="toc__live" title="a turn is running on this line now">▶</span>
+                )}
                 {deltaBadge(`el-${s.id}`)}
               </button>
             ))}
