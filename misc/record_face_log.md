@@ -187,3 +187,31 @@ already existed) and schedules phases 5–10; this round built 5–9:
   the first turn (threads + chat, two calls); the page leaves bare and
   wears the working lamp — the whole §5 loop now runs from the Record
   on a fresh project with no workspace visit.
+
+## 23 · Braided lines + messy realism (SC2/SC3) (+1h)
+
+The SC2 play on the from-scratch project surfaced, then closed, three
+gaps — each found by DRIVING, none by reading code:
+
+- **No growth door.** A non-bare live page had no way to open a NEW
+  line of inquiry — the day-0 box exists exactly once. Added the quiet
+  new-line composer at the story's foot (questions create threads, §5;
+  the ask fires the line's first turn). Used it to open the residual
+  line; it appeared as a section + a named sediment line immediately.
+- **Cross-line supersede is real and the face carries it.** Line 2's
+  analysis (Erlang-C back-solve; the injected effect is a decaying
+  one-week tail) proposed sharpening line 1's claim — "partially
+  persists" was now misleading — and on consent SUPERSEDED it with the
+  fully-resolved version, evidence from both lines attached. The braid
+  behaves as §5 promised: evidence is many-to-many; the graph prices
+  it at zero.
+- **Staleness is drift, not growth.** After the supersede, line 1's
+  ratified prose cited a ghost and the revision detector — keyed on
+  claim-count INCREASE — stayed silent. Now it fires on any count
+  drift; the drift revision proposed and ratified through the normal
+  path, and the story re-narrates the arc in past tense.
+- Messy realism, free of charge: the second thread's kernel could not
+  see the first thread's dataset (per-thread workdirs) — the guide
+  said so plainly, offered three routes, and the absolute path
+  unblocked it. The dock also met agent TABLES (rendered raw) — the
+  transcript renderer now draws pipe tables, scrollable.

@@ -265,13 +265,17 @@ def review_thread(tid: str):
             payload=payload)
     head = heads[-1]
     seen = (head.get("metadata") or {}).get("drafted_claims")
-    if seen is not None and len(claims) > seen:
+    # staleness is DRIFT, not growth: a superseded/retired claim leaves the
+    # story citing a ghost just as surely as a new claim leaves it behind
+    # (measured live: a cross-line supersede shrank the claim set and the
+    # ratified prose kept asserting the dead version)
+    if seen is not None and len(claims) != seen:
         payload["revises"] = head["id"]
         payload["title"] = head.get("title") or payload["title"]
         return add_proposal(
             thread_id=tid, kind="record_draft", advisor="record_drafter",
-            headline=(f"claims have landed since this story was drafted "
-                      f"({len(claims)} now, {seen} then) — revise it"),
+            headline=(f"the claim set has moved since this story was "
+                      f"drafted ({len(claims)} now, {seen} then) — revise it"),
             signature=f"record_draft:{tid}:{len(claims)}",
             payload=payload)
     return None
