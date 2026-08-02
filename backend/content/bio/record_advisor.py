@@ -95,7 +95,10 @@ _DRAFT_CHARTER = (
     "given maturity, naming it in parentheses, never stronger; order for "
     "reading (chronology or mechanism), but the strongest finding must be "
     "unmistakably the center; set contested/refuted material apart at the "
-    "end; no headings, no lists, no identifiers. Include NOTHING the "
+    "end; no headings, no lists. NEVER reproduce entity identifiers "
+    "(dat_/fig_/thr_/res_ codes and the like) even when a claim's text "
+    "contains them — refer to artifacts by NAME or description; the "
+    "record reads as prose, not as a database. Include NOTHING the "
     "listed claims do not state: no analysis, confirmation, or success "
     "language, no mechanisms or consequences of your own — connect the "
     "claims plainly and stop. Reply with the paragraph only.")
