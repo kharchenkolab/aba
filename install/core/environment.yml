@@ -85,7 +85,13 @@ dependencies:
       # 'h2' package is not installed`. Pin to the [http2] extra so the dep
       # set is explicit even though `anthropic` pulls in plain `httpx`.
       - httpx[http2]
-      - mcp
+      # PINNED below 2.0: `mcp` 2.0.0 MOVED `mcp.server.fastmcp`, which is what
+      # content/bio/mcp_servers/aba_core imports — and aba_core IS the agent's
+      # tool catalog. An unpinned resolve to 2.0.0 therefore takes the catalog to
+      # ZERO: every turn still answers, in prose, calling nothing. Measured live
+      # 2026-08-08; the only signal was one startup print (now also a critical
+      # selfcheck on /api/health). Moving this pin means porting that import.
+      - "mcp <2"
       - pydantic
       - python-dotenv
       - pypdfium2

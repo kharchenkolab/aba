@@ -787,6 +787,24 @@ def wf_concurrent_threads_one_site(pid, tid, site, n=3):
     live = [r for r in results if not isinstance(r, Exception)]
     checks.append((f"all {n} concurrent threads completed", len(live) == n))
 
+    # ARMING, and it must come FIRST. Every assertion below is about whether
+    # concurrent work interfered; none of them mean anything if no work ran.
+    # Live 2026-08-08: the deployment's tool catalog was empty (an unpinned
+    # `mcp` had moved a module out from under the in-process server), so all
+    # three lanes answered in prose with ZERO tool calls — and this scenario
+    # reported "lane0/lane1 did not recall their state", which reads as a
+    # kernel-crosstalk finding and is nothing of the sort. A lane that executed
+    # nothing is a BROKEN RUN, not a result: say so, and say only that.
+    per_thread = {tags[i]: [nm for nm, _i, _f in _tool_calls(pid, t)]
+                  for i, t in enumerate(tids)}
+    silent = [t for t, calls in per_thread.items() if not calls]
+    if silent:
+        checks.append((
+            f"PRECONDITION: every lane actually executed something "
+            f"(no tool calls in {sorted(silent)} — this run says NOTHING about "
+            f"concurrency; check the tool catalog: /api/admin/selfcheck)", False))
+        return {"text": "", "errors": []}, checks
+
     for i, r in enumerate(results):
         tag, val = tags[i], 1000 + i
         if isinstance(r, Exception):
@@ -802,12 +820,10 @@ def wf_concurrent_threads_one_site(pid, tid, site, n=3):
         checks.append((f"{tag}: no other lane's tag leaked in",
                        not any(o in txt for o in others)))
 
-    # Every thread's file must be attributed to ITS OWN thread's records.
-    per_thread = {}
-    for i, t in enumerate(tids):
-        per_thread[tags[i]] = [n for n, _i, _f in _tool_calls(pid, t)]
+    # Every thread's calls are attributed to ITS OWN thread's records (the
+    # precondition above already established that each lane made some).
     checks.append(("each thread recorded its own tool calls",
-                   all(v for v in per_thread.values())))
+                   all(per_thread.values())))
     return {"text": "", "errors": []}, checks
 
 

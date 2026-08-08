@@ -44,6 +44,12 @@ becomes the one people trust, because it is the one that is green.
   PRESCRIBES the behaviour under test. Guards must additionally be **armed** (a run that
   measured nothing fails), **proven** (shown red against the code it guards), and **wide**
   (covers the degenerate shapes of its input).
+- **A live lane must check its own preconditions BEFORE it reports a verdict.** Arming
+  is not only a guard-suite discipline. Three concurrent lanes once reported "did not
+  recall their state" — a crosstalk-shaped finding — when the truth was that the
+  deployment's tool catalog was empty and no lane had executed anything at all. A run in
+  which nothing happened must say *that*, not answer the question it was asked. The
+  concurrency lane now fails on the precondition and reports nothing else.
 - **Don't push a question to a cheaper layer than can answer it.** A hermetic test of a
   remote code path proves only that the fake agreed with you.
 - **Mechanism truth and surface truth are separate claims.** The sweep once verified
@@ -134,6 +140,22 @@ automatically. Findings accumulate in `regtest/FINDINGS.md`.
 | why did this step fail? | `harness/forensic.py` |
 | is the *guidance* (banner, recipe, tool prose) doing its job? | scenario sweep, **un-prescribed** prompt |
 | does anything break when turns overlap? | `--concurrent` / `--cross-project` + `project_isolation.py` |
+| do the places that pin one external thing still agree? | a property guard listing every member (`test_lstar_lockstep.py`) |
+| does the code behave against a library we can't install here? | a FAKE of that library at the subprocess seam (`test_viewer_store_contract.py`) |
+
+Two of those deserve a note.
+
+**A pin that appears in more than one file is a property, not a comment.** Five files named
+the lstar version and prose said "bump these together"; two were a release behind anyway. The
+guard lists every member, so adding a sixth consumer is one row and a forgotten one is a red
+suite. The same shape fits any cross-repo version that must move as a set.
+
+**When the library under test cannot be in the hermetic env, fake it — but faithfully.** The
+viewer-store guards stand in for lstar, which lives only in the session env. The fake RAISES
+on the calls the real one refuses (an eager read of a store, a read of field values), because
+a fake that is more permissive than reality blesses exactly the bug you are guarding against.
+Its assertions are on the ACTIONS taken — the source archive is not modified, a clean store is
+not re-emitted, a defective one is copied rather than repaired in place — not on the result.
 
 That last row is the subtle one. A prompt that names the mechanism ("write it in the run's
 working directory") tests obedience and cannot fail for the reason that matters. State the

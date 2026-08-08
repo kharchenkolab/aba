@@ -129,6 +129,7 @@ async def on_startup():
     # so bio's own tools flow through the same channel as external
     # stdio servers (see misc/phase6_mcp_wrapping.md). 6.A registers
     # zero tools today; subsequent sub-phases populate clusters.
+    _aba_core_error: "str | None" = None
     try:
         from core.runtime.mcp import (
             start_all as start_mcp, status as mcp_status,
@@ -150,6 +151,7 @@ async def on_startup():
             )
         except Exception as e:  # noqa: BLE001
             print(f"[startup] aba_core in-process server failed: {e}")
+            _aba_core_error = f"{type(e).__name__}: {e}"
         s = mcp_status()
         n_up = sum(1 for srv in s["servers"] if srv["state"] == "connected")
         n_tot = len(s["servers"])
@@ -157,6 +159,40 @@ async def on_startup():
             print(f"[startup] MCP gateway: {n_up}/{n_tot} servers connected")
     except Exception as e:  # noqa: BLE001
         print(f"[startup] MCP gateway init failed: {e}")
+        _aba_core_error = _aba_core_error or f"gateway init: {type(e).__name__}: {e}"
+
+    # An EMPTY tool catalog is a total functional outage: `aba_core` IS the
+    # agent's catalog (TOOL_SCHEMAS is pruned above), so a failure to register
+    # it leaves every turn able to talk and unable to act. It used to cost one
+    # `print` on a log nobody tails while /api/health stayed green — measured
+    # live 2026-08-08, when the unpinned `mcp` dep resolved to 2.0.0 (which
+    # moved `mcp.server.fastmcp`) and three concurrent turns answered in prose
+    # with zero tool calls and no error anywhere. Report it where an operator
+    # already looks.
+    def _check_tool_catalog() -> dict:
+        try:
+            from core.runtime.mcp import gateway
+            n = len(gateway.list_tools())
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "severity": "critical",
+                    "detail": f"tool catalog unreadable: {type(e).__name__}: {e}"}
+        if n:
+            return {"ok": True, "severity": "info", "detail": f"{n} tools exposed"}
+        return {"ok": False, "severity": "critical",
+                "detail": ("the agent's tool catalog is EMPTY — it can answer but "
+                           "cannot act; every turn will look plausible and do "
+                           "nothing" +
+                           (f" (aba_core: {_aba_core_error})" if _aba_core_error
+                            else ""))}
+
+    try:
+        from core.runtime import selfcheck
+        selfcheck.register("tool_catalog", _check_tool_catalog)
+        for _r in selfcheck.run():
+            if not _r.get("ok"):
+                print(f"[startup] selfcheck {_r['name']}: {_r.get('detail')}")
+    except Exception as e:  # noqa: BLE001
+        print(f"[startup] tool-catalog selfcheck failed to register: {e}")
 
     # C-2: kick off the TurnSink TTL sweeper. Runs every hour, deletes
     # JSONL files older than 7d (`turn_events/*.jsonl`) and evicts

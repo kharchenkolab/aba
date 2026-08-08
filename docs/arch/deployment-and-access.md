@@ -192,6 +192,7 @@ rebuilds an image; a dependency bump never reships the app):
 | **compute env images** | one line per stack (`releases/<ver>/image.sqfs` + `current`) | a stack's deps change | weft re-solves → publishes an `image.sqfs` keyed by EnvID (`core/compute/seeding.py` → weft publish/adopt) |
 | **recipe/rules bundle** | `installation/` (optionally versioned) | recipes/policy edit | refresh the dir (`aba update`) — no image rebuild |
 | **shared refs** | `refs/` (data store) | curator adds data | append; not a release |
+| **base env packs** | `installation/envs/*.yaml` | a pin in the shipped pack moves | **nothing automatic** — the installer writes these on a FRESH install and `aba update` never overwrites them; the dir is the operator's. `aba doctor` compares the deployed pins against the ones this ABA ships and prints the difference plus the fix (`cli.env_pack_drift`); applying it stays a deliberate act. Report, never rewrite — an environment is not ours to change under a running deployment, but a deployment that has silently fallen behind is not a state anyone should have to discover from a failure |
 
 **Pin-on-launch.** A session/job resolves `current` → a concrete release **once** at start
 (`resolve_current` / `active_release_id`, `core/release.py`; the OOD launcher's

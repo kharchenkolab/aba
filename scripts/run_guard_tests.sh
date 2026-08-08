@@ -21,6 +21,7 @@ FILES=(
   tests/test_suite_census.py
   # shared-agent-input guards (tool catalog / prompts / cache placement)
   tests/test_tool_conventions.py
+  tests/test_tool_catalog_liveness.py
   tests/test_tool_allowlist.py
   tests/test_tool_presentation.py
   tests/test_lean_catalog_compression.py
