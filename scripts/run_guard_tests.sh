@@ -70,6 +70,7 @@ FILES=(
   tests/test_remote_kernel_lane.py
   tests/test_kernel_cwd_guard.py
   tests/test_remote_setup_purity.py
+  tests/test_exec_argv_activation.py
   tests/test_handle_round_trip.py
   tests/test_job_failure_surfacing.py
   tests/test_shared_fs_inference.py

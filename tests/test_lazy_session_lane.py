@@ -320,11 +320,27 @@ def test_activation_only_argv_wraps(lazy_activation_only):
 # ── argv builder (pure) ──────────────────────────────────────────────────────
 
 def test_argv_for_runtime_direct():
+    """A directly-execable prefix skips the activation — for PYTHON.
+
+    R does not, and this test asserted that it did. `direct_exec` means the
+    prefix is execable, not that the environment is complete: a pack's `cran:`
+    layer is solved into a separate `<env>/rlib` and reaches R only through the
+    `R_LIBS` the activation exports. Measured 2026-08-08 on the r-bio pack —
+    `lstar ==0.2.2` was installed correctly in `rlib` and `library(lstar)`
+    failed through ABA's own door, so every R lane was blind to every cran dep
+    the pack declared. The rule now lives in `project_env._needs_activation`;
+    see tests/test_exec_argv_activation.py.
+    """
     rt = {"source": "session", "prefix": "/opt/envs/x", "activation": "A",
           "ns_wrap": False, "direct_exec": True}
     assert project_env.argv_for_runtime(rt, "python", ["-c", "1"]) == \
         ["/opt/envs/x/bin/python", "-c", "1"]
-    assert project_env.argv_for_runtime(rt, "r", ["--vanilla", "s.R"]) == \
+    r_argv = project_env.argv_for_runtime(rt, "r", ["--vanilla", "s.R"])
+    assert r_argv[0] == "bash" and "A && exec" in r_argv[-1], r_argv
+    # …and WITHOUT an activation there is nothing to route through, so R keeps
+    # the direct path.
+    assert project_env.argv_for_runtime({**rt, "activation": None}, "r",
+                                        ["--vanilla", "s.R"]) == \
         ["/opt/envs/x/bin/Rscript", "--vanilla", "s.R"]
 
 

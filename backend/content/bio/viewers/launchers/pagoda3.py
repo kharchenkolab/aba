@@ -113,11 +113,20 @@ def _rscript_shim(pid: str) -> "str | None":
         rt = project_env.runtime(pid, "r")
     except Exception:  # noqa: BLE001
         return None
-    if rt.get("direct_exec") and rt.get("prefix"):
-        return None                       # execable already — no shim wanted
     act = rt.get("activation")
     if not act:
         return None
+    # `direct_exec` is NOT sufficient for R. It says the prefix is execable; it
+    # does not say the environment is complete. A pack's `cran:` layer lives in
+    # a separate `<env>/rlib` and reaches R only via `R_LIBS`, which only the
+    # activation exports — so a bare `<prefix>/bin/Rscript` handed to lstar is
+    # blind to every cran package the pack declares (measured 2026-08-08:
+    # `library(lstar)` failed against an env that had lstar 0.2.2 installed).
+    # ONE owner for that rule: project_env._needs_activation, the same predicate
+    # argv_for_runtime uses. This used to decide it independently and got it
+    # wrong in the same way, which is the argument for sharing it.
+    if not project_env._needs_activation("r", rt) and rt.get("prefix"):
+        return None                       # execable AND complete — no shim wanted
     # Mirror argv_for_runtime's shapes, but with the forwarded arguments INSIDE
     # the activated shell. `bash -c <script> <argv0> "$@"` is the required idiom:
     # words after the script become $0, $1, … for it, so appending "$@" outside
@@ -158,8 +167,23 @@ def _rscript(pid: "str | None" = None) -> "str | None":
         from core import projects
         if base_env.active("r"):
             _pid = str(pid or projects.current() or "_none")
+            # The shim comes FIRST when R needs its activation, not only when
+            # `interpreter()` refuses. On a directly-execable prefix it does
+            # NOT refuse — it hands back `<prefix>/bin/Rscript`, which cannot
+            # see the pack's `cran:` layer (a separate `rlib` reached only via
+            # the activation's R_LIBS). That path looked healthy and silently
+            # dropped every cran package, lstar included.
             try:
-                cands.append(str(project_env.interpreter(_pid, "r")))
+                if project_env._needs_activation(
+                        "r", project_env.runtime(_pid, "r")):
+                    _shim = _rscript_shim(_pid)
+                    if _shim:
+                        cands.append(_shim)
+            except Exception:  # noqa: BLE001 — fall through to the plain path
+                pass
+            try:
+                if not cands:
+                    cands.append(str(project_env.interpreter(_pid, "r")))
             except Exception as e:  # noqa: BLE001
                 # A MOUNT-SCOPED R base has no interpreter path usable outside
                 # its activation, so `interpreter()` refuses (session.

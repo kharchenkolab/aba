@@ -205,3 +205,55 @@ def test_dist_path_stays_within_aba_home(monkeypatch, tmp_path):
     monkeypatch.setenv("ABA_PAGODA3_DIST", "/custom/build/dist")
     from pathlib import Path
     assert pagoda3.pagoda3_dist_path() == Path("/custom/build/dist")
+
+
+def test_rscript_prefers_the_ACTIVATION_SHIM_when_R_needs_it(monkeypatch, tmp_path):
+    """The .rds bridge is a SECOND door onto the same rule, and it had the same
+    bug in a different shape: `_rscript` only reached for a shim when
+    `project_env.interpreter()` RAISED. On a directly-execable prefix it does
+    not raise — it returns `<prefix>/bin/Rscript`, which cannot see the pack's
+    `cran:` layer (a separate `rlib` on the activation's R_LIBS). lstar then
+    execs that path and finds no lstar R package at all.
+
+    Both doors now ask one predicate (`project_env._needs_activation`).
+    """
+    from content.bio.viewers.launchers import pagoda3
+    from core.compute import base_env, project_env
+
+    monkeypatch.delenv("LSTAR_RSCRIPT", raising=False)
+    monkeypatch.setattr(base_env, "active", lambda lang: lang == "r")
+    monkeypatch.setattr(project_env, "runtime",
+                        lambda pid, lang: {"prefix": "/opt/envs/x",
+                                           "direct_exec": True,
+                                           "activation": "source /opt/envs/x/activate.sh"})
+    # If the bug were back, this would be handed out instead of the shim.
+    monkeypatch.setattr(project_env, "interpreter",
+                        lambda pid, lang: Path("/opt/envs/x/bin/Rscript"))
+    shim = tmp_path / "aba-rscript-shim"
+    shim.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(pagoda3, "_rscript_shim", lambda pid: str(shim))
+
+    got = pagoda3._rscript("prj_x")
+    assert got == str(shim), (
+        f"handed lstar {got!r} — a bare Rscript cannot see the pack's cran layer")
+
+
+def test_rscript_uses_the_plain_interpreter_when_no_activation_exists(monkeypatch,
+                                                                     tmp_path):
+    """CEILING: a served-base / pack-less deploy has no activation to route
+    through, and the direct interpreter is both correct and cheaper there."""
+    from content.bio.viewers.launchers import pagoda3
+    from core.compute import base_env, project_env
+
+    rs = tmp_path / "Rscript"
+    rs.write_text("#!/bin/sh\n")
+    monkeypatch.delenv("LSTAR_RSCRIPT", raising=False)
+    monkeypatch.setattr(base_env, "active", lambda lang: lang == "r")
+    monkeypatch.setattr(project_env, "runtime",
+                        lambda pid, lang: {"prefix": str(tmp_path),
+                                           "direct_exec": True, "activation": None})
+    monkeypatch.setattr(project_env, "interpreter", lambda pid, lang: rs)
+    monkeypatch.setattr(pagoda3, "_rscript_shim",
+                        lambda pid: (_ for _ in ()).throw(
+                            AssertionError("built a shim with no activation")))
+    assert pagoda3._rscript("prj_x") == str(rs)

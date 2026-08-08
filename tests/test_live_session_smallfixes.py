@@ -172,9 +172,7 @@ def test_shim_keeps_the_namespace_wrapper(monkeypatch, tmp_path):
     assert "unshare -rm bash -c" in body, body
 
 
-def test_rscript_falls_back_to_the_shim_and_says_so(monkeypatch, tmp_path, capsys):
-    """`interpreter()` raises a typed refusal on a mount-scoped base. Swallowing it
-    silently dropped the bridge with no signal — the live failure mode."""
+def _mount_scoped(monkeypatch, tmp_path, *, shim_ok=True):
     from content.bio.viewers.launchers import pagoda3
     import core.compute.base_env as be
     import core.compute.project_env as pe
@@ -187,6 +185,28 @@ def test_rscript_falls_back_to_the_shim_and_says_so(monkeypatch, tmp_path, capsy
         "direct_exec": False, "activation": "source /mnt/act.sh", "ns_wrap": False})
     monkeypatch.setattr(cfg, "project_work_dir", lambda pid: tmp_path)
     monkeypatch.delenv("LSTAR_RSCRIPT", raising=False)
+    if not shim_ok:
+        monkeypatch.setattr(pagoda3, "_rscript_shim", lambda pid: None)
+    return pagoda3
+
+
+def test_rscript_uses_the_shim_on_a_mount_scoped_base(monkeypatch, tmp_path):
+    """The bridge must resolve to a real executable when the prefix is
+    mount-scoped — the live failure mode was losing it silently."""
+    pagoda3 = _mount_scoped(monkeypatch, tmp_path)
     got = pagoda3._rscript("p1")
     assert got and Path(got).exists(), "bridge silently lost on a mount-scoped base"
-    assert "not directly execable" in capsys.readouterr().out
+
+
+def test_rscript_ANNOUNCES_when_no_shim_can_be_built(monkeypatch, tmp_path, capsys):
+    """The signal moved, deliberately. R now takes the shim FIRST whenever it
+    needs an activation (not only when `interpreter()` refuses), because a
+    directly-execable Rscript cannot see the pack's cran layer — so the shim is
+    the NORMAL path and announcing it every time would be noise. What still has
+    to be loud is the case that actually breaks the bridge: no shim AND no
+    usable interpreter."""
+    pagoda3 = _mount_scoped(monkeypatch, tmp_path, shim_ok=False)
+    got = pagoda3._rscript("p1")
+    out = capsys.readouterr().out
+    assert "not directly execable" in out and "NO shim" in out, out
+    assert got is None, f"handed back {got!r} with no shim and no interpreter"

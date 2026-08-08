@@ -282,6 +282,27 @@ def _keep_mount_tooling() -> str:
     return f"export PATH=\"$PATH:{d}\"; " if d else ""
 
 
+# Languages whose package search path is NOT intrinsic to the interpreter, and
+# which therefore cannot use the direct-exec fast path when an activation exists.
+#
+# `direct_exec` says the prefix is execable — nothing more. Python is fine
+# without the activation: the interpreter finds its own site-packages. R is not.
+# A pack's `cran:` deps are solved into a SEPARATE layer directory (`<env>/rlib`)
+# and reach R only through `R_LIBS`, which the activation exports. Exec'ing
+# `<prefix>/bin/Rscript` directly therefore silently drops the ENTIRE cran layer:
+# measured 2026-08-08, `lstar 0.2.2` realized correctly into rlib and
+# `library(lstar)` failed through ABA's own door, so every R lane — the .rds
+# viewer bridge, R kernels, run_r — was blind to every pack-declared cran
+# package. Nothing errored; the package was simply not there.
+_ACTIVATION_REQUIRED = {"r"}
+
+
+def _needs_activation(language: str, rt: dict) -> bool:
+    """Whether this language must route through the runtime's activation even
+    when the prefix is directly execable (see `_ACTIVATION_REQUIRED`)."""
+    return str(language).lower() in _ACTIVATION_REQUIRED and bool(rt.get("activation"))
+
+
 def argv_for_runtime(rt: dict, language: str, args: Sequence[str], *,
                      pre: Sequence[str] = ()) -> list[str]:
     """argv that runs the default env's interpreter with `args`, topology-blind
@@ -296,7 +317,7 @@ def argv_for_runtime(rt: dict, language: str, args: Sequence[str], *,
     head = [str(x) for x in pre]
     exe = _exe(language)
     p = rt.get("prefix")
-    if rt.get("direct_exec") and p:
+    if rt.get("direct_exec") and p and not _needs_activation(language, rt):
         return [*head, str(Path(p) / "bin" / exe), *tail]
     script = f"{rt['activation']} && exec {shlex.join([*head, exe, *tail])}"
     if rt.get("ns_wrap"):

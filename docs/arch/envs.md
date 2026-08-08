@@ -73,8 +73,17 @@ identity). ABA keeps per-project `name → EnvID` handles in `PROJECTS_DIR/<pid>
   probes prefix existence for liveness (`ensure()` asks `session_runtime`; only a truly
   pruned session rebuilds + replays recorded additions), and one-shot lanes compose commands
   through `project_env.argv_for_runtime(...)` — direct `prefix/bin/*` exec only when
-  `direct_exec`, else through the activation line (inside `unshare -rm` when `ns_wrap`;
-  squashfs bases are mount-scoped and have no path outside their activation).
+  `direct_exec` **and the language's packages are intrinsic to its interpreter**, else
+  through the activation line (inside `unshare -rm` when `ns_wrap`; squashfs bases are
+  mount-scoped and have no path outside their activation). That second condition is
+  `_needs_activation` / `_ACTIVATION_REQUIRED`, and today it holds exactly **R**:
+  `direct_exec` says the prefix is execable, not that the environment is complete, and a
+  pack's `cran:` layer is solved into a SEPARATE `<env>/rlib` that reaches R only via the
+  `R_LIBS` the activation exports. Exec'ing `<prefix>/bin/Rscript` directly therefore drops
+  the entire cran layer with no error — every R lane (the `.rds` viewer bridge, R kernels,
+  `run_r`) blind to every cran dep the pack declares. The `.rds` bridge is a second door
+  onto the same rule and asks the same predicate (`pagoda3._rscript` prefers its activation
+  shim whenever R needs one, not only when `interpreter()` refuses).
   `interpreter()`/`prefix()` refuse typed (`session.no_direct_exec`) rather than hand out a
   dangling path. Against a pre-runtime (eager-cloning) weft, an activation-shaped shim
   (`_shim_runtime`) synthesizes the block — deleted once every deployment's weft exposes
