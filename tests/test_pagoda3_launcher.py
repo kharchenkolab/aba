@@ -6,18 +6,27 @@ import types
 import pytest
 
 
+def _convert_call(calls):
+    """The `lstar convert` invocation among everything _convert_any runs.
+
+    It is no longer the only subprocess: the lane now probes the produced
+    store's counts basis afterwards (a `-c` metadata read), so a test that
+    looked at "the last call" would be reading the probe."""
+    return next(a for a in calls if "convert" in a)
+
+
 def test_convert_any_optimizes_via_viewer_flag(monkeypatch, tmp_path):
     from content.bio.viewers.launchers import pagoda3
-    seen = {}
+    calls = []
 
     def fake_run(args, **kw):
-        seen["args"] = args
+        calls.append(args)
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     src, out = tmp_path / "processed.h5ad", tmp_path / "o.lstar.zarr.building"
     pagoda3._convert_any(src, out)
-    a = seen["args"]
+    a = _convert_call(calls)
     # sys.executable -m lstar convert <src> <out> --to store --viewer
     #   --to store forces store output despite the .building temp suffix;
     #   --viewer optimizes to viewer@0.1 in-process (lstar-sc >=0.1.7 auto-falls-back
@@ -54,23 +63,58 @@ def test_registry_matches_single_cell_source_formats():
     assert top_external("table.csv") is None
 
 
-def test_resolve_source_falls_back_to_run_work_dir(monkeypatch, tmp_path):
+def _locate_returning(monkeypatch, *paths):
+    """Fake the project-locate door with a fixed hit list."""
+    from content.bio import project_locate
+    monkeypatch.setattr(project_locate, "locate_project_files",
+                        lambda name, limit=6: {"matches": [{"path": str(p)} for p in paths]})
+
+
+def test_resolve_source_falls_back_to_the_project_locate_door(monkeypatch, tmp_path):
     """A `.lstar.zarr` store a run wrote lands physically in work/<ana_id>/<name>,
     but the file tree may hand us only the LOGICAL output path (threads/.../output/)
-    with no physical file there. _resolve_source must still find the store by
-    scanning the project work dirs (regression: 'pagoda3: source not found')."""
+    with no physical file there. _resolve_source must still find it by NAME
+    (regression: 'pagoda3: source not found').
+
+    This test used to stage a file under work/ and expect a private glob to
+    sweep it up. That glob is gone — resolution goes through
+    `locate_project_files`, precisely so a basename hit carries the project's
+    own provenance instead of newest-wins across same-named files. The test kept
+    asserting the old mechanism and had been red ever since; it now fakes the
+    door and asserts the contract that replaced it."""
     from content.bio.viewers.launchers import pagoda3
     import core.config as cfg
 
-    store = tmp_path / "work" / "ana_abc" / "seurat_processed.lstar.zarr"
+    store = tmp_path / "work" / "ana_abc" / "processed.lstar.zarr"
     store.mkdir(parents=True)
-    (store / ".zattrs").write_text("{}")
     monkeypatch.setattr(cfg, "project_root", lambda pid: tmp_path)
     monkeypatch.setattr(cfg, "project_data_dir", lambda pid: tmp_path / "data")
+    _locate_returning(monkeypatch, store)
 
-    node = {"path": "threads/t/runs/r/output/seurat_processed.lstar.zarr",
-            "name": "seurat_processed.lstar.zarr"}   # logical path, nothing on disk there
+    node = {"path": "threads/t/runs/r/output/processed.lstar.zarr",
+            "name": "processed.lstar.zarr"}   # logical path, nothing on disk there
     assert pagoda3._resolve_source(node, "prj_x") == store
+
+
+def test_resolve_source_refuses_an_AMBIGUOUS_name(monkeypatch, tmp_path):
+    """CEILING on the fallback: two runs with the same output name must NOT be
+    resolved by picking one. Ambiguity falls through to the run-scoped resolver,
+    where provenance decides — the whole reason the glob was replaced."""
+    from content.bio.viewers.launchers import pagoda3
+    import core.config as cfg
+
+    a = tmp_path / "work" / "ana_a" / "processed.lstar.zarr"
+    b = tmp_path / "work" / "ana_b" / "processed.lstar.zarr"
+    for d in (a, b):
+        d.mkdir(parents=True)
+    monkeypatch.setattr(cfg, "project_root", lambda pid: tmp_path)
+    monkeypatch.setattr(cfg, "project_data_dir", lambda pid: tmp_path / "data")
+    _locate_returning(monkeypatch, a, b)
+
+    node = {"path": "threads/t/runs/r/output/processed.lstar.zarr",
+            "name": "processed.lstar.zarr"}
+    got = pagoda3._resolve_source(node, "prj_x")
+    assert got not in (a, b), f"picked {got} out of two same-named outputs"
 
 
 def test_rscript_resolves_for_rds_bridge(monkeypatch):
@@ -84,16 +128,17 @@ def test_rscript_resolves_for_rds_bridge(monkeypatch):
 def test_convert_any_sets_lstar_rscript_env(monkeypatch, tmp_path):
     from content.bio.viewers.launchers import pagoda3
     import sys
-    seen = {}
+    seen = []
 
     def fake_run(args, **kw):
-        seen["env"] = kw.get("env") or {}
+        seen.append((args, kw.get("env") or {}))
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     monkeypatch.setattr(pagoda3, "_rscript", lambda pid=None: sys.executable)
     pagoda3._convert_any(tmp_path / "x.rds", tmp_path / "o.building")
-    assert seen["env"].get("LSTAR_RSCRIPT") == sys.executable   # bridge points at R
+    env = next(e for a, e in seen if "convert" in a)      # not the basis probe
+    assert env.get("LSTAR_RSCRIPT") == sys.executable     # bridge points at R
 
 
 def _make_store(d):

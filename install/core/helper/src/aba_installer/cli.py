@@ -248,6 +248,18 @@ def doctor() -> int:
     chk("recipe pack imported", (home / "installation" / "skills" / "recipes").exists(),
         "re-run import-recipes, or `aba update`")
     chk("launcher (bin/aba)", (home / "bin" / "aba").exists(), "re-run install-launcher")
+    # Env-pack drift. installation/envs/ belongs to the operator and `aba update`
+    # never touches it, so a pin bump in the repo reaches an existing deployment
+    # through nothing at all — silently, which is the problem: an lstar bump that
+    # a viewer now REQUIRES looks identical to no bump at all from in here.
+    # Report, never rewrite.
+    _drift = env_pack_drift(home)
+    chk("env packs match this ABA's pins", not _drift,
+        "edit $ABA_HOME/installation/envs/<pack>.yaml (yours to own) and re-realize "
+        "the pack, or keep yours deliberately")
+    for _pack, _dep, _have, _want in _drift:
+        print(f"      {_pack}: {_dep} {_have or '(unpinned)'} → shipped "
+              f"{_want or '(unpinned)'}", flush=True)
     cfg = home / "config.env"
     # Credentials: config.env (apikey/oauth) OR the Claude-Code subscription OAuth that ABA
     # auto-uses (oauth_cc). A personal install commonly has NO cred in config.env and relies on
@@ -388,6 +400,56 @@ def _run_in_backend(home: Path, script: str, timeout: int = 30):
                               text=True, timeout=timeout, env=env)
     except Exception:  # noqa: BLE001
         return None
+
+
+def pack_pins(text: str) -> dict:
+    """`{dep name: pinned version}` for every EXACTLY pinned dep in an env pack.
+
+    Text scan, not a YAML parse: doctor must run before/without any yaml
+    dependency, and the packs carry heavy inline commentary. Only `name ==X`
+    counts — a bare name or a floor has no version to compare."""
+    pins = {}
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line.startswith("- "):
+            continue
+        parts = line[2:].strip().strip('"').strip("'").split()
+        if len(parts) >= 2 and parts[1].startswith("=="):
+            pins[parts[0]] = parts[1][2:].strip()
+    return pins
+
+
+def env_pack_drift(home: Path) -> list:
+    """Deployed env packs whose pins differ from the ones this ABA ships.
+
+    `$ABA_HOME/installation/envs/` is the OPERATOR's — the installer writes it
+    on a fresh install and `aba update` never overwrites it, deliberately: a
+    deployment's environment is not ours to change under it. The cost is that a
+    pin bump in the repo (a security fix, or a library whose store format got
+    stricter) reaches a long-lived deployment through NOTHING. Nobody is told.
+
+    So doctor tells them. Report only, never rewrite: this returns
+    [(pack, dep, deployed_version, shipped_version)] and the caller prints a
+    fix. A dep pinned on only one side is reported with None on the other —
+    added and removed deps are drift too."""
+    out = []
+    shipped_dir = home / "repo" / "aba" / "install" / "core" / "envs"
+    deployed_dir = home / "installation" / "envs"
+    if not shipped_dir.is_dir() or not deployed_dir.is_dir():
+        return out
+    for shipped in sorted(shipped_dir.glob("*.yaml")):
+        deployed = deployed_dir / shipped.name
+        if not deployed.exists():
+            continue                      # a pack this deploy never took — not drift
+        try:
+            want = pack_pins(shipped.read_text())
+            have = pack_pins(deployed.read_text())
+        except OSError:
+            continue
+        for dep in sorted(set(want) | set(have)):
+            if want.get(dep) != have.get(dep):
+                out.append((shipped.name, dep, have.get(dep), want.get(dep)))
+    return out
 
 
 def _settings_surface(home: Path) -> tuple[int, list]:

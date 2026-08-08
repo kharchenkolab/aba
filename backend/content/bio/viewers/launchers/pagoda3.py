@@ -232,6 +232,121 @@ def _convert_any(src: Path, out: Path, set_phase=None,
             tail = (r.stderr or r.stdout or "").strip()[-600:]
             raise RuntimeError(
                 f"lstar convert failed for {src.name!r} (exit {r.returncode}): {tail}")
+    # A convert with a CURRENT lstar always leaves a gene-major basis. If it did
+    # not, the store is not the problem — the SESSION ENV is behind, and the
+    # viewer would fail in the browser with nothing pointing here. This is the
+    # deployment-migration gap made legible: `install/core/envs/*.yaml` ships on
+    # fresh installs only, and `aba update` never overwrites
+    # $ABA_HOME/installation/envs, so a long-lived deployment keeps whatever
+    # lstar it was installed with.
+    if _viewer_contract(out, pid).get("gene_major") is False:
+        raise RuntimeError(
+            f"lstar converted {src.name!r} but left the counts cell-major only, "
+            f"which the pagoda3 viewer refuses. The session env's {_launcher_version(pid)} "
+            f"is older than the 0.2.2 this deployment expects: update the pack in "
+            f"$ABA_HOME/installation/envs/python_bio.yaml and re-realize it.")
+
+
+# ── the viewer@0.1 counts-basis contract ─────────────────────────────────────
+#
+# A viewer store carries the count payload in BOTH orientations: gene-major
+# (csc) so one gene is one column is one byte range, and cell-major (csr) for
+# cluster/lasso reads. Before lstar 0.2.2 the prep normalized the basis in
+# MEMORY and never wrote it back, so a store built from a CSR source came out
+# with two cell-major copies and nothing a gene column could be read from — and
+# served a cell's profile as a gene's column, silently.
+#
+# 0.2.2 writes it back, stamps `provenance.viewer="basis"`, and makes the
+# absence an ERROR; the pinned pagoda3 dist checks the same stamp client-side.
+# So every store built by an older lstar goes from silently wrong to REFUSED,
+# and the refusal lands in the browser where ABA cannot explain it.
+#
+# Bumping the lstar pin repairs only the CONVERT lane (ensure_derived keys on
+# the lstar-sc version, so a bump re-converts). The other two lanes need this:
+# the zip lane re-derives but would unpack the same stale bytes, and a native
+# store is symlinked, never rebuilt at all.
+
+# Metadata-only probe, run in the SESSION env (where lstar lives).
+#
+# Deliberately NOT `lstar.validate(ds)`: validate touches field VALUES
+# (`sp.issparse(f.values)`, `np.asarray(f.values)`), so on a lazily-opened store
+# it both defeats the laziness and mis-reports — a LazyCSX is not a scipy sparse
+# matrix, so the csc/csr branch would fall through to a spurious shape error. A
+# store can be tens of GB; opening it eagerly on every launch is not an option.
+#
+# The basis-selection rule below MIRRORS lstar's (`validate._viewer_basis` at
+# 0.2.2: stamped field, else one named `counts`, else the sole 2-D measure
+# spanning what `counts_cellmajor` spans). Mirroring a rule from another repo is
+# a liability — see misc/from-aba-viewer-contract.md, which asks lstar for a
+# public metadata-only contract check so this can be deleted.
+_CONTRACT_PROBE = r"""
+import json, sys
+import lstar
+ds = lstar.read(sys.argv[1], lazy=True)          # lazy: never materialize to ask a metadata question
+basis = None
+for _n, _f in ds.fields.items():
+    if (_f.provenance or {}).get("viewer") == "basis":
+        basis = (_n, _f); break
+if basis is None and ds.fields.get("counts") is not None:
+    basis = ("counts", ds.fields["counts"])
+if basis is None:
+    _cm = ds.fields.get("counts_cellmajor")
+    _span = list(_cm.span or []) if _cm is not None else []
+    _c = [(n, f) for n, f in ds.fields.items()
+          if n != "counts_cellmajor" and f.role == "measure" and list(f.span or []) == _span]
+    basis = _c[0] if len(_c) == 1 else None
+print("ABA_CONTRACT " + json.dumps({
+    "basis": basis[0] if basis else None,
+    "encoding": (basis[1].encoding if basis else None),
+    "gene_major": bool(basis is not None and basis[1].encoding == "csc"),
+}))
+"""
+
+
+def _viewer_contract(store: Path, pid: "str | None" = None) -> dict:
+    """Is `store`'s count basis gene-major? Metadata only; never mutates.
+
+    `gene_major` is TRI-STATE and the None matters: True = contract met, False =
+    the store needs a repair, **None = could not tell** (no lstar, an unreadable
+    store, a probe that raised). A caller must not treat None as either — it is
+    the one case where doing nothing is right, because the alternatives are
+    rewriting a store on a guess and refusing to open one that may be fine."""
+    import json
+    import subprocess
+    try:
+        r = subprocess.run(_lstar_py_argv(pid, ["-c", _CONTRACT_PROBE, str(store)]),
+                           capture_output=True, text=True, timeout=300)
+    except Exception as e:  # noqa: BLE001 — the probe must never fail a launch
+        return {"gene_major": None, "why": str(e)}
+    line = next((l for l in (r.stdout or "").splitlines()
+                 if l.startswith("ABA_CONTRACT ")), None)
+    if r.returncode != 0 or not line:
+        return {"gene_major": None,
+                "why": (r.stderr or r.stdout or "").strip()[-400:] or "no probe output"}
+    try:
+        return json.loads(line[len("ABA_CONTRACT "):])
+    except Exception as e:  # noqa: BLE001
+        return {"gene_major": None, "why": str(e)}
+
+
+def _repair_viewer_store(store: Path, pid: "str | None" = None,
+                         set_phase=None) -> bool:
+    """Re-run lstar's viewer prep over `store` IN PLACE — lstar's own documented
+    repair for a store written before 0.2.2 ("re-run extend_for_viewer"). It
+    rewrites the basis gene-major and prunes chunks the new layout no longer
+    covers, so the store's BYTES change; any cached copy of them must be
+    invalidated (the range cache keys on a freshness digest and wipes when it
+    cannot prove the store is unchanged, which covers this).
+
+    ONLY ever called on bytes ABA owns — its own cache dir. The native lane
+    copies first rather than repairing a store in the project tree or the weft
+    workspace: weft is the system of record there, and a viewer opening a file
+    is not a licence to rewrite it."""
+    import subprocess
+    (set_phase or (lambda *_: None))("Repairing viewer store…")
+    r = subprocess.run(_lstar_py_argv(pid, ["-m", "lstar", "viewer", str(store)]),
+                       capture_output=True, text=True, timeout=1800)
+    return r.returncode == 0
 
 
 def _pack_download(store_dir: "str | Path", dest: "str | Path",
@@ -263,7 +378,8 @@ def _pack_download(store_dir: "str | Path", dest: "str | Path",
 
 
 def _serve_native_store(src: Path, cache_dir: Path, out_name: str,
-                        project_root: Path, set_phase=None) -> Path:
+                        project_root: Path, set_phase=None,
+                        pid: "str | None" = None) -> Path:
     """Place an already-built `.lstar.zarr` DIRECTORY store where the store route
     can serve it, WITHOUT copying the tree when avoidable.
 
@@ -292,24 +408,56 @@ def _serve_native_store(src: Path, cache_dir: Path, out_name: str,
     except Exception:  # noqa: BLE001 — no weft configured → project-only
         pass
     inside = any(real == r or r in real.parents for r in allowed)
+    # A store written before lstar 0.2.2 has a cell-major-only basis, which the
+    # pinned pagoda3 dist refuses. It cannot be symlinked and served as-is, and
+    # it must not be repaired in place: `real` is a run's retained output or a
+    # live jobdir — weft's system of record, not ours. So take a COPY and repair
+    # that. The copy is the thing symlinking exists to avoid, which is why it is
+    # conditional: only a legacy store pays it, once, and only when the probe is
+    # SURE (None = couldn't tell → link as before rather than duplicate a tree
+    # on a guess).
+    if inside and _viewer_contract(real, pid).get("gene_major") is False:
+        sp("Upgrading store for the viewer (one-off copy)…")
+        shutil.copytree(real, out)
+        _repair_viewer_store(out, pid, sp)
+        return out
     if inside:
         sp("Linking store…")
         out.symlink_to(real, target_is_directory=True)
     else:
         sp("Copying store…")
         shutil.copytree(real, out)
+        if _viewer_contract(out, pid).get("gene_major") is False:
+            _repair_viewer_store(out, pid, sp)
     return out
 
 
-def _unzip_store(src: Path, out: Path, set_phase=None) -> None:
+def _unzip_store(src: Path, out: Path, set_phase=None,
+                 pid: "str | None" = None) -> None:
     """Native store shipped as a .lstar.zarr.zip — extract into a directory the
     store route can serve (the browser can't range-read a zip over HTTP). The
-    archive's root IS the store root (.zattrs/axes/fields at top level)."""
+    archive's root IS the store root (.zattrs/axes/fields at top level).
+
+    Then repair the extraction if its basis is cell-major. This lane looked
+    covered and was not: it runs under `ensure_derived`, which keys on the
+    lstar-sc version, so bumping lstar DOES re-derive — and re-derives by
+    unpacking the same stale bytes. Version-keyed rebuild only heals a lane that
+    RE-COMPUTES; unzip copies. The repair is safe here because the extraction is
+    ABA's own copy: the archive is not touched."""
     import zipfile
-    (set_phase or (lambda *_: None))("Unpacking store…")
+    sp = set_phase or (lambda *_: None)
+    sp("Unpacking store…")
     out.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(src) as z:
         z.extractall(out)
+    if _viewer_contract(out, pid).get("gene_major") is False:
+        _repair_viewer_store(out, pid, sp)
+        if _viewer_contract(out, pid).get("gene_major") is False:
+            raise RuntimeError(
+                f"{src.name}: this store's counts are cell-major only, and the "
+                f"viewer repair did not fix it. pagoda3 needs a gene-major "
+                f"basis to colour by gene; re-export the store with lstar "
+                f">=0.2.2 (`lstar viewer <store>`).")
 
 
 def _run_id_for_node(node: dict) -> "str | None":
@@ -712,15 +860,18 @@ def launch(node: dict, ctx: dict) -> LaunchResult:
     if suffix == _STORE_SUFFIX:
         # Already a store — nothing to derive; symlink it into the served dir
         # (copy only if it lives outside the project). No ensure_derived cache:
-        # the store IS the source, so there's nothing to key on or rebuild.
-        store = _serve_native_store(src, cache_dir, out_name, root, set_phase)
+        # the store IS the source, so there's nothing to key on or rebuild —
+        # which is also why this lane carries its own pre-0.2.2 basis repair
+        # instead of getting one from a cache-version bump.
+        store = _serve_native_store(src, cache_dir, out_name, root, set_phase,
+                                    pid=pid)
     else:
         base_convert = _unzip_store if suffix == _ZIP_SUFFIX else _convert_any
         def convert(s: Path, o: Path) -> None:  # bind set_phase + interpreters
             if base_convert is _convert_any:
                 _convert_any(s, o, set_phase, pid=pid, rscript=_rs)
             else:
-                base_convert(s, o, set_phase)
+                base_convert(s, o, set_phase, pid=pid)
         store = ensure_derived(src, cache_dir, out_name, _cache_ver, convert)
 
     return LaunchResult(

@@ -45,7 +45,6 @@ tests/test_no_micromamba.py
 tests/test_ood_preflight_refs.py
 tests/test_openai_runtime_live.py
 tests/test_option_b_phase5.py
-tests/test_pagoda3_launcher.py
 tests/test_path_preamble_refire.py
 tests/test_pdf_entity_preview.py
 tests/test_plan_orientation_service.py

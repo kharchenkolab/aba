@@ -280,6 +280,8 @@ FILES=(
   tests/test_viewer_launchers.py
   tests/test_viewer_link_resolution.py
   tests/test_viewer_prepare.py
+  tests/test_viewer_store_contract.py
+  tests/test_pagoda3_launcher.py
   tests/test_viewer_weft_resolution.py
   tests/test_weft_kernel_session.py
   tests/test_weft_sync_finalize.py
