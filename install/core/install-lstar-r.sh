@@ -2,10 +2,16 @@
 # Install the lstar R viewer bridge into a conda R "tools" env.
 #
 # The pagoda3 viewer opens Seurat / SingleCellExperiment `.rds` results by bridging
-# through the tools env's Rscript, which needs the lstar R package. It is NOT on CRAN
-# (lstar moves fast); we pin the git tag below — the SAME release moment as the Python
-# `lstar-sc` (same repo, R package under `R/`) and the pagoda3 dist, so writer/reader/
-# store-format stay a matched set. BUMP THESE PINS TOGETHER.
+# through the tools env's Rscript, which needs the lstar R package. We pin the git tag
+# below — the SAME release moment as the Python `lstar-sc` (same repo, R package under
+# `R/`) and the pagoda3 dist, so writer/reader/store-format stay a matched set.
+# BUMP THESE PINS TOGETHER.
+#
+# lstar is on CRAN now, and the weft r-bio PACK takes it from there (envs/r_bio.yaml).
+# This lane stays on the tag tarball on purpose: it provisions the conda TOOLS env for
+# targets that have no pack (the SIF images, legacy native installs), where a source
+# compile against the env's own zlib/toolchain — and an exact, offline-checkable ref —
+# is what we want. The two lanes must name the same version, not the same mechanism.
 #
 # Single source of truth for the lstar-R install, shared by every target that provisions
 # a tools env: the install/update playbooks (install.yml / update.yml — native
@@ -30,7 +36,11 @@
 # Usage: install-lstar-r.sh <tools_env_dir> [micromamba_bin]   (idempotent; skips at pin)
 set -uo pipefail   # NOT -e: non-fatal by design (see contract above)
 
-LSTAR_REF="v0.2.1"   # bump together with lstar-sc (pip) + the pagoda3 dist
+# Part of the lstar lockstep set — see tests/test_lstar_lockstep.py, which holds
+# every pinned member to one version. Bump this together with lstar-sc (pypi) in
+# envs/python_bio.yaml, lstar (cran) in envs/r_bio.yaml, and the pagoda3 dist in
+# modules/install-viewer-pagoda3.sh + ../sif/build.sh.
+LSTAR_REF="v0.2.2"
 
 TOOLS_ENV="${1:?usage: install-lstar-r.sh <tools_env_dir> [micromamba_bin]}"
 # micromamba: explicit arg wins, then $ABA_MICROMAMBA, then PATH. Needed to `run` inside

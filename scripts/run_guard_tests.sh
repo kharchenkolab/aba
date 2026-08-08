@@ -76,6 +76,7 @@ FILES=(
   tests/test_cross_language_sandbox.py
   tests/test_exec_record_project_binding.py
   tests/test_base_pack_completeness.py
+  tests/test_lstar_lockstep.py
   tests/test_short_transfer_refusal.py
   tests/test_turn_stream_termination.py
   tests/test_kernel_transport_resilience.py

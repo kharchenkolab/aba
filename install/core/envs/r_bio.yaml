@@ -63,18 +63,25 @@ spec:
       # bridge). Baked here rather than installed on demand: the on-demand
       # route source-compiles against zlib.h, which the base lacks — that dead
       # end cost a live session an isolated-env fork (misc/paths.md era, live
-      # 2026-07-23). No conda-forge `r-lstar` exists; CRAN 0.2.1 is the first
-      # published release, and PPM (weft's default repo) serves a binary.
-      - lstar
-  # Extra CRAN-like repos, folded into the joint closure alongside weft's
-  # default PPM snapshot (UTC-today − 2). Live CRAN is listed because that lag
-  # HIDES fresh releases: lstar 0.2.1 published 2026-07-22, and PPM's 07-21 and
-  # 07-22 snapshots both still served 0.1.0 — the pack would silently bake the
-  # OLD version, which must stay in lockstep with the pinned lstar-sc + pagoda3
-  # dist. install.packages() takes the highest version across repos, so this
-  # only ever moves a package FORWARD to what CRAN has published.
-  # DROP this once PPM carries 0.2.1 (check:
-  #   curl -s https://packagemanager.posit.co/cran/__linux__/focal/<date>/src/contrib/PACKAGES | grep -A1 '^Package: lstar$')
-  r_repositories:
-    - https://cloud.r-project.org
+      # 2026-07-23). No conda-forge `r-lstar` exists; PPM (weft's default repo)
+      # serves the CRAN binary.
+      #
+      # PINNED, and part of the lockstep set (tests/test_lstar_lockstep.py): the
+      # same version must appear as `lstar-sc` in python_bio.yaml, because a
+      # store one lane writes is read by the other and by the pagoda3 dist. A
+      # bare name is what makes skew SILENT — the pack simply bakes whatever the
+      # repo happens to serve. weft resolves a cran `==` as an assertion against
+      # its snapshot, so when CRAN moves ahead of this pin the solve FAILS
+      # (env.solve_conflict, naming both versions) instead of quietly shipping a
+      # mismatched pair. That failure is the signal to bump the whole set — the
+      # guard lists every member.
+      - lstar ==0.2.2
+  # No extra r_repositories. Live CRAN was listed here for one reason — weft's
+  # PPM snapshot lags UTC-today − 2, and that lag HID a fresh lstar (0.2.1
+  # published 07-22; the 07-21 and 07-22 snapshots both still served 0.1.0), so
+  # an UNPINNED dep would have baked the old version. The pin above removes the
+  # need: the snapshot carries 0.2.2 (from 2026-08-05), and a lag that hides a
+  # FUTURE release now fails the solve rather than passing the wrong version.
+  # Re-adding a live repo would restore the silent-skew path, since
+  # install.packages() takes the highest version across repos.
   # release_repos: []

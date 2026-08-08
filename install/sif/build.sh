@@ -115,7 +115,10 @@ echo "   ood preflight baked: /opt/aba/ood/aba_preflight.py"
 # static bundle, NOT vendored/built here; the /pagoda3 mount serves it). Unzipped
 # on the build host (needs curl+unzip); the image just gets the files. Non-fatal:
 # a fetch failure leaves the interactive viewer unavailable (conversion still works).
-PG3_URL="${ABA_PAGODA3_DIST_URL:-https://github.com/kharchenkolab/pagoda3/releases/download/v0.2.1/pagoda3-viewer-0.2.1.zip}"
+# Same pin as the viewer-pagoda3 module, and held to it by
+# tests/test_lstar_lockstep.py: the baked dist reads stores written by the lstar
+# pinned in install/core/envs/*, so the image must not ship a mismatched pair.
+PG3_URL="${ABA_PAGODA3_DIST_URL:-https://github.com/kharchenkolab/pagoda3/releases/download/v0.2.2/pagoda3-viewer-0.2.2.zip}"
 if command -v unzip >/dev/null 2>&1 && curl -fsSL "$PG3_URL" -o "$STAGE/pg3.zip" 2>/dev/null; then
   mkdir -p "$STAGE/pagoda3-dist"
   if unzip -q -o "$STAGE/pg3.zip" -d "$STAGE/pagoda3-dist" 2>/dev/null && [ -f "$STAGE/pagoda3-dist/index.html" ]; then

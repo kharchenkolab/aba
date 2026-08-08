@@ -1,5 +1,6 @@
 """H2 — Playbook parser + step executor tests."""
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -66,10 +67,18 @@ def test_load_playbook_rejects_bad_root(tmp_path):
         load_playbook(bad)
 
 
-def _fetch_pagoda3_cmd(playbook: str) -> str:
-    p = Path(__file__).resolve().parents[1] / "src/aba_installer" / playbook
-    step = next(s for s in load_playbook(p).steps if s.id == "fetch-pagoda3-dist")
-    return step.commands[0]
+def _viewer_module_script() -> str:
+    """The pagoda3 dist install, which is now the MODULE script rather than a
+    playbook step.
+
+    Both assertions below used to read a `fetch-pagoda3-dist` step out of
+    update.yml. That step was replaced by `refresh-modules` (the reconciler
+    re-provisions installed modules, so an OFF module is no longer installed for
+    everyone) — and these tests were left pointing at it, so they had been
+    raising StopIteration ever since, not merely testing nothing. Read the
+    artifact that actually performs the install."""
+    return (Path(__file__).resolve().parents[2]
+            / "modules" / "install-viewer-pagoda3.sh").read_text()
 
 
 def test_install_yml_is_core_only():
@@ -82,7 +91,9 @@ def test_install_yml_is_core_only():
     for gone in ("create-r-tools-env", "install-lstar-r", "fetch-pagoda3-dist",
                  "complete-base-env", "complete-r-env"):
         assert gone not in ids, f"{gone} should not be an install step (module/reconciler owns it)"
-    assert "pagoda3-viewer-0.2.1.zip" in _fetch_pagoda3_cmd("update.yml")   # update still refreshes
+    # update still refreshes an installed pagoda3 — through the module reconciler
+    assert "refresh-modules" in [s.id for s in load_playbook(
+        Path(__file__).resolve().parents[1] / "src/aba_installer/update.yml").steps]
 
 
 def _step_cmds(playbook: str, step_id: str) -> str:
@@ -199,9 +210,13 @@ def test_bg_skip_conditional_on_prewarm(monkeypatch):
 def test_fetch_pagoda3_dist_is_version_aware():
     # A pinned URL + a marker so a version bump re-fetches on update (not skipped
     # on "index.html present"), with an atomic swap that keeps the old dist on
-    # failure. If the pin bumps, update BOTH the URL and this assertion together.
-    cmd = _fetch_pagoda3_cmd("update.yml")
-    assert "pagoda3-viewer-0.2.1.zip" in cmd and "download/v0.2.1/" in cmd
+    # failure. The VERSION itself is not asserted here — that belongs to the
+    # lockstep guard (tests/test_lstar_lockstep.py), which holds this pin equal
+    # to the lstar pins it has to match. Duplicating the literal here is how the
+    # old assertion turned a routine bump into an unrelated red.
+    cmd = _viewer_module_script()
+    assert re.search(r"download/v(\d[\d.]*)/pagoda3-viewer-\1\.zip", cmd), \
+        "the dist URL is no longer a pinned release/asset pair"
     assert ".aba-dist-url" in cmd                 # version marker gates the skip
     assert '"$(cat "$MARK" 2>/dev/null)" = "$URL"' in cmd
     assert "0.1." not in cmd                       # no stale 0.1.x pin left behind

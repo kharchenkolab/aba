@@ -16,7 +16,10 @@ ABA_HOME="${ABA_HOME:-$HOME/.aba}"
 DIST="$ABA_HOME/vendor/pagoda3/dist"
 
 # The viewer dist (built browser bundle) from the pagoda3 release.
-URL="${ABA_PAGODA3_DIST_URL:-https://github.com/kharchenkolab/pagoda3/releases/download/v0.2.1/pagoda3-viewer-0.2.1.zip}"
+# Part of the lstar lockstep set (tests/test_lstar_lockstep.py): this release is
+# built against — and hard-requires — the lstar pinned in envs/python_bio.yaml +
+# envs/r_bio.yaml, because it reads the store's counts-basis stamp.
+URL="${ABA_PAGODA3_DIST_URL:-https://github.com/kharchenkolab/pagoda3/releases/download/v0.2.2/pagoda3-viewer-0.2.2.zip}"
 MARK="$DIST/.aba-dist-url"
 
 if [ -f "$DIST/index.html" ] && [ "$(cat "$MARK" 2>/dev/null)" = "$URL" ]; then

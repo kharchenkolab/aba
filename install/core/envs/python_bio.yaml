@@ -55,5 +55,12 @@ spec:
       - leidenalg
       - python-igraph
     pypi:
-      - lstar-sc ==0.2.1
+      # Lockstep set — FIVE files pin this interchange model, and
+      # tests/test_lstar_lockstep.py holds them all to one version (it lists
+      # them; two were a release behind when only prose was guarding it). A
+      # store written by one lane is read by the others, and 0.2.2 made the
+      # contract strict: validate() errors on a missing gene-major counts basis
+      # and the pagoda3 dist checks the same stamp client-side, so a set that
+      # straddles 0.2.2 writes stores half the estate refuses to open.
+      - lstar-sc ==0.2.2
       - "zarr >=3.1"

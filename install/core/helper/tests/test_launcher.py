@@ -1,5 +1,6 @@
 """H5 — Launcher template renderer + install."""
 import os
+import re
 import stat
 from pathlib import Path
 
@@ -127,8 +128,16 @@ def test_rendered_launcher_has_known_subcommands():
     out = render(ctx)
     for action in ("up)", "stop)", "status)", "logs)", "uninstall)"):
         assert action in out, f"launcher missing subcommand: {action}"
-    # update / doctor / auth / hpc-config share one case → the headless CLI (browserless).
-    assert "update|doctor|auth|hpc-config)" in out, "launcher missing the headless-CLI subcommand"
+    # update / doctor / auth / hpc-config share one case → the headless CLI
+    # (browserless). Assert each action REACHES that case, not the exact alias
+    # string: this used to pin the literal `update|doctor|auth|hpc-config)`, so
+    # adding a `settings` alias — a perfectly good change — turned it red for a
+    # reason that had nothing to do with what it guards.
+    arms = re.findall(r"^\s+([a-z|-]+)\)", out, re.M)
+    headless = next((a for a in arms if "update" in a.split("|")), "")
+    for action in ("update", "doctor", "auth", "hpc-config"):
+        assert action in headless.split("|"), (
+            f"{action} no longer reaches the headless-CLI case (arms: {arms})")
 
 
 def test_rendered_uninstall_is_robust_and_honest():
