@@ -50,6 +50,33 @@ CACHE_CAP_BYTES = 512 * 1024 * 1024
 # consumed — so over-guessing is cheap and under-guessing wastes floors.
 PREFETCH_SIBLINGS = 24
 
+# ── segment grid (ranged reads) ──────────────────────────────────────────────
+#
+# A whole-member request keeps the assembly path below, byte for byte. A RANGED
+# request does not: it fetches only the grid segments its interval covers.
+#
+# Why that matters, measured against a real remote store over a 12 Mbit link
+# (misc/from-aba-first-touch-cost.md): the channel is BANDWIDTH-bound, ~0.85 s
+# fixed per call and 1.2-2.8 MB/s marginal. A viewer colouring by one gene reads
+# ~84 KB out of a 176 MB member, and paid for all 176 MB — 149 s — because the
+# member was the cache unit. One segment is ~1.5 s.
+#
+# Why 1 MiB and not the 16 MiB per-call clamp: at 16 MiB a single-segment read
+# costs ~11.5 s, most of it bytes nobody asked for. Why not exact-to-the-byte:
+# an exact interval is not a reusable cache unit, and a fixed grid needs no
+# interval bookkeeping — presence is "does this file exist", eviction is per
+# file, and a swept segment is simply re-fetched.
+#
+# The grid does NOT make sequential reads slower, because contiguous missing
+# runs are coalesced into calls of up to RANGE_CAP: walking a whole member costs
+# the same number of round trips it costs today.
+SEGMENT_BYTES = 1024 * 1024
+
+# Per-member segment directory, beside (never inside) the whole-member cache
+# file — the same rel is a FILE in one layout and a DIRECTORY in the other.
+_SEG_DIR = ".seg"
+_SIZE_FILE = ".size"
+
 _REG_LOCK = threading.Lock()
 # Whether the deployed substrate accepts rels=[...] batch reads — flips False
 # on the first TypeError (older verb signature) and every miss thereafter goes
@@ -58,6 +85,25 @@ _BATCH_OK: dict = {"ok": True}
 
 
 # ── outcome the store route maps to a response ───────────────────────────────
+
+@dataclass
+class RangeOutcome:
+    """A byte range served from the segment grid. `status=="ok"` → 206 with
+    `data` / `start` / `end` / `total`; anything else maps like ChunkOutcome.
+
+    `total` is the MEMBER's size, which the route needs for `Content-Range`. It
+    is known only from a substrate reply, so a range can only ever be answered
+    after at least one read — there is no path that guesses it."""
+    status: str
+    data: Optional[bytes] = None
+    start: int = 0
+    end: int = 0                    # inclusive, HTTP style
+    total: int = 0
+    http: int = 200
+    detail: str = ""
+    site: Optional[str] = None
+    immutable: bool = False
+
 
 @dataclass
 class ChunkOutcome:
@@ -432,11 +478,12 @@ def _chunk_reader(entry: dict, safe: str):
     from core.compute import retention
     if entry.get("ref") is not None:
         ref, site = entry["ref"], entry.get("site")
-        return lambda offset: retention.data_read_range(
-            ref, rel=safe, offset=offset, site=site)
+        return lambda offset, length=None: retention.data_read_range(
+            ref, rel=safe, offset=offset, length=length, site=site)
     target = entry["target"]
     remote_rel = entry["base_rel"].rstrip("/") + "/" + safe
-    return lambda offset: retention.file_read_range(target, remote_rel, offset=offset)
+    return lambda offset, length=None: retention.file_read_range(
+        target, remote_rel, offset=offset, length=length)
 
 
 def _fetch_and_cache(entry: dict, safe: str, cache_file: str,
@@ -553,6 +600,235 @@ def _discard(tmp: str) -> None:
         os.remove(tmp)
     except OSError:
         pass
+
+
+# ── the segment grid ─────────────────────────────────────────────────────────
+
+def _seg_dir(pid: str, site: str, store_key: str, safe: str) -> str:
+    return os.path.join(_cache_root(pid, site, store_key), _SEG_DIR, safe)
+
+
+def _seg_path(sdir: str, index: int) -> str:
+    return os.path.join(sdir, str(index))
+
+
+def _read_member_size(sdir: str) -> Optional[int]:
+    """The member size learned from an earlier reply, or None. Persisted so a
+    second launch does not have to re-derive it, and so a range wholly inside
+    already-cached segments costs ZERO substrate calls."""
+    try:
+        with open(os.path.join(sdir, _SIZE_FILE)) as fh:
+            return int(fh.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _write_member_size(sdir: str, size: int) -> None:
+    try:
+        os.makedirs(sdir, exist_ok=True)
+        _install_bytes(os.path.join(sdir, _SIZE_FILE), str(int(size)).encode())
+    except OSError:
+        pass
+
+
+def _segments_for(start: int, end_inclusive: int) -> list:
+    """The grid indices covering a byte interval."""
+    return list(range(start // SEGMENT_BYTES,
+                      end_inclusive // SEGMENT_BYTES + 1))
+
+
+def _missing_runs(sdir: str, indices: list) -> list:
+    """Contiguous runs of absent segments, as (first, last) index pairs.
+
+    Coalescing is what keeps the grid from turning one big read into hundreds of
+    small ones: a run is fetched in calls of up to RANGE_CAP, so a sequential
+    walk costs the same round trips it costs without the grid."""
+    runs, run = [], None
+    for i in indices:
+        if os.path.isfile(_seg_path(sdir, i)):
+            if run:
+                runs.append(run); run = None
+            continue
+        if run and i == run[1] + 1:
+            run = (run[0], i)
+        else:
+            if run:
+                runs.append(run)
+            run = (i, i)
+    if run:
+        runs.append(run)
+    return runs
+
+
+def _flush_segments(sdir: str, base: int, buf: bytearray,
+                    member_size: int) -> int:
+    """Install every grid segment now provably WHOLE in `buf`, drop it from the
+    buffer, and return the new base offset.
+
+    Buffered across replies rather than per reply, because a reply is not a
+    segment: the substrate clamps at its own cap, which may be larger OR SMALLER
+    than the grid. Installing only what one reply fully covered meant a
+    substrate whose cap was under `SEGMENT_BYTES` could never complete a single
+    segment — the grid stayed permanently empty and every range refused.
+
+    A segment is written only when whole (or truncated by the member's own end).
+    A partial segment installed as complete would be the 16 MiB short read one
+    level down: sticky, silently wrong, indistinguishable afterwards."""
+    while buf:
+        idx = base // SEGMENT_BYTES
+        s = idx * SEGMENT_BYTES
+        e = min(s + SEGMENT_BYTES, member_size)
+        if base != s or base + len(buf) < e:
+            break                         # not segment-aligned, or not yet whole
+        _install_bytes(_seg_path(sdir, idx), bytes(buf[:e - s]))
+        del buf[:e - s]
+        base = e
+        if base >= member_size:
+            break
+    return base
+
+
+def _probe_member_size(entry: dict, safe: str) -> Optional[int]:
+    """The member's size, from the cheapest reply that carries it (1 byte).
+
+    Every reply states the member size; asking for a whole segment just to read
+    that number would cost a megabyte each time the sidecar was swept."""
+    read = _chunk_reader(entry, safe)
+    r = _retry_once(lambda: read(0, 1))
+    s = r.get("size")
+    return int(s) if isinstance(s, int) and s >= 0 else None
+
+
+def _fetch_segments(entry: dict, safe: str, sdir: str, runs: list,
+                    known_size: Optional[int]) -> Optional[int]:
+    """Back-haul the missing runs into the grid. Returns the member size.
+
+    Each run is read in calls of at most RANGE_CAP; a reply may be clamped
+    shorter, so progress is driven by what actually arrived rather than by what
+    was asked for."""
+    from core.compute import retention
+    read = _chunk_reader(entry, safe)
+    size = known_size
+    for first, last in runs:
+        offset = first * SEGMENT_BYTES
+        stop = (last + 1) * SEGMENT_BYTES
+        if size is not None:
+            stop = min(stop, size)
+        buf, base = bytearray(), offset
+        while offset < stop:
+            want = min(retention.RANGE_CAP, stop - offset)
+            r = _retry_once(lambda o=offset, w=want: read(o, w))
+            _s = r.get("size")
+            if isinstance(_s, int) and _s >= 0:
+                size = _s
+                stop = min(stop, size)
+            nbytes = int(r.get("nbytes") or 0)
+            if not nbytes:
+                break                     # no progress (past EOF) — stop this run
+            if size is None:
+                break                     # cannot place bytes without the size
+            buf += base64.b64decode(r.get("bytes_b64") or "")
+            offset += nbytes
+            base = _flush_segments(sdir, base, buf, size)
+        # Anything left in `buf` is a partial segment and is DISCARDED — it is
+        # exactly the shape that must never reach the cache.
+    if size is not None:
+        _write_member_size(sdir, size)
+    return size
+
+
+def serve_remote_range(pid: str, relpath: str, start: int,
+                       end: Optional[int]) -> Optional[RangeOutcome]:
+    """Serve ONE byte range of a remote store member from the segment grid,
+    back-hauling only the segments the interval covers.
+
+    `end` is HTTP-inclusive and may be None (open-ended `bytes=N-`). Returns
+    None when there is no registry entry, so the route falls through exactly as
+    it does today. Never raises into the route."""
+    store_key, _, chunk_rel = relpath.partition("/")
+    if not store_key:
+        return None
+    entry = lookup_remote_store(pid, store_key)
+    if entry is None:
+        return None
+    safe = _safe_rel(chunk_rel)
+    if safe is None:
+        return RangeOutcome("reject", http=403, detail="chunk path escapes store")
+    if start < 0:
+        return RangeOutcome("reject", http=416, detail="negative range start")
+    site = entry["site"]
+    # CEILING: a member already cached WHOLE is served by the existing path,
+    # where FileResponse answers the range from local bytes. Taking the grid
+    # here would re-fetch, over the network, bytes already on this disk.
+    if os.path.isfile(os.path.join(_cache_root(pid, site, store_key), safe)):
+        return None
+    immutable = entry.get("ref") is not None
+    sdir = _seg_dir(pid, site, store_key, safe)
+    size = _read_member_size(sdir)
+    t0 = time.monotonic()
+
+    try:
+        # The member size bounds the interval (an open-ended `bytes=N-` has no
+        # other end) and is what `Content-Range` must state. It is only ever
+        # learned from a reply, so ask for the smallest possible one rather than
+        # re-fetching a segment that may already be cached — otherwise a swept
+        # `.size` would re-download a megabyte to learn a number.
+        if size is None:
+            size = _probe_member_size(entry, safe)
+            if size is None:
+                return RangeOutcome("error", http=502, site=site,
+                                    detail=f"could not determine member size on {site}")
+            _write_member_size(sdir, size)
+        if start >= size:
+            return RangeOutcome("reject", http=416, site=site, total=size,
+                                detail=f"range start {start} past member size {size}")
+        last = size - 1 if end is None else min(end, size - 1)
+        indices = _segments_for(start, last)
+        runs = _missing_runs(sdir, indices)
+        if runs:
+            size = _fetch_segments(entry, safe, sdir, runs, size) or size
+        # THE GUARD. Segments are evictable and a back-haul can partially fail,
+        # so presence is re-checked AFTER the fetch. Serving a range that spans
+        # an absent segment would splice unrelated bytes together and look
+        # exactly like data — the failure this whole tier exists to prevent
+        # (the 16 MiB short read, one level down).
+        holes = [i for i in indices if not os.path.isfile(_seg_path(sdir, i))]
+        if holes:
+            return RangeOutcome(
+                "error", http=502, site=site, total=size,
+                detail=(f"range {start}-{last} of {safe} spans {len(holes)} "
+                        f"segment(s) that could not be fetched from {site} — "
+                        f"refusing to serve a spliced range"))
+        buf = bytearray()
+        for i in indices:
+            with open(_seg_path(sdir, i), "rb") as fh:
+                seg = fh.read()
+            s_abs = i * SEGMENT_BYTES
+            lo = max(start, s_abs) - s_abs
+            hi = min(last, s_abs + len(seg) - 1) - s_abs
+            if hi >= lo:
+                buf += seg[lo:hi + 1]
+    except OSError:
+        return RangeOutcome("error", http=502, site=site,
+                            detail="segment cache read failed")
+    except Exception as e:  # noqa: BLE001 — typed backhaul errors and worse
+        from core.compute.errors import ComputeError
+        from core.runtime import obs
+        if isinstance(e, ComputeError) and e.code in ("data.missing", "task.invalid"):
+            return RangeOutcome("missing", http=404, site=site,
+                                detail="chunk not found on remote store")
+        obs.emit("data", "range backhaul", site=site, severity="error",
+                 summary=safe, status=type(e).__name__,
+                 dur_ms=int((time.monotonic() - t0) * 1000))
+        return RangeOutcome("error", http=502, site=site,
+                            detail=f"range backhaul failed on {site}: {type(e).__name__}")
+
+    _sweep_to_cap(sdir)
+    from core.runtime import obs
+    obs.emit("data", "range backhaul", site=site, summary=safe, status="ok",
+             bytes=len(buf), dur_ms=int((time.monotonic() - t0) * 1000))
+    return RangeOutcome("ok", data=bytes(buf), start=start, end=last,
+                        total=size, site=site, immutable=immutable)
 
 
 def _sweep_to_cap(start_dir: str, keep: Optional[str] = None) -> None:

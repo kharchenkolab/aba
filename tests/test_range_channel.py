@@ -1932,7 +1932,11 @@ def test_note_launcher_ref_agreement_matrix(monkeypatch):
     for label, (e, name) in shapes.items():
         monkeypatch.setattr("core.graph.entities.get_entity",
                             lambda eid, _e=e: _e)
-        note_v = tv._remote_stream_ready(None, name, entity=e)
+        # `_remote_stream_ready` returns the RESOLVED HOME (truthy) rather than
+        # a bare bool, so the counts-basis note can reuse a resolve that costs
+        # ssh round-trips. What this matrix guards is the DECISION agreeing with
+        # the launcher's, so compare the decisions, not their representations.
+        note_v = bool(tv._remote_stream_ready(None, name, entity=e))
         launch_v = p3._register_remote_stream(
             {"entity_id": e["id"], "name": name,
              "artifact_path": f"/r/{name}"}, f"agree_{label}") is not None

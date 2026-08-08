@@ -349,6 +349,115 @@ def _repair_viewer_store(store: Path, pid: "str | None" = None,
     return r.returncode == 0
 
 
+# ── the same contract, for a store that is STREAMED and never comes home ─────
+#
+# The three local lanes above probe with lstar and repair. Neither is possible
+# for a remote store: its bytes are a run's retained output on another site, and
+# the whole point of the range channel is that they never come home. So this
+# lane DETECTS and REPORTS — it never writes.
+#
+# Detection needs no lstar on the far side and no materialization, because the
+# answer lives in metadata. A `.lstar.zarr` store is a directory of small JSON
+# metadata files beside the big arrays: the root carries `profiles` (is this a
+# viewer store at all) and the field list; a field's own metadata carries its
+# `encoding`. Two small reads over the data plane, against a store of any size.
+#
+# Measured 2026-08-08 against a real remote store: the root read was 103 KB and
+# the field read a few hundred bytes.
+_ROOT_META = "zarr.json"
+_BASIS_CANDIDATE = "counts"          # lstar's own second selection rule
+_META_MAX = 4 * 1024 * 1024
+
+
+def _remote_meta(entry: dict, rel: str) -> "dict | None":
+    """Read one small JSON metadata member of a remote store, by whichever arm
+    the registry row carries. None on any failure — this is a diagnostic, and a
+    diagnostic that raises into a launch is worse than one that abstains."""
+    import base64
+    import json
+    from core.compute import retention
+    try:
+        if entry.get("ref") is not None:
+            r = retention.data_read_range(entry["ref"], rel=rel, offset=0,
+                                          length=_META_MAX, site=entry.get("site"))
+        else:
+            base = (entry.get("base_rel") or "").rstrip("/")
+            r = retention.file_read(entry["target"],
+                                    f"{base}/{rel}" if base else rel,
+                                    max_bytes=_META_MAX)
+        b64 = r.get("bytes_b64")
+        if not b64:
+            return None
+        return json.loads(base64.b64decode(b64).decode("utf-8", "replace"))
+    except Exception:  # noqa: BLE001 — absent verb, missing member, bad JSON
+        return None
+
+
+def _lstar_attrs(doc: "dict | None") -> dict:
+    """The `lstar` block of a zarr metadata document, v3 (`attributes.lstar`) or
+    v2 (`lstar` at the root). Empty dict when it is neither."""
+    if not isinstance(doc, dict):
+        return {}
+    a = doc.get("attributes")
+    ls = (a or {}).get("lstar") if isinstance(a, dict) else None
+    if not isinstance(ls, dict):
+        ls = doc.get("lstar")
+    return ls if isinstance(ls, dict) else {}
+
+
+def remote_viewer_contract(entry: dict) -> dict:
+    """Does a STREAMED store satisfy the viewer's gene-major basis contract?
+
+    Returns `{gene_major, basis, encoding, why}` with the SAME tri-state as the
+    local probe: True = fine, False = the viewer will refuse it, **None = could
+    not tell**. None is the common answer here and must stay harmless — an older
+    substrate without the read verb, a store that is not viewer-profiled, a
+    basis that is not the conventionally-named field.
+
+    Deliberately narrower than lstar's full selection rule: it answers only for
+    the shape it can answer for (a `viewer@0.1` store whose basis is the field
+    named `counts`), and abstains otherwise. A remote guess is worse than a
+    remote shrug — the local lanes can repair a wrong answer, this one can only
+    tell the user something false."""
+    root = _lstar_attrs(_remote_meta(entry, _ROOT_META))
+    if not root:
+        return {"gene_major": None, "why": "store metadata unreadable"}
+    profiles = root.get("profiles") or []
+    if not any(str(p).startswith("viewer@") for p in profiles):
+        return {"gene_major": None, "why": "not a viewer-profiled store"}
+    fields = root.get("fields") or []
+    if _BASIS_CANDIDATE not in fields:
+        # A stamped or differently-named basis: lstar's rule would find it, this
+        # probe will not, and inventing an answer is the one thing it must not do.
+        return {"gene_major": None,
+                "why": f"no field named {_BASIS_CANDIDATE!r} — basis not identifiable "
+                       f"from metadata alone"}
+    fmeta = _lstar_attrs(_remote_meta(entry, f"fields/{_BASIS_CANDIDATE}/{_ROOT_META}"))
+    enc = fmeta.get("encoding")
+    if enc is None:
+        return {"gene_major": None, "why": "basis metadata unreadable"}
+    return {"gene_major": enc == "csc", "basis": _BASIS_CANDIDATE, "encoding": enc}
+
+
+def remote_contract_warning(entry: dict, store_rel: "str | None" = None) -> "str | None":
+    """The user-facing sentence for a streamed store that will be refused, or
+    None when there is nothing to say (fine, or unknown).
+
+    It names the FIX and the machine to run it on, because that is the only
+    action available: ABA cannot repair a store it is deliberately not holding.
+    Without this the failure lands in the browser as a viewer contract error
+    with nothing anywhere explaining what to do."""
+    got = remote_viewer_contract(entry)
+    if got.get("gene_major") is not False:
+        return None
+    site = entry.get("site") or "the remote site"
+    where = store_rel or "<store>"
+    return (f"This store's counts are cell-major only, so the pagoda3 viewer "
+            f"will refuse to colour by gene. Its bytes live on {site} and are "
+            f"streamed, so ABA cannot repair them from here — run "
+            f"`lstar viewer {where}` on {site} (lstar >=0.2.2), then reopen.")
+
+
 def _pack_download(store_dir: "str | Path", dest: "str | Path",
                    pid: "str | None" = None) -> None:
     """Pack the directory store into lstar's canonical single-file STORED
@@ -823,6 +932,13 @@ def launch(node: dict, ctx: dict) -> LaunchResult:
     # materialize path below, which keeps its guardrail + mirror lever unchanged.
     streamed_key = _register_remote_stream(node, pid)
     if streamed_key:
+        # NOTE: the counts-basis contract is NOT checked here. The ref arm
+        # registers from RECORDED FACTS ONLY — no round trip — and a launch is
+        # the one place that property is load-bearing; two metadata reads on a
+        # 12 Mbit link would put ~1.7 s in front of every streamed open to catch
+        # a rare defect. The check rides the PRE-FLIGHT NOTE instead
+        # (`_remote_stream_note`), which already probes, runs before the click,
+        # and exists precisely to say what opening will do.
         return LaunchResult(
             url=f"/pagoda3/?store=/pagoda3-store/{pid}/{streamed_key}/",
             label="Explore in pagoda3",

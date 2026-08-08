@@ -86,6 +86,7 @@ FILES=(
   tests/test_restart_orphan_stamp.py
   tests/test_artifact_url_doors.py
   tests/test_range_channel.py
+  tests/test_range_segments.py
   tests/test_data_ledger.py
   tests/test_provenance_evidence.py
   tests/test_delete_blockers.py
@@ -282,6 +283,7 @@ FILES=(
   tests/test_viewer_link_resolution.py
   tests/test_viewer_prepare.py
   tests/test_viewer_store_contract.py
+  tests/test_remote_store_contract.py
   tests/test_pagoda3_launcher.py
   tests/test_viewer_weft_resolution.py
   tests/test_weft_kernel_session.py

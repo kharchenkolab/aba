@@ -1486,6 +1486,34 @@ def pagoda3_app(path: str = ""):
     return _pagoda3_iso(FileResponse(str(target)))
 
 
+def _parse_byte_range(header: str | None) -> "tuple[int, int | None] | None":
+    """`Range: bytes=a-b` → `(a, b)`; `bytes=a-` → `(a, None)`. None for absent,
+    malformed, multi-range, or suffix (`bytes=-N`) forms.
+
+    Deliberately permissive-by-degrading: anything not understood returns None
+    and the caller serves the WHOLE member, which is always a correct answer to
+    a range request (200 instead of 206). A parser that 400'd would turn a
+    header quirk into a broken viewer."""
+    if not header:
+        return None
+    raw = header.strip()
+    if not raw.lower().startswith("bytes="):
+        return None
+    spec = raw[6:].strip()
+    if "," in spec:                     # multi-range: correct answer is the whole member
+        return None
+    first, sep, last = spec.partition("-")
+    if not sep or not first.strip().isdigit():
+        return None                     # includes the suffix form `-500`
+    start = int(first)
+    if not last.strip():
+        return (start, None)
+    if not last.strip().isdigit():
+        return None
+    end = int(last)
+    return (start, end) if end >= start else None
+
+
 def _store_cors(origin: str | None) -> dict:
     """CORS headers for a viewer-store response, given the request's `Origin`.
 
@@ -1598,6 +1626,38 @@ def pagoda3_store(pid: str, relpath: str, request: Request):
     # the per-chunk cache (misc/range_channel_plan.md Phase 1). No registry hit
     # (or streaming unavailable) → today's 404. The streaming branch must never
     # 500 the route.
+    # A RANGED request is served from the segment grid: only the segments the
+    # interval covers are back-hauled, instead of the whole member. That is the
+    # difference between ~84 KB and 176 MB for one gene column
+    # (misc/from-aba-first-touch-cost.md). Un-ranged requests, and any request
+    # whose member is already cached whole, keep the assembly path below exactly
+    # as before. A malformed/unsupported Range header degrades to it too —
+    # never a 400, since the whole-member answer is always correct.
+    _rng = _parse_byte_range(request.headers.get("range"))
+    if _rng is not None:
+        try:
+            from core.viewers.range_cache import serve_remote_range
+            rout = serve_remote_range(pid, relpath, _rng[0], _rng[1])
+        except Exception:  # noqa: BLE001 — degrade to the whole-member path
+            rout = None
+        if rout is not None:
+            if rout.status == "ok" and rout.data is not None:
+                resp = Response(rout.data, status_code=206, headers={
+                    "Content-Range": f"bytes {rout.start}-{rout.end}/{rout.total}",
+                    "Accept-Ranges": "bytes",
+                })
+                for _k, _v in _cors.items():
+                    resp.headers[_k] = _v
+                resp.headers["Cache-Control"] = (
+                    "private, max-age=86400, immutable" if rout.immutable
+                    else "no-cache")
+                return resp
+            if rout.status == "reject" and rout.http == 416:
+                raise HTTPException(416, rout.detail)
+            if rout.status in ("reject", "missing"):
+                raise HTTPException(rout.http, rout.detail)
+            raise HTTPException(rout.http, rout.detail)
+
     try:
         from core.viewers.range_cache import serve_remote_chunk
         out = serve_remote_chunk(pid, relpath)

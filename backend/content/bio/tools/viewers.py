@@ -44,8 +44,12 @@ def _remote_stream_note(site, *, mirror_lever) -> str:
             f"you will re-read it many times — {mirror_lever}.")
 
 
-def _remote_stream_ready(run_id, name, *, entity=None) -> bool:
-    """True when a remote source will STREAM its chunks. Two arms, tried
+def _remote_stream_ready(run_id, name, *, entity=None) -> "dict | None":
+    """The resolved home when a remote source will STREAM its chunks, else None.
+
+    Truthy/falsy exactly as the old bool was; it returns the home rather than
+    a flag so the counts-basis note can reuse a resolve that costs ssh round
+    trips instead of paying for it twice. Two arms, tried
     cheapest-first:
 
     * REF arm — LAUNCHER-PARITY from RECORDED FACTS ONLY, NO remote round-trip:
@@ -78,18 +82,54 @@ def _remote_stream_ready(run_id, name, *, entity=None) -> bool:
         # it in at package import, which open_viewer_impl guarantees.)
         if entity is not None:
             from content.bio.viewers.launchers.pagoda3 import ref_stream_facts
-            if (ref_stream_facts(entity, name or "")
-                    and retention.range_read_available(retention.DATA_RANGE_VERB)):
-                return True
+            facts = ref_stream_facts(entity, name or "")
+            if facts and retention.range_read_available(retention.DATA_RANGE_VERB):
+                ref = facts.get("ref") if isinstance(facts, dict) else None
+                return {"entry": {"ref": ref, "site": facts.get("site")} if ref else None,
+                        "rel": name or "<store>"}
         # RUN arm — one inventory-backed resolve when the run verb is live.
         if not run_id or not name:
-            return False
+            return None
         if not retention.range_read_available():
-            return False
+            return None
         from content.bio.lifecycle.runs import resolve_remote_store_stream
-        return bool(resolve_remote_store_stream(run_id, name))
+        home = resolve_remote_store_stream(run_id, name)
+        if not home:
+            return None
+        # The RESOLVED home rides back with the verdict so the contract note
+        # need not resolve again — this call costs ssh round-trips and is
+        # deliberately made once (test_range_channel asserts the count).
+        return {"entry": {"target": home.get("target"),
+                          "base_rel": home.get("store_rel") or "",
+                          "site": home.get("site")},
+                "rel": home.get("store_rel") or name}
     except Exception:  # noqa: BLE001
-        return False
+        return None
+
+
+def _stream_contract_note(entry: "dict | None", store_rel: str) -> "str | None":
+    """The counts-basis warning for a store that WILL stream, or None.
+
+    Takes the ALREADY-RESOLVED home rather than resolving its own: the run arm's
+    resolve costs ssh round-trips, and the readiness predicate above has just
+    paid for it. (Resolving again here doubled that cost — caught by the
+    launcher-parity assertion in test_range_channel.)
+
+    This rides the pre-flight note rather than the launch for a reason: the ref
+    arm registers from recorded facts with NO round trip, and putting two
+    metadata reads in front of every streamed open would tax the common case to
+    catch a rare defect. The note runs BEFORE the click, which is also the only
+    moment when "fix it on the site first" is actionable.
+
+    Report only: a streamed store's bytes are a run's output on another machine,
+    so ABA states the fix and never applies it. Never raises."""
+    if not entry:
+        return None
+    try:
+        from content.bio.viewers.launchers.pagoda3 import remote_contract_warning
+        return remote_contract_warning(entry, store_rel=store_rel)
+    except Exception:  # noqa: BLE001 — a note must never block the link
+        return None
 
 
 def _remote_note(site, size_bytes, *, mirror_lever, run_id, name,
@@ -103,8 +143,14 @@ def _remote_note(site, size_bytes, *, mirror_lever, run_id, name,
     wording; otherwise the fetch / over-gate wording. Both branches MUST route
     through here (a branch calling `_remote_open_note` directly is
     streaming-blind — the class this closes)."""
-    if _remote_stream_ready(run_id, name, entity=entity):
-        return _remote_stream_note(site, mirror_lever=mirror_lever)
+    ready = _remote_stream_ready(run_id, name, entity=entity)
+    if ready:
+        note = _remote_stream_note(site, mirror_lever=mirror_lever)
+        # "Nothing to do: just open it" is WRONG when the viewer is going to
+        # refuse the store. The warning rides the home this predicate already
+        # resolved — no second round trip.
+        warn = _stream_contract_note(ready.get("entry"), ready.get("rel") or "<store>")
+        return f"{note} {warn}" if warn else note
     return _remote_open_note(site, size_bytes, mirror_lever=mirror_lever)
 
 
