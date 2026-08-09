@@ -47,6 +47,29 @@ _log = logging.getLogger(__name__)
 IDLE_TIMEOUT_S = 1800   # 30 minutes
 
 
+def _targets_from_exec_records(run_id: str) -> list:
+    """The weft targets that PROVABLY executed this run's steps, from its exec
+    records' compute blocks (kernel_id / job_id) — the reconstruction used
+    when the dispatch-time `record_weft_target` stamp was missed (ambient
+    runs). Sidecars can be swept; best-effort, ordered, deduped, never
+    raises."""
+    out: list = []
+    try:
+        from core.graph import exec_records as _er
+        for row in _er.list_by_run(run_id):
+            try:
+                rec = _er.get(row["exec_id"]) or {}
+            except Exception:  # noqa: BLE001 — swept sidecar → no compute block
+                continue
+            comp = (rec.get("result") or {}).get("compute") or rec.get("compute") or {}
+            t = comp.get("kernel_id") or comp.get("job_id")
+            if t and t not in out:
+                out.append(t)
+    except Exception:  # noqa: BLE001
+        return out
+    return out
+
+
 def record_weft_target(run_id: Optional[str], target: Optional[str]) -> None:
     """Persist a weft target (a kernel_id / job_id that produced this Run's
     outputs) onto the Run entity's `metadata.weft_targets`. This is the handle
@@ -632,6 +655,23 @@ def _retain_run_outputs(run_id: str, run_metadata: dict) -> dict:
     Best-effort — retention must never break a turn, but failures are surfaced on the Run
     (`metadata.retention_alert`) rather than swallowed."""
     targets = list(run_metadata.get("weft_targets") or [])
+    if not targets:
+        # AMBIENT-run self-heal. The dispatch-time stamp
+        # (`record_weft_target`) needs an ACTIVE run id, and an ambient run
+        # is minted after the step already ran — so quick utility work on a
+        # weft kernel produced a run whose `weft_targets` was empty, and a
+        # keep decision against it was a silent no-op: retained_runs empty,
+        # keep_outputs honestly reporting NOT COVERED for a file sitting in
+        # the kernel's sandbox the whole time (regtest keep_triage, 3×
+        # deterministic, 2026-08-09). The run's OWN exec records carry the
+        # truth — each compute block names the kernel/job that executed it —
+        # so reconstruct the targets from what provably ran, and stamp them
+        # for every later reader. Property, not instance: any path that
+        # misses the dispatch stamp heals here, at the moment retention
+        # actually needs the handle.
+        targets = _targets_from_exec_records(run_id)
+        for t in targets:
+            record_weft_target(run_id, t)
     if not targets:
         return {}  # jupyter / no weft kernel → nothing to retain against
     try:

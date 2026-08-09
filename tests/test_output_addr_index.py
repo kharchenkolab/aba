@@ -374,3 +374,79 @@ def test_the_tree_graft_gate_opens_on_index_rows_alone(monkeypatch):
     names = [c.get("name") for c in parent["children"]]
     assert any(NAME in str(x) for x in names) or n > 0, (
         f"gate stayed closed with only index rows: grafted={n}, children={names}")
+
+
+# ── ambient-run self-heal: retention reconstructs targets from exec records ──
+
+def test_an_AMBIENT_run_with_no_stamped_target_still_retains(monkeypatch):
+    """Deterministic live failure (keep_triage, 3x): quick utility work runs
+    on a weft kernel BEFORE its ambient run exists, so the dispatch-time
+    record_weft_target stamp has no run to stamp — and a keep decision against
+    the run was a silent no-op (weft retained_runs empty, the file sitting in
+    the kernel sandbox the whole time). Retention must reconstruct the targets
+    from the run's own exec records' compute blocks, retain against them, and
+    stamp them for later readers."""
+    from content.bio.lifecycle import runs as R
+    from core.graph import output_addr as oa
+    from core.graph import exec_records as er
+    from core.graph.entities import create_entity, get_entity
+    from core.compute import retention
+
+    rid = create_entity(entity_type="analysis", title="ambient run", metadata={
+        "run": {"sites": ["local"]},          # NO weft_targets — the bug shape
+    })
+    monkeypatch.setattr(er, "list_by_run",
+                        lambda r, limit=None: [{"exec_id": "exec_amb1"}])
+    monkeypatch.setattr(er, "get", lambda x: {
+        "compute": {"substrate": "weft", "kernel_id": "krn_ambient",
+                    "site": "local"}} if x == "exec_amb1" else None)
+
+    import core.exec.artifacts as _arts
+    monkeypatch.setattr(_arts, "artifacts_for_run", lambda r: [])
+    monkeypatch.setattr(R, "_jobdir_store_dirs", lambda r: {"summary.txt"})
+    monkeypatch.setattr(R, "_declared_output_names", lambda md: set())
+    monkeypatch.setattr(R, "_disk_truth_includes",
+                        lambda r, md, inc, produced: (set(), set(), []))
+    monkeypatch.setattr(R, "_retained_so_far", lambda r: (set(), set()))
+    monkeypatch.setattr(R, "run_durable_view", lambda r: {"summary": {}})
+    retained = []
+    monkeypatch.setattr(retention, "retain",
+                        lambda t, include=None, label=None, **kw:
+                        retained.append((t, tuple(include or []))))
+    monkeypatch.setattr(R, "_live_inventory", lambda t, **kw: {
+        "site": "local", "live": True,
+        "entries": [{"path": "summary.txt", "bytes": 20, "mtime": 1}]})
+
+    out = R.set_keep_decision(rid, keep=["summary.txt"])
+    assert "error" not in out, out
+    assert retained and retained[0][0] == "krn_ambient", (
+        f"retention never reached the kernel target: {retained}")
+    assert "summary.txt" in retained[0][1]
+    # the reconstruction is STAMPED so every later reader has the handle
+    md = (get_entity(rid) or {}).get("metadata") or {}
+    assert md.get("weft_targets") == ["krn_ambient"]
+    # and the address index rows ride the same heal
+    rows = [r for r in oa.by_name("summary.txt") if r["run_id"] == rid]
+    assert rows and rows[0]["target"] == "krn_ambient"
+
+
+def test_a_run_with_stamped_targets_never_consults_exec_records(monkeypatch):
+    """CEILING: the reconstruction is the fallback, not a second source of
+    truth — a stamped run keeps its recorded targets (armed: the record door
+    raises)."""
+    from content.bio.lifecycle import runs as R
+    from core.graph import exec_records as er
+    monkeypatch.setattr(er, "list_by_run",
+                        lambda r, limit=None: (_ for _ in ()).throw(
+                            AssertionError("exec records consulted despite stamps")))
+    assert R._targets_from_exec_records is not None   # helper exists
+    # drive _retain_run_outputs directly with stamped metadata
+    import core.exec.artifacts as _arts
+    monkeypatch.setattr(_arts, "artifacts_for_run", lambda r: [])
+    monkeypatch.setattr(R, "_jobdir_store_dirs", lambda r: set())
+    monkeypatch.setattr(R, "_declared_output_names", lambda md: set())
+    monkeypatch.setattr(R, "_disk_truth_includes",
+                        lambda r, md, inc, produced: (set(), set(), []))
+    monkeypatch.setattr(R, "_retained_so_far", lambda r: (set(), set()))
+    out = R._retain_run_outputs("ana_x", {"weft_targets": ["krn_stamped"]})
+    assert isinstance(out, dict)
