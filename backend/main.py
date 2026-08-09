@@ -545,6 +545,30 @@ def entities_download(entity_id: str):
                          f"viewer (which fetches under a guardrail), or Keep it "
                          f"and place it here first")
     if not path.exists() or not path.is_file():
+        # A REGISTERED by-reference remote dataset has no run lineage, so the
+        # shim above never engages — and "missing on disk" is then wrong on
+        # both counts: the bytes exist (on the recorded site), and no disk this
+        # claim speaks for was ever supposed to hold them. Answer from the
+        # entity's RECORDED location facts (no probe — the same door the
+        # viewer pre-flight uses), with the honest lives-on-<site> shape the
+        # run-backed branch already raises. Found by live_audit 2026-08-08:
+        # six by-reference mendel datasets, every download link a dead 404.
+        try:
+            from content.bio.data_location import dataset_location
+            loc = dataset_location(e)
+            if loc.get("remote"):
+                size = loc.get("total_bytes")
+                sz = f" ({size / 1e6:.0f} MB)" if size else ""
+                raise HTTPException(
+                    413, f"this dataset lives on {loc.get('site')}{sz} — it is "
+                         f"registered by reference and its bytes were never "
+                         f"copied here. Open it with a viewer (which fetches or "
+                         f"streams under a guardrail), or mirror it locally "
+                         f"from its card, then download")
+        except HTTPException:
+            raise
+        except Exception:  # noqa: BLE001 — location facts are best-effort
+            pass
         raise HTTPException(404, "artifact file is missing on disk")
     # Suggest a reasonable filename based on the entity's title.
     base = e["title"].replace("/", "_").strip()

@@ -887,3 +887,55 @@ def test_artifact_store_tier_answers_name_lookup(monkeypatch, tmp_path):
     assert hit["digest"] == "abc123"
     # a name the run never advertised still resolves to nothing
     assert runs_mod.locate_run_output(rid, "other.csv", remote=False) is None
+
+
+# ── 18. entity download: a REGISTERED by-reference remote dataset is honest ──
+
+def test_entity_download_registered_byref_is_413_not_missing_on_disk(monkeypatch):
+    """The other shape of the same lie, found by live_audit 2026-08-08: a
+    dataset REGISTERED by reference (register_dataset with site=) has NO exec
+    lineage, so the run-backed shim above never engages, and six such entities
+    answered their advertised download URL with 404 'artifact file is missing
+    on disk' — for bytes that exist, on a recorded site, and were never
+    supposed to be on this disk. Recorded location facts must answer: honest
+    413 naming the site and the by-reference nature."""
+    from fastapi import HTTPException
+    import main as mainmod
+    ent_row = {"id": "ent_byref", "type": "dataset", "title": "Remote ds",
+               "artifact_path": "/remote/site/data/thing.data.zarr",
+               "exec_id": None,
+               "metadata": {"home": {"site": "siteA",
+                                     "path": "/remote/site/data/thing.data.zarr"}}}
+    monkeypatch.setattr(mainmod, "get_entity",
+                        lambda x: ent_row if x == "ent_byref" else None)
+    from content.bio import data_location as dl
+    monkeypatch.setattr(dl, "dataset_location", lambda e: {
+        "remote": True, "site": "siteA", "by_reference": True,
+        "total_bytes": 359_000_000})
+    try:
+        mainmod.entities_download("ent_byref")
+        raise AssertionError("expected HTTPException")
+    except HTTPException as e:
+        assert e.status_code == 413, e.detail
+        assert "siteA" in e.detail and "reference" in e.detail
+        assert "missing on disk" not in e.detail
+
+
+def test_entity_download_local_missing_stays_a_404(monkeypatch):
+    """CEILING: a genuinely-local dangling artifact keeps the plain 404 — the
+    413 must not swallow the real missing-file case."""
+    from fastapi import HTTPException
+    import main as mainmod
+    ent_row = {"id": "ent_gone", "type": "figure", "title": "Gone",
+               "artifact_path": "/nonexistent/local/file.png",
+               "exec_id": None, "metadata": {}}
+    monkeypatch.setattr(mainmod, "get_entity",
+                        lambda x: ent_row if x == "ent_gone" else None)
+    from content.bio import data_location as dl
+    monkeypatch.setattr(dl, "dataset_location", lambda e: {
+        "remote": None, "site": None, "by_reference": None})
+    try:
+        mainmod.entities_download("ent_gone")
+        raise AssertionError("expected HTTPException")
+    except HTTPException as e:
+        assert e.status_code == 404 and "missing on disk" in e.detail
