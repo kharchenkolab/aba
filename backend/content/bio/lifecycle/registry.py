@@ -162,7 +162,18 @@ def register_artifacts_from_tool_result(
     # on an upstream entity (provenance the user expects to navigate).
     plots = result_obj.get("plots") if isinstance(result_obj, dict) else None
     tables = result_obj.get("tables") if isinstance(result_obj, dict) else None
-    if tool_name in _ARTIFACT_TOOLS and (plots or tables):
+    # FILES count as outputs too. This gate used to require plots-or-tables,
+    # so a step that produced only files — write summary.txt, save a model,
+    # export a CSV the harvester filed under files — never got its exec
+    # attached to the ambient Run and never recorded its weft target. The
+    # visible end of that chain (regtest keep_triage, 3× deterministic,
+    # 2026-08-09): a keep decision against such a run was a silent no-op —
+    # exec run_id NULL, weft_targets absent, weft retained_runs empty — while
+    # the file sat in the kernel sandbox. Plots and tables are just files the
+    # harvester classified; the Run/attach/target bookkeeping must not depend
+    # on that classification.
+    files = result_obj.get("files") if isinstance(result_obj, dict) else None
+    if tool_name in _ARTIFACT_TOOLS and (plots or tables or files):
         analysis_id = _ensure_analysis(focused_entity_id or WORKSPACE_ID, analysis_ctx, thread_id)
         focused = focused_entity_id or WORKSPACE_ID
         if focused != WORKSPACE_ID:

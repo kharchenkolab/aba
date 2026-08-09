@@ -450,3 +450,54 @@ def test_a_run_with_stamped_targets_never_consults_exec_records(monkeypatch):
     monkeypatch.setattr(R, "_retained_so_far", lambda r: (set(), set()))
     out = R._retain_run_outputs("ana_x", {"weft_targets": ["krn_stamped"]})
     assert isinstance(out, dict)
+
+
+# ── files-only steps get a Run, an attach, and a weft target ─────────────────
+
+def test_a_FILES_ONLY_step_attaches_its_exec_and_target(monkeypatch):
+    """The gate upstream of the ambient failure: registry's post-tool hook
+    required plots-or-tables, so a step that produced only FILES (write
+    summary.txt) never attached its exec to the ambient Run and never
+    recorded its weft target — exec run_id NULL, weft_targets absent, and a
+    later keep a silent no-op. Plots and tables are just files the harvester
+    classified; the bookkeeping must not depend on the classification."""
+    from content.bio.lifecycle import registry as REG
+    from core.graph import exec_records as er
+
+    ensured = {"n": 0}
+    monkeypatch.setattr(REG, "_ensure_analysis",
+                        lambda focused, ctx, tid: (ensured.update(n=ensured["n"] + 1)
+                                                   or "ana_files"))
+    attached = []
+    monkeypatch.setattr(er, "attach_to_run",
+                        lambda eid, rid: attached.append((eid, rid)) or True)
+    monkeypatch.setattr(er, "get", lambda eid: {"weft_target": "krn_files",
+                                                "inputs": []})
+    stamped = []
+    from content.bio.lifecycle import runs as R
+    monkeypatch.setattr(R, "record_weft_target",
+                        lambda rid, t: stamped.append((rid, t)))
+    monkeypatch.setattr(REG, "add_edge", lambda *a, **k: None, raising=False)
+
+    REG.register_artifacts_from_tool_result(
+        tool_name="run_python", tool_input={"code": "open('summary.txt','w')"},
+        result_obj={"exec_id": "exec_f1", "plots": [], "tables": [],
+                    "files": [{"name": "summary.txt"}]},
+        thread_id="thr_t", focused_entity_id=None, analysis_ctx={})
+    assert ensured["n"] == 1, "a files-only step no longer ensures the Run"
+    assert ("exec_f1", "ana_files") in attached, "exec not attached to the Run"
+    assert ("ana_files", "krn_files") in stamped, "weft target not recorded"
+
+
+def test_a_no_output_step_still_creates_NO_run(monkeypatch):
+    """CEILING: pure-compute steps (print a number) must not litter the graph
+    with an ambient Run per utility call — the gate widened to files, not to
+    everything."""
+    from content.bio.lifecycle import registry as REG
+    monkeypatch.setattr(REG, "_ensure_analysis",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("Run ensured for a no-output step")))
+    REG.register_artifacts_from_tool_result(
+        tool_name="run_python", tool_input={"code": "print(1)"},
+        result_obj={"exec_id": "exec_f2", "plots": [], "tables": [], "files": []},
+        thread_id="thr_t", focused_entity_id=None, analysis_ctx={})
