@@ -29,12 +29,18 @@ below derives from a few invariants:
   leaves its caller blocked on a reply that never comes — a hung turn pegging
   CPU. A watchdog detects the dead process, resets the session, and fails the
   turn with an actionable message instead of hanging or spinning.
-- **Harvest is path-agnostic.** A figure or table is a result wherever the code
-  saved it. Harvest scans the cell's working dir *and* the artifact store *and*
-  the project work dir, so an off-convention `savefig('/…/work/fig.png')` still
-  registers. The failure this prevents is the worst kind: the agent correctly
-  reports `rc=0` + "figure saved", but the harvester loses it (`plots: []`) —
-  which reads as fabrication (the "A2"/C4 incident).
+- **Harvest is path-agnostic — and ownership-aware.** A figure or table is a
+  result wherever the code saved it. Harvest scans the cell's working dir *and*
+  the artifact store *and* the project work dir, so an off-convention
+  `savefig('/…/work/fig.png')` still registers. The failure this prevents is
+  the worst kind: the agent correctly reports `rc=0` + "figure saved", but the
+  harvester loses it (`plots: []`) — which reads as fabrication (the "A2"/C4
+  incident). The store scan has a converse hazard: the artifact store is shared
+  per-project and every concurrent thread's harvest writes serving copies into
+  it, so "new file in my window" does not imply "my agent saved it". Store-minted
+  files — name equals own content hash (`sha256[:32]+ext`) — are skipped, else
+  one thread's figures get re-registered as another's (the 2026-08-09
+  crossed-wires incident; `_is_store_minted` in `core/exec/run.py`).
 - **Size thread pools to the allocation, not the hardware.** On a node allocated
   1 of 56 CPUs, an uncapped OpenBLAS spawns 56 threads and dies on the per-user
   process limit (`pthread` `EAGAIN`). BLAS/OMP pools are sized to the *allocation*.
