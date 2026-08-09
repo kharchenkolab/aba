@@ -46,6 +46,13 @@ class ExecResult:
     stderr: str
     cancelled: bool = False
     timed_out: bool = False
+    # Set when the block NEVER EXECUTED because the infrastructure failed
+    # (transport down, submit refused) — the typed error code. Distinguishes
+    # "your code ran and exited 1" from "nothing ran": both used to arrive as
+    # returncode=1 with the failure squeezed into stderr, and the tool layer
+    # then wrapped a site outage in a success-shaped envelope whose note
+    # claimed the step "ran on <site>" (live, mn_offline_honesty 2026-08-09).
+    infra_error: "str | None" = None
 
 
 class Executor(Protocol):

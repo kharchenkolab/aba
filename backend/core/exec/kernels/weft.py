@@ -574,7 +574,9 @@ class WeftKernelSession:
             from core.compute.errors import describe
             return ExecResult(returncode=1, stdout="",
                               stderr=f"[kernel] block submit failed: {describe(e)}",
-                              cancelled=False, timed_out=False)
+                              cancelled=False, timed_out=False,
+                              infra_error=str(getattr(e, "code", "") or
+                                              "infra.submit_failed"))
         block = int(sub.get("block", 0))
         out_off = err_off = 0
         deadline = time.time() + timeout_s

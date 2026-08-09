@@ -140,5 +140,41 @@ def test_the_source_keeps_the_session_alive_on_transport_only():
         "an unconditional kill came back into the submit path"
 
 
+def test_a_submit_failure_is_MARKED_infra_not_user_code():
+    """An ExecResult whose block never executed must be distinguishable from
+    user code that ran and exited 1 — both used to arrive as returncode=1 with
+    the failure squeezed into stderr, and the tool layer then wrapped a SITE
+    OUTAGE in a success-shaped envelope whose note said the step "ran on
+    <site>" (live, mn_offline_honesty 2026-08-09: a paused fixture counted as
+    a successful hpc run). Same source-level assertion style as the alive
+    test, same reason."""
+    src = (ROOT / "backend/core/exec/kernels/weft.py").read_text()
+    i = src.index("sub = self._submit_block(code)")
+    body = src[i:i + 1400]
+    assert "infra_error=" in body, \
+        "the submit-failure ExecResult lost its infra marker"
+    src2 = (ROOT / "backend/content/bio/tools/run_exec.py").read_text()
+    # the exact LIVE branch line — `if False and getattr(...)` or any other
+    # disabling still containing the getattr text must fail here
+    assert '\n    if getattr(res, "infra_error", None):\n' in src2, \
+        "the infra branch is disabled or reshaped"
+    j = src2.index('getattr(res, "infra_error", None)')
+    tail = src2[j:j + 900]
+    assert '"status": "error"' in tail and "did NOT run" in tail, \
+        "an infra-marked result no longer produces an error envelope"
+    # ordering: the infra branch must run BEFORE the success-shaped note
+    assert src2.index('getattr(res, "infra_error", None)') < \
+        src2.index("ran on {site} in a persistent session"), \
+        "the infra check sits after the success envelope — dead branch"
+
+
+def test_execresult_default_carries_no_infra_error():
+    """CEILING: ordinary results (user code, any returncode) keep the old
+    shape — rc=1 user code must NOT become an infra error."""
+    from core.exec.base import ExecResult
+    r = ExecResult(returncode=1, stdout="", stderr="assert failed")
+    assert r.infra_error is None
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

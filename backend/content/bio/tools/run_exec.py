@@ -1176,6 +1176,24 @@ def _run_remote_kernel(input_: dict, ctx: dict | None, project_id: str,
         return {"status": "cancelled",
                 "note": f"Run was cancelled by the user "
                         f"({getattr(cancel_token, 'reason', '')}). No further work happened."}
+    if getattr(res, "infra_error", None):
+        # NOTHING RAN: the submit itself failed (site unreachable, transport
+        # reset). This must be an ERROR envelope — the success shape below
+        # would stamp "ran on <site>" on a step that never left the
+        # controller, and every consumer keying on status/error (site-ran
+        # accounting, exec records, the agent's own routing) would count a
+        # dead site as a successful run there. The session is kept (a
+        # transport blip must not cost the kernel's state); the next call
+        # simply tries again.
+        return {"status": "error", "site": site,
+                "error": res.infra_error,
+                "note": (f"the step did NOT run — the submit to {site} failed "
+                         f"before execution ({res.infra_error}). The session "
+                         f"and its variables are intact; retry when the site "
+                         f"is reachable.\n{(res.stderr or '').strip()[:600]}"),
+                "compute": {"substrate": "weft",
+                            "kernel_id": getattr(sess, "kernel_id", None),
+                            "site": site}}
     fetch_dir, remote_only = _fetch_new_kernel_files(
         sess.kernel_id, inv0, project_id, str(thread_id))
     # project_id EXPLICITLY — harvest_artifacts otherwise buckets the copies
