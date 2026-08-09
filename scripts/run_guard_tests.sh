@@ -68,6 +68,7 @@ FILES=(
   tests/test_capability_language.py
   tests/test_remote_output_resolution.py
   tests/test_output_search_uncapped.py
+  tests/test_output_addr_index.py
   tests/test_remote_kernel_lane.py
   tests/test_kernel_cwd_guard.py
   tests/test_remote_setup_purity.py

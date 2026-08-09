@@ -705,7 +705,68 @@ def _retain_run_outputs(run_id: str, run_metadata: dict) -> dict:
             _log.info("retain: %s had none of %s — covered by another "
                       "target, no alert", t, sorted(inc))
     _note_retention_alert(run_id, run_metadata, "; ".join(errors) if errors else None)
+    # RECORD THE ADDRESSES while they are in hand (core/graph/output_addr —
+    # the catalog's write-time half). This exact moment is the one that was
+    # missed live: a keep decision NAMED processed.lstar.zarr, retention was
+    # applied against the kernel target, and nothing wrote down (run, rel,
+    # site, target) — so a later click re-searched the project and 404'd on a
+    # cap. The keeper attribution (`per_target`) and the run's site are in
+    # hand right here; recording is one local write. Best-effort, like
+    # everything else in this function: knowledge, never a blocker.
+    try:
+        _record_output_addresses(run_id, run_metadata, per_target,
+                                 source="keep")
+    except Exception:  # noqa: BLE001
+        pass
     return info
+
+
+def _record_output_addresses(run_id: str, run_metadata: dict,
+                             per_target: dict, *, source: str) -> int:
+    """Write output_addr rows for a run's keeper set — `(run, rel) → {name,
+    site, target, kind, bytes, mtime, state}` — enriched from the target's
+    inventory when one is cheaply available (recorded receipt, or the live
+    sandbox scan for a kernel), tolerated absent (a row with a target and no
+    size is still an address). Store DIRECTORIES are recorded as one row for
+    the store root (`kind="dir"`, bytes summed over members) — the receipt
+    holds members, but the addressable thing is the root."""
+    from core.graph import output_addr
+    sites = list((run_metadata.get("run") or {}).get("sites") or [])
+    default_site = sites[0] if sites else None
+    rows: list = []
+    for target, rels in (per_target or {}).items():
+        inv: dict = {}
+        try:
+            inv = _live_inventory(target) or {}
+        except Exception:  # noqa: BLE001
+            inv = {}
+        site = inv.get("site") or default_site
+        entries = [e for e in (inv.get("entries") or inv.get("files") or [])
+                   if isinstance(e, dict)]
+        for rel in rels or []:
+            rel = str(rel).rstrip("/")
+            if not rel:
+                continue
+            members = [e for e in entries
+                       if (e.get("path") or "").startswith(rel + "/")]
+            exact = next((e for e in entries if e.get("path") == rel), None)
+            if members:                        # a directory store — one row, root rel
+                row = {"kind": "dir",
+                       "bytes": sum(int(e.get("bytes") or 0) for e in members),
+                       "mtime": max((int(e.get("mtime") or 0) for e in members),
+                                    default=None)}
+            elif exact:
+                row = {"kind": "file", "bytes": exact.get("bytes"),
+                       "mtime": exact.get("mtime"),
+                       "sha256": exact.get("sha256")}
+            else:
+                row = {"kind": None, "bytes": None, "mtime": None}
+            row.update(run_id=run_id, rel=rel, name=rel.rsplit("/", 1)[-1],
+                       site=site, target=target,
+                       state="live" if inv.get("live") else "retained",
+                       source=source)
+            rows.append(row)
+    return output_addr.record(rows)
 
 
 def _attribute_keepers(arts: list, targets: list, cumulative: list) -> dict:
@@ -1562,6 +1623,23 @@ def _project_output_matches(name: str) -> list:
     store sat intact on its site while a hard-coded `[:4]` answered the user's
     click with a 404 (live, 2026-08-08). A cap on a search for a unique answer
     is not a cost knob; it is a wrong answer with no distinguishing mark."""
+    cands = _output_candidacy(name)
+    return _confirm_output_matches(name, cands)
+
+
+def _output_candidacy(name: str) -> list:
+    """The POSSIBLE owners of output `name`, cheaply — one batched receipt read
+    plus one index read, no per-run round-trips. `[(run_id, row_or_None)]`
+    where a run qualifies when its receipt NAMES the file, its receipt is
+    TRUNCATED (budgeted — absence unproven), it has NO receipt (a kernel
+    records one only at stop; a live kernel is findable only by the live
+    tier), or the address index holds a row for it. A COMPLETE receipt that
+    does not name the file proves absence — terminal truth, newer than any
+    keep-time index row — so that run is out, row or no row.
+
+    Candidacy is deliberately a superset of ownership: confirmation
+    (`_confirm_output_matches`) prunes it. What it must never be is a subset —
+    a run excluded here is unreachable by every caller."""
     base = name.rsplit("/", 1)[-1].rstrip("/")
     n = name.rstrip("/")
     if not base:
@@ -1577,7 +1655,7 @@ def _project_output_matches(name: str) -> list:
     all_tgts = list(dict.fromkeys(t for _rid, ts in cands for t in ts))
     try:
         invs = (retention.inventories(all_tgts) or {}).get("inventories") or {}
-    except Exception:  # noqa: BLE001 — no batch verb → confirm everything below
+    except Exception:  # noqa: BLE001 — no batch verb → everything stays a candidate
         invs = {}
 
     def _names_it(v: dict) -> bool:
@@ -1589,22 +1667,90 @@ def _project_output_matches(name: str) -> list:
                 return True
         return False
 
-    matches: list = []
+    from core.graph import output_addr
+    idx: dict = {}
+    for r in output_addr.by_name(base):
+        idx.setdefault(r.get("run_id"), r)
+
+    out: list = []
     for rid, tgts in cands:
-        confirm = False
+        named = absent = False
         for t in tgts:
             v = invs.get(t)
             if not isinstance(v, dict) or v.get("error"):
-                confirm = True            # no receipt — only the live tier can answer
+                absent = True             # no receipt — only the live tier can answer
             elif _names_it(v):
-                confirm = True            # named — confirm via the canonical resolver
+                named = True              # named — a real candidate
             elif v.get("truncated"):
-                confirm = True            # budgeted receipt — absence unproven
-        if not confirm:
-            continue
+                absent = True             # budgeted receipt — absence unproven
+        row = idx.get(rid)
+        if named:
+            out.append((rid, row, True))      # CERTAIN: the receipt names it
+        elif absent:
+            # Absence merely unproven (missing/truncated receipt): a keep-time
+            # index row is recorded evidence and stands in (certain); no row →
+            # only the live tier can answer (uncertain).
+            out.append((rid, row, row is not None))
+        # else: every receipt is COMPLETE and none names the file — absence is
+        # proven, terminal truth. The run is OUT, index row or no index row: a
+        # row must stand in for the confirm, never resurrect a file the
+        # receipt says was gone by the end (kept live, deleted before stop).
+    return out
+
+
+def _confirm_output_matches(name: str, cands: list) -> list:
+    """Confirm candidacy into ownership: `[(run_id, loc)]`, remote only.
+
+    An index row with a SITE (core/graph/output_addr — written at keep/settle
+    time) stands in for the expensive confirm: the canonical resolver's remote
+    tier costs ~12 s of inventory+stat+digest round-trips per run (measured
+    2026-08-08), and everything it re-derives is in the row. Rows are
+    knowledge, not holdings — the serving layers validate bytes on use exactly
+    as they do for a fresh confirm, so a stale row costs an honest launch
+    error, never wrong bytes. Rows without a site confirm the slow way, and
+    the hit is BACKFILLED, so each name pays the confirm at most once per
+    project."""
+    base = name.rsplit("/", 1)[-1].rstrip("/")
+    n = name.rstrip("/")
+    from core.graph import output_addr
+
+    def _confirm_one(rid, row):
+        if row is not None and row.get("site") and row.get("site") != "local":
+            return (rid, {
+                "locality": "remote", "site": row["site"],
+                "size": row.get("bytes"), "kind": row.get("kind"),
+                "target": row.get("target"), "digest": row.get("sha256"),
+                "local_path": None,
+            })
         loc = locate_run_output(rid, name)
         if loc and loc.get("locality") == "remote":
-            matches.append((rid, loc))
+            output_addr.record([{                      # backfill: pay once
+                "run_id": rid, "rel": loc.get("rel") or n, "name": base,
+                "site": loc.get("site"), "target": loc.get("target"),
+                "kind": loc.get("kind"), "bytes": loc.get("size"),
+                "state": loc.get("durability"), "source": "backfill"}])
+            return (rid, loc)
+        return None
+
+    # CERTAIN candidates first (recorded evidence: a receipt names the file,
+    # or an index row exists). UNCERTAIN ones — runs whose receipt is merely
+    # missing or truncated, i.e. live kernels — are probed ONLY when no
+    # certain owner emerged: each probe is a live-tier site round-trip
+    # (~2 s), it repeats on EVERY lookup (a live kernel's absence is
+    # re-checkable state, so there is nothing durable to backfill), and a
+    # project with a few unstopped kernels was paying ~7 s per warm lookup
+    # for probes that kept answering "no". The deliberate narrowing: when a
+    # RECORDED owner exists, a same-named file possibly sitting in a
+    # still-running kernel does not force ambiguity — recorded provenance
+    # outranks a maybe-in-flight duplicate, the same doctrine as recorded
+    # truth first everywhere else. Once that kernel stops and its receipt
+    # names the file, it becomes a certain candidate and the collision
+    # surfaces as real ambiguity.
+    matches = [m for m in (_confirm_one(rid, row)
+                           for rid, row, certain in cands if certain) if m]
+    if not matches:
+        matches = [m for m in (_confirm_one(rid, row)
+                               for rid, row, certain in cands if not certain) if m]
     return matches
 
 
@@ -1633,12 +1779,27 @@ def _locate_project_run_output(name: str, *, max_runs: int = 12) -> Optional[tup
 
     `max_runs` is accepted for signature compatibility and DELIBERATELY
     ignored: correctness must not depend on how many runs a project has."""
+    cands = _output_candidacy(name)
+    cand_ids = {rid for rid, _row, _certain in cands}
+    # LOCAL pass, newest wins — scoped to runs that can actually OWN the name:
+    # the candidates, plus every run with no weft target at all (a purely
+    # local run has no receipt to prove anything either way, and its local
+    # tiers are cheap). Two reasons for the scope, one of cost and one of
+    # correctness: a weft-targeted run's "local" tiers include the (run, rel)
+    # key stat — a SITE round-trip per run, which made this pass the dominant
+    # lookup cost once the confirms were indexed — and a same-named stray file
+    # in a run whose receipt proves it never produced the output is exactly
+    # the stale-sandbox shadow paths.md F1 exists to forbid (provenance beats
+    # a copy).
     for e in reversed(list_entities(type_filter="analysis", include_archived=False)):
         rid = e["id"]
+        tgts = (e.get("metadata") or {}).get("weft_targets") or []
+        if tgts and rid not in cand_ids:
+            continue
         loc = locate_run_output(rid, name, remote=False)
         if loc and loc.get("local_path"):
             return (rid, "local", loc.get("size"), False)
-    matches = _project_output_matches(name)
+    matches = _confirm_output_matches(name, cands)
     if len(matches) == 1:                     # unambiguous remote hit
         rid, loc = matches[0]
         return (rid, loc["site"], loc.get("size"), True)

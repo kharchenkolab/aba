@@ -42,6 +42,22 @@ sys.path.insert(0, str(ROOT / "backend"))
 NAME = "processed.data.zarr"
 
 
+@pytest.fixture(autouse=True)
+def _empty_index():
+    """These are unit tests of the SCAN — the path taken when the address
+    index has nothing. The scan now backfills the index on every confirmed
+    hit, so without this reset each test inherits its predecessors' rows and
+    resolves from the index instead (first seen as three 'failures' that were
+    the index working as designed, 2026-08-08). Index-present behaviour is
+    tests/test_output_addr_index.py's job."""
+    from core.graph import _schema, output_addr
+    _schema.init_db()
+    with _schema._conn() as c:
+        output_addr._ensure(c)
+        c.execute("DELETE FROM output_addr")
+    yield
+
+
 def _wire(monkeypatch, n_runs, owners, *, receipts="complete", live=()):
     """A project with `n_runs` analyses (run_1 oldest … run_N newest), each with
     one weft target t_<k>. `owners` hold NAME remotely. `receipts` shapes the
@@ -211,22 +227,63 @@ def test_a_store_is_matched_by_its_member_paths(monkeypatch):
     assert [rid for rid, rem in calls if rem is not False] == ["run_9"]
 
 
-def test_local_still_wins_and_short_circuits(monkeypatch):
-    """CEILING: a local copy answers before any remote work happens."""
+def test_a_local_copy_of_the_OWNER_wins_without_any_remote_confirm(monkeypatch):
+    """CEILING: the owner's local copy (fetched mirror, harvest copy) answers
+    before the ~12 s remote confirm ever runs — armed by a confirm that
+    raises."""
     from content.bio.lifecycle import runs as R
-    from core.compute import retention
     _wire(monkeypatch, 5, owners={"run_2"})
 
     def locate(rid, name, match="name", remote=True, **kw):
-        if remote is False and rid == "run_4":
-            return {"local_path": "/x/p", "size": 7}
+        if remote is False:
+            return ({"local_path": "/x/mirror/" + NAME, "size": 7}
+                    if rid == "run_2" else None)
+        raise AssertionError("paid the remote confirm despite a local copy")
+    monkeypatch.setattr(R, "locate_run_output", locate)
+    assert R._locate_project_run_output(NAME) == ("run_2", "local", 7, False)
+
+
+def test_a_TARGETLESS_local_run_still_wins(monkeypatch):
+    """A purely local run (no weft target, no receipt anywhere) is outside the
+    candidacy machinery entirely; its local tiers must stay reachable or every
+    local-substrate project loses name resolution."""
+    from content.bio.lifecycle import runs as R
+    _wire(monkeypatch, 4, owners=set())
+    from core.graph import entities  # noqa: F401 — for parallel shape only
+    ents = [{"id": f"run_{k}", "type": "analysis",
+             "metadata": {"weft_targets": [f"t_{k}"]}} for k in (1, 2)]
+    ents.append({"id": "run_local", "type": "analysis", "metadata": {}})
+    monkeypatch.setattr(R, "list_entities",
+                        lambda type_filter=None, include_archived=False: ents)
+
+    def locate(rid, name, match="name", remote=True, **kw):
+        if remote is False and rid == "run_local":
+            return {"local_path": "/x/out/" + NAME, "size": 3}
         return None
     monkeypatch.setattr(R, "locate_run_output", locate)
+    assert R._locate_project_run_output(NAME) == ("run_local", "local", 3, False)
 
-    def no_batch(targets):
-        raise AssertionError("remote membership consulted despite a local hit")
-    monkeypatch.setattr(retention, "inventories", no_batch)
-    assert R._locate_project_run_output(NAME) == ("run_4", "local", 7, False)
+
+def test_a_stray_copy_in_a_NON_owner_no_longer_shadows(monkeypatch):
+    """The F1 doctrine (paths.md): a same-named file lying in a run whose
+    COMPLETE receipt proves it never produced the output must not answer —
+    that stale-sandbox shadow once bound a registration to a partial download
+    and cost two agents four minutes on intact data. Provenance beats a copy:
+    the real owner's remote address wins."""
+    from content.bio.lifecycle import runs as R
+    _wire(monkeypatch, 5, owners={"run_2"})
+
+    def locate(rid, name, match="name", remote=True, **kw):
+        if remote is False:
+            # the stray: run_4 holds a local file it provably never produced
+            return ({"local_path": "/x/stray/" + NAME, "size": 9}
+                    if rid == "run_4" else None)
+        if rid == "run_2":
+            return {"locality": "remote", "site": "siteA", "size": 4096,
+                    "kind": "dir", "target": "t_2"}
+        return None
+    monkeypatch.setattr(R, "locate_run_output", locate)
+    assert R._locate_project_run_output(NAME) == ("run_2", "siteA", 4096, True)
 
 
 if __name__ == "__main__":
