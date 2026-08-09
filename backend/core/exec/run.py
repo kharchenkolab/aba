@@ -767,6 +767,17 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0,
                 continue
             if not (_window_floor(since_ts) <= mt < _harvest_begin):
                 continue
+            # OWNERSHIP: the artifacts store is SHARED per-project, and the
+            # harvester itself is a concurrent writer to it — another thread's
+            # harvest landing a serving copy during OUR window is otherwise
+            # indistinguishable from "the agent saved here directly". `_created`
+            # only excludes THIS call's copies. A store-minted name is its own
+            # content address ({sha256[:32]}{ext}, see _copy_and_record), so
+            # self-addressed files were minted by a harvest, never by this
+            # run's agent — skip them. (Live 2026-08-09: a metadata thread's
+            # produced[] scooped the concurrent seurat thread's figures.)
+            if _is_store_minted(g):
+                continue
             suf = g.suffix.lower()
             if suf == ".png":
                 if _png_is_blank(g):
@@ -825,6 +836,27 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0,
             f"Re-save or `touch` them, or keep/register them explicitly, to "
             f"track them.")
     return plots, tables, files, warnings
+
+
+def _is_store_minted(g: Path) -> bool:
+    """True iff `g`'s NAME is its own content address in store shape —
+    ``{sha256(content)[:32]}{ext}`` — i.e. it was minted by a harvest's
+    `_copy_and_record`, not saved by an agent. The content must MATCH the
+    name: a merely hash-LOOKING name an agent happened to write stays
+    capturable. An unreadable file counts as minted (nothing to capture
+    from it either way)."""
+    stem = g.stem
+    if len(stem) != 32 or any(c not in "0123456789abcdef" for c in stem):
+        return False
+    import hashlib as _hashlib
+    _h = _hashlib.sha256()
+    try:
+        with open(g, "rb") as _fh:
+            for _chunk in iter(lambda: _fh.read(1 << 20), b""):
+                _h.update(_chunk)
+    except OSError:
+        return True
+    return _h.hexdigest()[:32] == stem
 
 
 def _pdf_page_count(pdf_path: Path) -> int:

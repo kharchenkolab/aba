@@ -95,6 +95,54 @@ def test_offconvention_skipped_when_no_since_ts(tmp_path, monkeypatch):
     assert "stray.png" not in {p["original_name"] for p in plots}
 
 
+# --- ownership: concurrent threads' serving copies are NOT cross-captured ---
+# Live 2026-08-09 (prj_4b3aba81): two threads ran at once; thread A's harvest wrote
+# serving copies into the SHARED /artifacts/<pid>/ store, and thread B's harvest —
+# whose off-convention window covered those mtimes — registered them as B's own
+# figures (`_created` only excludes the CURRENT call's copies). The ownership test
+# is content-grounded: a store-minted name IS its content address (sha256[:32]+ext),
+# so a self-addressed file was minted by a harvest, never saved by this run's agent.
+
+def _mk_store_copy(d: Path, ext: str, mtime: float) -> str:
+    """A file whose NAME is its own sha256[:32] — the store-minted shape."""
+    import hashlib
+    tmp = d / f"__tmp{ext}"
+    if ext == ".png":
+        _mkpng(tmp)
+    else:
+        tmp.write_bytes(b"a,b\n1,2\n")
+    name = hashlib.sha256(tmp.read_bytes()).hexdigest()[:32] + ext
+    tmp.rename(d / name)
+    os.utime(d / name, (mtime, mtime))
+    return name
+
+
+def test_concurrent_serving_copies_not_cross_captured(tmp_path, monkeypatch):
+    adir, scratch = _isolate(tmp_path, monkeypatch)
+    fig = _mk_store_copy(adir, ".png", mtime=START + 50)   # thread A's serving copy
+    tab = _mk_store_copy(adir, ".csv", mtime=START + 50)
+    _mkpng(adir / "cytc_tree.png", mtime=START + 50)       # agent-written sibling, SAME window
+    plots, tables, files, warns = runmod.harvest_artifacts(scratch, since_ts=START)
+    # ARMED: the sibling proves the capture window was live over adir — a run
+    # where the pass never fired would fail here, not silently pass.
+    assert {p["original_name"] for p in plots} == {"cytc_tree.png"}
+    assert fig not in {p["original_name"] for p in plots}
+    assert tables == []
+    assert not any(fig in w or tab in w for w in warns)    # no bogus nudge either
+
+
+def test_hash_lookalike_name_still_captured(tmp_path, monkeypatch):
+    """The skip is content-grounded: a name that merely LOOKS store-minted (32 hex
+    chars) but doesn't hash to itself is an agent-written file — still captured."""
+    adir, scratch = _isolate(tmp_path, monkeypatch)
+    lookalike = "a" * 32 + ".png"
+    _mkpng(adir / lookalike, mtime=START + 50)
+    plots, tables, files, warns = runmod.harvest_artifacts(scratch, since_ts=START)
+    assert {p["original_name"] for p in plots} == {lookalike}    # captured
+    assert not plots[0]["url"].endswith(lookalike)               # stored under its REAL digest
+    assert any("artifacts dir" in w for w in warns)
+
+
 # --- C4: figures saved to the PROJECT WORK DIR (parent of the per-thread exec cwd) ---
 # The "A2" apparent-fabrication: the agent savefig'd an absolute path into the project
 # work dir (parent of cwd); the cell returned rc=0 + its own "figure saved" print, but
@@ -156,7 +204,7 @@ def test_large_file_recorded_link_only_not_dropped(tmp_path, monkeypatch):
     assert entry.get("url") is None                     # not inline-linkable
     assert entry.get("bytes") == size
     assert not list(adir.glob("*.rds"))                 # NOT copied into the store
-    assert any("too large" in w and "retained" in w for w in warns)   # honest warning
+    assert any("size cap" in w and "retained" in w for w in warns)   # honest warning
 
 
 def test_small_file_still_copied_with_url(tmp_path, monkeypatch):
