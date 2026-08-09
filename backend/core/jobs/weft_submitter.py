@@ -756,6 +756,45 @@ class WeftSubmitter:
                           f"treating as a SITE OUTAGE, not a job verdict; "
                           f"polling on", flush=True)
                     return None
+                # While waiting, distinguish the two outage shapes the moment
+                # transport allows a question: a jobdir ON the node means the
+                # task was DELIVERED (the work may be running — keep waiting
+                # for its durable result); a typed data.missing means the cut
+                # hit MID-STAGING and the task never reached the node — no
+                # result.json will ever exist, so waiting is a hang and the
+                # honest move is ONE resubmit (safe by definition: nothing
+                # ran). Weft's jobdirs always carry the driver's machinery
+                # (`cmd.sh`), so its presence is the delivery receipt. A
+                # transport raise here = still dark = keep waiting.
+                if not params.get("transport_resubmitted"):
+                    delivered = None
+                    try:
+                        st = retention.file_stat(wid, "cmd.sh")
+                        delivered = bool(st.get("exists"))
+                    except Exception as e:  # noqa: BLE001
+                        code = str(getattr(e, "code", "") or "")
+                        if code == "data.missing":
+                            delivered = False
+                    if delivered is False:
+                        try:
+                            job_site = self._job_site(params)
+                            task = self._build_detached_task(
+                                job, params, params.get("env_id"),
+                                site=job_site)
+                            r = _adapter().sync_call("task_submit", task)
+                            _uj(job["id"],
+                                params={**params, "weft_id": r["job_id"],
+                                        "transport_resubmitted": True},
+                                project_id=params.get("project_id"))
+                            self._record_run_target(params, r["job_id"],
+                                                    replace=wid)
+                            print(f"[jobs.weft] task {wid} was never "
+                                  f"delivered (cut mid-staging) — "
+                                  f"resubmitted as {r['job_id']} on "
+                                  f"{job_site}", flush=True)
+                            return None      # poll the NEW task
+                        except Exception:  # noqa: BLE001 — still dark; next cycle
+                            return None
                 deadline = float(params.get("timeout_s") or 300) + 180
                 if _t.time() - float(first) < deadline:
                     return None

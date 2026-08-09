@@ -167,3 +167,107 @@ def test_a_REAL_failure_is_not_delayed_by_the_window(monkeypatch):
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# ── never-delivered: the cut hit mid-staging ─────────────────────────────────
+
+def _sub2(monkeypatch, *, jobdir_exists, submit_ok=True):
+    """Outage already stamped; transport now answers file_stat. `jobdir_exists`
+    drives the delivery receipt; task_submit records resubmissions."""
+    from core.jobs import weft_submitter as ws
+    from core.compute import retention
+    from core.compute.errors import ComputeError
+
+    sub = object.__new__(ws.WeftSubmitter)
+    sub._job_site = lambda params: "hpc"
+    sub._compute_block = lambda wid, state: {"state": state}
+    sub._result_miss = lambda wid: False
+    sub._cancelled_note = lambda params: "n/a"
+    sub._build_detached_task = lambda job, params, env_id, site: {"t": 1}
+    replaced = {}
+    sub._record_run_target = lambda params, new, replace=None: replaced.update(
+        new=new, old=replace)
+
+    submitted = []
+
+    class _A:
+        def sync_call(self, name, *a, **kw):
+            if name == "task_status":
+                return [{"error": TRANSPORT_ERR}]
+            if name == "task_submit":
+                if not submit_ok:
+                    raise ComputeError("site.unreachable", "still dark")
+                submitted.append(a[0] if a else kw)
+                return {"job_id": "jb_NEW"}
+            raise RuntimeError(name)
+    monkeypatch.setattr(ws, "_adapter", lambda: _A())
+
+    def file_read(target, rel, max_bytes=None):
+        raise RuntimeError("result not there")
+    monkeypatch.setattr(retention, "file_read", file_read)
+
+    def file_stat(target, rel):
+        if jobdir_exists:
+            return {"exists": True}
+        raise ComputeError("data.missing", "no such jobdir")
+    monkeypatch.setattr(retention, "file_stat", file_stat)
+
+    stamped = {}
+    import core.graph.jobs as gj
+    monkeypatch.setattr(gj, "update_job",
+                        lambda jid, **kw: stamped.update(kw), raising=False)
+    return sub, submitted, stamped, replaced
+
+
+def test_a_NEVER_DELIVERED_task_is_resubmitted_once(monkeypatch):
+    """The rerun's shape: the cut hit mid-staging, no jobdir ever existed, and
+    waiting for its result.json was a hang dressed as patience. data.missing
+    on the driver machinery = never delivered = resubmit (nothing ran, so it
+    is safe by definition)."""
+    from core.jobs import weft_submitter as ws
+    sub, submitted, stamped, replaced = _sub2(monkeypatch, jobdir_exists=False)
+    params = {"detached": True, "timeout_s": 300, "project_id": "prj_t",
+              "transport_outage_at": time.time() - 30}
+    out = ws.WeftSubmitter._poll_detached(sub, JOB, params, "jb_OLD", "FAILED")
+    assert out is None
+    assert submitted, "never-delivered task was not resubmitted"
+    p = stamped.get("params") or {}
+    assert p.get("weft_id") == "jb_NEW" and p.get("transport_resubmitted")
+    assert replaced == {"new": "jb_NEW", "old": "jb_OLD"}
+
+
+def test_a_DELIVERED_task_is_NOT_resubmitted(monkeypatch):
+    """CEILING — the dangerous direction: the jobdir exists, the work may be
+    mid-flight on the node; a resubmit would run it TWICE."""
+    from core.jobs import weft_submitter as ws
+    sub, submitted, _s, _r = _sub2(monkeypatch, jobdir_exists=True)
+    params = {"detached": True, "timeout_s": 300, "project_id": "prj_t",
+              "transport_outage_at": time.time() - 30}
+    assert ws.WeftSubmitter._poll_detached(sub, JOB, params, "jb_OLD", "FAILED") is None
+    assert not submitted, "resubmitted a task whose jobdir exists on the node"
+
+
+def test_resubmit_happens_at_most_ONCE(monkeypatch):
+    from core.jobs import weft_submitter as ws
+    sub, submitted, _s, _r = _sub2(monkeypatch, jobdir_exists=False)
+    params = {"detached": True, "timeout_s": 300, "project_id": "prj_t",
+              "transport_outage_at": time.time() - 30,
+              "transport_resubmitted": True}
+    assert ws.WeftSubmitter._poll_detached(sub, JOB, params, "jb_OLD", "FAILED") is None
+    assert not submitted, "a second resubmit — the once-bound is gone"
+
+
+def test_a_dark_site_defers_the_delivery_question(monkeypatch):
+    """WIDE: file_stat raising TRANSPORT (not data.missing) means still dark —
+    neither wait-forever nor resubmit-blind; just the next cycle."""
+    from core.jobs import weft_submitter as ws
+    from core.compute import retention
+    sub, submitted, _s, _r = _sub2(monkeypatch, jobdir_exists=False)
+
+    def stat_dark(target, rel):
+        raise RuntimeError("ssh transport failed")     # untyped transport raise
+    monkeypatch.setattr(retention, "file_stat", stat_dark)
+    params = {"detached": True, "timeout_s": 300, "project_id": "prj_t",
+              "transport_outage_at": time.time() - 30}
+    assert ws.WeftSubmitter._poll_detached(sub, JOB, params, "jb_OLD", "FAILED") is None
+    assert not submitted, "resubmitted while the site was still dark"
