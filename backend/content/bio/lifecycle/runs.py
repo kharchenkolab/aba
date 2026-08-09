@@ -1540,31 +1540,105 @@ def resolve_entity_output(entity_id: str) -> Optional[dict]:
         return None
 
 
+def _project_output_matches(name: str) -> list:
+    """Every Run in the project whose REMOTE outputs include `name`, confirmed:
+    `[(run_id, loc)]` with `loc` the canonical locate record. UNCAPPED by
+    design, and cheap anyway:
+
+    The membership question is answered by ONE batched read of the terminal
+    receipts (`retention.inventories(targets=[...])` — recorded knowledge, no
+    site round-trip; measured 34 targets in 0.00 s). The expensive per-run
+    resolve (`locate_run_output`, remote tier, live-aware) runs ONLY where the
+    batch cannot prove absence: the receipt names the file, or the receipt is
+    TRUNCATED (budgeted recording — absence unproven), or there is NO receipt
+    (a kernel not yet stopped records its receipt only at `kernel.stop`; a
+    live kernel is findable only by the live tier). A complete receipt that
+    does not name the file proves absence for that target — receipts outlive
+    sweeps, so this is knowledge, not a stat.
+
+    History, and why there is deliberately NO bound here: the predecessor
+    probed candidates one at a time, so it capped the list at FOUR — and a
+    project's fifth-or-later run's output resolved as "does not exist". A
+    store sat intact on its site while a hard-coded `[:4]` answered the user's
+    click with a 404 (live, 2026-08-08). A cap on a search for a unique answer
+    is not a cost knob; it is a wrong answer with no distinguishing mark."""
+    base = name.rsplit("/", 1)[-1].rstrip("/")
+    n = name.rstrip("/")
+    if not base:
+        return []
+    cands: list = []                                   # (rid, [targets])
+    for e in reversed(list_entities(type_filter="analysis", include_archived=False)):
+        tgts = [t for t in ((e.get("metadata") or {}).get("weft_targets") or []) if t]
+        if tgts:
+            cands.append((e["id"], tgts))
+    if not cands:
+        return []
+    from core.compute import retention
+    all_tgts = list(dict.fromkeys(t for _rid, ts in cands for t in ts))
+    try:
+        invs = (retention.inventories(all_tgts) or {}).get("inventories") or {}
+    except Exception:  # noqa: BLE001 — no batch verb → confirm everything below
+        invs = {}
+
+    def _names_it(v: dict) -> bool:
+        for f in (v.get("files") or v.get("entries") or []):
+            p = (f.get("path") or "") if isinstance(f, dict) else ""
+            if p and (p == n or p.startswith(n + "/")
+                      or p == base or p.startswith(base + "/")
+                      or p.rsplit("/", 1)[-1] == base):
+                return True
+        return False
+
+    matches: list = []
+    for rid, tgts in cands:
+        confirm = False
+        for t in tgts:
+            v = invs.get(t)
+            if not isinstance(v, dict) or v.get("error"):
+                confirm = True            # no receipt — only the live tier can answer
+            elif _names_it(v):
+                confirm = True            # named — confirm via the canonical resolver
+            elif v.get("truncated"):
+                confirm = True            # budgeted receipt — absence unproven
+        if not confirm:
+            continue
+        loc = locate_run_output(rid, name)
+        if loc and loc.get("locality") == "remote":
+            matches.append((rid, loc))
+    return matches
+
+
+def project_run_output_matches(name: str) -> list:
+    """`[(run_id, site)]` for every Run that owns REMOTE output `name` — the
+    surfacing half of the ambiguity contract. `_locate_project_run_output`
+    refuses to pick between two owners of the same bare name; this lets the
+    refusing surface SAY SO ("found in runs X and Y") instead of reporting the
+    file nonexistent. Never raises."""
+    try:
+        return [(rid, loc.get("site")) for rid, loc in _project_output_matches(name)]
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def _locate_project_run_output(name: str, *, max_runs: int = 12) -> Optional[tuple]:
     """Locate a project Run output matching `name` WITHOUT moving bytes:
     `(run_id, site, size, is_remote)` for a confident match, or None. A cheap
-    LOCAL-only locate pass over recent Runs first; then the remote tier over a
-    bounded few weft-target candidates. When only remote candidates match and
-    MORE THAN ONE run has the output (a bare-basename collision across runs),
+    LOCAL-only locate pass over Runs first (newest wins); then the remote
+    matches via the batched receipt pass (`_project_output_matches` — uncapped;
+    see its docstring for why a bound here once turned an existing file into a
+    404). When MORE THAN ONE run has the output (a bare-basename collision),
     the result is ambiguous → None — run A's output never silently answers a
-    request that could be run B's."""
-    scanned = 0
-    remote_cands: list = []
+    request that could be run B's; `project_run_output_matches` names the
+    candidates so the caller can say so.
+
+    `max_runs` is accepted for signature compatibility and DELIBERATELY
+    ignored: correctness must not depend on how many runs a project has."""
     for e in reversed(list_entities(type_filter="analysis", include_archived=False)):
         rid = e["id"]
         loc = locate_run_output(rid, name, remote=False)
         if loc and loc.get("local_path"):
             return (rid, "local", loc.get("size"), False)
-        if (e.get("metadata") or {}).get("weft_targets"):
-            remote_cands.append(rid)
-        scanned += 1
-        if scanned >= max_runs:
-            break
-    matches: list = []
-    for rid in remote_cands[:4]:
-        loc = locate_run_output(rid, name)
-        if loc and loc.get("locality") == "remote":
-            matches.append((rid, loc))
+    matches = _project_output_matches(name)
     if len(matches) == 1:                     # unambiguous remote hit
         rid, loc = matches[0]
         return (rid, loc["site"], loc.get("size"), True)
