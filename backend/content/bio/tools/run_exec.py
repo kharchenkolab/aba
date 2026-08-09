@@ -1171,7 +1171,29 @@ def _run_remote_kernel(input_: dict, ctx: dict | None, project_id: str,
     inv0 = _kernel_sandbox_inventory(sess.kernel_id)
     res = sess.execute(code, cancel_token=cancel_token, timeout_s=timeout_s)
     if res.timed_out:
-        return {"error": f"Code execution timed out ({timeout_s}s limit)"}
+        # On a scheduler site the session kernel IS a cluster job; when the
+        # allocation is still PENDING the honest message is the scheduler's
+        # own reason, not a bare timeout. Live (mn_cbe_kernel, 2026-08-09):
+        # two steps "timed out" at 300/600 s while the kernel's allocation
+        # pended on "Nodes required for job are DOWN, DRAINED or reserved" —
+        # a fact weft's task_status carried the whole time. Best-effort: the
+        # timeout stands either way.
+        why = ""
+        try:
+            from core.compute.adapter import get_compute
+            _rows = get_compute().sync_call("task_status",
+                                            getattr(sess, "kernel_id", ""))
+            _r0 = _rows[0] if _rows else {}
+            if _r0.get("state") == "QUEUED":
+                why = (" — the session on this site has NOT STARTED: its "
+                       "cluster allocation is still pending"
+                       + (f" ({_r0['queue_reason']})"
+                          if _r0.get("queue_reason") else "")
+                       + "; nothing ran, and retrying with a longer timeout "
+                         "only waits on the same queue")
+        except Exception:  # noqa: BLE001
+            pass
+        return {"error": f"Code execution timed out ({timeout_s}s limit){why}"}
     if res.cancelled:
         return {"status": "cancelled",
                 "note": f"Run was cancelled by the user "

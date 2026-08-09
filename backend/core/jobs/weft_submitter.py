@@ -978,6 +978,25 @@ class WeftSubmitter:
         except Exception:  # noqa: BLE001 — substrate hiccup ≠ job failure
             return None
         state = rows[0]["state"] if rows else None
+        # A QUEUED task's queue_reason is the difference between "waiting,
+        # normal" and "waiting, and here is why nothing will start" — weft
+        # carries it on the row and ABA dropped it. Live (mn_cbe_smoke,
+        # 2026-08-09): a job pended 54 minutes with the scheduler saying
+        # "Nodes required for job are DOWN, DRAINED or reserved" the whole
+        # time, and the user-facing row just said `queued`, silently. Stamp
+        # it onto the row (once per change) so the jobs panel and any status
+        # check can say what the scheduler is saying.
+        if state == "QUEUED":
+            reason = (rows[0] or {}).get("queue_reason") or ""
+            if reason and reason != params.get("queue_reason"):
+                try:
+                    from core.graph.jobs import update_job as _uj_q
+                    _uj_q(job["id"],
+                          params={**params, "queue_reason": reason},
+                          log_tail=f"pending on the scheduler: {reason}",
+                          project_id=params.get("project_id"))
+                except Exception:  # noqa: BLE001 — annotation, never a blocker
+                    pass
         if state not in _TERMINAL:
             # LOCAL-lane restart orphan (stamped by reconcile_jobs): the
             # in-process supervisor died with the old backend, so weft's local

@@ -271,3 +271,66 @@ def test_a_dark_site_defers_the_delivery_question(monkeypatch):
               "transport_outage_at": time.time() - 30}
     assert ws.WeftSubmitter._poll_detached(sub, JOB, params, "jb_OLD", "FAILED") is None
     assert not submitted, "resubmitted while the site was still dark"
+
+
+# ── queue_reason surfacing: pending must say WHY ─────────────────────────────
+
+def test_a_QUEUED_rows_reason_is_stamped_onto_the_job(monkeypatch):
+    """Live (mn_cbe_smoke): a job pended 54 minutes while the scheduler said
+    'Nodes ... DOWN, DRAINED or reserved' on every poll, and the user-facing
+    row just said `queued`. The reason weft already carries must land on the
+    row (once per change) where the jobs panel and status checks read it."""
+    from core.jobs import weft_submitter as ws
+
+    sub = object.__new__(ws.WeftSubmitter)
+
+    class _A:
+        def sync_call(self, name, *a, **kw):
+            assert name == "task_status"
+            return [{"state": "QUEUED",
+                     "queue_reason": "Nodes required for job are DOWN"}]
+    monkeypatch.setattr(ws, "_adapter", lambda: _A())
+    stamped = {}
+    import core.graph.jobs as gj
+    monkeypatch.setattr(gj, "update_job",
+                        lambda jid, **kw: stamped.update(kw), raising=False)
+
+    out = ws.WeftSubmitter.poll(sub, {"id": "job_q", "params": {
+        "weft_id": "jb_q", "project_id": "prj_t"}})
+    assert out is None                       # still queued — no verdict
+    assert "DOWN" in (stamped.get("log_tail") or ""), \
+        "the scheduler's queue_reason never reached the job row"
+    assert (stamped.get("params") or {}).get("queue_reason")
+
+
+def test_an_unchanged_reason_is_not_restamped(monkeypatch):
+    """CEILING: the poll runs every few seconds; stamping the same reason each
+    cycle would churn the row (and its updated_at) for nothing."""
+    from core.jobs import weft_submitter as ws
+    sub = object.__new__(ws.WeftSubmitter)
+
+    class _A:
+        def sync_call(self, name, *a, **kw):
+            return [{"state": "QUEUED", "queue_reason": "Nodes DOWN"}]
+    monkeypatch.setattr(ws, "_adapter", lambda: _A())
+    writes = []
+    import core.graph.jobs as gj
+    monkeypatch.setattr(gj, "update_job",
+                        lambda jid, **kw: writes.append(kw), raising=False)
+    ws.WeftSubmitter.poll(sub, {"id": "job_q", "params": {
+        "weft_id": "jb_q", "project_id": "prj_t",
+        "queue_reason": "Nodes DOWN"}})
+    assert writes == [], "restamped an unchanged queue_reason"
+
+
+def test_kernel_timeout_names_a_pending_allocation():
+    """Source-level (constructing the run tool's session machinery needs a
+    live substrate): the timeout return must consult the kernel's task state
+    and name a QUEUED allocation's reason instead of a bare 'timed out'."""
+    src = (Path(__file__).resolve().parents[1] /
+           "backend/content/bio/tools/run_exec.py").read_text()
+    i = src.index("if res.timed_out:")
+    body = src[i:i + 1400]
+    assert "task_status" in body and "queue_reason" in body, \
+        "the kernel timeout no longer consults the allocation state"
+    assert "NOT STARTED" in body
