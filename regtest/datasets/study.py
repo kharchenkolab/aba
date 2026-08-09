@@ -407,7 +407,18 @@ def s_remote(client, pid, tid):
          any((t["input"].get("site") or "").startswith("mendel") for t in reg)),
         ("durable home recorded on the entity",
          (md.get("home") or {}).get("path") == R_DATA),
-        ("no content ref yet (lazy identity)", md.get("ref") is None),
+        # The identity contract MOVED (run-outputs.md, Register row): durable
+        # remote homes now EAGERLY mint + record the data-plane content ref at
+        # registration (best-effort, under the transfer byte budget) — that
+        # recorded ref is what lets the range channel's ref arm STREAM the
+        # dataset with no resolvable run. This check asserted the old
+        # lazy-identity contract and started failing when the product did the
+        # newly-documented right thing (2026-08-09). What must still hold:
+        # identity is a data-plane ref (or honestly absent after a failed
+        # best-effort mint), never a byte COPY — the no-copy check below is
+        # the load-bearing half.
+        ("content ref recorded eagerly (streamable), or honestly absent",
+         md.get("ref") is None or str(md.get("ref")).startswith("dref:")),
         ("descriptor shows the true size",
          (md.get("descriptor") or {}).get("total_bytes") == 30_000_004),
         ("no copy attempted", not copied),
