@@ -87,6 +87,7 @@ FILES=(
   tests/test_store_cors.py
   tests/test_study_registration.py
   tests/test_restart_orphan_stamp.py
+  tests/test_transport_outage_poll.py
   tests/test_artifact_url_doors.py
   tests/test_range_channel.py
   tests/test_range_segments.py

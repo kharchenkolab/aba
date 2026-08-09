@@ -96,6 +96,25 @@ def _typed_task_error(raw) -> Optional[str]:
     return msg
 
 
+def _payload_transport_error(task_err) -> bool:
+    """Is a task row's recorded error TRANSPORT-class — a failure BETWEEN the
+    controller and the site, saying nothing about the work on the node?
+
+    The payload twin of `core.exec.kernels.weft._is_transport_error` (which
+    classifies exceptions): same `site.*`/`infra.*` code prefixes, same
+    "retryable by the substrate's own account did not leave the far side in a
+    decided state" rule. Kept in the same vocabulary deliberately — one rule,
+    two shapes."""
+    if not isinstance(task_err, dict):
+        return False
+    code = str(task_err.get("error") or "")
+    if code.startswith(("site.", "infra.")):
+        return True
+    hints = task_err.get("hints") or {}
+    return bool(task_err.get("retryable")) and \
+        str(hints.get("delivered", "")).lower() != "yes"
+
+
 def _mismatch_platform(e) -> Optional[str]:
     """The site's platform out of weft's env.platform_mismatch error
     ('... but site X is linux-aarch64') — drives the lazy re-lock."""
@@ -705,6 +724,51 @@ class WeftSubmitter:
                     task_err = (rows[0] or {}).get("error")
                 except Exception:  # noqa: BLE001
                     pass
+            # A FAILED whose recorded error is TRANSPORT-class is not a job
+            # verdict — it says the controller (or the substrate's poller)
+            # could not REACH the site, which says nothing about the work
+            # running ON it. Found live (regtest mn_net_drop_midjob,
+            # 2026-08-09): sshd cut mid-background-job → weft rows flipped
+            # FAILED with `site.unreachable` ("a retry builds a fresh
+            # connection") → this branch fabricated a terminal failure while
+            # the node computed the true result. Restart-survival doctrine
+            # applies verbatim: `result.json` is durable truth (the `raw`
+            # read above finalizes the REAL outcome the moment transport is
+            # back, stale FAILED row or not), so during the outage the only
+            # honest poll answer is "not finished yet". Bounded like the
+            # restart orphan: walltime + grace from first sighting, then an
+            # OUTAGE verdict that names the site and says the work may be
+            # intact — never "the task failed".
+            if state == "FAILED" and _payload_transport_error(task_err):
+                import time as _t
+                from core.graph.jobs import update_job as _uj
+                first = params.get("transport_outage_at")
+                if not first:
+                    params = {**params, "transport_outage_at": _t.time()}
+                    try:
+                        _uj(job["id"], params=params,
+                            project_id=params.get("project_id"))
+                    except Exception:  # noqa: BLE001
+                        pass
+                    print(f"[jobs.weft] task {wid} reported FAILED with a "
+                          f"transport-class error "
+                          f"({str((task_err or {}).get('error'))[:60]}) — "
+                          f"treating as a SITE OUTAGE, not a job verdict; "
+                          f"polling on", flush=True)
+                    return None
+                deadline = float(params.get("timeout_s") or 300) + 180
+                if _t.time() - float(first) < deadline:
+                    return None
+                _where = self._job_site(params) or "the site"
+                res = {"error": (
+                    f"could not reach {_where} since the outage began, and "
+                    f"the job's walltime has passed without a readable "
+                    f"result — this is a CONNECTIVITY failure, not a "
+                    f"verdict on the job, which may have completed on the "
+                    f"node; when {_where} is reachable again, check the "
+                    f"run's files before re-running")}
+                res.setdefault("compute", self._compute_block(wid, state))
+                return res
             # Lazy platform re-lock, POLL side: this weft surfaces
             # env.platform_mismatch at realize (async), so the submit-time
             # catch never sees it. Re-lock for the site's platform and
