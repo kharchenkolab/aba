@@ -147,6 +147,29 @@ def _resolve_files_node(entity_id: str | None, path: str | None,
                     "run_id": _rid}   # lets the launch route retain-on-view (P3)
         cands = list_file_matches(tree, path)
         hint = f" Did you mean: {', '.join(cands)}?" if cands else ""
+        if not hint:
+            # Say what is actually known before claiming absence. Two shapes
+            # that used to collapse into this bare 404 (live 2026-08-08):
+            # AMBIGUITY — several runs own the name, the resolver rightly
+            # refused to pick, and "no file matching" reported a refusal as
+            # nonexistence; and a SITE-SHAPED absolute path (a weft workdir)
+            # that plainly names bytes on a remote machine this project has
+            # not recorded.
+            try:
+                from content.bio.lifecycle.runs import project_run_output_matches
+                owners = project_run_output_matches(path)
+                if len(owners) > 1:
+                    named = ", ".join(f"{r} (on {s})" for r, s in owners)
+                    hint = (f" Several runs produced an output with this name — "
+                            f"{named} — so a bare name can't pick one. Open it "
+                            f"from the owning run's card, or relaunch with run=.")
+            except Exception:  # noqa: BLE001 — the hint must never mask the 404
+                pass
+        if not hint and "/.weft/" in path and path.startswith("/"):
+            hint = (" That is an absolute path under a compute site's work "
+                    "area — it isn't recorded in this project. If it lives on "
+                    "a remote site, register it (register_dataset with site=) "
+                    "or open it from the run that produced it.")
         raise HTTPException(404, f"no file matching {path!r} in this project.{hint}")
     raise HTTPException(400, "supply either entity_id or path")
 

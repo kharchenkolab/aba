@@ -421,7 +421,14 @@ def _graft_run_outputs(parent: dict, run: dict, *, cap: int = 300) -> int:
     view_files: list[dict] = []
     try:
         from core.exec.artifacts import artifacts_for_run
-        if artifacts_for_run(rid):     # cheap local gate: no ledger rows →
+        # The gate is a cheap local check for "is there anything to render";
+        # exec-record rows OR address-index rows both count. The index half is
+        # what keeps a run's outputs listed when the exec sidecars are gone —
+        # measured live 2026-08-08: sidecars swept, artifacts_for_run empty,
+        # and the gate skipped the durable view that (via output_addr) knew
+        # about a 185 MB store on mendel — so the Files tab showed nothing.
+        from core.graph import output_addr as _oa
+        if artifacts_for_run(rid) or _oa.by_run(rid):   # cheap local gate: no rows →
             from content.bio.lifecycle.runs import run_durable_view
             view_files = [f for f in run_durable_view(rid)["files"]
                           if f.get("state") != "cleared"]

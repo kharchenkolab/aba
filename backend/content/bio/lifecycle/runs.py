@@ -2391,10 +2391,32 @@ def run_durable_view(run_id: str) -> dict:
     # The per-file loop this replaces was the convoy's amplifier — 2N store
     # queries + N subprocess spawns, serialized, under a 50-round-trip budget
     # that silently left the tail to the proxy.
+    # Files known by ADDRESS (core/graph/output_addr, written at keep/settle/
+    # backfill) join the panel even when the exec sidecars are gone — measured
+    # live 2026-08-08: a run whose store weft's receipt named rendered an EMPTY
+    # panel (all states zero) because artifacts_for_run read sidecars that had
+    # been swept. Rows contribute the FILE; the weft tiers above still own the
+    # STATE (retained/saving), and the terminal-inventory proxy set covers the
+    # rest — a directory store must never take the per-file stat path (a stat
+    # of a dir rel answers not-a-file, which mislabels it "cleared").
+    try:
+        from core.graph import output_addr as _oa
+        for _r in _oa.by_run(run_id):
+            _rel = _r.get("rel")
+            if not _rel or _rel in by_rel:
+                continue
+            by_rel[_rel] = {"original_name": _rel,
+                            "size": _r.get("bytes") or 0,
+                            "kind": "store" if _r.get("kind") == "dir" else "file"}
+            inv_paths.add(_rel)
+    except Exception:  # noqa: BLE001 — the panel must render without the index
+        pass
+
     _STAT_CAP = 500          # per-request bound; files beyond it → proxy path
     need_stat = [rel for rel, a in by_rel.items()
                  if rel not in done_files and not _sel_match(rel, done_sel)
-                 and not _is_saving(rel) and not a.get("url")][:_STAT_CAP]
+                 and not _is_saving(rel) and not a.get("url")
+                 and a.get("kind") != "store"][:_STAT_CAP]
     stat_res: dict = {}      # rel -> (performed, exists, bytes)
     if targets and need_stat:
         answered: set = set()

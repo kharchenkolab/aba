@@ -319,3 +319,58 @@ def test_live_kernels_ARE_probed_when_nothing_recorded_answers(monkeypatch):
     m = R._project_output_matches(NAME)
     assert [(r, l["site"]) for r, l in m] == [("ana_2", "siteB")]
     assert sorted(probed) == ["ana_1", "ana_2"]
+# ── the UI half: index-known files render when the sidecars are gone ─────────
+
+def test_the_durable_view_lists_an_index_known_store(monkeypatch):
+    """Measured live: exec sidecars swept -> artifacts_for_run empty -> the
+    run's Files panel rendered ALL ZEROS while weft's receipt named a 185 MB
+    store. Index rows are knowledge that must survive that sweep. State stays
+    honest: nothing keeps it here, so it reads at-risk/temporary — never
+    'cleared' (a dir rel must not take the per-file stat path), never a fake
+    'retained'."""
+    from core.graph.entities import create_entity
+    from content.bio.lifecycle import runs as R
+    from core.graph import output_addr as oa
+    from core.compute import retention
+
+    rid = create_entity(entity_type="analysis", title="run", metadata={
+        "weft_targets": ["krn_x"], "run_state": "closed"})
+    oa.record([{"run_id": rid, "rel": NAME, "site": "siteA", "target": "krn_x",
+                "kind": "dir", "bytes": 185_000_000, "source": "keep"}])
+    monkeypatch.setattr(R, "artifacts_for_run", lambda r: [], raising=False)
+    import core.exec.artifacts as _arts
+    monkeypatch.setattr(_arts, "artifacts_for_run", lambda r: [])
+    monkeypatch.setattr(retention, "retained", lambda **kw: [])
+    monkeypatch.setattr(retention, "inventory", lambda *a, **kw: {"entries": []})
+    monkeypatch.setattr(retention, "file_stats",
+                        lambda *a, **kw: (_ for _ in ()).throw(
+                            AssertionError("a store dir took the per-file stat path")))
+
+    v = R.run_durable_view(rid)
+    rows = {f["rel"]: f for f in v["files"]}
+    assert NAME in rows, "the index-known store is missing from the panel again"
+    assert rows[NAME]["kind"] == "store"
+    assert rows[NAME]["state"] in ("at-risk", "in-sandbox"), rows[NAME]["state"]
+
+
+def test_the_tree_graft_gate_opens_on_index_rows_alone(monkeypatch):
+    """The graft gated on artifacts_for_run — 'no ledger rows → skip the view'
+    — which also gated out index-known files, so the durable-view fix above
+    changed nothing in the Files tab until the GATE learned about the index."""
+    from content.bio.files import tree as T
+    from core.graph import output_addr as oa
+    import core.exec.artifacts as _arts
+
+    oa.record([{"run_id": "ana_g", "rel": NAME, "site": "siteA",
+                "target": "krn_x", "kind": "dir", "bytes": 10}])
+    monkeypatch.setattr(_arts, "artifacts_for_run", lambda r: [])
+    from content.bio.lifecycle import runs as R
+    monkeypatch.setattr(R, "run_durable_view", lambda r: {"files": [
+        {"rel": NAME, "kind": "store", "state": "at-risk", "bytes": 10}]})
+
+    parent = {"path": "threads/t/runs/r/output", "children": []}
+    n = T._graft_run_outputs(parent, {"id": "ana_g", "title": "run",
+                                      "artifact_path": None, "metadata": {}})
+    names = [c.get("name") for c in parent["children"]]
+    assert any(NAME in str(x) for x in names) or n > 0, (
+        f"gate stayed closed with only index rows: grafted={n}, children={names}")

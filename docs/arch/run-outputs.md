@@ -27,12 +27,40 @@ bytes, who records where they are, and how every way a user touches them
   unknown`), stay honest through sweeps and index outages, and name the site
   when bytes aren't here.
 
-## The invariant: one locate, one mover
+## The invariant: one locate, one mover — and one notebook
 
 The local-or-remote decision has exactly **one home** —
 `locate_run_output(run_id, name, match=, remote=)` — and byte movement has
 exactly **one door** — `materialize_run_output(loc, max_bytes=, force=,
 progress=)`. Everything else is a thin, named policy over that pair.
+
+**The address index (`core/graph/output_addr`) is the write-time half.** The
+locator is keyed on `(run_id, name)`, but the handles that circulate — a name
+in chat, a `?path=` in a minted link, a tree node — often carry no run key, and
+recovering it by SEARCHING (iterating weft receipts per candidate run at read
+time) is what a hard-coded `[:4]` once capped into a 404 for a store that
+existed (live 2026-08-08; misc/addressing_and_the_missing_index.md). So the
+catalog writes addresses down when it learns them: `_retain_run_outputs`' tail
+(keep decisions AND settle — keeper attribution and site in hand) records
+`(run, rel) → {name, site, target, kind, bytes, state, ref?, sha256?}`, and the
+name→run join reads it O(1). Division of responsibility mirrors weft's own
+data-plane doc: weft indexes container→contents (receipts) and
+identity→location (its location table, refs); ABA owns meaning→address — this
+table. Rows are KNOWLEDGE, not holdings: the serving layers validate bytes on
+use, so a stale row costs an honest launch error, never wrong bytes; a row
+never out-votes a COMPLETE terminal receipt (kept live, deleted before stop);
+`ref`/`sha256` are nullable adapters for weft's trajectory (hash-under
+receipts, Fabric epilogue refs) and ABA never hashes. The name→run search
+(`_output_candidacy` → `_confirm_output_matches`) is UNCAPPED — membership is
+one batched receipt read; index rows stand in for the ~12 s per-run remote
+confirm; confirmed hits BACKFILL, so old projects index themselves by being
+used; live kernels (receipt merely missing — a kernel writes its receipt only
+at `kernel.stop`) are probed only when nothing recorded answers, since their
+absence is re-checkable state with nothing durable to cache. Minted viewer
+links carry `&run=` so the launch route resolves by key without any search
+(`tests/test_viewer_link_run_key.py`); N-independence — the property the
+capped scan violated — is pinned at k=1/7/20 of 20 runs
+(`tests/test_output_search_uncapped.py`, `tests/test_output_addr_index.py`).
 
 **`locate_run_output` never transfers.** It walks the local tiers
 (weft retained tree catalog-first → live weft jobdir(s) → run sandbox →
