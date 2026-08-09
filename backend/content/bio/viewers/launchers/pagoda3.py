@@ -789,6 +789,32 @@ def _has_local_store_bytes(node: dict) -> bool:
         return False
 
 
+def _refresh_stream_registration(pid: str, run_id: str, name: str,
+                                 expect_key: str) -> None:
+    """Background half of the fast-reuse launch: re-resolve the store's remote
+    home and re-register, so a re-derived store's changed digest still wipes
+    the stale chunk cache — just seconds AFTER the launch instead of gating
+    it. Best-effort; a failure leaves the reused row exactly as a failed
+    resolve would have today."""
+    try:
+        from content.bio.lifecycle.runs import resolve_remote_store_stream
+        from core.viewers.range_cache import register_remote_store
+        home = resolve_remote_store_stream(run_id, name)
+        if not home:
+            return
+        stem = (name[:-len(_STORE_SUFFIX)] if name.endswith(_STORE_SUFFIX)
+                else Path(name).stem)
+        tag = hashlib.sha1(
+            f"{home['site']}|{home['store_rel']}".encode()).hexdigest()[:8]
+        if f"{stem}-{tag}{_STORE_SUFFIX}" != expect_key:
+            return          # the home MOVED — the next launch resolves fresh
+        register_remote_store(pid, expect_key, target=home["target"],
+                              base_rel=home["store_rel"], site=home["site"],
+                              size=home.get("size"), digest=home.get("digest"))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _register_remote_stream(node: dict, pid: str) -> "str | None":
     """If this node resolves to a directory store that lives on a REMOTE site AND
     the substrate exposes a ranged-read verb, register the store's remote home
@@ -822,6 +848,36 @@ def _register_remote_stream(node: dict, pid: str) -> "str | None":
         name = Path(raw).name
         if not run_id or not name:
             return None
+        # FAST REUSE: a store this project has streamed before has a registry
+        # row carrying the full arm — and the address index can mint the same
+        # store_key without any resolve. The run-arm resolve costs several
+        # site round-trips (locate + inventory + digest) and was paid on
+        # EVERY click: ~6 s of the launch page's "Starting…" (measured live,
+        # 2026-08-09). Reuse the row immediately and refresh the digest in
+        # the BACKGROUND — the wipe-on-change then lands seconds after the
+        # launch instead of gating it, which is no worse a staleness window
+        # than today's (the chunk cache already persists BETWEEN launches and
+        # only ever wiped at the next launch's resolve). First launch of a
+        # store still pays the full resolve.
+        try:
+            from core.graph import output_addr as _oa
+            from core.viewers.range_cache import lookup_remote_store
+            row = next((r for r in _oa.by_name(name)
+                        if r.get("run_id") == run_id and r.get("site")
+                        and r.get("site") != "local" and r.get("rel")), None)
+            if row is not None:
+                stem0 = (name[:-len(_STORE_SUFFIX)]
+                         if name.endswith(_STORE_SUFFIX) else Path(name).stem)
+                tag0 = hashlib.sha1(
+                    f"{row['site']}|{row['rel']}".encode()).hexdigest()[:8]
+                key0 = f"{stem0}-{tag0}{_STORE_SUFFIX}"
+                if lookup_remote_store(pid, key0):
+                    from core import projects as _prj
+                    _prj.spawn(_refresh_stream_registration,
+                               pid, run_id, name, key0)
+                    return key0
+        except Exception:  # noqa: BLE001 — reuse is an optimization only
+            pass
         from content.bio.lifecycle.runs import resolve_remote_store_stream
         home = resolve_remote_store_stream(run_id, name)
         if not home:

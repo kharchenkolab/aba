@@ -2343,3 +2343,82 @@ def _standalone() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(_standalone())
+
+
+# ── fast reuse: a re-launch must not re-pay the run-arm resolve ──────────────
+
+def test_a_relaunch_reuses_the_registry_row_without_resolving(monkeypatch, tmp_path):
+    """The run-arm resolve (locate + inventory + digest) was paid on EVERY
+    click — ~6 s of the launch page's 'Starting…' (measured live 2026-08-09)
+    — even though the registry row from the previous launch carried the whole
+    arm and the address index can mint the same store_key. Armed: the resolve
+    RAISES; the freshness refresh runs in the background instead."""
+    from content.bio.viewers.launchers import pagoda3 as p3
+    from content.bio.lifecycle import runs as R
+    from core.viewers import range_cache as rc
+    from core.graph import _schema, output_addr as oa
+
+    monkeypatch.setattr(rc, "project_root", lambda pid: tmp_path)
+    _schema.init_db()
+    with _schema._conn() as c:
+        oa._ensure(c)
+        c.execute("DELETE FROM output_addr")
+    oa.record([{"run_id": "ana_fast", "rel": "s.lstar.zarr", "site": "siteA",
+                "target": "krn_f", "kind": "dir"}])
+    import hashlib as _h
+    tag = _h.sha1(b"siteA|s.lstar.zarr").hexdigest()[:8]
+    key = f"s-{tag}.lstar.zarr"
+    rc.register_remote_store("prj_fast", key, site="siteA", target="krn_f",
+                             base_rel="s.lstar.zarr", size=10, digest="d0")
+
+    monkeypatch.setattr(R, "resolve_remote_store_stream",
+                        lambda rid, name: (_ for _ in ()).throw(
+                            AssertionError("paid the run-arm resolve on a re-launch")))
+    from core.compute import retention
+    monkeypatch.setattr(retention, "range_read_available", lambda *a, **k: True)
+    monkeypatch.setattr(p3, "_has_local_store_bytes", lambda node: False)
+    monkeypatch.setattr(p3, "_register_ref_arm", lambda node, pid: None)
+    monkeypatch.setattr(p3, "_run_id_for_node", lambda node: "ana_fast")
+    spawned = []
+    from core import projects as prj
+    monkeypatch.setattr(prj, "spawn",
+                        lambda fn, *a, **k: spawned.append((fn.__name__, a)))
+
+    got = p3._register_remote_stream({"name": "s.lstar.zarr",
+                                      "path": "s.lstar.zarr"}, "prj_fast")
+    assert got == key, f"fast path minted {got!r}, expected {key!r}"
+    assert spawned and spawned[0][0] == "_refresh_stream_registration", \
+        "the background freshness refresh never spawned"
+
+
+def test_first_launch_still_resolves(monkeypatch, tmp_path):
+    """CEILING: no registry row → the full resolve runs (the fast path must
+    never invent a stream from an index row alone — the row has no digest
+    freshness and the registry is what the store route serves from)."""
+    from content.bio.viewers.launchers import pagoda3 as p3
+    from content.bio.lifecycle import runs as R
+    from core.viewers import range_cache as rc
+    from core.graph import _schema, output_addr as oa
+
+    monkeypatch.setattr(rc, "project_root", lambda pid: tmp_path)
+    _schema.init_db()
+    with _schema._conn() as c:
+        oa._ensure(c)
+        c.execute("DELETE FROM output_addr")
+    oa.record([{"run_id": "ana_new", "rel": "t.lstar.zarr", "site": "siteA",
+                "target": "krn_n", "kind": "dir"}])
+    resolved = []
+    monkeypatch.setattr(R, "resolve_remote_store_stream",
+                        lambda rid, name: resolved.append(rid) or {
+                            "target": "krn_n", "site": "siteA",
+                            "store_rel": "t.lstar.zarr", "size": 5, "digest": "d1"})
+    from core.compute import retention
+    monkeypatch.setattr(retention, "range_read_available", lambda *a, **k: True)
+    monkeypatch.setattr(p3, "_has_local_store_bytes", lambda node: False)
+    monkeypatch.setattr(p3, "_register_ref_arm", lambda node, pid: None)
+    monkeypatch.setattr(p3, "_run_id_for_node", lambda node: "ana_new")
+
+    got = p3._register_remote_stream({"name": "t.lstar.zarr",
+                                      "path": "t.lstar.zarr"}, "prj_new")
+    assert resolved == ["ana_new"], "first launch skipped the resolve"
+    assert got and got.endswith(".lstar.zarr")
