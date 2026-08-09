@@ -71,6 +71,17 @@ _WARN_MARKS = ("warning", "skipped", "unverified", "unportable", "fallback",
                "missing", "deferred", "cancelled", "interrupted")
 
 
+# session id → site, learned from events that carry both (session.started
+# does). weft's session.* lifecycle events (ensure_attempt/ensure_done/
+# installed — the ensure_capability path) name the SESSION but not the SITE,
+# so their Console rows rendered without the local/remote chip every other
+# row gets — and a capability install is one of the most site-specific things
+# the console shows (live feedback 2026-08-09). Backfill from the mapping;
+# bounded so a long-lived server cannot grow it without limit.
+_SESSION_SITE: dict = {}
+_SESSION_SITE_CAP = 512
+
+
 def console_event_for(ev: dict) -> dict | None:
     """Map one substrate event (`{kind, site?, job_id?, **payload}`) to a
     `console` wire payload, or None when the family isn't console-worthy."""
@@ -80,6 +91,14 @@ def console_event_for(ev: dict) -> dict | None:
     category = _FAMILY_CATEGORY.get(family)
     if category is None:
         return None
+    sess = ev.get("session")
+    if sess:
+        if ev.get("site"):
+            if len(_SESSION_SITE) >= _SESSION_SITE_CAP:
+                _SESSION_SITE.clear()          # tiny map; wholesale reset is fine
+            _SESSION_SITE[str(sess)] = str(ev["site"])
+        elif str(sess) in _SESSION_SITE:
+            ev = {**ev, "site": _SESSION_SITE[str(sess)]}
     tail = kind.split(".", 1)[1] if "." in kind else ""
     severity = ("error" if any(m in tail for m in _ERROR_MARKS)
                 else "warn" if any(m in tail for m in _WARN_MARKS)

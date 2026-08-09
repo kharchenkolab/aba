@@ -128,3 +128,40 @@ def test_relay_pushes_console_and_legacy_compute(monkeypatch):
     assert types == ["compute", "console"]
     comp.cb({"kind": "transfer.done", "site": "siteA", "bytes_total": 5})
     assert [p["type"] for p in got[2:]] == ["console"]      # no legacy for data
+
+
+# ── session events inherit their site (the ensure_capability pill) ───────────
+
+def test_a_session_event_without_site_inherits_from_session_started():
+    """weft's session.* lifecycle events (the ensure_capability path) name the
+    SESSION but not the SITE, so their Console rows rendered without the
+    local/remote chip every other row gets — and a capability install is one
+    of the most site-specific things the console shows (live, 2026-08-09).
+    session.started carries both; the relay remembers the mapping."""
+    from core.web.routers.compute import console_event_for, _SESSION_SITE
+    _SESSION_SITE.clear()
+    started = console_event_for({"kind": "session.started",
+                                 "session": "ses_1", "site": "mendel"})
+    assert started and started.get("site") == "mendel"
+    ensured = console_event_for({"kind": "session.ensure_done",
+                                 "session": "ses_1", "satisfied": True})
+    assert ensured and ensured.get("site") == "mendel", \
+        "the ensure event lost its site chip again"
+
+
+def test_an_unknown_session_stays_chipless_rather_than_guessing():
+    """CEILING: no mapping → no site; a wrong chip is worse than none."""
+    from core.web.routers.compute import console_event_for, _SESSION_SITE
+    _SESSION_SITE.clear()
+    ev = console_event_for({"kind": "session.ensure_done",
+                            "session": "ses_never_seen", "satisfied": True})
+    assert ev is not None and ev.get("site") is None
+
+
+def test_an_event_with_its_own_site_is_never_overridden():
+    from core.web.routers.compute import console_event_for, _SESSION_SITE
+    _SESSION_SITE.clear()
+    console_event_for({"kind": "session.started", "session": "s2", "site": "a"})
+    ev = console_event_for({"kind": "session.installed", "session": "s2",
+                            "site": "b"})
+    assert ev.get("site") == "b"
