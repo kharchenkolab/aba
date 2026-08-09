@@ -283,6 +283,7 @@ FILES=(
   tests/test_verify.py
   tests/test_viewer_launchers.py
   tests/test_viewer_link_resolution.py
+  tests/test_viewer_link_run_key.py
   tests/test_viewer_prepare.py
   tests/test_viewer_store_contract.py
   tests/test_remote_store_contract.py

@@ -256,6 +256,7 @@ def open_viewer_impl(params: dict, ctx: dict | None = None) -> dict:
     # PBMC" wouldn't end in the file extension.
     link_path = matched_path  # canonical tree path used in the launch link (file case)
     note = None               # location pre-flight annotation (either branch)
+    run_hint = None           # owning run, when a path resolve learned it (rides the link)
     if entity_id:
         e = prefetched or get_entity(entity_id)
         if not e:
@@ -348,6 +349,14 @@ def open_viewer_impl(params: dict, ctx: dict | None = None) -> dict:
                         "error": f"No file matching {file_path!r} in this project. " + " ".join(parts)}
             _rid, abs_path, _site, _size, _remote = located
             link_path = file_path
+            # The link carries the RUN KEY, not only the display path. The
+            # resolve above just paid a project-wide search to learn which run
+            # owns this output; minting `?path=` alone threw that answer away
+            # and made the launch route re-search — and a path-only link is
+            # exactly the handle shape that 404'd live (2026-08-08) when the
+            # re-search was less capable than this one. A handle one door
+            # emits must open at every door that takes one.
+            run_hint = _rid
             node = {
                 "entity_id": None,
                 "entity_type": None,
@@ -388,6 +397,8 @@ def open_viewer_impl(params: dict, ctx: dict | None = None) -> dict:
         q["entity"] = entity_id
     else:
         q["path"] = link_path
+        if run_hint:
+            q["run"] = run_hint
     viewer_url = "/viewer-launch?" + urlencode(q)
 
     # LOCATION PRE-FLIGHT (surfacing census 2026-07-26): a link minted for a

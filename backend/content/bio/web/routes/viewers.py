@@ -40,10 +40,33 @@ def viewers_registry():
     return out
 
 
-def _resolve_files_node(entity_id: str | None, path: str | None) -> dict:
-    """Resolve a files-tree node from either an entity_id (entity-backed
-    file) or a path (any node in the tree). Shared by the viewer lookup
-    and launch endpoints. Raises HTTPException on missing/underspecified."""
+def _resolve_files_node(entity_id: str | None, path: str | None,
+                        run_id: str | None = None) -> dict:
+    """Resolve a files-tree node from an entity_id (entity-backed file), a
+    (run_id, path) pair, or a path alone (any node in the tree). Shared by the
+    viewer lookup and launch endpoints. Raises HTTPException on
+    missing/underspecified.
+
+    The run key, when the caller has one, is the MOST specific handle and is
+    tried first: one bounded resolve against the owning run, no project-wide
+    search. Links minted by get_viewer_url now carry it — its path resolve
+    already paid the search that learned the owner, and a path-only link made
+    this route pay it again with a weaker searcher (the shape that 404'd live,
+    2026-08-08). A stale run key falls through to the path tiers unchanged."""
+    if run_id and path and not entity_id:
+        from content.bio.lifecycle.runs import locate_run_output
+        name = Path(path.rstrip("/")).name
+        try:
+            loc = locate_run_output(run_id, name)
+        except Exception:  # noqa: BLE001 — stale/foreign key → path tiers below
+            loc = None
+        if loc:
+            # Local hit → the real on-disk path; remote → the LOGICAL-NAME
+            # marker (the launch path fetches or streams under its own gate) —
+            # the same contract resolve_project_run_output hands out.
+            return {"entity_id": None, "entity_type": None, "name": name,
+                    "artifact_path": loc.get("local_path") or name,
+                    "size": loc.get("size"), "run_id": run_id}
     if entity_id:
         e = get_entity(entity_id)
         if not e:
@@ -159,6 +182,7 @@ def viewers_for_node(
 class ViewerLaunchIn(BaseModel):
     entity_id: str | None = None
     path: str | None = None
+    run_id: str | None = None         # owning run, when the link's minter knew it
     viewer_id: str | None = None      # which external viewer; default = highest-priority
 
 
@@ -175,7 +199,7 @@ def viewers_launch(body: ViewerLaunchIn, _pid: str = Depends(require_project)):
     from core.viewers import prepare
     from core.projects import current_project_id
 
-    node = _resolve_files_node(body.entity_id, body.path)
+    node = _resolve_files_node(body.entity_id, body.path, run_id=body.run_id)
     ext = [v for v in viewers_for(node) if v.mode == "external" and v.open_external]
     v = (next((x for x in ext if x.id == body.viewer_id), None) if body.viewer_id
          else (ext[0] if ext else None))

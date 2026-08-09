@@ -111,7 +111,8 @@ _HTML = r"""<!doctype html>
     var BASE = location.pathname.replace(/\/viewer-launch\/?$/, "");
     var q = new URLSearchParams(location.search);
     var params = { viewer_id: q.get("viewer") || undefined, path: q.get("path") || undefined,
-                   entity_id: q.get("entity") || undefined };
+                   entity_id: q.get("entity") || undefined,
+                   run_id: q.get("run") || undefined };
     var project = q.get("project") || "";
     var label = q.get("label") || "";
     var action = q.get("action") || "view";        // 'view' | 'download'
