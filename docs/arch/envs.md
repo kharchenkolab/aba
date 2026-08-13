@@ -359,11 +359,14 @@ the install-time probe can't run.
   probe resolves on a weft deployment — controller or adopted pack — has not been confirmed; if
   it reads the controller, the cue would report GPU-ready while jobs run CPU torch, defeating
   the warning it exists to give.
-- **A CUDA science pack costs ~5x the disk.** Measured on linux-64: the `python-bio` pack is
-  708 MB published; the same spec with `pytorch-gpu` + a `cuda-version` ceiling is **3547 MB**
-  (~3 min to build with `--staging` on tmpfs). That is a read-only squashfs mounted per session,
-  so the cost is disk plus first-read I/O — but a deployment that falls back to per-user
-  realize pays it per user, which is the difference between tolerable and not.
+- **A CUDA science pack costs ~5x the disk.** Measured on linux-64, zstd squashfs: the
+  `python-bio` pack is **676 MB** compressed / 2.5 GB realized; the same spec with
+  `pytorch-gpu` + a `cuda-version` ceiling is **3.4 GB** compressed / **6.5 GB** realized
+  (~3 min to build with `--staging` on tmpfs). The CUDA stack compresses far worse — 1.94x vs
+  3.77x — because cuDNN/cuBLAS/libtorch are already-packed binaries where the CPU pack is
+  mostly Python source. Mounted read-only, that is one image on the share and the cost is disk
+  plus first-read I/O; on the per-user **realize** fallback every user unpacks 6.5 GB instead,
+  which is the difference between tolerable and not.
 - **Install-time GPU verify & build-on-target.** Per-job `gpu_capability_ok` verifies at *run*
   time, but ABA does not yet confirm at *install* that the built CUDA runtime initializes on each
   GPU partition (driver new enough), nor build node-arch-specific artifacts (source-only wheels,
