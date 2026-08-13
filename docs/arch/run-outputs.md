@@ -225,6 +225,27 @@ not be re-derived at a door (misc/paths.md owns the rationale).
 
 ## Known gaps
 
+- **Driver machinery is advertised as a Run output, and it serves empty.** The
+  surface oracle fails `cheminformatics` deterministically (2/2, 2026-08-13) on
+  `surface:empty_bytes:<rid>/blocks/0001.err` — the durable view lists
+  `blocks/0001.err` with a truthy `bytes`, and `/api/runs/<rid>/file?rel=…`
+  returns 200 with no content. `blocks/NNNN.err` is the weft block driver's own
+  stderr, empty precisely because the step succeeded, so the row is wrong twice:
+  it is not the user's output, and its advertised size is not its served size.
+  This is the recurrence of the harvest-filter class already on record (a fake
+  sandbox that started EMPTY blessed a filter which scooped `current_block` as a
+  Run's only output) — a real jobdir always carries the driver's machinery, so
+  the filter must exclude it by rule rather than by what a fixture happens to
+  contain.
+- **A working file is registered as a Dataset instead of kept.**
+  `ephemeral_deliverable` fails 3/3 (2026-08-13) with
+  `tool_not_used:keep_outputs` + `tool_called_too_often:register_dataset (1 > 0)`:
+  the agent writes the file in a kernel and then mints a Dataset entity, which
+  the scenario names as the wrong lane ("Datasets are first-class scientific
+  entities, not retained working files"). Deterministic, same tool set each run.
+  Its baseline is a SINGLE accepted sample from 2026-07-23 on a different
+  machine, so the honest statement is "current behaviour differs from one
+  three-week-old observation", not "today's change broke it".
 - **Candidacy still misses a sidecar-only keep.** `_retained_so_far` — what
   `run_durable_view` renders from — builds two sets: `decided` from
   `selection.include`, and `placed` from the DONE row's **sidecar**
