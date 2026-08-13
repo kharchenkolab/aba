@@ -615,3 +615,79 @@ def test_routine_tier_honors_an_explicit_model_pin(monkeypatch):
     src = (ROOT / "regtest" / "harness" / "sweep.py").read_text()
     assert 'if not os.environ.get("ABA_SCENARIO_MODEL")' in src, (
         "the routine tier pops the pin unconditionally again")
+
+
+def test_a_declined_scenario_is_not_a_crash():
+    """NOT-RUN and CRASHED must not look alike.
+
+    A `requires: slurm` scenario declines cleanly when the active submitter is
+    local — the runner prints `[skip]` and exits. It used to exit 0 WITHOUT
+    writing report.json, so the sweep read the missing file as
+    `ERROR: report.json unreadable` and the row became a permanent 'baseline
+    blind spot' with a cause nobody could read off the report. All three
+    scheduler scenarios sat there — on a box that has Slurm, which the harness
+    simply never told them about.
+
+    Both rows are `infra` (never baked by --accept), so the load-bearing
+    difference is whether the report SAYS WHICH — the same distinction
+    test_setup_error_cause_survives_into_the_row draws for a fixture gap."""
+    skipped = sweep.score_of({"_error": "NOT-RUN: precondition unmet — [skip] x "
+                                        "requires the Slurm submitter",
+                              "_skipped": True, "_infra": 1})
+    crashed = sweep.score_of({"_error": "report.json unreadable: [Errno 2]",
+                              "_infra": 0})
+    assert skipped["infra"] == 1, "a declined scenario must never bake into a baseline"
+    assert "NOT-RUN" in skipped["fails"][0], f"cause lost: {skipped['fails']}"
+    assert "ABA_BATCH_SUBMITTER" in skipped["fails"][0] or "Slurm" in skipped["fails"][0], (
+        "the row must say what to set — an unreadable cause is why these went unfixed")
+    assert "NOT-RUN" not in crashed["fails"][0], (
+        "a real crash must NOT be dressed up as a clean skip — that would hide "
+        "exactly what the blind-spot alarm exists to surface")
+
+
+def test_the_runner_signals_decline_with_its_own_exit_code():
+    """WIDE / armed at the source. The sweep's classification is only as good as
+    the runner's signal: if the skip path ever returns 0 again, the sweep is
+    back to reading a missing report.json as a crash, and this file's other
+    guard would still pass because it tests score_of() in isolation."""
+    import re as _re
+    from pathlib import Path as _P
+    src = (_P(__file__).resolve().parents[1] / "regtest/harness/runner.py").read_text()
+    blk = src[src.index('if req == "slurm":'):]
+    blk = blk[:blk.index("\n    src = ")]
+    assert _re.search(r"return 4\b", blk), (
+        "the requires-slurm skip must exit 4 (declined), not 0 — a 0 with no "
+        "report.json is indistinguishable from a crash")
+
+
+def test_exit_4_is_classified_as_declined_not_unreadable(tmp_path, monkeypatch):
+    """ARMED at the seam that actually changed. The guard above asserts what
+    `score_of` does with an already-classified row, and the one below asserts
+    the runner emits 4 — but the load-bearing step is `run_scenario` TURNING a
+    4 into a declined row. Without this, both could pass while the sweep still
+    fell through to 'report.json unreadable'."""
+    import subprocess as _sp
+
+    monkeypatch.setattr(sweep, "RUNS", tmp_path)
+
+    class _R:
+        returncode = 4
+
+    def _fake_run(*a, **k):
+        # the runner's own words, which the row must carry through
+        for h in (k.get("stdout"),):
+            if hasattr(h, "write"):
+                h.write("[skip] gpu_job_completion requires the Slurm submitter "
+                        "(set ABA_BATCH_SUBMITTER=slurm); active submitter is 'local'.\n")
+        return _R()
+
+    monkeypatch.setattr(_sp, "run", _fake_run)
+    monkeypatch.setattr(sweep.subprocess, "run", _fake_run, raising=False)
+    rep = sweep.run_scenario("gpu_job_completion", "haiku")
+    assert rep.get("_skipped") is True, f"exit 4 not recognised as declined: {rep!r}"
+    assert rep.get("_infra") == 1, "a declined scenario must be infra-marked"
+    assert "unreadable" not in (rep.get("_error") or ""), (
+        "exit 4 still fell through to the missing-report branch — the very "
+        "confusion this change removes")
+    assert "ABA_BATCH_SUBMITTER" in (rep.get("_error") or ""), (
+        f"the actionable reason did not survive: {rep.get('_error')!r}")

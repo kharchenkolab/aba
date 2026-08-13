@@ -264,6 +264,23 @@ def run_scenario(sid, mode):
         return {"_error": "SETUP-ERROR: declared data_files missing from DATA_DIR "
                           "(scenario fixture/staging gap — not a product failure)",
                 "_setup_error": True, "_infra": 1}
+    # exit 4 = the runner declined a scenario whose declared precondition is not
+    # met (e.g. `requires: slurm` with a local submitter). It did NOT run and did
+    # NOT crash, and saying so is the whole point: this used to arrive as
+    # "report.json unreadable", indistinguishable from a crash, so three
+    # scheduler scenarios sat permanently in the blind-spot list with a cause
+    # nobody could read off the report. Infra-marked, so --accept never bakes it.
+    if rc == 4:
+        why = ""
+        try:
+            why = " — " + next(
+                (ln.strip() for ln in reversed(_errlog.read_text().splitlines())
+                 if ln.startswith("[skip]")), "")[:200]
+        except Exception:  # noqa: BLE001 — the reason is a nicety, never a failure
+            pass
+        return {"_error": f"NOT-RUN: precondition unmet{why}",
+                "_skipped": True, "_infra": 1}
+
     # the runner wrote report.json into the latest _runs/<sid>-<ts>/ dir
     runs = sorted(RUNS.glob(f"{sid}-*"), key=lambda p: p.stat().st_mtime)
     fresh = [r for r in runs if r.stat().st_mtime >= t0 - 5]

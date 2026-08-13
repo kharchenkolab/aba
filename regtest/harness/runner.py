@@ -661,8 +661,16 @@ def main() -> int:
     if req == "slurm":
         from core.jobs.submitter import submitter_name
         if submitter_name() != "slurm":
+            # exit 4, not 0: this scenario did NOT run. Returning 0 without a
+            # report.json made the sweep read the missing file as
+            # "ERROR: report.json unreadable" — a deliberate skip transcribed as
+            # a crash, which then hardened into a permanent "baseline blind
+            # spot" (all three `requires: slurm` scenarios sat there, invisible,
+            # on a box that has Slurm — the harness simply never exported
+            # ABA_BATCH_SUBMITTER). Not-run and crashed must not look alike.
             print(f"[skip] {SCENARIO} requires the Slurm submitter (set ABA_BATCH_SUBMITTER=slurm); "
-                  f"active submitter is '{submitter_name()}'."); return 0
+                  f"active submitter is '{submitter_name()}'.")
+            return 4
     src = LIB / SCENARIO / "data"
     # Scenario data/ is generated, not committed (see regtest/scenarios/_regen_all.sh).
     # On a fresh clone it won't exist yet — point the user at the regen step instead
