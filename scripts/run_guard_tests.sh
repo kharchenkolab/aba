@@ -213,6 +213,7 @@ FILES=(
   tests/test_oauth_refresh_store.py
   tests/test_ood_template_contracts.py
   tests/test_enroll_group.py
+  tests/test_gpu_env_routing.py
   tests/test_open_viewer.py
   tests/test_option_b_phase6.py
   tests/test_output_manifest_stores.py

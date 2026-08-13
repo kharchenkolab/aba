@@ -111,7 +111,12 @@ def context_line() -> str:
         # Accelerator readiness — only surfaced when a GPU is in the picture. Tells the
         # agent whether a GPU step will actually accelerate or silently fall back to CPU.
         if "gpu_usable" in e:
-            line += (". GPU usable (CUDA stack)" if e["gpu_usable"]
+            # The usable branch carries its reason too: on a jobs.gpu_env_pack
+            # site the reason IS the instruction (batch lane only, this node is
+            # CPU) — "GPU usable" alone would invite an interactive GPU step.
+            line += ((f". GPU usable — {e['gpu_usable_reason']}"
+                      if e.get("gpu_usable_reason") else ". GPU usable (CUDA stack)")
+                     if e["gpu_usable"]
                      else f". WARNING: GPU present but NOT usable — {e.get('gpu_usable_reason', '')}; "
                           "a GPU step runs on CPU, so prefer CPU sizing or tell the user")
         wt = e.get("walltime_remaining_min")
@@ -274,6 +279,47 @@ def _cluster_landscape(site: str) -> "tuple[list, list]":
     return parts, access
 
 
+def gpu_readiness() -> tuple[bool, str]:
+    """(usable, reason) for the `gpu_usable` cue — the ONE owner of "will a GPU
+    step actually accelerate here?", called only when a GPU is in the picture.
+
+    Two regimes, split by whether the site declares a GPU env pack
+    (jobs.gpu_env_pack → ABA_JOBS_GPU_ENV_PACK):
+
+    * **Declared** (a batch-only GPU site): GPU work rides the declared CUDA
+      pack in the job lane, so probing torch in THIS process would probe the
+      wrong interpreter entirely — on a weft deployment the controller carries
+      no torch at all, and the probe would warn "set ABA_ACCELERATOR=cuda"
+      forever on a correctly configured site. Usable = the declared pack
+      exists in the bundle (structural; no solve in this per-turn hot path).
+      A declared-but-missing pack reads NOT usable — the same misconfiguration
+      the submit path refuses (base_env.gpu_pack_env_id), said earlier.
+    * **Not declared** (the unchanged default): usable = the base torch is a
+      CUDA build (`torch_cuda_build`, node-independent). macOS never reaches
+      here at all — `node_gpus` counts NVIDIA devices only, and the default
+      osx-arm64 base accelerates via Metal/MPS with nothing to declare."""
+    from core import config as _cfg
+    pack = _cfg.settings.gpu_env_pack.get()
+    if pack:
+        try:
+            from core.compute import env_packs
+            ok = env_packs.pack_spec(pack) is not None
+        except Exception:  # noqa: BLE001 — bundle unreadable ≠ GPU-ready
+            ok = False
+        return ok, (
+            f"GPU steps run as background jobs in the site's {pack!r} env "
+            f"(this node itself is CPU — no interactive GPU sessions)"
+            if ok else
+            f"site declares GPU env pack {pack!r} but the bundle has no such "
+            f"pack — GPU jobs will refuse until it is published")
+    from core.exec.verify import torch_cuda_build
+    cuda = torch_cuda_build()
+    return cuda is not None, (
+        f"CUDA torch ({cuda})" if cuda else
+        "base torch is CPU-only — a GPU step would fall back to CPU (admin: set "
+        "ABA_ACCELERATOR=cuda in config.env + rebuild the env)")
+
+
 def _build_compute_env() -> dict:
     from core.exec.cpu import effective_cpu_count
     from core.exec.hpc_session import session_allocation
@@ -315,13 +361,7 @@ def _build_compute_env() -> dict:
     # just "a GPU exists," when placing a GPU step.
     gpu_present = bool(env["node_gpus"]) or any(p.get("gpu") for p in env.get("partitions") or [])
     if gpu_present:
-        from core.exec.verify import torch_cuda_build
-        _cuda = torch_cuda_build()
-        env["gpu_usable"] = _cuda is not None
-        env["gpu_usable_reason"] = (
-            f"CUDA torch ({_cuda})" if _cuda else
-            "base torch is CPU-only — a GPU step would fall back to CPU (admin: set "
-            "ABA_ACCELERATOR=cuda in config.env + rebuild the env)")
+        env["gpu_usable"], env["gpu_usable_reason"] = gpu_readiness()
     # Declared remote machines usable via run_python/run_r site= (the detached
     # lane) — surfaced so the agent knows its placement options WITHOUT having
     # to call describe_compute first. Named only (kind/capacity is the tool's job).

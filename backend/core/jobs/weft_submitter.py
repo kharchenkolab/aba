@@ -283,6 +283,32 @@ def _sized_walltime(kind: str, est: Optional[dict], timeout_s: int) -> Optional[
     return None
 
 
+def _gpu_env_for(params: dict, lang: str) -> Optional[str]:
+    """EnvID of the site's GPU env pack IFF this job asked for a GPU and the
+    site declares one (jobs.gpu_env_pack); None otherwise. The ONE rule both
+    submit lanes consult, so they cannot disagree about when a job leaves the
+    project env for the CUDA flavour.
+
+    Deliberately narrow: python only (the pack is a python stack — an R GPU
+    job keeps its normal env), and an explicit ``env=`` ALWAYS wins — the
+    caller who named an env chose it, and second-guessing that choice would
+    make `env=` mean "unless we know better". With no site declaration this
+    returns None before touching the bundle, so a deployment without the key
+    pays nothing and changes nothing.
+
+    NOTE the trade the caller is making when this returns an EnvID: the job
+    runs the SHARED CUDA pack, not the project session's snapshot, so packages
+    the user installed into the project (`ensure_capability`) are NOT along
+    for the ride. The spec stamp (`env_source`) exists so that a missing
+    import in a GPU job reads as this trade, not as a mystery."""
+    if lang != "python" or not (params.get("estimate") or {}).get("gpu"):
+        return None
+    if params.get("env"):
+        return None
+    from core.compute import base_env
+    return base_env.gpu_pack_env_id()
+
+
 class WeftSubmitter:
     """site='local' → this node (the W2 lane); site=<slurm-kind weft site> →
     the cluster (W3.3), same entry + result.json contract over the shared FS
@@ -379,6 +405,7 @@ class WeftSubmitter:
         # LONGER resolved aba-side (the old raw `<prefix>/bin/python` broke under the
         # squashfs realization strategy that parallel-FS/cluster roots get).
         env_id = None
+        env_source = None
         if kind in ("run_python", "run_r"):
             from core.compute import base_env, named_envs, project_env
             lang = "r" if kind == "run_r" else "python"
@@ -392,7 +419,25 @@ class WeftSubmitter:
                         env_id = row["env_id"]
                 else:
                     base_env.require(lang)      # weft-only: no served-base fallback
-                    env_id = project_env.snapshot(str(pid), lang)   # identity; store op, no realize
+                    # GPU-estimated python job on a site that declares a GPU env
+                    # pack → ride the CUDA flavour instead of the project
+                    # snapshot (whose torch is the CPU build). env_source stamps
+                    # the trade: the shared pack does NOT carry the project's
+                    # own installs, and a missing import must read as that.
+                    env_id = _gpu_env_for(params, lang)
+                    if env_id:
+                        from core import config as _cfg
+                        env_source = f"gpu_pack:{_cfg.settings.gpu_env_pack.get()}"
+                    else:
+                        env_id = project_env.snapshot(str(pid), lang)   # identity; store op, no realize
+            except ComputeError as e:
+                if e.code == "gpu_env_pack.unknown":
+                    # Misconfiguration, not a node-side condition: falling
+                    # through would run the GPU job on CPU torch (the
+                    # scVI-on-CPU class). Stop the submit.
+                    raise
+                print(f"[jobs.weft] env identity resolution failed ({e}) — the job "
+                      f"will fail loudly on the node (no served-base fallback)")
             except Exception as e:  # noqa: BLE001
                 print(f"[jobs.weft] env identity resolution failed ({e}) — the job "
                       f"will fail loudly on the node (no served-base fallback)")
@@ -406,6 +451,11 @@ class WeftSubmitter:
             # substrate there); it runs the activated task env via CONDA_PREFIX.
             "result_path": str(result_path), "env": None,
             "env_id": env_id, "interp": None,
+            # Which rule chose env_id, when it was NOT the default. Today the
+            # only non-default source is "gpu_pack:<name>" — kept in the spec
+            # so a GPU job's record says it ran the shared CUDA pack rather
+            # than the project env (project installs absent BY DESIGN there).
+            "env_source": env_source,
             "gpu": bool((params.get("estimate") or {}).get("gpu")),
             "modules": [],
             "pipeline": params.get("pipeline"), "revision": params.get("revision"),
@@ -501,6 +551,13 @@ class WeftSubmitter:
         from core.compute.errors import is_env_resolution_failure
         try:
             base_env.require(lang)
+            # Same GPU rule as the shared lane (_gpu_env_for): a GPU-estimated
+            # python job on a gpu_env_pack site rides the CUDA flavour.
+            # env_name stays None — it is not a project-named env, and the
+            # named-env re-lock machinery must not treat it as one.
+            gid = _gpu_env_for(params, lang)
+            if gid:
+                return gid, None
             return project_env.snapshot(str(pid), lang), None
         except Exception as e:  # noqa: BLE001 — classified, never degraded
             if not is_env_resolution_failure(e):

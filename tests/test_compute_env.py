@@ -164,3 +164,59 @@ def test_the_interactive_ceiling_is_stated_whether_or_not_a_scheduler_exists(mon
     line = _cue(monkeypatch, shape)
     assert "30 min" in line, f"[{shape}] cue omits the interactive ceiling: {line!r}"
     assert "clamp" in line, f"[{shape}] cue does not say a larger timeout_s is clamped"
+
+
+def test_gpu_readiness_on_a_gpu_env_pack_site(monkeypatch):
+    """jobs.gpu_env_pack declared: readiness is about the BATCH lane, not this
+    process's torch — on a weft deployment the controller has no torch at all,
+    and probing it would warn 'set ABA_ACCELERATOR=cuda' forever on a correctly
+    configured site (that admin advice patches the CONTROLLER env there)."""
+    import core.exec.compute_env as ce
+    from core.compute import env_packs
+    monkeypatch.setenv("ABA_JOBS_GPU_ENV_PACK", "python-bio-cuda")
+
+    # declared + present in the bundle → usable, and the reason IS the
+    # instruction: batch jobs only, this node is CPU
+    monkeypatch.setattr(env_packs, "pack_spec", lambda n: {"deps": {}})
+    ok, reason = ce.gpu_readiness()
+    assert ok and "background jobs" in reason and "python-bio-cuda" in reason
+    assert "no interactive GPU" in reason
+
+    # declared but MISSING from the bundle → NOT usable, misconfig named
+    monkeypatch.setattr(env_packs, "pack_spec", lambda n: None)
+    ok, reason = ce.gpu_readiness()
+    assert not ok and "no such pack" in reason
+
+
+def test_gpu_readiness_without_a_pack_is_the_torch_probe_unchanged(monkeypatch):
+    """No declaration: byte-for-byte the pre-existing behavior — the cue is the
+    base torch build, and the bundle is never consulted."""
+    import core.exec.compute_env as ce
+    from core.compute import env_packs
+    monkeypatch.delenv("ABA_JOBS_GPU_ENV_PACK", raising=False)
+    monkeypatch.setattr(env_packs, "pack_spec",
+                        lambda n: (_ for _ in ()).throw(AssertionError("bundle touched")))
+    import core.exec.verify as verify
+    monkeypatch.setattr(verify, "torch_cuda_build", lambda: "12.4")
+    ok, reason = ce.gpu_readiness()
+    assert ok and "CUDA torch (12.4)" in reason
+    monkeypatch.setattr(verify, "torch_cuda_build", lambda: None)
+    ok, reason = ce.gpu_readiness()
+    assert not ok and "ABA_ACCELERATOR=cuda" in reason
+
+
+def test_context_line_carries_the_batch_lane_instruction(monkeypatch):
+    """'GPU usable' alone would invite an interactive GPU step; the usable
+    branch must carry its reason so the agent learns the lane, not just the
+    verdict."""
+    import core.exec.compute_env as ce
+    monkeypatch.setattr(ce, "compute_env", lambda *a, **k: {
+        "mode": "slurm", "node_cores": 8, "node_mem_gb": 32, "node_gpus": 0,
+        "gpu_usable": True,
+        "gpu_usable_reason": "GPU steps run as background jobs in the site's "
+                             "'python-bio-cuda' env (this node itself is CPU — "
+                             "no interactive GPU sessions)",
+        "partitions": [{"partition": "g", "cpus_per_node": 192, "gpu": True,
+                        "wait": "likely quick"}]})
+    line = ce.context_line()
+    assert "background jobs" in line and "python-bio-cuda" in line

@@ -430,6 +430,11 @@ def main():
             lines.append(f"export ABA_BATCH_SUBMITTER={shq(jobs['submitter'])}")
         if jobs.get("hpc_config"):
             lines.append(f"export ABA_HPC_CONFIG={shq(ex(jobs['hpc_config']))}")
+        # jobs.gpu_env_pack: which pack GPU-estimated jobs run in (the CUDA
+        # flavour of the base). Absent = no GPU env routing — the honest default
+        # for a site with no GPU partition or no published CUDA pack.
+        if jobs.get("gpu_env_pack"):
+            lines.append(f"export ABA_JOBS_GPU_ENV_PACK={shq(jobs['gpu_env_pack'])}")
         # extra host paths to bind into the --containall run (site.yaml `binds:`).
         # script.sh.erb applies them. Needed when the group/user trees live outside
         # the conventional /groups + share roots (e.g. a pilot rooted in a home dir).

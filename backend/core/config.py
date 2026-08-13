@@ -1137,6 +1137,17 @@ setting("hpc_config", env="ABA_HPC_CONFIG", type="str", default=None,
         deploy_injected=True,
         doc="Path to hpc.yaml compute-topology override (else $ABA_HOME/hpc.yaml). "
             "Forwarded into the SIF alongside the submitter (partition/QOS catalog).")
+setting("gpu_env_pack", env="ABA_JOBS_GPU_ENV_PACK", type="str", default=None,
+        empty_is_unset=True, category="cluster", deploy_injected=True,
+        weft_fate="move:site",
+        doc="Name of the env pack GPU-estimated background jobs run in (site.yaml "
+            "jobs.gpu_env_pack; e.g. 'python-bio-cuda', derived by "
+            "scripts/derive_gpu_pack.py). The site's declaration that GPU work "
+            "rides a CUDA flavour of the base rather than the (CPU-torch) project "
+            "env — interim shape of the accelerator-as-site-fact migration (see "
+            "docs/arch/envs.md, GPU/accelerator). UNSET = no GPU env routing at "
+            "all: jobs resolve exactly as before, and macOS needs nothing here "
+            "(the default osx-arm64 base already accelerates via Metal/MPS).")
 # slurm_mem_frac/slurm_walltime_frac stay: still LIVE via core/exec/router.py
 # (read directly from the env) — the Slurm-mode threshold for routing a won't-fit
 # step to the background (weft slurm) lane. weft_fate=retire is intent, not yet.

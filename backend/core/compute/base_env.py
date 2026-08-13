@@ -125,6 +125,48 @@ def env_id(language: str) -> Optional[str]:
     return eid
 
 
+def gpu_pack_env_id() -> Optional[str]:
+    """EnvID of the site-declared GPU env pack (site.yaml ``jobs.gpu_env_pack``
+    → ``ABA_JOBS_GPU_ENV_PACK``), adopt-or-solve exactly like ``env_id()``.
+
+    None when the deployment declares none — the default, and the whole GPU-env
+    feature is inert then: no bundle lookup, no solve, nothing. The pack is the
+    CUDA flavour of the python base (scripts/derive_gpu_pack.py) that only
+    GPU-estimated background jobs ride; interactive sessions never see it, and
+    macOS never needs it (the default osx-arm64 base ships Metal/MPS).
+
+    A DECLARED pack missing from the bundle RAISES rather than returning None:
+    the caller's fallback is the project snapshot, whose torch is the CPU
+    build — a GPU job silently riding it is the scVI-on-CPU incident wearing a
+    config typo, so misconfiguration stops the submit."""
+    from core import config
+    name = config.settings.gpu_env_pack.get()
+    if not name:
+        return None
+    spec = env_packs.pack_spec(name)
+    if spec is None:
+        raise ComputeError(
+            "gpu_env_pack.unknown",
+            f"the site declares GPU env pack {name!r} (jobs.gpu_env_pack) but "
+            f"no such pack exists in the bundle — refusing to run a GPU job in "
+            f"the CPU-torch project env instead",
+            stage="aba",
+            hints={"fix": "derive + ship the pack (scripts/derive_gpu_pack.py, "
+                          "then publish_base_packs --packs <name>), or remove "
+                          "jobs.gpu_env_pack from site.yaml"})
+    digest = json.dumps(spec, sort_keys=True, default=str)
+    key = ("gpu", name, str(hash(digest)))
+    if key in _env_ids:
+        return _env_ids[key]
+    from core.compute import seeding
+    eid = seeding.adopt_env_id(name)
+    if eid is None:
+        res = named_envs._sync(_adapter.get_compute().env_ensure(spec))
+        eid = res["env_id"]
+    _env_ids[key] = eid
+    return eid
+
+
 def prefix(language: str, *, timeout_s: int = 1800) -> Optional[Path]:
     """The realized base DIRECTORY prefix on the local site (realizing on first
     use), or None when no pack is declared. Raises `env.no_raw_prefix` for a
