@@ -25,10 +25,12 @@ _spec.loader.exec_module(sweep)
 pytestmark = pytest.mark.platform
 
 
-def _row(mech_pass=3, mech_total=4, infra=0, fails=(), setup_error=False):
+def _row(mech_pass=3, mech_total=4, infra=0, fails=(), setup_error=False,
+         declined=False):
     return {"mech_pass": mech_pass, "mech_total": mech_total,
             "rubric_overall": None, "fails": list(fails),
-            "bundle": None, "infra": infra, "setup_error": setup_error}
+            "bundle": None, "infra": infra, "setup_error": setup_error,
+            "declined": declined}
 
 
 def _diff(rows, base, tmp_path, monkeypatch, mode="haiku"):
@@ -643,6 +645,61 @@ def test_a_declined_scenario_is_not_a_crash():
     assert "NOT-RUN" not in crashed["fails"][0], (
         "a real crash must NOT be dressed up as a clean skip — that would hide "
         "exactly what the blind-spot alarm exists to surface")
+
+
+def test_declined_is_its_own_infra_class_not_a_credential_failure():
+    """The misdirection this splits apart: the 2026-08-13 sweep announced three
+    DECLINED scenarios as "CREDENTIAL/RATE-LIMIT errors … re-run under fresh
+    creds". Nothing was wrong with the credentials — the submitter had never
+    been provided — and the advice sent the reader after the wrong fix.
+
+    Asserted on the CLASSIFICATION, not on the banner text: `credentials` is
+    the REMAINDER bucket, so a cause added later cannot be silently absorbed
+    into it the way this one was."""
+    rows = {"declined": _row(mech_total=None, infra=1, declined=True),
+            "fixture": _row(mech_total=None, infra=1, setup_error=True),
+            "tokendead": _row(mech_pass=2, mech_total=8, infra=3),
+            "measured": _row()}
+    cls = sweep.infra_classes(rows)
+    assert cls == {"setup": ["fixture"], "declined": ["declined"],
+                   "credentials": ["tokendead"]}, cls
+    assert "measured" not in sum(cls.values(), []), "an informative row was called infra"
+
+
+def test_score_of_carries_the_decline_flag_from_the_runner():
+    """The seam: `run_scenario` marks a runner exit-4 row `_skipped`, and the
+    row must CARRY that to the reporting layer. Dropping it here put the three
+    scheduler scenarios back in the credential bucket while every other guard
+    stayed green."""
+    declined = sweep.score_of({"_error": "NOT-RUN: precondition unmet — [skip] x "
+                                         "requires the Slurm submitter",
+                               "_skipped": True, "_infra": 1})
+    assert declined["declined"] is True and declined["setup_error"] is False
+    # …and a genuine credential/rate-limit failure is NOT laundered into it
+    creds = sweep.score_of({"_error": "no run dir produced", "_infra": 3})
+    assert creds["declined"] is False
+    assert sweep.infra_classes({"c": creds})["credentials"] == ["c"]
+
+
+def test_a_decline_for_a_non_slurm_reason_classifies_the_same_way():
+    """WIDE — the classifier keys on "the runner declined", not on the word
+    slurm. A future precondition declining for its own reason lands in the same
+    bucket, and its own reason survives into the row."""
+    row = sweep.score_of({"_error": "NOT-RUN: precondition unmet — [skip] x needs "
+                                    "a GPU partition; none available.",
+                          "_skipped": True, "_infra": 1})
+    assert sweep.infra_classes({"x": row}) == {"setup": [], "declined": ["x"],
+                                               "credentials": []}
+    assert "GPU partition" in row["fails"][0], "the real reason was dropped"
+
+
+def test_declined_rows_are_never_baked_into_a_baseline():
+    """A decline measured nothing, so --accept must skip it — baking one is
+    precisely how "errored, no report" became these scenarios' reference."""
+    row = sweep.score_of({"_error": "NOT-RUN: precondition unmet", "_skipped": True,
+                          "_infra": 1})
+    clean, skipped = sweep.bakeable_rows({"declined": row, "ok": _row()})
+    assert skipped == ["declined"] and set(clean) == {"ok"}
 
 
 def test_the_runner_signals_decline_with_its_own_exit_code():

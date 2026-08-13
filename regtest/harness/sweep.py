@@ -22,6 +22,7 @@ baseline but produced no measurement — lost coverage, NOT a regression), and
 baseline BLIND SPOTS (the reference itself is "errored, no report"). Pre-flight
 refuses a run that could not measure at all — an unprovisioned eval home aborts,
 and scenarios with absent declared inputs are skipped before any budget is spent.
+A scenario the runner DECLINED is its own class, never a credential failure.
 """
 from __future__ import annotations
 import argparse
@@ -339,11 +340,15 @@ def score_of(rep):
         return {"mech_pass": 0, "mech_total": None, "rubric_overall": None,
                 "fails": [f"ERROR:{rep['_error']}"], "bundle": rep.get("_bundle"),
                 "infra": 1 if rep.get("_setup_error") else rep.get("_infra", 0),
-                # the CAUSE survives into the row: a fixture gap and an expired
-                # token are both "infra" but want opposite remedies, and one
-                # banner advising "re-run under fresh creds" for both sends you
-                # chasing credentials over a missing seed file
-                "setup_error": bool(rep.get("_setup_error"))}
+                # the CAUSE survives into the row: a fixture gap, a DECLINED
+                # precondition and an expired token are all "infra" but want
+                # three different remedies, and one banner advising "re-run
+                # under fresh creds" for all of them sends you chasing
+                # credentials over a missing seed file or an unprovided
+                # submitter (it did: the 2026-08-13 sweep announced the three
+                # scheduler scenarios as CREDENTIAL/RATE-LIMIT errors)
+                "setup_error": bool(rep.get("_setup_error")),
+                "declined": bool(rep.get("_skipped"))}
     mech = rep.get("mechanical") or {}
     fails = [f"{r['step']}:{';'.join(r.get('fails') or [])}"
              for r in (rep.get("report") or []) if r.get("verdict") == "FAIL"]
@@ -455,6 +460,24 @@ def diff_vs_baseline(scorecard, mode):
         if isinstance(cr, (int, float)) and isinstance(br, (int, float)) and (br - cr) > RUBRIC_REGRESSION:
             regressions.append((sid, f"rubric {br}→{cr}"))
     return base, regressions, unmeasured
+
+
+def infra_classes(rows: dict) -> dict:
+    """Split the INFRA bucket by CAUSE → {"setup", "declined", "credentials"}.
+
+    Three remedies, three classes, and a wrong one costs a debugging session: a
+    staged-fixture gap is not fixed by fresh credentials; a DECLINED scenario
+    (its declared precondition was not met — nothing ran) is not a credential
+    problem either. The 2026-08-13 sweep announced all three scheduler
+    scenarios as "CREDENTIAL/RATE-LIMIT errors … re-run under fresh creds"
+    while the credentials were fine and the submitter had simply never been
+    provided. `credentials` is the REMAINDER, so a new cause added here can
+    never be silently absorbed into it."""
+    setup = [sid for sid, r in rows.items() if r.get("setup_error")]
+    declined = [sid for sid, r in rows.items() if r.get("declined")]
+    creds = [sid for sid, r in rows.items()
+             if r.get("infra") and not r.get("setup_error") and not r.get("declined")]
+    return {"setup": setup, "declined": declined, "credentials": creds}
 
 
 def prune_runs():
@@ -701,13 +724,11 @@ def main() -> int:
             env = dict(os.environ); env["ABA_SCENARIO"] = sid
             subprocess.run([PY, "-u", str(FORENSIC)], env=env, cwd=str(ROOT))
 
-    # Split the INFRA bucket by CAUSE — the remedies are different and a wrong
-    # one costs a debugging session: a staged-fixture gap is not fixed by fresh
-    # credentials, and no amount of re-running under a new token stages a
-    # missing seed file.
-    setup_scen = [sid for sid, r in rows.items() if r.get("setup_error")]
-    creds_scen = [sid for sid, r in rows.items()
-                  if r.get("infra") and not r.get("setup_error")]
+    # Split the INFRA bucket by CAUSE (see infra_classes) — three remedies, and
+    # a wrong one costs a debugging session.
+    _cls = infra_classes(rows)
+    setup_scen, declined_scen, creds_scen = (
+        _cls["setup"], _cls["declined"], _cls["credentials"])
     if creds_scen:
         print(f"\n[sweep] ⚠ {len(creds_scen)} scenario(s) hit CREDENTIAL/RATE-LIMIT errors, "
               f"NOT product failures — re-run under fresh creds: {creds_scen}")
@@ -715,6 +736,18 @@ def main() -> int:
         print(f"\n[sweep] ⚠ {len(setup_scen)} scenario(s) never ran: SETUP/FIXTURE gap "
               f"(declared inputs absent after staging). Fresh creds will NOT help — "
               f"fix the fixture/staging: {setup_scen}")
+    if declined_scen:
+        # Its OWN class. These were announced as credential/rate-limit failures
+        # ("re-run under fresh creds") when nothing was wrong with the creds:
+        # the runner DECLINED a declared precondition it could not meet. The
+        # remedy is the precondition, and the row already carries its reason.
+        print(f"\n[sweep] ⚠ {len(declined_scen)} scenario(s) DECLINED — a declared "
+              f"precondition was not met, so they never ran (not a credential "
+              f"problem, not a product failure). Fresh creds will NOT help; "
+              f"satisfy the precondition (see harness/preconditions.py):")
+        for sid in declined_scen:
+            why = (rows[sid].get("fails") or ["ERROR:unknown"])[0]
+            print(f"          · {sid}: {why[:200]}")
 
     if args.accept:
         BASELINES.mkdir(parents=True, exist_ok=True)
