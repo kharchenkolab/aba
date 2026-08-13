@@ -342,3 +342,27 @@ def test_site_without_group_scope_refuses_cleanly(tmp_path, monkeypatch, capsys)
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+def test_placeholder_this_tool_cannot_expand_is_refused(tmp_path, monkeypatch, capsys):
+    """aba_preflight's expander knows {user} and {home}; this one does not.
+
+    Rather than keep a second, half-complete copy of that vocabulary, enrolment
+    refuses a path it cannot fully resolve. Silently creating a directory
+    literally named "{user}" while preflight looks elsewhere would leave the lab
+    invisible with nothing to explain why."""
+    groups_root = tmp_path / "groups"; groups_root.mkdir()
+    cfg = tmp_path / "site.yaml"
+    cfg.write_text("scopes:\n  group:\n"
+                   f"    root_path: {groups_root}/{{user}}/{{group_dir}}/aba\n"
+                   '    strip_suffix: ".grp"\n')
+
+    class FakeGr:
+        gr_gid = os.getgid()
+    monkeypatch.setattr(eg.grp, "getgrnam", lambda n: FakeGr())
+    before = snapshot(groups_root)
+    rc = eg.main([REAL_GROUP, "--site", str(cfg), "--yes"])
+    assert rc == 2
+    assert snapshot(groups_root) == before, "must not create a literal {user} directory"
+    err = capsys.readouterr().err
+    assert "Traceback" not in err and "What to do:" in err

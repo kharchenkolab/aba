@@ -193,7 +193,21 @@ def build_plan(a):
     group_dir = a.group[:-len(strip)] if (strip and a.group.endswith(strip)) else a.group
 
     def _ex(s):
-        return s.replace("{group_dir}", group_dir).replace("{group}", a.group)
+        out = s.replace("{group_dir}", group_dir).replace("{group}", a.group)
+        # aba_preflight's expander (aba_preflight.py:216) also knows {user} and
+        # {home}. This tool deliberately does NOT copy that vocabulary — a
+        # second, half-complete copy is how the writer and the reader drift.
+        # But an unexpanded placeholder must never reach the filesystem: it
+        # would create a directory literally named "{user}" here while preflight
+        # looked somewhere else, and the lab would never appear with nothing to
+        # explain why. Refuse instead.
+        if "{" in out:
+            raise Refusal(
+                f"This ABA installation's settings use a placeholder this tool "
+                f"does not understand: {s}",
+                "Enrolment cannot safely guess where the folder should go. "
+                "Please send this line to your ABA admin.")
+        return out
 
     root = Path(_ex(gcfg.get("root_path") or "/groups/{group}/aba"))
     skeleton = gcfg.get("skeleton_template")
