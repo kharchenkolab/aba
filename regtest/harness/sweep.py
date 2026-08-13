@@ -137,6 +137,26 @@ def check_eval_home() -> list[str]:
     return problems
 
 
+def _substrate_mod():
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import substrate
+    return substrate
+
+
+def check_substrate() -> list[str]:
+    """Is the substrate this sweep will measure UNIQUELY identified?
+
+    Sibling of check_eval_home, and the same argument: refuse a run whose
+    result could not be attributed. A verdict is about the aba tree PAIRED
+    WITH a weft substrate, and only the first half was ever recorded. When two
+    different weft copies are importable, which one answers is decided by
+    interpreter flags — so the same tree measured twice, once under
+    PYTHONNOUSERSITE, gives two verdicts and neither names its substrate.
+    That is not hypothetical: on 2026-08-13 a four-week-old shadowed copy
+    produced three false failures and one wrong diagnosis. See substrate.py."""
+    return _substrate_mod().check_substrate()
+
+
 def preflight_fixtures(scenarios) -> dict:
     """Predict the runner's seed-staging guard STATICALLY, in milliseconds.
 
@@ -460,7 +480,10 @@ def write_report(scorecard, base, regressions, mode, ts, unmeasured=()):
     (REPORTS / f"{mode}-{ts}.json").write_text(json.dumps(scorecard, indent=2))
     lines = [f"# regtest sweep — {mode} — {ts}", "",
              f"commit `{scorecard['meta']['commit']}` · {scorecard['meta']['n_scenarios']} scenarios · "
-             f"agent `{scorecard['meta']['agent_model']}`", ""]
+             f"agent `{scorecard['meta']['agent_model']}`", "",
+             f"substrate `{scorecard['meta'].get('substrate', 'unrecorded')}`"
+             + ("  ⚠ **AMBIGUOUS — rows below are unattributable**"
+                if scorecard['meta'].get('substrate_ambiguous') else ""), ""]
     _mb = _model_truth_banner(scorecard)
     if _mb:
         lines += [f"> {_mb}", ""]
@@ -517,6 +540,10 @@ def main() -> int:
                     help="with --accept, allow a row to LOWER its baseline "
                          "(default ratchets: the higher prior reference is kept, "
                          "so the bar never drifts down by accident)")
+    ap.add_argument("--allow-ambiguous-substrate", action="store_true",
+                    help="run even when two different weft copies are "
+                         "importable (pre-flight normally refuses — no row "
+                         "could be attributed to a substrate)")
     ap.add_argument("--allow-unprovisioned", action="store_true",
                     help="run even if the eval home looks unprovisioned "
                          "(pre-flight normally refuses — the scorecard would be "
@@ -556,6 +583,26 @@ def main() -> int:
               "scorecard would read as a product collapse. Provision the home "
               "(or pass --allow-unprovisioned if you truly mean it).")
         return 2
+
+    # The other half of the pairing. Always STAMPED (so any verdict can be
+    # attributed later); REFUSED only when it is ambiguous.
+    _sub = _substrate_mod()
+    substrate_stamp = _sub.stamp()
+    print(f"[sweep] substrate: {substrate_stamp}", flush=True)
+    substrate_problems = _sub.check_substrate()
+    if substrate_problems and not args.allow_ambiguous_substrate:
+        print("[sweep] SETUP-ERROR: the substrate under test is not uniquely "
+              "identified —")
+        for p in substrate_problems:
+            print(f"          · {p}")
+        print("        A red row would not distinguish 'the product regressed' "
+              "from 'you measured a stale substrate', and a green one would not "
+              "say what passed. Resolve the duplicate (or pass "
+              "--allow-ambiguous-substrate to record the ambiguity and proceed).")
+        return 2
+    if substrate_problems:
+        print("[sweep] ⚠ proceeding with an AMBIGUOUS substrate on request — "
+              "every row below is unattributable.", flush=True)
 
     pf = preflight_fixtures(scenarios)
     fixture_gaps = pf["gaps"]
@@ -629,6 +676,12 @@ def main() -> int:
                  "agent_model": _observed_model(rows) or "unknown",
                  "agent_model_assumed": ("claude-opus-4-8" if mode == "opus"
                                          else "claude-haiku-4-5"),
+                 # The other half of the pairing this scorecard is about. A
+                 # baseline diff across weeks or machines compares two aba
+                 # commits AND two substrates; without this the second
+                 # difference is invisible and reads as a product regression.
+                 "substrate": substrate_stamp,
+                 "substrate_ambiguous": bool(substrate_problems),
                  "n_scenarios": len(scenarios)},
         "scenarios": rows,
         "totals": {"mech_pass": sum((r["mech_pass"] or 0) for r in rows.values()),
