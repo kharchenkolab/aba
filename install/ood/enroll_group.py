@@ -1,22 +1,40 @@
 #!/usr/bin/env python3
-"""enroll-group — enroll a lab GROUP in ABA (admin action; the pilot gate).
+"""enroll-group — enroll a lab GROUP in ABA (the pilot gate).
 
 Usage:
-  enroll_group.py <group> [--site PATH]
+  enroll_group.py <group> [--site PATH] [--yes] [--dry-run] [--validate-only]
         [--api-key sk-ant-api… | --oauth-token sk-ant-oat… | --cred-file FILE]
         [--by NAME]
 
+WHO RUNS THIS: one person per lab, once, and quite possibly someone who has
+never used a terminal before. That audience is the whole design brief:
+
+  * Nothing is created until the operator has SEEN what will happen and agreed.
+    The plan is resolved and checked first, printed in full, then confirmed.
+  * Every refusal is a plain sentence plus a next step — never a traceback.
+    A Python stack trace tells this operator nothing and reads as breakage.
+  * The checks that matter run BEFORE any mutation, not after. A mistyped group
+    name used to create /groups/<typo>/aba and then print "✓ enrolled", so the
+    lab silently never appeared; the unix group is now verified up front and a
+    typo refuses without touching the disk.
+  * What was done is verified independently afterwards, by re-reading the disk
+    and asking the question the LAUNCH FORM asks — not by trusting the writes
+    that just happened.
+
 Reads the SAME site.yaml that aba-preflight + the launch form read, then:
-  1. creates /groups/<group>/aba from the skeleton (drops the .aba-workspace
-     stamp) — the signal that makes the group appear on the form and pass
-     preflight. Idempotent; REFUSES a foreign same-named folder.
-  2. records the enrollment (date / by / credential mode) in .aba-workspace.
+  1. creates <root_path> from the skeleton (drops the .aba-workspace stamp) —
+     the signal that makes the group appear on the form and pass preflight.
+     Idempotent; REFUSES a foreign same-named folder.
+  2. records the enrollment (date / by / credential mode) in .aba-workspace,
+     PRESERVING the original enrolment date when re-run to rotate a credential.
   3. (optional) writes the lab-shared credential at credentials.group_key_path
      (mode 0600) — an Anthropic API key, an OAuth token, or a ready cred file.
-  4. makes the workspace group-owned + setgid (best-effort), so the lab shares it.
+  4. makes the workspace group-owned + setgid, so the lab shares it.
+  5. validates the result and says plainly whether the lab is now enrolled.
 
-After this the group is enrolled. Leave the credential out to have each user
-paste one on the launch form.
+Exit codes:  0 = done (or dry-run/validation OK)
+             2 = refused before changing anything
+             3 = changes were made but validation failed
 """
 import argparse
 import datetime
@@ -31,94 +49,422 @@ from pathlib import Path
 try:
     import yaml
 except ImportError:
-    sys.exit("enroll-group: PyYAML required")
+    sys.exit("enroll-group: this needs the PyYAML package, which appears to be "
+             "missing.\nWhat to do: ask your cluster admin for a python3 with "
+             "PyYAML, or run this on the login node where it is installed.")
 
 OURS_MARKERS = (".aba-workspace", ".bundle", ".envs")   # == aba_preflight.OURS_MARKERS
 
+# Credential kinds we know how to write, and the prefix each one really has.
+# The prefix is CHECKED, not assumed: an `sk-ant-api…` handed to --oauth-token
+# used to be written as claude_code_oauth_token without complaint, and a
+# credential in the wrong slot resolves to a weaker auth mode — the lab quietly
+# loses the model tier it thought it was getting. Wrong slot is a refusal.
+CRED_KINDS = {
+    "oauth-token": {"json_key": "claude_code_oauth_token", "prefix": "sk-ant-oat"},
+    "api-key":     {"json_key": "anthropic_api_key",       "prefix": "sk-ant-api"},
+}
 
-def main(argv=None):
-    ap = argparse.ArgumentParser(prog="enroll-group", description="Enroll a lab group in ABA.")
-    ap.add_argument("group", help="the lab's unix group name")
-    ap.add_argument("--site", default=os.environ.get("ABA_SITE_CONFIG", "/cluster/aba/site.yaml"),
-                    help="site.yaml (default: $ABA_SITE_CONFIG or /cluster/aba/site.yaml)")
-    ap.add_argument("--by", default=getpass.getuser(), help="who is enrolling (for the record)")
-    c = ap.add_mutually_exclusive_group()
-    c.add_argument("--api-key", help="Anthropic API key (sk-ant-api…) — lab-shared")
-    c.add_argument("--oauth-token", help="Claude OAuth token (sk-ant-oat…) — lab-shared")
-    c.add_argument("--cred-file", help="path to a ready credentials.json to install")
-    a = ap.parse_args(argv)
 
-    site = yaml.safe_load(Path(a.site).read_text()) or {}
+class Refusal(Exception):
+    """A problem the operator can act on. Carries the fix, not just the fault.
+
+    Everything raised at the operator is this: the message is two lines, what
+    is wrong and what to do about it. A bare exception type reaching the
+    terminal is a bug in this script, not information for the reader."""
+
+    def __init__(self, what, fix):
+        super().__init__(what)
+        self.what = what
+        self.fix = fix
+
+
+class Plan:
+    """Everything resolved and checked, before anything is written.
+
+    Building this object must not touch the disk beyond reading. It exists so
+    the operator can be shown exactly what will happen — the same values that
+    the apply step will then use, rather than a prose approximation of them."""
+
+    def __init__(self, group, group_dir, root, skeleton, cred_kind, cred_path,
+                 cred_data, site_path, by):
+        self.group = group              # unix group name, e.g. tanaka.grp
+        self.group_dir = group_dir      # on-disk folder name, e.g. tanaka
+        self.root = root                # the ABA workspace path
+        self.skeleton = skeleton
+        self.cred_kind = cred_kind      # None | "oauth-token" | "api-key" | "file"
+        self.cred_path = cred_path
+        self.cred_data = cred_data      # already-validated JSON text, or None
+        self.site_path = site_path
+        self.by = by
+        self.already = False            # workspace already exists and is ours
+
+
+def _read_site(path):
+    p = Path(path)
+    if not p.exists():
+        raise Refusal(
+            f"I could not find the ABA site configuration at {p}.",
+            "Check the path, or pass --site /path/to/site.yaml. Your cluster "
+            "admin can tell you where ABA is installed.")
+    try:
+        return yaml.safe_load(p.read_text()) or {}
+    except yaml.YAMLError as e:
+        raise Refusal(f"The site configuration at {p} is not valid YAML ({e.__class__.__name__}).",
+                      "Ask your cluster admin to check that file — this is not "
+                      "something you can fix from here.")
+    except OSError as e:
+        raise Refusal(f"I could not read {p}: {e.strerror}.",
+                      "Check that you have permission to read it, then try again.")
+
+
+def _check_group_exists(group):
+    """The check that has to happen FIRST.
+
+    A mistyped group name is the single most likely operator error, and it used
+    to be discovered only at the very end (as a printed note, after the folder
+    had been created and '✓ enrolled' promised). Verified here, a typo costs
+    nothing and explains itself."""
+    try:
+        return grp.getgrnam(group)
+    except KeyError:
+        raise Refusal(
+            f"There is no unix group called {group!r} on this cluster.",
+            "Check the spelling. To see the groups you belong to, run:  groups")
+
+
+def _validated_credential(a):
+    """Return (kind, json_text) for the credential flags, or (None, None).
+
+    Refuses a credential in the wrong slot and a --cred-file that is not the
+    JSON this script writes; a 0600 file full of the wrong thing fails later,
+    at a user's first launch, where nobody can connect it back to enrolment."""
+    if a.cred_file:
+        p = Path(a.cred_file)
+        if not p.exists():
+            raise Refusal(f"I could not find the credential file {p}.",
+                          "Check the path and try again.")
+        try:
+            text = p.read_text()
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            raise Refusal(f"The credential file {p} is not valid JSON.",
+                          'It should contain one line like: '
+                          '{"claude_code_oauth_token": "sk-ant-oat01-…"}')
+        except OSError as e:
+            raise Refusal(f"I could not read {p}: {e.strerror}.",
+                          "Check that you have permission to read it.")
+        if not isinstance(parsed, dict):
+            raise Refusal(f"The credential file {p} must contain a JSON object.",
+                          'For example: {"claude_code_oauth_token": "sk-ant-oat01-…"}')
+        known = {k["json_key"] for k in CRED_KINDS.values()}
+        if not (set(parsed) & known):
+            raise Refusal(
+                f"The credential file {p} has none of the keys ABA understands "
+                f"({', '.join(sorted(known))}).",
+                'Rewrite it as: {"claude_code_oauth_token": "sk-ant-oat01-…"}')
+        return "file", text
+
+    for flag, spec in CRED_KINDS.items():
+        value = getattr(a, flag.replace("-", "_"))
+        if not value:
+            continue
+        if not value.startswith(spec["prefix"]):
+            other = next((k for k, s in CRED_KINDS.items()
+                          if value.startswith(s["prefix"])), None)
+            hint = (f"That value looks like a {other} — pass it as --{other} instead."
+                    if other else
+                    f"A {flag} should start with {spec['prefix']}…")
+            raise Refusal(f"The value given to --{flag} does not look like a {flag}.", hint)
+        return flag, json.dumps({spec["json_key"]: value}) + "\n"
+
+    return None, None
+
+
+def build_plan(a):
+    """Resolve + check everything. Raises Refusal; never writes."""
+    site = _read_site(a.site)
     gcfg = (site.get("scopes") or {}).get("group") or {}
-    # On-disk FOLDER name vs the unix GROUP name: some sites suffix the unix group name
-    # while the shared folder omits it, so strip a site-declared suffix. {group_dir} = the
-    # folder; {group} stays the unix name for ownership (step 4). No-op when unset/absent.
+
+    # On-disk FOLDER name vs the unix GROUP name: some sites suffix the unix
+    # group while the shared folder omits it. {group_dir} = folder, {group} =
+    # unix name (used for ownership). No-op when strip_suffix is unset.
     strip = str(gcfg.get("strip_suffix") or "")
     group_dir = a.group[:-len(strip)] if (strip and a.group.endswith(strip)) else a.group
 
     def _ex(s):
         return s.replace("{group_dir}", group_dir).replace("{group}", a.group)
 
-    group_root = Path(_ex(gcfg.get("root_path") or "/groups/{group}/aba"))
-    tmpl = gcfg.get("skeleton_template")
+    root = Path(_ex(gcfg.get("root_path") or "/groups/{group}/aba"))
+    skeleton = gcfg.get("skeleton_template")
+    cred_kind, cred_data = _validated_credential(a)
 
-    # 1) workspace
-    if group_root.exists() and any((group_root / m).exists() for m in OURS_MARKERS):
-        print(f"already enrolled: {group_root}")
-    elif group_root.exists() and any(group_root.iterdir()):
-        sys.exit(f"REFUSING: {group_root} exists and is NOT an ABA workspace "
-                 f"(no {'/'.join(OURS_MARKERS)} marker). Move it aside, then re-run.")
-    else:
-        group_root.mkdir(parents=True, exist_ok=True)
-        if tmpl and Path(tmpl).is_dir():
-            shutil.copytree(tmpl, group_root, dirs_exist_ok=True)
-        else:
-            (group_root / ".aba-workspace").touch()
-        print(f"created ABA workspace: {group_root}")
-
-    # 2) enrollment record (the .aba-workspace stamp doubles as a record)
-    cred_mode = ("api-key" if a.api_key else "oauth" if a.oauth_token
-                 else "file" if a.cred_file else "none (per-user form paste)")
-    (group_root / ".aba-workspace").write_text(
-        "# This folder is an ABA workspace (marker read by aba-preflight).\n"
-        f"enrolled_at: {datetime.datetime.now().isoformat(timespec='seconds')}\n"
-        f"enrolled_by: {a.by}\n"
-        f"credential: {cred_mode}\n")
-
-    # 3) lab-shared credential (optional, 0600)
-    if a.api_key or a.oauth_token or a.cred_file:
+    cred_path = None
+    if cred_kind:
         gkey = (site.get("credentials") or {}).get("group_key_path")
         if not gkey:
-            sys.exit("credentials.group_key_path not set in site.yaml — cannot place a lab key.")
-        gkey_path = Path(_ex(gkey))
-        gkey_path.parent.mkdir(parents=True, exist_ok=True)
-        if a.cred_file:
-            data = Path(a.cred_file).read_text()
-        elif a.api_key:
-            data = json.dumps({"anthropic_api_key": a.api_key}) + "\n"
+            raise Refusal(
+                "This ABA installation has no place configured for a lab-shared "
+                "credential (credentials.group_key_path is not set).",
+                "Re-run without the credential option to enrol the group anyway "
+                "— each user can then connect their own subscription in "
+                "Settings → Agent. Or ask your admin to set that key.")
+        cred_path = Path(_ex(gkey))
+
+    plan = Plan(a.group, group_dir, root, skeleton, cred_kind, cred_path,
+                cred_data, a.site, a.by)
+
+    _check_group_exists(a.group)          # FIRST, and fatal
+
+    # Target state: ours (re-run), foreign (refuse), or new (needs a writable parent).
+    if root.exists() and any((root / m).exists() for m in OURS_MARKERS):
+        plan.already = True
+    elif root.exists() and any(root.iterdir()):
+        raise Refusal(
+            f"{root} already exists and is not an ABA workspace.",
+            "Something else is using that folder. Move it aside (or ask your "
+            "admin to), then run this again.")
+    else:
+        parent = root.parent
+        if not parent.exists():
+            raise Refusal(
+                f"The folder {parent} does not exist, so I cannot create {root}.",
+                "This usually means the lab has no shared directory yet. Ask "
+                "your cluster admin to create it.")
+        if not os.access(parent, os.W_OK):
+            raise Refusal(
+                f"You do not have permission to create {root}.",
+                f"Ask someone who can write to {parent} to run this command, or "
+                "ask your cluster admin for access.")
+
+    if skeleton and not Path(skeleton).is_dir():
+        raise Refusal(
+            f"The ABA starter template is missing: {skeleton}.",
+            "This is an installation problem, not something you did. Please "
+            "send this message to your ABA admin.")
+
+    return plan
+
+
+def render_plan(plan):
+    """What the operator sees before saying yes. Resolved values only."""
+    L = [""]
+    L.append(f"  Lab group        {plan.group}   (unix group; exists ✓)")
+    if plan.group_dir != plan.group:
+        L.append(f"  Lab folder name  {plan.group_dir}")
+    L.append(f"  ABA workspace    {plan.root}")
+    L.append("                   " + ("already set up — will be left in place, "
+                                       "not overwritten" if plan.already
+                                       else "will be CREATED now"))
+    if plan.cred_kind:
+        L.append(f"  Shared login     a {plan.cred_kind} for the whole lab")
+        L.append(f"                   will be written to {plan.cred_path}")
+        L.append("                   (readable only by you and the lab; not shown on screen)")
+    else:
+        L.append("  Shared login     none — each person connects their own in "
+                 "Settings → Agent")
+    L.append(f"  Owned by group   {plan.group}, shared (setgid)")
+    L.append(f"  Using settings   {plan.site_path}")
+    L.append("")
+    return "\n".join(L)
+
+
+def confirm(assume_yes):
+    """Ask. Refuse rather than guess when nobody can answer."""
+    if assume_yes:
+        return True
+    if not sys.stdin.isatty():
+        raise Refusal(
+            "I need someone to confirm this, but there is nobody at the keyboard.",
+            "Run this again with --yes if you are sure, or run it in a normal "
+            "terminal where you can answer.")
+    try:
+        answer = input("Go ahead and do this? [y/N] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+    return answer in ("y", "yes")
+
+
+def apply_plan(plan):
+    """Do it. Anything that goes wrong here is reported honestly."""
+    if plan.already:
+        print(f"· workspace already present: {plan.root}")
+    else:
+        plan.root.mkdir(parents=True, exist_ok=True)
+        if plan.skeleton:
+            shutil.copytree(plan.skeleton, plan.root, dirs_exist_ok=True)
         else:
-            data = json.dumps({"claude_code_oauth_token": a.oauth_token}) + "\n"
+            (plan.root / ".aba-workspace").touch()
+        print(f"· created workspace: {plan.root}")
+
+    # Enrolment record. Re-running to rotate a credential must NOT rewrite the
+    # original enrolment date — that is the one fact this file exists to keep.
+    stamp = plan.root / ".aba-workspace"
+    first_at, first_by = None, None
+    if stamp.exists():
+        for line in stamp.read_text().splitlines():
+            if line.startswith("enrolled_at:") and first_at is None:
+                first_at = line.split(":", 1)[1].strip()
+            elif line.startswith("enrolled_by:") and first_by is None:
+                first_by = line.split(":", 1)[1].strip()
+    now = datetime.datetime.now().isoformat(timespec="seconds")
+    cred_mode = plan.cred_kind or "none (each user connects their own)"
+    body = ["# This folder is an ABA workspace (marker read by aba-preflight).",
+            f"enrolled_at: {first_at or now}",
+            f"enrolled_by: {first_by or plan.by}",
+            f"credential: {cred_mode}"]
+    if first_at:                                    # a re-run: record it as such
+        body.append(f"updated_at: {now}")
+        body.append(f"updated_by: {plan.by}")
+    stamp.write_text("\n".join(body) + "\n")
+    print(f"· recorded enrolment in {stamp.name}")
+
+    if plan.cred_kind:
+        plan.cred_path.parent.mkdir(parents=True, exist_ok=True)
         old = os.umask(0o077)
         try:
-            gkey_path.write_text(data)
+            plan.cred_path.write_text(plan.cred_data)
         finally:
             os.umask(old)
-        os.chmod(gkey_path, 0o600)
-        print(f"wrote lab credential: {gkey_path} (0600, {cred_mode})")
+        os.chmod(plan.cred_path, 0o600)
+        print(f"· wrote the lab's shared login to {plan.cred_path}")
 
-    # 4) group ownership + setgid (best-effort, like aba-preflight)
+    gid = grp.getgrnam(plan.group).gr_gid        # existence proven in preflight
     try:
-        gid = grp.getgrnam(a.group).gr_gid
-        try:
-            os.chown(group_root, -1, gid)
-        except PermissionError:
-            print(f"note: not permitted to chgrp {group_root} → {a.group} (not a member?)")
-        os.chmod(group_root, 0o2775)
-    except KeyError:
-        print(f"note: unix group {a.group!r} not found — left ownership as-is")
+        os.chown(plan.root, -1, gid)
+        os.chmod(plan.root, 0o2775)
+        print(f"· shared the workspace with the {plan.group} group")
+    except PermissionError:
+        # Not fatal, but NOT a success either — validation decides.
+        print(f"· note: could not hand {plan.root} to the {plan.group} group "
+              f"(you may not be a member)")
 
-    print(f"✓ enrolled '{a.group}' — it now appears on the launch form and passes preflight.")
+
+def validate(plan):
+    """Re-read from disk and ask the question the LAUNCH FORM asks.
+
+    Deliberately independent of what apply_plan believes it wrote: the point is
+    to catch the case where the writes 'succeeded' and the lab still will not
+    appear. Returns a list of problems; empty means enrolled for real."""
+    problems = []
+    if not plan.root.is_dir():
+        return [f"{plan.root} does not exist."]
+
+    # (a) the form's own predicate: at least one marker, and readable.
+    if not any((plan.root / m).exists() for m in OURS_MARKERS):
+        problems.append(
+            f"{plan.root} has none of the markers ABA looks for "
+            f"({', '.join(OURS_MARKERS)}) — the lab will not appear on the form.")
+    if not os.access(plan.root, os.R_OK | os.X_OK):
+        problems.append(f"{plan.root} is not readable, so ABA cannot see it.")
+
+    # (b) shared with the lab: ownership + setgid, or members cannot collaborate.
+    try:
+        st = plan.root.stat()
+        want = grp.getgrnam(plan.group).gr_gid
+        if st.st_gid != want:
+            problems.append(
+                f"{plan.root} is not owned by the {plan.group} group, so other "
+                f"lab members will not be able to use it.")
+        if not st.st_mode & 0o2000:
+            problems.append(
+                f"{plan.root} is missing the setgid bit, so files created by one "
+                f"member will not be shared with the rest of the lab.")
+    except (KeyError, OSError) as e:
+        problems.append(f"could not check ownership of {plan.root}: {e}")
+
+    # (c) the credential, if one was placed: parses, has a known key, is private.
+    if plan.cred_kind:
+        if not plan.cred_path.exists():
+            problems.append(f"the shared login file {plan.cred_path} is missing.")
+        else:
+            try:
+                parsed = json.loads(plan.cred_path.read_text())
+                known = {k["json_key"] for k in CRED_KINDS.values()}
+                if not (set(parsed) & known):
+                    problems.append(
+                        f"{plan.cred_path} does not contain a login ABA understands.")
+            except (json.JSONDecodeError, OSError):
+                problems.append(f"{plan.cred_path} could not be read back as JSON.")
+            if plan.cred_path.exists() and (plan.cred_path.stat().st_mode & 0o077):
+                problems.append(
+                    f"{plan.cred_path} is readable by others — it must be private.")
+    return problems
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(
+        prog="enroll-group", description="Enrol a lab group in ABA.")
+    ap.add_argument("group", help="the lab's unix group name")
+    ap.add_argument("--site", default=os.environ.get("ABA_SITE_CONFIG",
+                                                     "/cluster/aba/site.yaml"),
+                    help="site.yaml (default: $ABA_SITE_CONFIG)")
+    ap.add_argument("--by", default=getpass.getuser(), help="who is enrolling (for the record)")
+    ap.add_argument("--yes", action="store_true", help="skip the confirmation question")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="show what would happen and stop, changing nothing")
+    ap.add_argument("--validate-only", action="store_true",
+                    help="check an existing enrolment; change nothing")
+    ap.add_argument("--debug", action="store_true",
+                    help="show the full Python error if something breaks")
+    c = ap.add_mutually_exclusive_group()
+    c.add_argument("--api-key", help="Anthropic API key (sk-ant-api…) — lab-shared")
+    c.add_argument("--oauth-token", help="Claude OAuth token (sk-ant-oat…) — lab-shared")
+    c.add_argument("--cred-file", help="path to a ready credentials.json to install")
+    a = ap.parse_args(argv)
+
+    try:
+        plan = build_plan(a)
+
+        if a.validate_only:
+            problems = validate(plan)
+            if problems:
+                print(f"✗ {plan.group} is NOT correctly enrolled:")
+                for p in problems:
+                    print(f"    · {p}")
+                return 3
+            print(f"✓ {plan.group} is enrolled and looks correct.")
+            return 0
+
+        print("\nHere is what I found, and what I am about to do:")
+        print(render_plan(plan))
+        if a.dry_run:
+            print("Nothing was changed (--dry-run).")
+            return 0
+        if not confirm(a.yes):
+            print("Stopped. Nothing was changed.")
+            return 0
+
+        print()
+        apply_plan(plan)
+
+        problems = validate(plan)
+        if problems:
+            print(f"\n✗ Something is not right — {plan.group} may not work yet:")
+            for p in problems:
+                print(f"    · {p}")
+            print("\nWhat to do: send the lines above to your ABA admin.")
+            return 3
+        print(f"\n✓ Done. '{plan.group}' is enrolled — it will now appear on the "
+              f"ABA launch form for members of that group.")
+        return 0
+
+    except Refusal as r:
+        print(f"\nProblem: {r.what}\nWhat to do: {r.fix}\n", file=sys.stderr)
+        return 2
+    except KeyboardInterrupt:
+        print("\nStopped. Nothing was changed.", file=sys.stderr)
+        return 2
+    except Exception as e:                       # never show a traceback
+        if a.debug:
+            raise
+        print(f"\nProblem: something went wrong that I did not expect "
+              f"({e.__class__.__name__}: {e}).\n"
+              f"What to do: send this message to your ABA admin. Re-running with "
+              f"--debug will show the full technical details.\n", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
