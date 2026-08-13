@@ -346,19 +346,22 @@ the install-time probe can't run.
   intended home is per-**site** weft config, so that one controller could dispatch CUDA work to a
   GPU site and CPU work elsewhere from a single base description. That migration is not built —
   the CPU/CUDA choice is still a per-deployment base variant.
-- **On a weft deployment the toggle no longer reaches the science env.** `ABA_ACCELERATOR` and
-  `inject-accelerator.sh` act on `install/core/environment.yml`, which is now the **controller**
-  runtime; user science runs in the `python-bio` weft pack, whose EnvSpec carries no accelerator
-  variant. A deployment that sets `ABA_ACCELERATOR=cuda` therefore builds a CUDA controller and
-  still runs **CPU torch under jobs** — the scVI-on-CPU failure with a new cause. Closing it
-  means expressing the accelerator in the pack (a `linux-64` variant + `system_requirements`,
-  per `weft/gpu.py::suggest_gpu_spec`), and deciding whether the pack is published in CPU and
-  CUDA flavours or one flavour per deployment.
-- **The GPU-readiness cue may inspect the wrong env.** `gpu_usable` is true when a GPU is
-  present *and* the base torch is a CUDA build (`torch_cuda_build`). Which interpreter that
-  probe resolves on a weft deployment — controller or adopted pack — has not been confirmed; if
-  it reads the controller, the cue would report GPU-ready while jobs run CPU torch, defeating
-  the warning it exists to give.
+- **GPU jobs on a weft deployment ride the site's declared CUDA pack** (`ABA_ACCELERATOR`
+  never reached the science env there — it patches what is now the controller spec). The
+  mechanism: `scripts/derive_gpu_pack.py` derives a CUDA *flavour* of the base at deploy time
+  (one source spec, so the flavours cannot drift), site.yaml declares it via
+  `jobs.gpu_env_pack` → `ABA_JOBS_GPU_ENV_PACK`, and both submit lanes consult ONE rule
+  (`weft_submitter._gpu_env_for`): a GPU-estimated python job with no explicit `env=` rides
+  the pack's EnvID; everything else — every interactive session, every CPU job, macOS with
+  its default Metal/MPS build — is untouched, and with the key unset the feature is absent,
+  not merely off. A declared-but-missing pack REFUSES the submit (`gpu_env_pack.unknown`)
+  rather than degrading to the CPU-torch snapshot. The `gpu_usable` cue (`gpu_readiness()`)
+  follows the same split: on a pack site it reports the batch lane and never probes the
+  controller's torch. Guards: `tests/test_gpu_env_routing.py`, `tests/test_compute_env.py`.
+  Interim shape of the accelerator-as-site-fact migration above — when weft solves per site,
+  this key and the derived flavour retire together. Remaining limitation, by design: a GPU
+  job runs the SHARED pack, not the project session, so project-level `ensure_capability`
+  installs are not along for the ride — the job spec's `env_source` stamp says so.
 - **A CUDA science pack costs ~5x the disk.** Measured on linux-64, zstd squashfs: the
   `python-bio` pack is **676 MB** compressed / 2.5 GB realized; the same spec with
   `pytorch-gpu` + a `cuda-version` ceiling is **3.4 GB** compressed / **6.5 GB** realized
