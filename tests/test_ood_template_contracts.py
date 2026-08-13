@@ -194,3 +194,38 @@ def test_session_tmpdir_prefers_node_local_and_cleans_fallback():
         "the fallback TMPDIR must be removed by the EXIT-installed handler "
         f"({handler!r}); a separate `trap 'rm -rf' EXIT` gets clobbered by a "
         "later `trap … EXIT` and leaks the per-session dir")
+
+
+def _marker_literals(path: Path, pattern: str) -> set[str]:
+    """The enrollment-marker list a file carries, as a set of literals."""
+    m = re.search(pattern, path.read_text())
+    assert m, f"{path.name} has lost its enrollment-marker list"
+    return set(re.findall(r"""['"](\.[a-z-]+)['"]""", m.group(1)))
+
+
+def test_every_reader_of_the_enrollment_marker_agrees():
+    """"Is this lab enrolled?" is asked in three places, in two languages.
+
+    `aba_preflight.py` gates the launch on it, `enroll_group.py` writes it, and
+    `form.yml.erb` decides whether the lab is even OFFERED on the launch form.
+    The Ruby one cannot import the Python one, so the list is copied — and a
+    copy that drifts fails in the worst direction available: enrolment
+    "succeeds", preflight agrees, and the lab simply never appears on the form,
+    with no error anywhere to explain why.
+
+    Same shape as the instance-ladder pair above: two halves of one contract,
+    each independently valid, verified apart. Compared as SETS — order is not
+    part of the meaning, since every reader asks `any(marker exists)`."""
+    preflight = _marker_literals(OOD / "aba_preflight.py",
+                                 r"OURS_MARKERS\s*=\s*\((.*?)\)")
+    enroll = _marker_literals(OOD / "enroll_group.py",
+                              r"OURS_MARKERS\s*=\s*\((.*?)\)")
+    form = _marker_literals(APP / "form.yml.erb",
+                            r"markers\s*=\s*\[(.*?)\]")
+    assert preflight, "aba_preflight's marker list parsed empty — pattern drift"
+    assert preflight == enroll == form, (
+        "the enrollment-marker lists have diverged; a lab could be enrolled and "
+        "still never appear on the launch form:\n"
+        f"  aba_preflight.py : {sorted(preflight)}\n"
+        f"  enroll_group.py  : {sorted(enroll)}\n"
+        f"  form.yml.erb     : {sorted(form)}")
