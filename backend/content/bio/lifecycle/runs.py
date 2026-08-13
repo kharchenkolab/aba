@@ -1667,15 +1667,74 @@ def _project_output_matches(name: str) -> list:
     return _confirm_output_matches(name, cands)
 
 
+def _output_name_matches(p: str, n: str, base: str) -> bool:
+    """One matching rule for every candidacy source: exact rel, rel-prefix
+    (a member inside a directory store), or bare-basename anywhere."""
+    return bool(p) and (p == n or p.startswith(n + "/")
+                        or p == base or p.startswith(base + "/")
+                        or p.rsplit("/", 1)[-1] == base)
+
+
+def _recorded_keep_rels() -> dict:
+    """`label(=run_id) → {literal keeper rels}` across the project's retain
+    rows — weft's retention index, ONE unfiltered local read (the same truth
+    `run_durable_view` renders from, which is exactly why candidacy must read
+    it too: two doors reading different books was the live 404-vs-retained
+    disagreement). Same state filter and literal-only rule as
+    `_retained_so_far`. Best-effort empty — keeps merely unknown, never a
+    raise."""
+    import json as _json
+    from core.compute import retention
+    out: dict = {}
+    try:
+        for row in (retention.retained() or []):
+            lab = row.get("label")
+            if not lab or row.get("state") not in (
+                    "done", "pinned-pending", "queued", "inflight"):
+                continue
+            try:
+                sel = _json.loads(row.get("selection") or "{}")
+            except Exception:  # noqa: BLE001
+                sel = {}
+            rels = {g for g in (sel.get("include") or [])
+                    if not any(c in g for c in "*?[")}
+            if rels:
+                out.setdefault(lab, set()).update(rels)
+    except Exception:  # noqa: BLE001
+        return {}
+    return out
+
+
+def _row_witnesses_keep(row: dict) -> bool:
+    """Does this index row claim the file was KEPT (retained-tree truth), as
+    opposed to merely seen in a sandbox? Keep/settle-time rows (`source`) and
+    rows whose recorded state is a retention state (`retained`/`pinned-pending`
+    — a backfill that found the file in the retained tree records `retained`)
+    are keep witnesses. A plain backfill that only echoed sandbox presence is
+    not — a complete terminal receipt may out-vote THAT (the paths.md F1
+    stale-sandbox shadow), never a keep."""
+    return (row.get("source") in ("keep", "settle")
+            or (row.get("state") or "") in ("retained", "pinned-pending"))
+
+
 def _output_candidacy(name: str) -> list:
-    """The POSSIBLE owners of output `name`, cheaply — one batched receipt read
-    plus one index read, no per-run round-trips. `[(run_id, row_or_None)]`
-    where a run qualifies when its receipt NAMES the file, its receipt is
-    TRUNCATED (budgeted — absence unproven), it has NO receipt (a kernel
-    records one only at stop; a live kernel is findable only by the live
-    tier), or the address index holds a row for it. A COMPLETE receipt that
-    does not name the file proves absence — terminal truth, newer than any
-    keep-time index row — so that run is out, row or no row.
+    """The POSSIBLE owners of output `name`, cheaply — one batched receipt
+    read, one retention-index read, one address-index read; no per-run
+    round-trips. `[(run_id, row_or_None, certain)]` where a run qualifies when
+
+      * its receipt NAMES the file (sandbox truth),
+      * a recorded KEEP names it — a retention-index selection for the run, or
+        an index row witnessing a keep (`_row_witnesses_keep`),
+      * or absence is UNPROVEN: receipt missing (a kernel writes one only at
+        stop — a live kernel is findable only by the live tier) or truncated.
+
+    A COMPLETE receipt that names nothing proves absence **in the sandbox** —
+    and only there. It excludes the run ONLY when no keep is recorded: a file
+    kept live and deleted before stop is exactly what keeping exists for — the
+    receipt cannot speak to the retained tree, and reading it as project-wide
+    absence made retained outputs 404 by name while the run-keyed durable view
+    listed them (live 2026-08-12). A sandbox-witness-only row still never
+    resurrects a receipt-proven sandbox absence (the F1 shadow).
 
     Candidacy is deliberately a superset of ownership: confirmation
     (`_confirm_output_matches`) prunes it. What it must never be is a subset —
@@ -1701,9 +1760,7 @@ def _output_candidacy(name: str) -> list:
     def _names_it(v: dict) -> bool:
         for f in (v.get("files") or v.get("entries") or []):
             p = (f.get("path") or "") if isinstance(f, dict) else ""
-            if p and (p == n or p.startswith(n + "/")
-                      or p == base or p.startswith(base + "/")
-                      or p.rsplit("/", 1)[-1] == base):
+            if _output_name_matches(p, n, base):
                 return True
         return False
 
@@ -1711,6 +1768,7 @@ def _output_candidacy(name: str) -> list:
     idx: dict = {}
     for r in output_addr.by_name(base):
         idx.setdefault(r.get("run_id"), r)
+    keeps = _recorded_keep_rels()
 
     out: list = []
     for rid, tgts in cands:
@@ -1724,17 +1782,17 @@ def _output_candidacy(name: str) -> list:
             elif v.get("truncated"):
                 absent = True             # budgeted receipt — absence unproven
         row = idx.get(rid)
-        if named:
-            out.append((rid, row, True))      # CERTAIN: the receipt names it
+        kept = any(_output_name_matches(p, n, base) for p in keeps.get(rid, ()))
+        if named or kept or (row is not None and _row_witnesses_keep(row)):
+            out.append((rid, row, True))      # CERTAIN: recorded truth vouches
         elif absent:
-            # Absence merely unproven (missing/truncated receipt): a keep-time
-            # index row is recorded evidence and stands in (certain); no row →
-            # only the live tier can answer (uncertain).
+            # Absence merely unproven (missing/truncated receipt): a recorded
+            # index row stands in (certain); no row → only the live tier can
+            # answer (uncertain).
             out.append((rid, row, row is not None))
-        # else: every receipt is COMPLETE and none names the file — absence is
-        # proven, terminal truth. The run is OUT, index row or no index row: a
-        # row must stand in for the confirm, never resurrect a file the
-        # receipt says was gone by the end (kept live, deleted before stop).
+        # else: every receipt is COMPLETE, none names the file, and nothing
+        # recorded a keep — sandbox absence proven, no keep claim to honor.
+        # The run is OUT (the F1 stale-sandbox shadow stays forbidden).
     return out
 
 

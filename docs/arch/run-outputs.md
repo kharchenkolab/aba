@@ -47,10 +47,16 @@ name→run join reads it O(1). Division of responsibility mirrors weft's own
 data-plane doc: weft indexes container→contents (receipts) and
 identity→location (its location table, refs); ABA owns meaning→address — this
 table. Rows are KNOWLEDGE, not holdings: the serving layers validate bytes on
-use, so a stale row costs an honest launch error, never wrong bytes; a row
-never out-votes a COMPLETE terminal receipt (kept live, deleted before stop);
-`ref`/`sha256` are nullable adapters for weft's trajectory (hash-under
-receipts, Fabric epilogue refs) and ABA never hashes. The name→run search
+use, so a stale row costs an honest launch error, never wrong bytes. A
+COMPLETE terminal receipt proves absence **in the sandbox only**: it out-votes
+a row that merely witnessed sandbox presence (a plain backfill — the
+stale-sandbox shadow stays forbidden), but never a recorded KEEP — candidacy
+reads weft's retention index (one unfiltered local read; the same truth the
+durable view renders from) plus keep/settle-witness rows, so a file kept live
+and deleted before kernel stop stays reachable by name (the durable-view-says-
+retained / name-door-404 disagreement, live 2026-08-12). `ref`/`sha256` are
+nullable adapters for weft's trajectory (hash-under receipts, Fabric epilogue
+refs) and ABA never hashes. The name→run search
 (`_output_candidacy` → `_confirm_output_matches`) is UNCAPPED — membership is
 one batched receipt read; index rows stand in for the ~12 s per-run remote
 confirm; confirmed hits BACKFILL, so old projects index themselves by being

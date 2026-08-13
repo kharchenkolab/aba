@@ -208,15 +208,18 @@ def test_a_row_answers_WITHOUT_any_locate_call(monkeypatch):
     assert m[0][1]["site"] == "siteA" and m[0][1]["target"] == "krn_live"
 
 
-def test_a_row_does_NOT_resurrect_a_receipt_proven_absence(monkeypatch):
-    """The ordering that keeps the index honest: a COMPLETE terminal receipt
-    that does not name the file is newer truth than a keep-time row (kept
-    live, deleted before stop). The row may only stand in for the confirm."""
+def test_a_sandbox_witness_row_does_NOT_resurrect_a_receipt_proven_absence(monkeypatch):
+    """The ordering that keeps the index honest — SCOPED to what a receipt can
+    actually prove: a COMPLETE terminal receipt that does not name the file is
+    newer truth about the SANDBOX, so a row that only witnessed sandbox
+    presence (a backfill from a live locate) may not resurrect it (the
+    paths.md F1 shadow). A row witnessing a KEEP is a different claim — about
+    the retained tree, which the receipt cannot speak to — covered below."""
     R = _matches_fixture(
         monkeypatch,
         receipt={"files": [{"path": "other.txt", "bytes": 1, "mtime": 1}]},
         row={"run_id": "ana_1", "rel": NAME, "site": "siteA",
-             "target": "krn_live"})
+             "target": "krn_live", "source": "backfill", "state": "in-sandbox"})
     monkeypatch.setattr(R, "locate_run_output",
                         lambda *a, **k: (_ for _ in ()).throw(
                             AssertionError("locate on a proven absence")))
@@ -319,6 +322,149 @@ def test_live_kernels_ARE_probed_when_nothing_recorded_answers(monkeypatch):
     m = R._project_output_matches(NAME)
     assert [(r, l["site"]) for r, l in m] == [("ana_2", "siteB")]
     assert sorted(probed) == ["ana_1", "ana_2"]
+
+
+# ── keeps out-vote a receipt about the SANDBOX — never about the keep tree ───
+# The live break (2026-08-12): durable view showed kept.csv retained with a
+# URL; the name door 404'd. Candidacy read receipts + the index only, so a
+# retained file whose jobdir copy was gone at kernel stop — the very shape
+# keeping exists FOR — was excluded as "receipt-proven absent", and the local
+# pass (scoped to candidates) never consulted locate's retained-tree tier.
+# The corrected rule: a complete receipt proves absence IN THE SANDBOX;
+# recorded keeps (retention selections, keep/settle-witness rows) are truth
+# about the retained tree and keep the run a candidate.
+
+import json as _json
+
+
+def _keeps_fixture(monkeypatch, *, receipt, row=None, retained=None):
+    """Like _matches_fixture, with weft's retention index under test control."""
+    from core.compute import retention
+    R = _matches_fixture(monkeypatch, receipt=receipt, row=row)
+    if retained is None:
+        monkeypatch.setattr(retention, "retained", lambda *a, **k: [])
+    elif isinstance(retained, Exception):
+        monkeypatch.setattr(retention, "retained",
+                            lambda *a, **k: (_ for _ in ()).throw(retained))
+    else:
+        monkeypatch.setattr(retention, "retained", lambda *a, **k: retained)
+    return R
+
+
+def _no_locate(R, monkeypatch, msg):
+    monkeypatch.setattr(R, "locate_run_output",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError(msg)))
+
+
+def test_a_keep_row_keeps_the_run_reachable_past_a_complete_receipt(monkeypatch):
+    """A keep-time row (source='keep' — state may honestly be 'live': keeps
+    happen against live kernels) survives a complete receipt that lacks the
+    name, and answers WITHOUT a locate round-trip."""
+    R = _keeps_fixture(
+        monkeypatch,
+        receipt={"files": [{"path": "other.txt", "bytes": 1, "mtime": 1}]},
+        row={"run_id": "ana_1", "rel": NAME, "site": "siteA",
+             "target": "krn_live", "source": "keep", "state": "live"})
+    _no_locate(R, monkeypatch, "keep row should answer without a confirm")
+    m = R._project_output_matches(NAME)
+    assert [(r, l["site"]) for r, l in m] == [("ana_1", "siteA")]
+
+
+def test_a_backfill_row_that_witnessed_the_retained_tree_survives(monkeypatch):
+    """WIDE (the state side of the witness): a backfill row whose locate found
+    the file RETAINED records state='retained' — that is keep-tree truth, not a
+    sandbox echo, so a later complete receipt cannot erase it."""
+    R = _keeps_fixture(
+        monkeypatch,
+        receipt={"files": [{"path": "other.txt", "bytes": 1, "mtime": 1}]},
+        row={"run_id": "ana_1", "rel": NAME, "site": "siteA",
+             "target": "krn_live", "source": "backfill", "state": "retained"})
+    _no_locate(R, monkeypatch, "retained-witness row should answer alone")
+    m = R._project_output_matches(NAME)
+    assert [(r, l["site"]) for r, l in m] == [("ana_1", "siteA")]
+
+
+def test_recorded_retention_keeps_candidacy_with_no_row_at_all(monkeypatch):
+    """The reported live shape: keep predates the index (no row), the terminal
+    receipt lacks the name — but weft's retention index records the keep
+    (selection include, label = run). The run must stay a candidate, and the
+    LOCAL pass must consult it (the retained/keep tree is a local tier).
+    Also WIDE: the keep rel lives under a subdir; the query is the bare name."""
+    R = _keeps_fixture(
+        monkeypatch,
+        receipt={"files": [{"path": "other.txt", "bytes": 1, "mtime": 1}]},
+        retained=[{"label": "ana_1", "state": "done", "target": "krn_live",
+                   "selection": _json.dumps({"include": ["outputs/" + NAME]})}])
+    cands = R._output_candidacy(NAME)
+    assert [(rid, certain) for rid, _row, certain in cands] == [("ana_1", True)]
+    monkeypatch.setattr(R, "locate_run_output",
+                        lambda rid, name, **kw: {
+                            "local_path": "/keep/ana_1/" + NAME, "rel": NAME,
+                            "locality": "local", "site": "local",
+                            "durability": "retained", "size": 42, "kind": "dir"})
+    got = R._locate_project_run_output(NAME)
+    assert got is not None and got[0] == "ana_1" and got[3] is False, \
+        "retained file unreachable by name while the durable view lists it"
+
+
+def test_no_keep_no_row_complete_receipt_stays_excluded(monkeypatch):
+    """CEILING: the F1-shadow protection is retained — with NO recorded keep
+    and no row, a complete receipt that does not name the file still excludes
+    the run (a same-named stray in a non-producing run must not shadow)."""
+    R = _keeps_fixture(
+        monkeypatch,
+        receipt={"files": [{"path": "other.txt", "bytes": 1, "mtime": 1}]})
+    assert R._output_candidacy(NAME) == []
+    _no_locate(R, monkeypatch, "confirm ran for a proven absence")
+    assert R._project_output_matches(NAME) == []
+
+
+def test_retention_read_failure_degrades_without_crashing(monkeypatch):
+    """WIDE (absent input): the retention index unreadable → keeps are simply
+    unknown; candidacy degrades to receipts+rows, never raises."""
+    R = _keeps_fixture(
+        monkeypatch,
+        receipt={"files": [{"path": "other.txt", "bytes": 1, "mtime": 1}]},
+        retained=RuntimeError("substrate offline"))
+    assert R._output_candidacy(NAME) == []
+
+
+def test_receipt_and_keep_agreeing_yield_one_candidate(monkeypatch):
+    """No double-count when both sources vouch: exactly one candidate tuple."""
+    R = _keeps_fixture(
+        monkeypatch,
+        receipt={"files": [{"path": NAME, "bytes": 5, "mtime": 1}]},
+        retained=[{"label": "ana_1", "state": "done", "target": "krn_live",
+                   "selection": _json.dumps({"include": [NAME]})}])
+    cands = R._output_candidacy(NAME)
+    assert len(cands) == 1 and cands[0][0] == "ana_1" and cands[0][2] is True
+
+
+def test_two_keep_backed_runs_are_honest_ambiguity(monkeypatch):
+    """Two runs with recorded keeps for the same bare name: the locate refuses
+    to pick (None) and the surfacing half names both."""
+    from content.bio.lifecycle import runs as R
+    from core.compute import retention
+    from core.graph import output_addr as oa
+    ents = [{"id": "ana_1", "type": "analysis",
+             "metadata": {"weft_targets": ["krn_a"]}},
+            {"id": "ana_2", "type": "analysis",
+             "metadata": {"weft_targets": ["krn_b"]}}]
+    monkeypatch.setattr(R, "list_entities",
+                        lambda type_filter=None, include_archived=False: ents)
+    monkeypatch.setattr(retention, "inventories", lambda tgts: {"inventories": {
+        t: {"files": [{"path": "other.txt", "bytes": 1, "mtime": 1}]}
+        for t in tgts}})
+    monkeypatch.setattr(retention, "retained", lambda *a, **k: [])
+    oa.record([{"run_id": "ana_1", "rel": NAME, "site": "siteA",
+                "target": "krn_a", "source": "keep"},
+               {"run_id": "ana_2", "rel": NAME, "site": "siteB",
+                "target": "krn_b", "source": "keep"}])
+    monkeypatch.setattr(R, "locate_run_output",
+                        lambda rid, name, **kw: None)   # local pass finds nothing
+    assert R._locate_project_run_output(NAME) is None
+    assert sorted(s for _r, s in R.project_run_output_matches(NAME)) == \
+        ["siteA", "siteB"]
 # ── the UI half: index-known files render when the sidecars are gone ─────────
 
 def test_the_durable_view_lists_an_index_known_store(monkeypatch):
