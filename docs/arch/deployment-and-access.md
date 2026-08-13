@@ -205,8 +205,15 @@ image** (a small ~375 MB controller-only SIF); the *only* on-disk envs are the w
 compute stacks, mounted read-only on the node via the site's `ro_roots` (the deployment's
 published env tree — `ABA_WEFT_PUBLISH_TREE` / `site.yaml` `envs.publish_tree`; consumers
 `env_adopt` by name, no solve — the adapter injects the tree into every site's `ro_roots` at
-registration). There is no separate controller-env-on-FS or content-addressed `components/`
-tier here (that machinery belongs to the legacy slim model — see `misc/slim_sif_deploy.md`).
+registration). There is no separate controller-env-on-FS here — no `env` component, which is
+why the launcher leaves `ABA_BASE_DIR` unset and offloaded jobs re-enter the image. The
+content-addressed `components/` tier itself does still apply: a weft release is
+`releases/<ver>/sif -> ../../components/sif/<cid>`, so two releases built from the same image
+share one copy of its bytes. `<cid>` must be derived from the artifact's CONTENT —
+`stage_release` refuses a single-file component whose id already names different bytes
+(`core/release.py`), because `ensure_component` reuses an existing id without looking and a
+non-content id therefore serves the previous build under a new release name. The multi-tier
+`{sif,env,opt}` composition belongs to the legacy slim model — see `misc/slim_sif_deploy.md`.
 
 **`site.yaml` is not release-specific.** It points at the release *root* (`app/`); the
 `current` symlink inside does per-release selection at launch. It changes only when the
