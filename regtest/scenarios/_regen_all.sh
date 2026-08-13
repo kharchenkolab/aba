@@ -58,9 +58,28 @@ run() {  # try the scenario venv, fall back to the runtime venv (scanpy etc.)
 # (e.g. mystery.fasta written, blast_hits.tsv not); the old non-empty check skipped it,
 # so the scenario ran against missing inputs and every step failed (blast_seq: 0/9).
 _data_complete() {  # $1 = scenario dir
-  local dir="$1" f files
+  local dir="$1" f files rc
   [ -d "$dir/data" ] || return 1
-  files=$(awk '/^data_files:/{f=1;next} f&&/^-[[:space:]]/{sub(/^-[[:space:]]*/,"");print} f&&/^[^[:space:]-]/{f=0}' "$dir/scenario.yaml" 2>/dev/null)
+  # ONE reader of `data_files:` — the same parser the sweep's pre-flight uses.
+  # Parsing it here too got it wrong twice: an awk `sub()` mutated the record
+  # the terminator rule then matched, so only the FIRST entry was ever checked;
+  # and flow style (`data_files: [x.csv]`) was invisible, silently falling back
+  # to "data/ is non-empty". Both made an incomplete data/ read as complete, so
+  # regen skipped it forever and the sweep hit SETUP-ERROR (variant_annotation,
+  # 2 of 4 inputs absent). Exit 2 = the helper could not tell (no PyYAML) →
+  # fall through to the shell reader below rather than guess.
+  "$SV" "$REPO/regtest/harness/fixtures.py" --complete "$dir" 2>/dev/null
+  rc=$?
+  [ "$rc" = 0 ] && return 0
+  [ "$rc" = 1 ] && return 1
+  # NB the `next` after print. Without it awk falls through to the terminator
+  # rule, which is evaluated against the record `sub()` JUST MUTATED — the
+  # leading "- " is gone, so "b.txt" matches ^[^[:space:]-] and clears the flag.
+  # Only the FIRST declared file was ever collected, so a data/ holding entry 1
+  # of 4 read as complete and regen skipped it forever; variant_annotation then
+  # died at SETUP-ERROR with 2 of 4 inputs absent. tests/test_regen_completeness.py
+  # pins this against the python parser that reads the same declaration.
+  files=$(awk '/^data_files:/{f=1;next} f&&/^-[[:space:]]/{sub(/^-[[:space:]]*/,"");print;next} f&&/^[^[:space:]-]/{f=0}' "$dir/scenario.yaml" 2>/dev/null)
   # no declared list → fall back to the old "non-empty" test
   [ -z "$files" ] && { [ -n "$(ls -A "$dir/data" 2>/dev/null)" ]; return $?; }
   while IFS= read -r f; do
@@ -79,7 +98,15 @@ for g in "$HERE"/*/_make_data.py; do
   if [ -z "$FORCE" ] && _data_complete "$d"; then
     echo "[$n] skip (data present)"; skip=$((skip+1)); continue
   fi
-  echo -n "[$n] "; if run "$d"; then echo ok; ok=$((ok+1)); else echo FAIL; fail=$((fail+1)); failed="$failed $n"; fi
+  # "ran without error" is not "produced what it declares". variant_annotation's
+  # generator exited 0 while writing only 2 of its 4 declared inputs (the other
+  # two came from a sibling fetch script nothing called), so regen reported `ok`
+  # for a scenario the sweep could not run. Re-check completeness AFTER running.
+  echo -n "[$n] "
+  if run "$d"; then
+    if _data_complete "$d"; then echo ok; ok=$((ok+1))
+    else echo "FAIL (ran, but declared inputs still missing)"; fail=$((fail+1)); failed="$failed $n"; fi
+  else echo FAIL; fail=$((fail+1)); failed="$failed $n"; fi
 done
 echo "=== regen: $ok ok, $skip cached-skip, $fail failed${failed:+ ($failed)} ==="
 [ "$fail" = 0 ]

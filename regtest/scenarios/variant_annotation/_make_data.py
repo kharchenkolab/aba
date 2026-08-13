@@ -112,7 +112,28 @@ def main() -> None:
     print(f"wrote {OUT}  variants={n}  (curated tiers: HIGH={n_high} MODERATE={n_mod} LOW={n_low})")
     print(f"size={OUT.stat().st_size} bytes")
     print(f"wrote {OUT_CORRECTED}  (GRCh37-corrected re-export, same rows)  size={OUT_CORRECTED.stat().st_size} bytes")
-    print("run _fetch_vep.py to (re)generate data/vep_grch38.tsv and data/vep_grch37.tsv")
+    # Fetch the two VEP tables if they are absent. They are DECLARED inputs, so
+    # a data/ without them is an unrunnable scenario — and _regen_all.sh only
+    # ever calls _make_data.py, so leaving the fetch to a sibling script nobody
+    # invokes meant this scenario shipped permanently incomplete (the sweep
+    # reported SETUP-ERROR: 2 declared data_files absent). Every other
+    # network-backed scenario fetches from its own _make_data.py; this one now
+    # matches. Cached: present files are never re-fetched, so a weekly regen
+    # stays offline. Best-effort — no network must not fail the VCF generation.
+    need = [p for p in (OUT.parent / "vep_grch38.tsv", OUT.parent / "vep_grch37.tsv")
+            if not p.exists()]
+    if not need:
+        print("vep tables present — not re-fetching")
+        return
+    import subprocess
+    import sys as _sys
+    fetch = Path(__file__).resolve().parent / "_fetch_vep.py"
+    print(f"fetching {len(need)} missing VEP table(s) via {fetch.name} …")
+    rc = subprocess.run([_sys.executable, str(fetch)]).returncode
+    if rc != 0:
+        print(f"WARNING: _fetch_vep.py exited {rc} — data/ is INCOMPLETE "
+              f"(needs network to rest.ensembl.org); the scenario will "
+              f"SETUP-ERROR until it succeeds")
 
 
 if __name__ == "__main__":
