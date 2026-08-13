@@ -224,3 +224,41 @@ def test_derivation_refuses_to_stack():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+def test_the_advertised_pack_name_opens_the_env_door(monkeypatch):
+    """The handle round-trip (live catch, gpu_job_completion 2026-08-14): the
+    gpu_usable cue names the pack, the agent passed that name as env=, and
+    named_envs refused it as an unknown isolated env — four submit attempts,
+    zero jobs, with advice to CREATE an isolated env. A handle one door emits
+    must open at every door that takes one: env=<the declared pack> resolves
+    to the pack, with or without a gpu estimate."""
+    monkeypatch.setenv(ENVVAR, PACK)
+    monkeypatch.setattr(env_packs, "pack_spec",
+                        lambda n: {"deps": {}} if n == PACK else None)
+    from core.compute import seeding
+    monkeypatch.setattr(seeding, "adopt_env_id",
+                        lambda n: EID if n == PACK else None)
+    assert ws._gpu_env_for({"env": PACK, "estimate": {"gpu": True}}, "python") == EID
+    assert ws._gpu_env_for({"env": PACK}, "python") == EID          # no estimate: still opens
+
+
+def test_the_pack_name_on_an_r_job_stays_with_the_named_lane(monkeypatch):
+    """python-only: run_r with env=<pack> falls through to named_envs, whose
+    refusal is the honest answer (the pack carries no R)."""
+    monkeypatch.setenv(ENVVAR, PACK)
+    monkeypatch.setattr(env_packs, "pack_spec", _boom)
+    assert ws._gpu_env_for({"env": PACK, "estimate": {"gpu": True}}, "r") is None
+
+
+def test_gpu_rule_outranks_named_resolve_in_both_lanes():
+    """Ordering pin: the pack-name door only works if _gpu_env_for is consulted
+    BEFORE named_envs.resolve in each lane — after it, the named lane has
+    already refused. Assert the call order in the source of both lanes."""
+    src = (ROOT / "backend/core/jobs/weft_submitter.py").read_text()
+    # detached lane: _gpu_env_for(...) appears before named_envs.resolve(...)
+    d = src.index("def _detached_env")
+    d_end = src.index("def ", d + 10)
+    body = src[d:d_end]
+    assert body.index("_gpu_env_for") < body.index("named_envs.resolve"), \
+        "_detached_env resolves named envs before the GPU rule — the pack-name door is dead"

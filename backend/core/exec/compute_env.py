@@ -306,9 +306,13 @@ def gpu_readiness() -> tuple[bool, str]:
             ok = env_packs.pack_spec(pack) is not None
         except Exception:  # noqa: BLE001 — bundle unreadable ≠ GPU-ready
             ok = False
+        # Outcome first, mechanism second: the first wording led the live agent
+        # to pass the pack name as env= (now a valid handle, but unnecessary) —
+        # what it must actually do is just submit with its GPU estimate.
         return ok, (
-            f"GPU steps run as background jobs in the site's {pack!r} env "
-            f"(this node itself is CPU — no interactive GPU sessions)"
+            f"GPU steps run as background jobs — submit with the gpu estimate "
+            f"and the site's {pack!r} env is applied automatically, no env= "
+            f"needed (this node itself is CPU — no interactive GPU sessions)"
             if ok else
             f"site declares GPU env pack {pack!r} but the bundle has no such "
             f"pack — GPU jobs will refuse until it is published")

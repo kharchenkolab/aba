@@ -300,10 +300,26 @@ def _gpu_env_for(params: dict, lang: str) -> Optional[str]:
     runs the SHARED CUDA pack, not the project session's snapshot, so packages
     the user installed into the project (`ensure_capability`) are NOT along
     for the ride. The spec stamp (`env_source`) exists so that a missing
-    import in a GPU job reads as this trade, not as a mystery."""
-    if lang != "python" or not (params.get("estimate") or {}).get("gpu"):
+    import in a GPU job reads as this trade, not as a mystery.
+
+    `env=` naming the DECLARED PACK ITSELF also resolves here — a handle one
+    door emits must open at every door that takes one, and the gpu_usable cue
+    names the pack. Live catch (gpu_job_completion, 2026-08-14): the agent
+    read the cue, passed env='python-bio-cuda', and named_envs refused it as
+    an unknown isolated env — with advice to CREATE one. Four submit attempts,
+    zero jobs. Any OTHER explicit env still wins unchanged: a caller who named
+    a project env chose it, and this rule never second-guesses that."""
+    if lang != "python":
         return None
-    if params.get("env"):
+    from core import config as _cfg
+    pack = _cfg.settings.gpu_env_pack.get()
+    if not pack:
+        return None
+    explicit = params.get("env")
+    if explicit:
+        if explicit != pack:
+            return None                 # a project env by name — not ours
+    elif not (params.get("estimate") or {}).get("gpu"):
         return None
     from core.compute import base_env
     return base_env.gpu_pack_env_id()
@@ -410,7 +426,18 @@ class WeftSubmitter:
             from core.compute import base_env, named_envs, project_env
             lang = "r" if kind == "run_r" else "python"
             try:
-                if params.get("env"):
+                # The GPU rule is consulted FIRST — it also owns `env=` naming
+                # the declared pack itself (the cue advertises that name, so
+                # this door must open it; named_envs would refuse it as an
+                # unknown isolated env). env_source stamps the trade: the
+                # shared pack does NOT carry the project's own installs, and a
+                # missing import must read as that.
+                gid = _gpu_env_for(params, lang)
+                if gid:
+                    env_id = gid
+                    from core import config as _cfg
+                    env_source = f"gpu_pack:{_cfg.settings.gpu_env_pack.get()}"
+                elif params.get("env"):
                     row = named_envs.resolve(str(pid), params["env"])
                     if row is None:
                         print(f"[jobs.weft] unknown isolated env {params['env']!r} for "
@@ -419,17 +446,7 @@ class WeftSubmitter:
                         env_id = row["env_id"]
                 else:
                     base_env.require(lang)      # weft-only: no served-base fallback
-                    # GPU-estimated python job on a site that declares a GPU env
-                    # pack → ride the CUDA flavour instead of the project
-                    # snapshot (whose torch is the CPU build). env_source stamps
-                    # the trade: the shared pack does NOT carry the project's
-                    # own installs, and a missing import must read as that.
-                    env_id = _gpu_env_for(params, lang)
-                    if env_id:
-                        from core import config as _cfg
-                        env_source = f"gpu_pack:{_cfg.settings.gpu_env_pack.get()}"
-                    else:
-                        env_id = project_env.snapshot(str(pid), lang)   # identity; store op, no realize
+                    env_id = project_env.snapshot(str(pid), lang)   # identity; store op, no realize
             except ComputeError as e:
                 if e.code == "gpu_env_pack.unknown":
                     # Misconfiguration, not a node-side condition: falling
@@ -532,6 +549,14 @@ class WeftSubmitter:
             # pack realization — right for pure download/transfer steps that a
             # 1.5 GB scientific env would serve nothing
             return None, None
+        # The GPU rule outranks the named-env lookup: it also owns `env=`
+        # naming the declared pack itself (the cue advertises that name; the
+        # named lane would refuse it and advise creating an isolated env).
+        # env_name stays None — not a project-named env, and the named-env
+        # re-lock machinery must not treat it as one.
+        gid = _gpu_env_for(params, lang)
+        if gid:
+            return gid, None
         if params.get("env"):
             from core.compute import named_envs
             row = named_envs.resolve(str(pid), params["env"])
@@ -551,13 +576,6 @@ class WeftSubmitter:
         from core.compute.errors import is_env_resolution_failure
         try:
             base_env.require(lang)
-            # Same GPU rule as the shared lane (_gpu_env_for): a GPU-estimated
-            # python job on a gpu_env_pack site rides the CUDA flavour.
-            # env_name stays None — it is not a project-named env, and the
-            # named-env re-lock machinery must not treat it as one.
-            gid = _gpu_env_for(params, lang)
-            if gid:
-                return gid, None
             return project_env.snapshot(str(pid), lang), None
         except Exception as e:  # noqa: BLE001 — classified, never degraded
             if not is_env_resolution_failure(e):
