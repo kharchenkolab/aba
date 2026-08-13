@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import re
 import shutil
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -30,6 +31,44 @@ from typing import Any, Optional
 
 from core import config
 from core.compute.errors import ComputeError, is_error_payload
+
+# Kwargs aba may pass that an OLDER weft can lack. Membership is a reviewed
+# compatibility CLAIM, not a heuristic: omitting the kwarg must be safe and its
+# loss must be acceptable degradation. `verify` qualifies — weft added it
+# guaranteeing "no verify => byte-identical, zero oracle invocations", so an old
+# substrate simply installs without the post-install oracle. Anything NOT listed
+# still raises, so a typo or a genuinely-required argument fails loudly.
+SUBSTRATE_OPTIONAL_KWARGS = frozenset({"verify"})
+
+_UNSUPPORTED_KW = re.compile(r"unexpected keyword argument '([^']+)'")
+_warned_substrate_gaps: set = set()
+
+
+def _unsupported_optional_kwarg(err: TypeError, kw: dict) -> Optional[str]:
+    """The declared-optional kwarg this TypeError is complaining about, if any.
+
+    Three conditions, all required: the message is the interpreter's
+    arity complaint, the named kwarg was one WE passed, and it is on the
+    reviewed list. A TypeError raised from *inside* the verb therefore never
+    triggers a retry, and neither does one naming an argument we must keep."""
+    m = _UNSUPPORTED_KW.search(str(err))
+    if not m:
+        return None
+    name = m.group(1)
+    return name if name in kw and name in SUBSTRATE_OPTIONAL_KWARGS else None
+
+
+def _warn_substrate_lacks(verb: str, kwarg: str) -> None:
+    """Say it once per (verb, kwarg). Degrading silently forever is how a
+    deployment quietly loses a guarantee it believes it has."""
+    key = (verb, kwarg)
+    if key in _warned_substrate_gaps:
+        return
+    _warned_substrate_gaps.add(key)
+    print(f"[compute] this weft does not accept {kwarg}= on {verb} — retrying "
+          f"without it; the guarantee it provides is unavailable until weft is "
+          f"updated (a SIF deploy bakes a matching pair; a personal install "
+          f"updates aba and weft separately)")
 
 _LOCAL_SITE = "local"
 
@@ -227,6 +266,16 @@ class WeftAdapter:
                 print(f"[compute] registered site {name!r} ({kind}) from {path.name}")
 
     # -- pass-through machinery ------------------------------------------------
+    # Substrate kwarg compatibility lives HERE, at the one point every weft call
+    # passes through, and nowhere else. aba and weft upgrade on independent
+    # cadences — a SIF bakes weft in, but a cluster-personal install updates the
+    # two separately — so aba routinely runs against a weft older than the code
+    # was written for. That was handled per-call-site: `session_install(verify=)`
+    # had `except TypeError:  # substrate predates verify=` at one of its two
+    # callers and nothing at the other, and the bare one raised
+    #   TypeError: Weft.session_install() got an unexpected keyword argument 'verify'
+    # out of a worker thread, so a capability install surfaced as a stack trace.
+    # A third caller would have forgotten again; the property belongs in one place.
 
     async def _call(self, name: str, /, *args: Any, **kw: Any) -> Any:
         fn = getattr(self._weft, name)
@@ -234,7 +283,18 @@ class WeftAdapter:
         # paths and record state, and the executor hop drops the project binding
         # (see core.projects — the thread-boundary counterpart of bind()).
         from core import projects as _projects
-        out = await _projects.in_pool(self._pool, fn, *args, **kw)
+        for _ in range(len(SUBSTRATE_OPTIONAL_KWARGS) + 1):
+            try:
+                out = await _projects.in_pool(self._pool, fn, *args, **kw)
+                break
+            except TypeError as e:
+                drop = _unsupported_optional_kwarg(e, kw)
+                if drop is None:
+                    raise
+                _warn_substrate_lacks(name, drop)
+                kw = {k: v for k, v in kw.items() if k != drop}
+        else:                                   # pragma: no cover — bounded above
+            raise RuntimeError(f"{name}: could not reconcile kwargs with the substrate")
         if is_error_payload(out):
             raise ComputeError.from_payload(out)
         return out

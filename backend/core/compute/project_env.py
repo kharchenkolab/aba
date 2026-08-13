@@ -224,13 +224,13 @@ def ensure(pid: str, language: str) -> dict:
             _rkw = dict(add.get("opts") or {})
             if add.get("verify"):
                 _rkw["verify"] = add["verify"]
-            try:
-                ires = named_envs._sync(ad.session_install(
-                    sid, **{add["eco"]: add["specs"]}, **_rkw))
-            except TypeError:              # substrate predates verify=
-                _rkw.pop("verify", None)
-                ires = named_envs._sync(ad.session_install(
-                    sid, **{add["eco"]: add["specs"]}, **_rkw))
+            # No local `except TypeError: # substrate predates verify=` here any
+            # more: the adapter drops a declared-optional kwarg an older weft
+            # cannot take (adapter.SUBSTRATE_OPTIONAL_KWARGS), for every caller.
+            # This site had the guard and the other one did not, which is how a
+            # named-env install died on a raw TypeError.
+            ires = named_envs._sync(ad.session_install(
+                sid, **{add["eco"]: add["specs"]}, **_rkw))
         # installs are the FLIP moment (base → own clone): the install result
         # carries the fresh runtime; the start-time block is stale after one
         rt = (ires or {}).get("runtime") or rt
