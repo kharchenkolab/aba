@@ -342,16 +342,57 @@ def _copy_into(src: str, dest: Path) -> None:
         shutil.copy2(p, dest / p.name)
 
 
+def _file_sha256(p: Path) -> str:
+    h = hashlib.sha256()
+    with open(p, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _refuse_stale_reuse(kind: str, cid: str, src: str, existing: Path) -> None:
+    """A component id must name ONE artifact. `ensure_component` reuses whatever
+    already sits at `<kind>/<cid>` without looking, which is right while the id
+    derives from the content — and silently serves the OLD bytes when it doesn't
+    (aba-vbc keyed `sif` on the aba git sha, and the recipe pack / weft / base
+    image that are baked into the image all move without moving that sha).
+
+    Only a single-FILE component is checked. An `env` component is keyed on its
+    LOCKFILE hash deliberately: reuse across differing built trees is the point
+    there, and hashing a multi-GB tree every deploy would be the wrong trade."""
+    sp = Path(src)
+    if not sp.is_file():
+        return
+    have = existing / sp.name
+    if have.is_file() and _file_sha256(have) == _file_sha256(sp):
+        return                                             # genuine dedup
+    raise ValueError(
+        f"component {kind}/{cid} already exists with different content "
+        f"(staging {src}). The id is not content-addressed, so reusing it would "
+        f"serve the previously-staged bytes under a new release id. Key the "
+        f"component on a hash of the artifact itself.")
+
+
 def stage_release(version: str, components: "dict[str, tuple[str, str]]", *,
                   share: Optional[str] = None, do_promote: bool = False,
                   built_at: Optional[str] = None) -> dict:
     """DEPLOY-side orchestration (called by deploy.sh). `components` = {kind: (cid, src_path)}:
     ensure each as a content-addressed component under $ABA_SHARE (copy src → components/kind/cid,
     **skipping the copy when the cid already exists** — so a code-only upgrade never re-copies the
-    multi-GB env), then compose the release, then optionally promote. Returns what it staged."""
+    multi-GB env), then compose the release, then optionally promote. Returns what it staged.
+
+    Refuses before touching anything if a supplied id collides with a DIFFERENT
+    single-file artifact (`_refuse_stale_reuse`) — the whole release is rejected
+    rather than composed around stale bytes."""
     root = share_root(share)
     if not root:
         raise RuntimeError("no $ABA_SHARE — versioned release staging is slim-deploy only")
+    # Check every component BEFORE staging any of them: a release refused halfway
+    # would leave one new component published and `current` still on the old tree.
+    for kind, (cid, src) in components.items():
+        ex = component_path(kind, cid, str(root))
+        if ex is not None:
+            _refuse_stale_reuse(kind, cid, src, ex)
     comp_ids, reused = {}, []
     for kind, (cid, src) in components.items():
         existed = component_path(kind, cid, str(root)) is not None

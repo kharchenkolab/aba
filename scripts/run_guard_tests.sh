@@ -237,6 +237,7 @@ FILES=(
   tests/test_reclaim_env_evict.py
   tests/test_register_dataset_remote.py
   tests/test_regtest_seed_guard.py
+  tests/test_release_component_identity.py
   tests/test_release_lifecycle.py
   tests/test_relink.py
   tests/test_reload_exclude.py
