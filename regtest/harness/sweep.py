@@ -21,8 +21,10 @@ Three verdicts, never conflated: MEASURED (ran + scored), UNMEASURED (had a
 baseline but produced no measurement — lost coverage, NOT a regression), and
 baseline BLIND SPOTS (the reference itself is "errored, no report"). Pre-flight
 refuses a run that could not measure at all — an unprovisioned eval home aborts,
-and scenarios with absent declared inputs are skipped before any budget is spent.
-A scenario the runner DECLINED is its own class, never a credential failure.
+a declared `requires:` this host cannot honour aborts (harness/preconditions.py,
+which the sweep also uses to PROVIDE the requirement), and scenarios with absent
+declared inputs are skipped before any budget is spent. A scenario the runner
+DECLINED is its own class, never a credential failure.
 """
 from __future__ import annotations
 import argparse
@@ -92,25 +94,17 @@ def discover(only, exclude, smoke=False):
 MIN_INSTALLED_SKILLS = int(os.environ.get("ABA_REGTEST_MIN_SKILLS", "50"))
 
 
-def check_eval_home() -> list[str]:
-    """Is the eval home PROVISIONED? Refuse to measure with an empty toolbox.
+def eval_home() -> Path:
+    """The ABA_HOME the runner subprocesses will actually USE.
 
-    An ABA_HOME with no deployed installation still runs: the agent simply has
-    a near-empty skill catalog and refuses work it cannot ground, so all 31
-    scenarios fail for one reason that has nothing to do with the product. A
-    full sweep once burned hours that way (a dozen skills visible instead of
-    ~300, and scores of capability refusals) and the output looked like a
-    catastrophic product regression. A run that CANNOT measure must fail loudly
-    up front, not produce a confident zero."""
-    problems = []
+    Mirrors the runner's resolution EXACTLY: when ABA_HOME is unset, each
+    runner sources it from the ABA_LIVE_ENV creds file (NUL-separated k=v; see
+    runner.bootstrap_env, ABA_HOME ∈ CRED_KEYS). Every pre-flight must inspect
+    THIS home — checking ~/.aba while the runners run under the env-file home
+    can green-light the exact confident-zero run the checks exist to prevent,
+    or falsely abort a good one."""
     home = os.environ.get("ABA_HOME")
     if not home:
-        # Mirror the runner's resolution EXACTLY: when ABA_HOME is unset, each
-        # runner sources it from the ABA_LIVE_ENV creds file (NUL-separated
-        # k=v; see runner.bootstrap_env, ABA_HOME ∈ CRED_KEYS). Pre-flight must
-        # validate the home the runners will USE — checking ~/.aba while they
-        # run under the env-file home can green-light the exact confident-zero
-        # run this guard exists to prevent, or falsely abort a good one.
         ef = Path(os.environ.get("ABA_LIVE_ENV", "/tmp/aba_8000.env"))
         if ef.exists():
             for kv in ef.read_bytes().split(b"\0"):
@@ -122,7 +116,21 @@ def check_eval_home() -> list[str]:
                         except UnicodeDecodeError:
                             pass
                         break
-    home = Path(home or (Path.home() / ".aba"))
+    return Path(home or (Path.home() / ".aba"))
+
+
+def check_eval_home() -> list[str]:
+    """Is the eval home PROVISIONED? Refuse to measure with an empty toolbox.
+
+    An ABA_HOME with no deployed installation still runs: the agent simply has
+    a near-empty skill catalog and refuses work it cannot ground, so all 31
+    scenarios fail for one reason that has nothing to do with the product. A
+    full sweep once burned hours that way (a dozen skills visible instead of
+    ~300, and scores of capability refusals) and the output looked like a
+    catastrophic product regression. A run that CANNOT measure must fail loudly
+    up front, not produce a confident zero."""
+    problems = []
+    home = eval_home()
     inst = home / "installation"
     if not inst.exists():
         problems.append(f"ABA_HOME={home} has no installation/ — the eval home is "
@@ -156,6 +164,38 @@ def check_substrate() -> list[str]:
     That is not hypothetical: on 2026-08-13 a four-week-old shadowed copy
     produced three false failures and one wrong diagnosis. See substrate.py."""
     return _substrate_mod().check_substrate()
+
+
+def _preconditions_mod():
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import preconditions
+    return preconditions
+
+
+def requirement_env_for(sid) -> dict:
+    """Env a scenario's declared `requires:` needs in the runner subprocess.
+
+    Keyed on the DECLARATION, never on a scenario id — the sweep must not carry
+    a list of "the slurm ones"."""
+    import yaml
+    pre = _preconditions_mod()
+    try:
+        spec = yaml.safe_load((SCEN / sid / "scenario.yaml").read_text()) or {}
+    except Exception:  # noqa: BLE001 — discovery already tolerated this file
+        return {}
+    return pre.requirement_env(pre.requirement_of(spec))
+
+
+def check_requirements(scenarios) -> dict:
+    """Can this host honour the `requires:` of every SELECTED scenario?
+
+    Sibling of check_eval_home and check_substrate, and the same argument. The
+    sweep now PROVIDES a declared requirement (see requirement_env_for), so the
+    remaining failure is a host that cannot supply it — on which the runner
+    declines those scenarios (exit 4) and the sweep prints a green headline over
+    a selection it never measured. Three scheduler scenarios sat that way for
+    the life of the baseline. See harness/preconditions.py for the probe."""
+    return _preconditions_mod().check_requirements(SCEN, scenarios, eval_home())
 
 
 def preflight_fixtures(scenarios) -> dict:
@@ -250,6 +290,14 @@ def run_scenario(sid, mode):
     env = dict(os.environ)
     env.setdefault("ABA_LIVE_ENV", "/tmp/aba_8000.env")
     env["ABA_SCENARIO"] = sid
+    # SATISFY the scenario's declared `requires:` — the runner decides from the
+    # resolved submitter (core.jobs.submitter.submitter_name → ABA_BATCH_SUBMITTER)
+    # and the sweep never exported it, so every `requires: slurm` scenario
+    # declined on a box that HAS Slurm. Scoped to the scenarios that declare the
+    # requirement: forcing the cluster lane on all 38 would re-place every
+    # background job in the sweep. Pre-flight (check_requirements) has already
+    # refused the run if the host cannot honour it.
+    env.update(requirement_env_for(sid))
     if mode == "opus":
         env["ABA_SCENARIO_MODEL"] = "claude-opus-4-8"
         env["ABA_JUDGE_MODEL"] = "claude-opus-4-8"
@@ -567,6 +615,11 @@ def main() -> int:
                     help="run even when two different weft copies are "
                          "importable (pre-flight normally refuses — no row "
                          "could be attributed to a substrate)")
+    ap.add_argument("--allow-declined", action="store_true",
+                    help="run even when a selected scenario's declared "
+                         "`requires:` cannot be honoured here (pre-flight "
+                         "normally refuses — those scenarios DECLINE and the "
+                         "sweep reports on fewer scenarios than it claims)")
     ap.add_argument("--allow-unprovisioned", action="store_true",
                     help="run even if the eval home looks unprovisioned "
                          "(pre-flight normally refuses — the scorecard would be "
@@ -626,6 +679,38 @@ def main() -> int:
     if substrate_problems:
         print("[sweep] ⚠ proceeding with an AMBIGUOUS substrate on request — "
               "every row below is unattributable.", flush=True)
+
+    # Declared preconditions. The sweep PROVIDES what it can (requirement_env_for
+    # in run_scenario); this refuses the run when the HOST cannot supply one —
+    # otherwise those scenarios decline (runner exit 4) and the sweep reports a
+    # green headline over a selection it never measured. Three `requires: slurm`
+    # scenarios sat in exactly that state for the life of the baseline, on a box
+    # with working Slurm.
+    rq = check_requirements(scenarios)
+    if rq["problems"] and not args.allow_declined:
+        print("[sweep] SETUP-ERROR: a selected scenario declares a requirement "
+              "this host cannot honour —")
+        for req, problems in sorted(rq["problems"].items()):
+            sids = sorted(s for s, r in rq["requiring"].items() if r == req)
+            print(f"          · requires: {req}  ({len(sids)} scenario(s): {sids})")
+            for p in problems:
+                print(f"              {p}")
+        print("        They would DECLINE (runner exit 4) and the sweep would "
+              "report on fewer scenarios than it claims — 'measured nothing' "
+              "must not read as success. Fix the host/deployment, deselect them "
+              "(--exclude), or pass --allow-declined to proceed knowingly.")
+        return 2
+    if rq["problems"]:
+        print(f"[sweep] ⚠ proceeding with {len(rq['problems'])} unmet "
+              f"requirement(s) on request — the scenarios declaring them will "
+              f"DECLINE and this sweep measures less than it lists.", flush=True)
+    elif rq["examined"] == 0:
+        print("[sweep] note: no selected scenario declares a `requires:` — the "
+              "precondition check is VACUOUS for this selection.", flush=True)
+    else:
+        print(f"[sweep] preconditions: {rq['examined']} scenario(s) declare a "
+              f"requirement, all satisfiable here "
+              f"({sorted(set(rq['requiring'].values()))})", flush=True)
 
     pf = preflight_fixtures(scenarios)
     fixture_gaps = pf["gaps"]

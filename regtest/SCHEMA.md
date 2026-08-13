@@ -37,7 +37,16 @@ id: <kebab_id>                 # == dir name
 title: <one line>
 domain: genomics | protein | bioimaging | ...
 gpu: false
-requires: slurm                # optional — skip the scenario unless this submitter is active
+requires: slurm                # optional — the scenario needs this submitter to be meaningful
+#   The sweep SUPPLIES a declared requirement to the runner subprocess
+#   (harness/preconditions.py: `slurm` → ABA_BATCH_SUBMITTER=slurm) and its
+#   pre-flight REFUSES a run whose host cannot honour one — no Slurm client, no
+#   controller answering, or no `kind: slurm` weft site declared (with none,
+#   the submitter degrades to the local lane and the row would claim scheduler
+#   coverage for a local job). Absent that, the runner declines the scenario
+#   (exit 4 = NOT-RUN, reported as DECLINED — never as a credential failure).
+#   Adding a NEW requirement value means adding it to REQUIREMENT_ENV +
+#   REQUIREMENT_PROBES; an unknown one is a pre-flight error, not a no-op.
 summary: <one sentence>
 data_files: [ ... ]            # staged into DATA_DIR at start
 make_data: _make_data.py       # optional deterministic generator (seed=0)

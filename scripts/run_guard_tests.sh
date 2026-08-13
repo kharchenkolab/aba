@@ -101,6 +101,7 @@ FILES=(
   tests/test_transport_oracle.py
   tests/test_live_surface_probe_eval.py
   tests/test_sweep_baseline_honesty.py
+  tests/test_regtest_requirements.py
   # backend/tests/ — the env-realization + runtime-shape guards. This whole
   # DIRECTORY was unrunnable from the repo root (its files import `core.*`,
   # which needs backend/ on sys.path), so none of it had ever been listed here

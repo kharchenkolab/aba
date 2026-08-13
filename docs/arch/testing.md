@@ -80,7 +80,8 @@ tools, driven by `harness/runner.py` over `scenarios/*/scenario.yaml`, orchestra
 `harness/library_runner.py` runs a single scenario interactively against the live agent.
 
 `scenario.yaml` already expresses far more than is obvious: `tools_used`/`tools_not_used`,
-`background_job` (awaits a real job to terminal state; pair with `requires: slurm`),
+`background_job` (awaits a real job to terminal state; pair with `requires: slurm`, which
+the sweep supplies and pre-flights — see `harness/preconditions.py`),
 `produces`, `state` (entities, manifest, archived/active, two-sided thresholds),
 provenance (`reproduced`, `env_drift`, `revisions_min`), and context/cache assertions.
 **Read SCHEMA.md before concluding your case needs new machinery** — most cases do not.
@@ -96,6 +97,11 @@ Both run at scenario end unless a scenario opts *out*:
   substrate. Non-vacuous by construction — zero substrate-stamped exec records is a FAIL.
 - `harness/fixtures.py` — ONE definition of "are the declared inputs present?", shared by
   the static preflight and the runner so they cannot disagree.
+- `harness/preconditions.py` — the same shape for a scenario's `requires:`: ONE definition
+  of what a declaration DEMANDS (the env that satisfies it) and whether this host can
+  supply it. The sweep provides it per scenario and refuses up front when it cannot;
+  without that, `requires: slurm` scenarios decline silently and the sweep reports green
+  on a selection it never measured (all three did, for the life of a baseline).
 - `harness/convoy_canary.py` — the durable route must not starve the server.
 
 ### live studies — real deployment, real substrate
