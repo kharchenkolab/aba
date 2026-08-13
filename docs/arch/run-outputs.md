@@ -246,21 +246,6 @@ not be re-derived at a door (misc/paths.md owns the rationale).
   Its baseline is a SINGLE accepted sample from 2026-07-23 on a different
   machine, so the honest statement is "current behaviour differs from one
   three-week-old observation", not "today's change broke it".
-- **Candidacy still misses a sidecar-only keep.** `_retained_so_far` — what
-  `run_durable_view` renders from — builds two sets: `decided` from
-  `selection.include`, and `placed` from the DONE row's **sidecar**
-  (`_sidecar_files(retention.location_path(row))`). `_recorded_keep_rels`, which
-  `_output_candidacy` consults, builds only the `decided` half and additionally
-  requires `row["label"]`, which the durable view never needs because it queries
-  `retained(label=run_id)`. So a keep recorded only in the sidecar — a DONE retain
-  with a `location` and a `.weft-run.json`, no `selection` — is listed as
-  `retained` with a URL and simultaneously unresolvable by name, which is the
-  two-doors-different-books disagreement `_recorded_keep_rels` exists to end.
-  `tests/test_surface_parity_oracle.py::test_oracle_passes_honest_setup` is red on
-  this. Whether it is a code gap or an unrealistic fixture turns on one question:
-  does a real retain row always carry `label` + `selection.include`? If it does,
-  the oracle's `_retained_run` should mint both; if it does not, candidacy has to
-  read the sidecar the way `_retained_so_far` does.
 - **The streamed store's contract verdict is coarse by design.** The remote
   probe answers only for the shape metadata alone can settle — a
   `viewer@0.1` store whose basis is the field named `counts` — and returns
