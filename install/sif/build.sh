@@ -248,6 +248,19 @@ if [ "$PROFILE" = "fat" ] || [ "$PROFILE" = "weft" ]; then
 fi
 
 # ── generate the .def for this profile ──
+# What SOURCE went into this image. A release directory carries the aba sha by
+# convention and weft's appeared nowhere at all, so "is this SIF on the latest
+# weft?" could only be answered by hashing site-packages INSIDE the image. These
+# labels make `apptainer inspect` the authoritative answer instead.
+# `-dirty` is part of the identity, not a footnote: an image built from a
+# modified checkout is not any commit, and a bare sha there would be a lie.
+_src_stamp() {
+  local dir="$1" sha
+  sha="$(git -C "$dir" rev-parse --short HEAD 2>/dev/null)" || { echo "unknown"; return; }
+  git -C "$dir" diff --quiet HEAD 2>/dev/null || sha="$sha-dirty"
+  echo "$sha"
+}
+
 DEF="$STAGE/aba-$PROFILE.def"
 {
   echo "Bootstrap: $SIF_BOOTSTRAP"
@@ -350,6 +363,13 @@ DEF="$STAGE/aba-$PROFILE.def"
   # (fat bakes the venv; slim mounts it at runtime, so the label is authoritative for fat).
   echo "    org.aba.accelerator $ACCEL"
   [ "$ACCEL" = "cuda" ] && echo "    org.aba.cuda_version ${ABA_CUDA_VERSION:-11.8}"
+  # Source provenance (see _src_stamp above). weft is labelled only when it was
+  # actually staged into the image — claiming a substrate commit for an image
+  # that carries no weft would be worse than saying nothing.
+  echo "    org.aba.aba_commit $(_src_stamp "$REPO_ROOT")"
+  if [ -d "$STAGE/weft/src/weft" ]; then
+    echo "    org.aba.weft_commit $(_src_stamp "$WEFT_SRC")"
+  fi
 } > "$DEF"
 echo "   wrote $DEF"
 
