@@ -261,18 +261,37 @@ is surfaced to the agent. Guarded by `tests/test_capability_install_conflict.py`
 A step's *hardware-variant* need (a CUDA build of torch vs the CPU build) is a distinct axis
 from its *library* needs, and lives at the **base** tier, not the library tier:
 
-- **Hardware variant → the base, chosen at install** (deployment-conditional). `torch` arrives
-  transitively via `scvi-tools`, and conda-forge's default is the **CPU-only** build; a GPU
-  deployment builds a **CUDA** base instead. The choice is one toggle in `$ABA_HOME/config.env`
-  — `ABA_ACCELERATOR=cpu|cuda` (+ optional `ABA_CUDA_VERSION`) — written by the linux/cluster
-  installer (which auto-detects a `gpu` Slurm partition) and applied by
-  `install/core/inject-accelerator.sh`, which injects a CUDA `torch` pin into the base spec. A
-  CUDA torch is a **superset**: it uses a GPU when present and falls back to CPU on the login
-  node / CPU jobs, so one base serves both. The base builds on the GPU-less login node — there
-  is no build-time GPU — so the installer exports `CONDA_OVERRIDE_CUDA` to let the solver accept
-  the CUDA build (and select the CUDA major); `11.8` is the widest-compat default (driver
-  ≥450.80, GPUs P100…H100). **Non-torch GPU frameworks** (jax[cuda], RAPIDS) are the library
-  axis — a session install or an isolated env, not the base.
+- **Hardware variant → the base, chosen when the base is built** (deployment-conditional).
+  `torch` arrives transitively via `scvi-tools`, and conda-forge's default on linux is the
+  **CPU-only** build, so a GPU deployment must force the GPU variant. A CUDA torch is a
+  **superset** — it uses a GPU when present and falls back to CPU on the controller / CPU jobs
+  — so one base serves both. **Which "base" that is depends on the delivery mode, and the two
+  are not the same env:**
+  - **Personal / non-weft installs.** The base IS `install/core/environment.yml`, and the
+    toggle is `ABA_ACCELERATOR=cpu|cuda` (+ optional `ABA_CUDA_VERSION`) in
+    `$ABA_HOME/config.env`, applied by `install/core/inject-accelerator.sh`, which injects a
+    CUDA `torch` pin into that spec. The base builds on a GPU-less node, so the installer
+    exports `CONDA_OVERRIDE_CUDA` to let the conda solver accept a CUDA build.
+  - **Weft deployments (the default SIF profile).** `environment.yml` is the **controller**
+    runtime only — it deliberately no longer carries the science stack (see its own header) —
+    and the science env is a **weft base pack** (`install/core/envs/python_bio.yaml`, published
+    by `scripts/publish_base_packs.py`). The accelerator therefore belongs in the **pack's**
+    EnvSpec, not in `environment.yml`: `ABA_ACCELERATOR` reaches only the controller here.
+- **The weft-native way to express it** — `weft/gpu.py::suggest_gpu_spec(caps)`, a pure
+  function over a site capability record, so the values are *probed* rather than guessed:
+  - **deps** `cuda-version <=<driver max>` — a **ceiling**, not an equality pin, so the solver
+    takes the best userland the site's driver supports and a driver upgrade needs no spec edit.
+  - **`system_requirements: {cuda: <driver>}`** — pixi's mechanism for solving a GPU stack on a
+    GPU-less controller (the weft-era counterpart of `CONDA_OVERRIDE_CUDA`).
+  - GPU packages go in the spec's **`linux-64` variant** (`EnvSpec.variants`, per-platform
+    deps), and a package with separate CPU/GPU builds needs the GPU one forced — the `-gpu`
+    metapackage (`pytorch-gpu`) or a build selector (`pytorch 2.* *cuda*`).
+  - **Apple Silicon needs nothing.** Metal/MPS ships in the default `osx-arm64` builds, so a
+    single pack serves both: CUDA under the `linux-64` variant, MPS by default on mac. Pinning
+    a CUDA package for all platforms makes the pack unsolvable on `osx-arm64` (there is no
+    `pytorch-gpu` there) — the variant is what keeps one spec portable.
+  - **Non-torch GPU frameworks** (jax[cuda], RAPIDS) are the library axis — a session install
+    or an isolated env, not the base.
 - **Certainty across nodes = discover-once + verify-at-use** (ABA runs on a CPU login node; a
   job runs on a GPU node ABA can't observe):
   - **`gpu_usable`** — a node-independent readiness hint in the agent's per-turn cue
@@ -317,7 +336,8 @@ the install-time probe can't run.
 | `core/modules/reconciler.py` · `manager.py` | disk reclaim via `env_evict(env_id, site)` (rebuild-from-lock), stop-kernel-less-holders-and-retry |
 | `core/exec/run.py` (`:44-72`) · `core/exec/kernels/weft.py` | run-lane interpreter selection (named / snapshot / base+session); the remote kernel platform re-lock |
 | `content/bio/tools/discovery.py` | agent surface: `ensure_capability` → `project_env.install` / `named_envs`, `propose_capability`, `search_bioconda`/`search_pypi` |
-| `install/core/inject-accelerator.sh` · `install/linux/setup.sh` | deployment-conditional base torch: `ABA_ACCELERATOR` → CPU vs CUDA pin (+ `CONDA_OVERRIDE_CUDA`), auto-detected |
+| `install/core/inject-accelerator.sh` · `install/linux/setup.sh` | deployment-conditional base torch for **non-weft** installs: `ABA_ACCELERATOR` → CPU vs CUDA pin (+ `CONDA_OVERRIDE_CUDA`), auto-detected |
+| `weft/gpu.py::suggest_gpu_spec` | capability record → the spec pieces for a GPU env: `cuda-version <=<driver>` ceiling, `system_requirements: {cuda}`, GPU packages in the `linux-64` variant; Apple Silicon needs no pin (Metal/MPS is the default build) |
 
 ## Known gaps
 
@@ -326,6 +346,24 @@ the install-time probe can't run.
   intended home is per-**site** weft config, so that one controller could dispatch CUDA work to a
   GPU site and CPU work elsewhere from a single base description. That migration is not built —
   the CPU/CUDA choice is still a per-deployment base variant.
+- **On a weft deployment the toggle no longer reaches the science env.** `ABA_ACCELERATOR` and
+  `inject-accelerator.sh` act on `install/core/environment.yml`, which is now the **controller**
+  runtime; user science runs in the `python-bio` weft pack, whose EnvSpec carries no accelerator
+  variant. A deployment that sets `ABA_ACCELERATOR=cuda` therefore builds a CUDA controller and
+  still runs **CPU torch under jobs** — the scVI-on-CPU failure with a new cause. Closing it
+  means expressing the accelerator in the pack (a `linux-64` variant + `system_requirements`,
+  per `weft/gpu.py::suggest_gpu_spec`), and deciding whether the pack is published in CPU and
+  CUDA flavours or one flavour per deployment.
+- **The GPU-readiness cue may inspect the wrong env.** `gpu_usable` is true when a GPU is
+  present *and* the base torch is a CUDA build (`torch_cuda_build`). Which interpreter that
+  probe resolves on a weft deployment — controller or adopted pack — has not been confirmed; if
+  it reads the controller, the cue would report GPU-ready while jobs run CPU torch, defeating
+  the warning it exists to give.
+- **A CUDA science pack costs ~5x the disk.** Measured on linux-64: the `python-bio` pack is
+  708 MB published; the same spec with `pytorch-gpu` + a `cuda-version` ceiling is **3547 MB**
+  (~3 min to build with `--staging` on tmpfs). That is a read-only squashfs mounted per session,
+  so the cost is disk plus first-read I/O — but a deployment that falls back to per-user
+  realize pays it per user, which is the difference between tolerable and not.
 - **Install-time GPU verify & build-on-target.** Per-job `gpu_capability_ok` verifies at *run*
   time, but ABA does not yet confirm at *install* that the built CUDA runtime initializes on each
   GPU partition (driver new enough), nor build node-arch-specific artifacts (source-only wheels,
