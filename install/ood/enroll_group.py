@@ -257,7 +257,12 @@ def render_plan(plan):
                                        "not overwritten" if plan.already
                                        else "will be CREATED now"))
     if plan.cred_kind:
-        L.append(f"  Shared login     a {plan.cred_kind} for the whole lab")
+        # Spelled out, because "a oauth-token" is what a flag name reads like,
+        # not what a person reads.
+        said = {"oauth-token": "a Claude OAuth token, shared by the whole lab",
+                "api-key": "an Anthropic API key, shared by the whole lab",
+                "file": "the login from the file you gave, shared by the whole lab"}
+        L.append(f"  Shared login     {said.get(plan.cred_kind, plan.cred_kind)}")
         L.append(f"                   will be written to {plan.cred_path}")
         L.append("                   (readable only by you and the lab; not shown on screen)")
     else:
@@ -321,13 +326,26 @@ def apply_plan(plan):
     print(f"· recorded enrolment in {stamp.name}")
 
     if plan.cred_kind:
+        # 0640 and group-owned, NOT 0600. This credential exists so the whole
+        # lab launches without an auth prompt, and aba_preflight reads it AS THE
+        # LAUNCHING USER — so at 0600 it is readable by exactly one person: the
+        # one who ran this script. Worse, read_cred_file() swallows every
+        # exception, so PermissionError is indistinguishable from "no file":
+        # every other member silently falls through to no credential, while the
+        # person who enrolled the lab tests it and sees it work.
+        # World bits stay off — this is a secret shared with the lab, not the
+        # cluster.
         plan.cred_path.parent.mkdir(parents=True, exist_ok=True)
-        old = os.umask(0o077)
+        old = os.umask(0o027)
         try:
             plan.cred_path.write_text(plan.cred_data)
         finally:
             os.umask(old)
-        os.chmod(plan.cred_path, 0o600)
+        try:
+            os.chown(plan.cred_path, -1, grp.getgrnam(plan.group).gr_gid)
+        except (PermissionError, KeyError):
+            pass                       # validate() decides whether this matters
+        os.chmod(plan.cred_path, 0o640)
         print(f"· wrote the lab's shared login to {plan.cred_path}")
 
     gid = grp.getgrnam(plan.group).gr_gid        # existence proven in preflight
@@ -387,9 +405,27 @@ def validate(plan):
                         f"{plan.cred_path} does not contain a login ABA understands.")
             except (json.JSONDecodeError, OSError):
                 problems.append(f"{plan.cred_path} could not be read back as JSON.")
-            if plan.cred_path.exists() and (plan.cred_path.stat().st_mode & 0o077):
-                problems.append(
-                    f"{plan.cred_path} is readable by others — it must be private.")
+            # Two-sided: the LAB must be able to read it (or only the enroller
+            # can launch), and the rest of the cluster must not. Checking only
+            # one side is how 0600 survived — "not world-readable" looked right.
+            if plan.cred_path.exists():
+                st = plan.cred_path.stat()
+                if st.st_mode & 0o007:
+                    problems.append(
+                        f"{plan.cred_path} is readable by anyone on the cluster "
+                        f"— it must be limited to the lab.")
+                if not st.st_mode & 0o040:
+                    problems.append(
+                        f"{plan.cred_path} is not readable by the {plan.group} "
+                        f"group, so only you would be able to start a session — "
+                        f"everyone else would silently get no login.")
+                try:
+                    if st.st_gid != grp.getgrnam(plan.group).gr_gid:
+                        problems.append(
+                            f"{plan.cred_path} does not belong to the "
+                            f"{plan.group} group, so the lab cannot read it.")
+                except KeyError:
+                    pass
     return problems
 
 

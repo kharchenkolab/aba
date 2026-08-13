@@ -213,11 +213,27 @@ def test_credential_is_private_and_never_printed(site, capsys):
     rc = eg.main([REAL_GROUP, "--site", site["cfg"], "--yes", "--oauth-token", OAUTH])
     assert rc == 0
     cred = site["groups"] / "testlab" / "aba" / ".credentials.json"
-    assert cred.stat().st_mode & 0o077 == 0, "the shared login must be private"
+    assert cred.stat().st_mode & 0o007 == 0, "the shared login must not be cluster-readable"
     captured = capsys.readouterr()
     assert OAUTH not in captured.out and OAUTH not in captured.err, \
         "a secret must never reach the terminal"
     assert OAUTH not in (site["groups"] / "testlab" / "aba" / ".aba-workspace").read_text()
+
+
+def test_the_shared_login_is_readable_by_the_LAB(site):
+    """The bug this pins: 0600 made the "lab-shared" credential readable by
+    exactly one person — whoever ran the script.
+
+    aba_preflight reads this file AS THE LAUNCHING USER, and its read_cred_file
+    swallows every exception, so a PermissionError is indistinguishable from
+    "no credential configured". Every other member of the lab would silently
+    get no login while the enroller tested it and saw it work. Two-sided on
+    purpose: readable by the group, never by the rest of the cluster."""
+    assert eg.main([REAL_GROUP, "--site", site["cfg"], "--yes",
+                    "--oauth-token", OAUTH]) == 0
+    st = (site["groups"] / "testlab" / "aba" / ".credentials.json").stat()
+    assert st.st_mode & 0o040, "the lab must be able to read its own shared login"
+    assert st.st_mode & 0o007 == 0, "but the rest of the cluster must not"
 
 
 # ── validation is ARMED: it must be able to FAIL ───────────────────────────
