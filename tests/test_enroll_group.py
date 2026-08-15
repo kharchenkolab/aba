@@ -243,13 +243,65 @@ def test_the_shared_login_is_readable_by_the_LAB(site):
 
 # ── validation is ARMED: it must be able to FAIL ───────────────────────────
 
-def test_validate_only_fails_on_a_half_enrolled_workspace(site):
+def _secondary_gid():
+    """A group we belong to that is NOT our primary.
+
+    The default fixture makes the lab gid == our own primary gid so chown can
+    succeed — which quietly destroys the distinction the sharing check exists to
+    make: with lab == primary, EVERY new file "inherits the lab group", setgid
+    or not, and the check can never fail. A fake that cannot express the failure
+    blesses it."""
+    primary = os.getgid()
+    for gid in os.getgroups():
+        if gid != primary:
+            return gid
+    pytest.skip("need a secondary unix group to distinguish inherited ownership")
+
+
+@pytest.fixture
+def lab_is_a_real_other_group(site, monkeypatch):
+    gid = _secondary_gid()
+
+    class FakeGr:
+        gr_gid = gid
+
+    def fake_getgrnam(name):
+        if name != REAL_GROUP:
+            raise KeyError(name)
+        return FakeGr()
+    monkeypatch.setattr(eg.grp, "getgrnam", fake_getgrnam)
+    return site
+
+
+def test_validate_only_fails_on_a_half_enrolled_workspace(lab_is_a_real_other_group):
+    """A workspace owned by the lab but not SHARING with it must not validate.
+
+    On a filesystem that honours modes, "not sharing" means: no setgid, so a
+    file created here comes out under the creator's own primary group and the
+    rest of the lab cannot write it."""
+    site = lab_is_a_real_other_group
     root = site["groups"] / "testlab" / "aba"
     root.mkdir(parents=True)
-    (root / ".aba-workspace").touch()        # marker, but never shared with the lab
-    os.chmod(root, 0o755)                    # no setgid
+    (root / ".aba-workspace").touch()
+    os.chown(root, -1, _secondary_gid())     # owned by the lab...
+    os.chmod(root, 0o775)                    # ...but NOT setgid: nothing inherits
     rc = eg.main([REAL_GROUP, "--site", site["cfg"], "--validate-only"])
     assert rc == 3, "a workspace the lab cannot share is not a valid enrolment"
+
+
+def test_validate_only_passes_once_new_files_reach_the_lab(lab_is_a_real_other_group):
+    """The other side of the same check: turning sharing ON must flip it green.
+
+    Paired with the test above so the check is shown to DISCRIMINATE rather than
+    just to fail — a validator that always says no is as useless as one that
+    always says yes."""
+    site = lab_is_a_real_other_group
+    root = site["groups"] / "testlab" / "aba"
+    root.mkdir(parents=True)
+    (root / ".aba-workspace").touch()
+    os.chown(root, -1, _secondary_gid())
+    os.chmod(root, 0o2775)                   # setgid: new files reach the lab
+    assert eg.main([REAL_GROUP, "--site", site["cfg"], "--validate-only"]) == 0
 
 
 def test_validate_only_passes_on_a_good_one(site):

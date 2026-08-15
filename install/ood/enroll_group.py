@@ -45,6 +45,7 @@ import grp
 import json
 import os
 import shutil
+import stat
 import sys
 from pathlib import Path
 
@@ -363,16 +364,76 @@ def apply_plan(plan):
             pass                       # validate() decides whether this matters
         os.chmod(plan.cred_path, 0o640)
         print(f"· wrote the lab's shared login to {plan.cred_path}")
+        # Say what the filesystem actually did, not what we asked it to do.
+        print(f"  readable by: {_effective_readers(plan.cred_path, plan.group)}")
 
     gid = grp.getgrnam(plan.group).gr_gid        # existence proven in preflight
     try:
         os.chown(plan.root, -1, gid)
         os.chmod(plan.root, 0o2775)
-        print(f"· shared the workspace with the {plan.group} group")
+        # Report the OUTCOME. `chmod 2775` is a silent no-op on the lab export
+        # (NFSv4, ACL-enforced), so "shared the workspace" was a claim about a
+        # syscall's return value, not about the folder — and validate() then
+        # contradicted it two lines later.
+        ok, why = _new_files_belong_to_the_lab(plan.root, gid)
+        if ok:
+            print(f"· shared the workspace with the {plan.group} group")
+        else:
+            print(f"· note: {plan.root} may not be shared with {plan.group} ({why})")
     except PermissionError:
         # Not fatal, but NOT a success either — validation decides.
         print(f"· note: could not hand {plan.root} to the {plan.group} group "
               f"(you may not be a member)")
+
+
+def _new_files_belong_to_the_lab(root: Path, want_gid: int):
+    """(True|False|None, explanation) — make a real file and see who owns it.
+
+    The only test that survives a filesystem with its own ideas about
+    permissions. Cleans up after itself even when the check fails."""
+    probe = root / f".aba-enrol-check-{os.getpid()}"
+    try:
+        probe.write_text("")
+    except OSError as e:
+        return None, f"cannot write there: {e}"
+    try:
+        got = probe.stat().st_gid
+        if got == want_gid:
+            return True, ""
+        try:
+            got_name = grp.getgrgid(got).gr_name
+        except KeyError:
+            got_name = f"gid {got}"
+        return False, f"it came out owned by {got_name}"
+    except OSError as e:
+        return None, str(e)
+    finally:
+        try:
+            probe.unlink()
+        except OSError:
+            pass
+
+
+def _effective_readers(path: Path, group: str) -> str:
+    """Who can actually read this file, in plain words.
+
+    Says what the FILESYSTEM reports, not what we asked for. On the lab export
+    `chmod 0640` is silently discarded and every mode reads 0777 — access is
+    enforced by an ACL the mode bits do not describe — so quoting our own
+    intent back at the operator would be a guess dressed as a fact."""
+    try:
+        mode = stat.S_IMODE(path.stat().st_mode)
+    except OSError as e:
+        return f"could not be checked ({e})"
+    if mode == 0o640:
+        return f"you and the {group} group"
+    if mode & 0o007:
+        return (f"reported as mode {mode:04o} — this filesystem does not appear "
+                f"to honour permission bits (it kept {mode:04o} after we asked "
+                f"for 0640), so access is whatever its own ACLs allow. On the "
+                f"lab shares here that is the lab; confirm with your admin if "
+                f"the credential is sensitive")
+    return f"reported as mode {mode:04o}"
 
 
 def validate(plan):
@@ -393,7 +454,17 @@ def validate(plan):
     if not os.access(plan.root, os.R_OK | os.X_OK):
         problems.append(f"{plan.root} is not readable, so ABA cannot see it.")
 
-    # (b) shared with the lab: ownership + setgid, or members cannot collaborate.
+    # (b) shared with the lab. Ask the OUTCOME ("does a file made here belong to
+    # the lab?"), not the mechanism ("is the setgid bit set?").
+    #
+    # setgid is one way to get that outcome, and on a local filesystem it is the
+    # way. The lab trees here are an NFSv4 export that enforces access by ACL and
+    # ignores chmod entirely: `chmod 2775` returns success, the bit never appears,
+    # and every mode reads 0777 no matter what anyone writes. Yet new files DO
+    # inherit the lab group, because the server does the inheriting. Checking the
+    # bit therefore fails every enrolment on the only filesystem this pilot runs
+    # on, and hands the operator a remedy no admin can perform. Checking the
+    # outcome passes there and still catches the real breakage on a local disk.
     try:
         st = plan.root.stat()
         want = grp.getgrnam(plan.group).gr_gid
@@ -401,10 +472,14 @@ def validate(plan):
             problems.append(
                 f"{plan.root} is not owned by the {plan.group} group, so other "
                 f"lab members will not be able to use it.")
-        if not st.st_mode & 0o2000:
+        shared, why = _new_files_belong_to_the_lab(plan.root, want)
+        if shared is False:
             problems.append(
-                f"{plan.root} is missing the setgid bit, so files created by one "
-                f"member will not be shared with the rest of the lab.")
+                f"a file created in {plan.root} does not belong to the "
+                f"{plan.group} group ({why}), so work by one member will not be "
+                f"shared with the rest of the lab.")
+        elif shared is None:
+            problems.append(f"could not check sharing in {plan.root}: {why}")
     except (KeyError, OSError) as e:
         problems.append(f"could not check ownership of {plan.root}: {e}")
 
