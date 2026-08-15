@@ -62,10 +62,15 @@ def site(tmp_path, monkeypatch):
     cfg.write_text(
         "scopes:\n"
         "  group:\n"
+        "    enabled: true\n"
         f"    root_path: {groups_root}/{{group_dir}}/aba\n"
         '    strip_suffix: ".grp"\n'
         f"    skeleton_template: {skel}\n"
         "credentials:\n"
+        # enroll-group only reads group_key_path, but the LAUNCH GATE reads the
+        # order — and a site.yaml that omits it resolves no credential at all.
+        # Carrying it here keeps the fixture a site the gate would accept.
+        "  order: [group_shared]\n"
         f"  group_key_path: {groups_root}/{{group_dir}}/aba/.credentials.json\n")
 
     class FakeGr:
@@ -366,3 +371,45 @@ def test_placeholder_this_tool_cannot_expand_is_refused(tmp_path, monkeypatch, c
     assert snapshot(groups_root) == before, "must not create a literal {user} directory"
     err = capsys.readouterr().err
     assert "Traceback" not in err and "What to do:" in err
+
+
+# ── the seam: enrol writes, the launch gate reads ────────────────────────────
+
+def test_the_enrolled_lab_passes_the_launch_gate(site, tmp_path, monkeypatch):
+    """Enrolment's whole purpose is to make aba_preflight say yes.
+
+    Every guard above tests enroll-group alone, against its own idea of what it
+    wrote. That is one door. This feeds its output into the door that consumes
+    it — the launch gate — because the two read the same site.yaml through
+    different expanders, and a lab that enrols perfectly and still fails to
+    launch is indistinguishable, to the operator, from not being enrolled."""
+    import importlib.util as _ilu
+    spec = _ilu.spec_from_file_location(
+        "aba_preflight_seam", ROOT / "install" / "ood" / "aba_preflight.py")
+    pf = _ilu.module_from_spec(spec)
+    sys.modules["aba_preflight_seam"] = pf
+    spec.loader.exec_module(pf)
+
+    assert eg.main([REAL_GROUP, "--site", site["cfg"], "--yes",
+                    "--oauth-token", OAUTH]) == 0
+
+    staged = tmp_path / "staged"; staged.mkdir()
+    for k, v in {"ABA_SITE_CONFIG": site["cfg"], "ABA_PF_GROUP": REAL_GROUP,
+                 "ABA_PF_USER": "alice", "ABA_PF_HOME": str(tmp_path / "home"),
+                 "ABA_PF_STAGED": str(staged)}.items():
+        monkeypatch.setenv(k, v)
+    pf.main()
+
+    import yaml
+    st = yaml.safe_load((staged / "status.yaml").read_text())
+    assert st["ready"] is True, st.get("blocked_on")
+    assert st["scopes"]["group"]["state"] == "ok"
+    assert st["credentials"]["resolved"] is True
+
+    # and the credential the gate hands the session is the one enrolment wrote,
+    # in the slot that keeps it an OAuth bearer rather than a downgraded key
+    env = (staged / "aba-env.sh").read_text()
+    assert "CLAUDE_CODE_OAUTH_TOKEN=" in env
+    assert "ANTHROPIC_API_KEY=" not in env
+    # never echoed to the terminal, only to the 0600 env file
+    assert OAUTH not in (staged / "status.yaml").read_text()

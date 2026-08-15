@@ -28,7 +28,9 @@ Reads the SAME site.yaml that aba-preflight + the launch form read, then:
   2. records the enrollment (date / by / credential mode) in .aba-workspace,
      PRESERVING the original enrolment date when re-run to rotate a credential.
   3. (optional) writes the lab-shared credential at credentials.group_key_path
-     (mode 0600) — an Anthropic API key, an OAuth token, or a ready cred file.
+     (mode 0640 — owner + LAB, never world; 0600 made the shared credential
+     unreadable by the very group it is shared with) — an Anthropic API key, an
+     OAuth token, or a ready cred file.
   4. makes the workspace group-owned + setgid, so the lab shares it.
   5. validates the result and says plainly whether the lab is now enrolled.
 
