@@ -95,9 +95,25 @@ def test_rejected_credential_still_distinct_from_missing(monkeypatch):
     assert "401" in rejected
 
 
-def test_rejected_oauth_token_names_the_refresh_action(monkeypatch):
+@pytest.mark.parametrize("source,expected", [
+    # The action that actually fixes it differs per tier, so one message cannot
+    # be right for all three. Telling a pasted-token user to refresh the CLI
+    # sent an operator to a file the container does not even have (2026-08-15).
+    ("claude_cli", "~/.claude/.credentials.json"),
+    ("pasted_token", "claude setup-token"),
+    ("refreshable_store", "Reconnect your subscription"),
+    (None, "Connect a credential"),          # nothing resolved: still an action
+])
+def test_rejected_oauth_token_names_an_action_for_ITS_tier(monkeypatch, source, expected):
     monkeypatch.setenv("ABA_LLM_CREDENTIAL", "oauth_cc")
-    assert "refresh" in friendly_error(_Status("authentication_error", 401)).lower()
+    import core.llm as llm
+    monkeypatch.setattr(llm, "_oauth_bearer_detail",
+                        lambda: (("tok" if source else None), source, None))
+    msg = friendly_error(_Status("authentication_error", 401))
+    assert expected in msg
+    # and never the remedy for a DIFFERENT tier
+    if source != "claude_cli":
+        assert "~/.claude" not in msg
 
 
 def test_unknown_error_still_gets_the_generic_pill():

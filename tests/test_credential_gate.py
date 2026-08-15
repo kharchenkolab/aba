@@ -48,4 +48,9 @@ def test_friendly_error_with_credential_falls_through(monkeypatch):
     class E(Exception):
         status_code = 401
     msg = le.friendly_error(E("authentication_error"))
-    assert "Settings → Agent" not in msg   # a real 401 (cred present) isn't the connect prompt
+    # A real 401 with a credential present is a REJECTION, not the first-run
+    # connect prompt. (It may well point at Settings — that is where a rejected
+    # credential gets replaced — so the connect prompt's own wording is what
+    # must be absent, not the word "Settings".)
+    assert "No model provider is connected yet" not in msg
+    assert "rejected" in msg.lower() or "revoked" in msg.lower() or "expired" in msg.lower()

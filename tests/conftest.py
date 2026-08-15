@@ -16,6 +16,8 @@ from __future__ import annotations
 import os
 import sys
 
+import pytest
+
 # Make backend/ importable from tests/ — mirrors what main.py does as
 # the live entry point. The standalone-script tests do this via a
 # `sys.path.insert(0, ...)` block at the top of each file; pytest-
@@ -139,3 +141,17 @@ try:
     _llm_for_tests._CLI_CRED_CACHE.update(tok=None, until=0.0)
 except Exception:  # noqa: BLE001 — llm import problems surface in real tests
     pass
+
+
+@pytest.fixture(autouse=True)
+def _no_leaked_oauth_env(monkeypatch):
+    """Tier 2 must not leak between test FILES.
+
+    `credentials.store_oauth_token()` writes CLAUDE_CODE_OAUTH_TOKEN straight
+    into os.environ (that is its job — the change has to be live next turn), and
+    nothing put it back. Whole files then passed alone and failed after their
+    neighbours, which reads as flakiness rather than as the pollution it is; the
+    suite only escaped it by running one process per file. A test that wants the
+    tier sets the variable itself."""
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    yield

@@ -111,29 +111,36 @@ def status(provider: str = "anthropic") -> dict:
     pasted = (os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
               or cfg.get("CLAUDE_CODE_OAUTH_TOKEN") or "")
     # Use the SAME resolver a turn uses (oauth.json → CLAUDE_CODE_OAUTH_TOKEN →
-    # ~/.claude/.credentials.json) so status matches reality, not just our keys.
-    # _oauth_bearer() returns None for an expired-with-no-refresh token, so
-    # oauth_active already means "present AND usable".
+    # ~/.claude/.credentials.json), and take the SOURCE AND EXPIRY FROM THAT SAME
+    # ANSWER. Reading `has_oauth` from the resolver but `source`/`expires_at` from
+    # the tier-1 store is how this page reported, live on 2026-08-15, a green dot
+    # beside an expiry sixteen days past — while every turn 401'd on a third
+    # credential (a pasted token) the page never named. One resolver, one answer.
     oauth_active = False
     expires_at = None
     source = None
+    token = None
+    refresh_failure = None
     try:
-        from core.llm import _oauth_bearer, _load_oauth_store
-        oauth_active = bool(_oauth_bearer())
-        store = _load_oauth_store() or {}
-        if store.get("access_token"):
-            expires_at = store.get("expires_at")
-            source = "refreshable_store"
-        elif pasted:
-            source = "pasted_token"
-        elif oauth_active:
-            source = "claude_cli"          # ~/.claude/.credentials.json
-            expires_at = _claude_cli_expiry()
+        from core.llm import _oauth_bearer_detail, oauth_refresh_failure
+        token, source, expires_at = _oauth_bearer_detail()
+        oauth_active = bool(token)
+        refresh_failure = oauth_refresh_failure()
     except Exception:  # noqa: BLE001
+        token = pasted or None
         oauth_active = bool(pasted)
         source = "pasted_token" if pasted else None
     has_api_key = bool(api_key)
-    return {
+    # Presence is not usability. A pasted `setup-token` has no local expiry at
+    # all, and a refreshable store's expiry says nothing about REVOCATION — so
+    # the only honest falsifier is the provider's own verdict, recorded by
+    # note_auth_failure() when a turn is rejected. `valid` stays True until the
+    # credential we would actually send is the one that got turned away.
+    rejected = _rejection_for(token) if token else None
+    if rejected:
+        oauth_active = False
+    api_rejected = _rejection_for(api_key) if api_key else None
+    st = {
         "provider": "anthropic",
         "mode": mode,
         "has_api_key": has_api_key,
@@ -142,10 +149,88 @@ def status(provider: str = "anthropic") -> dict:
         "oauth_source": source,
         "oauth_expires_at": expires_at,
         # The UI shows status+Change when valid, and the input field immediately
-        # when not. An API key is "valid" if present (it's verified on save);
-        # OAuth validity already factors in expiry via _oauth_bearer.
-        "valid": has_api_key or oauth_active,
+        # when not. Validity = a credential is present, not locally expired, and
+        # not one the provider has already rejected this session.
+        "valid": (has_api_key and not api_rejected) or oauth_active,
     }
+    # Why it is not valid / what is quietly broken. Absent keys mean "nothing to
+    # report" — the UI shows a plain green state only when both are absent.
+    if rejected or api_rejected:
+        st["rejected"] = rejected or api_rejected
+    if refresh_failure:
+        # The store is dead and cannot renew itself. Chat may still work (the
+        # chain falls through to another tier) — which is precisely why this has
+        # to be said out loud rather than inferred from a working session.
+        st["oauth_refresh_failed"] = refresh_failure
+    return st
+
+
+# Credentials the PROVIDER has rejected this process, keyed by fingerprint. Kept
+# in memory on purpose: a restart re-tries, and a stale file claiming a
+# now-rotated credential is dead would be a new lie of the same species.
+_rejections: dict[str, dict] = {}
+
+
+def fingerprint(secret: str) -> str:
+    """Stable, non-reversible id for a credential — safe to log and compare.
+    Never put a token itself in a status payload, a log line, or an assertion."""
+    import hashlib
+    return hashlib.sha256((secret or "").encode()).hexdigest()[:12]
+
+
+def _rejection_for(secret: str | None):
+    return _rejections.get(fingerprint(secret)) if secret else None
+
+
+def any_rejected() -> bool:
+    """Has the provider turned down a credential this session? Distinguishes
+    "nothing is connected" from "what is connected was refused" — two states
+    that any_configured() reports identically and that need opposite advice."""
+    return bool(_rejections)
+
+
+def note_auth_failure(exc: Exception) -> dict | None:
+    """Record that the credential we WOULD send was rejected by the provider.
+
+    Called on a turn failure (guide.py). Only 401/authentication_error counts —
+    a rate limit or an overload says nothing about the credential. Returns the
+    recorded entry, or None if this exception was not an auth rejection.
+
+    This is what makes `valid` falsifiable for the pasted-token tier, which has
+    no local expiry to check: without it, "valid" degrades to "a string exists"
+    and a revoked token reads exactly like a working one."""
+    import time
+    from core.runtime.llm_errors import is_auth_error
+    s = str(exc).lower()
+    if not is_auth_error(exc):
+        return None
+    try:
+        from core.llm import _oauth_bearer_detail
+        token, source, _ = _oauth_bearer_detail()
+    except Exception:  # noqa: BLE001
+        token, source = None, None
+    if not token:
+        token = (os.environ.get("ANTHROPIC_API_KEY") or read().get("ANTHROPIC_API_KEY") or "")
+        source = "api_key" if token else source
+    if not token:
+        return None
+    # "revoked" and "expired" call for different fixes and the provider says
+    # which; guessing "likely expired" at a revoked token sent one operator to
+    # refresh a file the session does not even read.
+    reason = "revoked" if "revoked" in s else ("expired" if "expired" in s else "rejected")
+    entry = {"reason": reason, "source": source, "at": time.time(),
+             "fingerprint": fingerprint(token)}
+    _rejections[entry["fingerprint"]] = entry
+    return entry
+
+
+def clear_auth_rejection(secret: str | None = None) -> None:
+    """Forget a rejection — for a specific credential, or all of them. Called
+    when a credential is saved: the new one deserves its own verdict."""
+    if secret:
+        _rejections.pop(fingerprint(secret), None)
+    else:
+        _rejections.clear()
 
 
 def any_configured() -> dict:
@@ -191,6 +276,7 @@ def set_api_key(key: str) -> dict:
     os.environ.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
     os.environ.pop("ABA_LLM_CREDENTIAL", None)  # → _credential_mode() defaults to apikey
     _clear_llm_client_cache()
+    clear_auth_rejection(key)      # a freshly saved credential gets its own verdict
     return status()
 
 
@@ -206,6 +292,7 @@ def set_oauth_token(token: str) -> dict:
     os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = token
     os.environ["ABA_LLM_CREDENTIAL"] = "oauth_cc"
     _clear_llm_client_cache()
+    clear_auth_rejection(token)    # a freshly saved credential gets its own verdict
     return status()
 
 
@@ -366,6 +453,14 @@ def store_oauth_token(provider: str, token: dict) -> dict:
     except Exception:  # noqa: BLE001 — never let store persistence break sign-in
         pass
     _clear_llm_client_cache()
+    # A fresh sign-in also revives the refresh path; drop any recorded verdict on
+    # the credential we just replaced so status() judges the new one on its own.
+    clear_auth_rejection()
+    try:
+        from core import llm as _llm
+        _llm._refresh_failure.update(at=None, error=None)
+    except Exception:  # noqa: BLE001
+        pass
     return status("anthropic")
 
 

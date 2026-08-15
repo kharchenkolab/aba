@@ -42,6 +42,13 @@ interface CredStatus {
   oauth_expires_at: number | null
   valid: boolean
   oauth_enabled?: boolean   // deployment offers subscription sign-in (false → hide that tab)
+  // The provider's own verdict on the credential we would send, once a turn has
+  // been rejected. `valid` already accounts for it; this says WHY, so the line
+  // can name the fix instead of just going red.
+  rejected?: { reason: string; source: string | null; at: number } | null
+  // The stored subscription token can no longer renew itself. Chat may still be
+  // working via another tier — which is exactly why it has to be said out loud.
+  oauth_refresh_failed?: { at: number; error: string } | null
 }
 
 type Ping = { state: 'idle' | 'checking' | 'ok' | 'bad'; detail?: string }
@@ -79,10 +86,23 @@ function defaultMethod(c: CredStatus | null): 'subscription' | 'key' {
 
 function credStatusLine(c: CredStatus | null): string {
   if (!c) return 'Not connected'
+  // A verdict from the provider outranks anything we can infer locally: a
+  // revoked token is present, unexpired by our clock, and completely dead.
+  if (c.rejected) {
+    const verb = c.rejected.reason === 'revoked' ? 'revoked'
+      : c.rejected.reason === 'expired' ? 'expired' : 'rejected'
+    return `Credential ${verb} — reconnect below`
+  }
   if (c.has_oauth) {
     const sub = c.provider === 'openai' ? 'ChatGPT / Codex subscription' : 'Claude.ai subscription'
-    const exp = c.oauth_expires_at ? ` · expires ${new Date(c.oauth_expires_at * 1000).toLocaleDateString()}` : ''
-    return `${sub}${exp}`
+    // A date in the past used to render exactly like one a year out ("expires
+    // 7/30/2026" beside a green dot, sixteen days after it lapsed). Say which.
+    const exp = c.oauth_expires_at
+      ? ` · ${c.oauth_expires_at * 1000 < Date.now() ? 'EXPIRED' : 'expires'} ` +
+        new Date(c.oauth_expires_at * 1000).toLocaleDateString()
+      : ''
+    const stale = c.oauth_refresh_failed ? ' · stored token can no longer renew' : ''
+    return `${sub}${exp}${stale}`
   }
   if (c.has_api_key) return `API key ••••${c.key_suffix}`
   return 'Not connected'

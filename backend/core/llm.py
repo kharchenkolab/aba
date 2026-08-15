@@ -387,6 +387,18 @@ _OAUTH_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token"
 _OAUTH_REFRESH_SKEW = 120          # refresh this many seconds before expiry
 _oauth_lock = threading.Lock()     # one refresh at a time (refresh tokens are single-use)
 
+# The last tier-1 refresh failure, so Settings can SAY the store is dead. A store
+# whose refresh 400s fails on every single turn — one live session logged 17
+# identical failures while the UI stayed green — and the fallthrough that keeps
+# chat alive (the 2026-07-18 "dead store must not poison the chain" fix) is
+# exactly what makes the failure invisible. Recording it is the other half.
+_refresh_failure: dict = {"at": None, "error": None}
+
+
+def oauth_refresh_failure():
+    """{'at': unix, 'error': str} for the last failed tier-1 refresh, else None."""
+    return dict(_refresh_failure) if _refresh_failure["at"] else None
+
 
 def _oauth_store_path():
     home = config.settings.home_dir.get()  # raw: None when ABA_HOME unset (no store)
@@ -437,10 +449,13 @@ def _refresh_oauth(store: dict):
             data = json.loads(resp.read().decode())
     except Exception as e:  # noqa: BLE001
         print(f"[llm] OAuth token refresh failed: {e}", flush=True)
+        _refresh_failure.update(at=time.time(), error=str(e))
         return None
     at = data.get("access_token")
     if not at:
+        _refresh_failure.update(at=time.time(), error="token endpoint returned no access_token")
         return None
+    _refresh_failure.update(at=None, error=None)
     _save_oauth_store({
         "access_token": at,
         # Refresh tokens rotate (single-use); keep the new one, fall back to the
@@ -452,22 +467,28 @@ def _refresh_oauth(store: dict):
     return at
 
 
-def _oauth_bearer():
-    """Claude Code subscription OAuth bearer, or None. Re-read per call so a
-    refreshed token is picked up immediately.
+def _oauth_bearer_detail():
+    """(token, source, expires_at) — WHICH tier answered, not merely what it said.
 
     Priority: (1) ABA's own refreshable store ($ABA_HOME/oauth.json) from the
     browser flow — auto-refreshed near expiry; (2) $CLAUDE_CODE_OAUTH_TOKEN env
     (pasted/setup-token path — long-lived, not refreshable); (3) the Claude Code
     CLI store (~/.claude/.credentials.json), which the CLI itself refreshes.
     An expired token with no way to refresh returns None so oauth_cc mode can
-    refuse with a clear, actionable error instead of a confusing 401."""
+    refuse with a clear, actionable error instead of a confusing 401.
+
+    The tier is part of the answer because the fallthrough at (1) makes "who is
+    speaking" unguessable from outside: a dead store plus a live pasted token
+    resolves to the PASTED one, and a caller that reports the store's expiry
+    beside that token describes a credential nobody is sending. That is exactly
+    what Settings did on 2026-08-15 — green dot, an expiry sixteen days past,
+    and every turn 401ing on a third credential the page never mentioned."""
     # (1) ABA's refreshable store.
     store = _load_oauth_store()
     if store and store.get("access_token"):
         exp = store.get("expires_at")
         if not exp or time.time() < exp - _OAUTH_REFRESH_SKEW:
-            return store["access_token"]                       # still valid
+            return store["access_token"], "refreshable_store", exp   # still valid
         if store.get("refresh_token"):
             with _oauth_lock:
                 s = _load_oauth_store() or {}                  # re-check: another turn may have refreshed
@@ -475,29 +496,41 @@ def _oauth_bearer():
                 if s.get("refresh_token") and e and time.time() >= e - _OAUTH_REFRESH_SKEW:
                     tok = _refresh_oauth(s)
                     if tok:
-                        return tok
+                        fresh = _load_oauth_store() or {}
+                        return tok, "refreshable_store", fresh.get("expires_at")
                     # DEAD STORE MUST NOT POISON THE CHAIN (found live
                     # 2026-07-18: an expired store whose refresh 400s
                     # blocked a perfectly valid CLI credential) — fall
                     # through to the other tiers instead of returning None
                 else:
-                    return s.get("access_token")               # already refreshed by another turn
+                    # already refreshed by another turn
+                    return s.get("access_token"), "refreshable_store", e
 
-    # (2) Static env var (back-compat / pasted token).
+    # (2) Static env var (back-compat / pasted token). No expiry to report and
+    # none to check: a pasted `claude setup-token` value carries its lifetime
+    # server-side only, so presence is all this tier can honestly claim. What
+    # makes it falsifiable is the provider's verdict — see
+    # credentials.note_auth_failure().
     tok = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
     if tok:
-        return tok.strip()
+        return tok.strip(), "pasted_token", None
 
     # (3) Claude Code CLI credential (the CLI keeps it refreshed):
     #     the credentials file where it exists, else the macOS Keychain
     #     (the CLI's default store on mac — the file usually doesn't exist).
-    tok = _cli_credential()
+    tok, exp = _cli_credential_detail()
     if tok:
-        return tok
-    return None
+        return tok, "claude_cli", exp
+    return None, None, None
 
 
-_CLI_CRED_CACHE: dict = {"tok": None, "until": 0.0}
+def _oauth_bearer():
+    """Claude Code subscription OAuth bearer, or None. Re-read per call so a
+    refreshed token is picked up immediately. See _oauth_bearer_detail()."""
+    return _oauth_bearer_detail()[0]
+
+
+_CLI_CRED_CACHE: dict = {"tok": None, "exp": None, "until": 0.0}
 # The whole tier-3 CLI credential (the ~/.claude/.credentials.json FILE *and* the
 # macOS Keychain) is real developer-machine state. One switch gates the ENTIRE tier
 # so tests disable it on every platform (tests/conftest.py, which also clears the
@@ -507,31 +540,33 @@ _CLI_CRED_CACHE: dict = {"tok": None, "until": 0.0}
 _CLI_CRED_ENABLED = True
 
 
-def _cli_credential():
-    """Claude Code CLI's own OAuth access token, from its credentials file
-    or (macOS) its Keychain entry. Cached briefly — the Keychain read is a
-    subprocess. Expired tokens read as missing."""
+def _cli_credential_detail():
+    """(token, expires_at) from the Claude Code CLI's credentials file or (macOS)
+    its Keychain entry. Cached briefly — the Keychain read is a subprocess.
+    Expired tokens read as missing, so a token returned here is unexpired and its
+    expiry is the one that belongs to it."""
     if not _CLI_CRED_ENABLED:      # tier disabled (tests): never touch real-machine state
-        return None
+        return None, None
     now = time.time()
     if now < _CLI_CRED_CACHE["until"]:
-        return _CLI_CRED_CACHE["tok"]
+        return _CLI_CRED_CACHE["tok"], _CLI_CRED_CACHE["exp"]
 
     def _from_blob(blob: dict):
         oa = (blob or {}).get("claudeAiOauth") or {}
         exp = oa.get("expiresAt")
         # expiresAt is ms-since-epoch; treat expired (5s grace) as missing.
         if isinstance(exp, (int, float)) and exp <= int(now * 1000) + 5_000:
-            return None
-        return (oa.get("accessToken") or "").strip() or None
+            return None, None
+        tok = (oa.get("accessToken") or "").strip() or None
+        return tok, (int(exp / 1000) if isinstance(exp, (int, float)) else None)
 
-    tok = None
+    tok = exp = None
     cred = os.path.expanduser("~/.claude/.credentials.json")
     if os.path.exists(cred):
         try:
-            tok = _from_blob(json.load(open(cred)))
+            tok, exp = _from_blob(json.load(open(cred)))
         except Exception:  # noqa: BLE001
-            tok = None
+            tok = exp = None
     if tok is None and sys.platform == "darwin":
         try:
             import subprocess
@@ -539,11 +574,15 @@ def _cli_credential():
                                 "-s", "Claude Code-credentials", "-w"],
                                capture_output=True, text=True, timeout=5)
             if r.returncode == 0 and r.stdout.strip():
-                tok = _from_blob(json.loads(r.stdout))
+                tok, exp = _from_blob(json.loads(r.stdout))
         except Exception:  # noqa: BLE001
-            tok = None
-    _CLI_CRED_CACHE.update(tok=tok, until=now + 60)
-    return tok
+            tok = exp = None
+    _CLI_CRED_CACHE.update(tok=tok, exp=exp, until=now + 60)
+    return tok, exp
+
+
+def _cli_credential():
+    return _cli_credential_detail()[0]
 
 
 class OAuthTokenUnavailable(RuntimeError):

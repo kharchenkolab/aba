@@ -1573,6 +1573,17 @@ async def stream_response(
 
     except Exception as e:
         print(f"[guide] stream_response failed: {type(e).__name__}: {e}")
+        # A 401 is the provider's verdict on the credential we just sent — the
+        # only thing that can falsify a pasted token, which has no local expiry.
+        # Without this, Settings keeps calling a revoked credential valid.
+        try:
+            from core import credentials as _creds
+            _rej = _creds.note_auth_failure(e)
+            if _rej:
+                print(f"[guide] credential rejected by provider: {_rej['reason']} "
+                      f"(source={_rej['source']} fp={_rej['fingerprint']})", flush=True)
+        except Exception:  # noqa: BLE001
+            pass
         turn.error = {"type": type(e).__name__, "message": str(e)}
         turn.transition(TurnState.FAILED)
         checkpoint(turn)
