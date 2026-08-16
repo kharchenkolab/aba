@@ -302,7 +302,75 @@ def test_no_deployment_found_asks_rather_than_guessing(tmp_path, monkeypatch, ca
 
 def paste(monkeypatch, value, tty=True):
     monkeypatch.setattr(sys.stdin, "isatty", lambda: tty, raising=False)
-    monkeypatch.setattr(eg.getpass, "getpass", lambda prompt="": value)
+    monkeypatch.setattr(eg, "_read_masked", lambda prompt="": value)
+
+
+def drive_prompt(feed):
+    """Run the real prompt against a real terminal. Returns (value, on_screen).
+
+    A pty, because the whole behaviour under test IS terminal behaviour —
+    raw mode, per-character echo, backspace — none of which a StringIO has."""
+    import pty
+    import termios
+    master, slave = pty.openpty()
+    # Take the pty's line discipline OUT of the picture before feeding it.
+    # In canonical mode the terminal itself echoes the input, and applies ERASE
+    # (0x7f) and KILL (0x15) to its own buffer — so the backspace and ctrl-U
+    # tests passed against a build with both handlers deleted: the pty had
+    # already done the editing. The fake was doing the work under test.
+    attrs = termios.tcgetattr(slave)
+    attrs[3] &= ~(termios.ECHO | termios.ICANON)
+    termios.tcsetattr(slave, termios.TCSANOW, attrs)
+    os.write(master, feed.encode())
+    tin = os.fdopen(os.dup(slave), "r", newline="")
+    tout = os.fdopen(os.dup(slave), "w")
+    saved = (sys.stdin, sys.stdout)
+    # A prompt that swallows its input BLOCKS rather than returning something
+    # wrong (tty.setraw's default TCSAFLUSH discards the queue, which is
+    # exactly that failure). Turn the hang into a test failure, or the guard
+    # protects nothing when the suite is run unattended.
+    import signal
+
+    def too_slow(*_):
+        raise AssertionError("the prompt never returned — it discarded its input")
+
+    old_alarm = signal.signal(signal.SIGALRM, too_slow)
+    signal.alarm(5)
+    try:
+        sys.stdin, sys.stdout = tin, tout
+        value = eg._read_masked("paste: ")
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_alarm)
+        sys.stdin, sys.stdout = saved
+        tin.close()
+        tout.close()
+        os.close(slave)
+    shown = os.read(master, 1 << 16).decode(errors="replace")
+    os.close(master)
+    return value, shown
+
+
+def test_the_prompt_shows_stars_and_never_the_characters():
+    """The feedback the operator asked for — you can see the paste land — with
+    the secret still off the screen and out of any scrollback."""
+    value, shown = drive_prompt(OAUTH + "\r")
+    assert value == OAUTH
+    assert OAUTH not in shown
+    assert shown.count("*") == len(OAUTH)
+
+
+def test_a_typo_at_the_prompt_can_be_corrected():
+    """Without backspace the only correction is to abandon and start again —
+    and the operator cannot see what they are correcting."""
+    value, _ = drive_prompt("abc\x7f\x7fZ\r")
+    assert value == "aZ"
+
+
+def test_ctrl_u_clears_the_whole_line():
+    value, shown = drive_prompt("wrongpaste\x15" + OAUTH + "\r")
+    assert value == OAUTH
+    assert "wrongpaste" not in shown
 
 
 def test_a_pasted_token_enrols_the_lab(site, capsys, monkeypatch):
@@ -382,7 +450,7 @@ def test_giving_up_at_the_prompt_is_not_a_crash(site, capsys, monkeypatch):
     def bail(prompt=""):
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(eg.getpass, "getpass", bail)
+    monkeypatch.setattr(eg, "_read_masked", bail)
     before = snapshot(site["groups"])
     assert eg.main([REAL_GROUP, "--site", site["cfg"], "--yes", "--paste-token"]) == 2
     assert snapshot(site["groups"]) == before
@@ -398,6 +466,76 @@ def test_pasting_is_not_consent(site, monkeypatch):
     before = snapshot(site["groups"])
     assert eg.main([REAL_GROUP, "--site", site["cfg"], "--paste-token"]) == 0
     assert snapshot(site["groups"]) == before
+
+
+# ── a mode is only evidence where modes are honoured ────────────────────────
+#
+# Live catch, 2026-08-16: a real enrolment into /groups/tanaka wrote a correct
+# credential, printed "readable by: … this filesystem does not appear to honour
+# permission bits", and then FAILED validation with "readable by anyone on the
+# cluster" — reading as fact the very mode the line above had just explained
+# away. Same defect as the setgid check: asserting a mechanism on a filesystem
+# that does not implement it.
+
+
+def enrol(site, *extra):
+    return eg.main([REAL_GROUP, "--site", site["cfg"], "--yes",
+                    "--oauth-token", OAUTH, *extra])
+
+
+def test_a_meaningless_mode_is_not_read_as_a_leak(site, capsys, monkeypatch):
+    """The live shape, reproduced: the credential reads 0777 AND chmod does
+    nothing about it. Enrolment succeeded, so it must say so.
+
+    Built by patching the real os.chmod rather than stubbing the probe, so the
+    detection itself stays under test."""
+    assert enrol(site) == 0
+    cred = site["groups"] / "testlab" / "aba" / ".credentials.json"
+    os.chmod(cred, 0o777)                       # what the lab export reports
+    monkeypatch.setattr(eg.os, "chmod", lambda *a, **k: None)   # ...and keeps reporting
+    capsys.readouterr()
+    assert enrol(site) == 0, "a correctly enrolled lab must not be called broken"
+    out = capsys.readouterr().out
+    assert "readable by anyone" not in out
+    assert cred.stat().st_mode & 0o007, "the fake must keep the mode that fooled us"
+
+
+def test_but_a_real_leak_on_a_real_filesystem_still_fails(site, capsys, monkeypatch):
+    """The paired positive — without it the fix above is indistinguishable from
+    deleting the check. Here chmod works (so a mode is evidence) and the
+    credential really is open to the cluster."""
+    real_chmod = os.chmod
+
+    def the_credential_will_not_stay_shut(path, mode, *a, **k):
+        return real_chmod(path, 0o777 if str(path).endswith(".credentials.json") else mode)
+
+    monkeypatch.setattr(eg.os, "chmod", the_credential_will_not_stay_shut)
+    assert enrol(site) == 3
+    assert "readable by anyone" in capsys.readouterr().out
+
+
+def test_validate_only_looks_at_the_credential_already_there(site, capsys):
+    """`--validate-only` carries no credential flag, and used to take that as
+    'no credential to check' — reporting a lab healthy without ever opening the
+    login it launches with."""
+    assert enrol(site) == 0
+    (site["groups"] / "testlab" / "aba" / ".credentials.json").write_text("{}\n")
+    assert eg.main([REAL_GROUP, "--site", site["cfg"], "--validate-only"]) == 3
+    assert "does not contain a login" in capsys.readouterr().out
+
+
+def test_the_probe_tells_the_two_filesystems_apart(tmp_path, monkeypatch):
+    assert eg._honours_mode_bits(tmp_path) is True
+    monkeypatch.setattr(eg.os, "chmod", lambda *a, **k: None)
+    assert eg._honours_mode_bits(tmp_path) is False
+
+
+def test_the_probe_leaves_nothing_behind(tmp_path, monkeypatch):
+    before = snapshot(tmp_path)
+    eg._honours_mode_bits(tmp_path)
+    monkeypatch.setattr(eg.os, "chmod", lambda *a, **k: None)
+    eg._honours_mode_bits(tmp_path)
+    assert snapshot(tmp_path) == before
 
 
 # ── validation is ARMED: it must be able to FAIL ───────────────────────────

@@ -214,6 +214,60 @@ def _token_as_credential(value):
         "of it — a copied shell prompt or a stray quote is the usual cause.")
 
 
+def _read_masked(prompt):
+    """Read a line from the terminal, echoing one * per character.
+
+    getpass shows NOTHING, and for a pasted hundred-character secret that is
+    indistinguishable from a paste that never landed — the operator's only move
+    is to press enter and find out. Stars give the feedback back and cost no
+    secrecy: a length is not a secret, and we report it either way.
+
+    Backspace and ctrl-U work, because a prompt you cannot correct is one you
+    have to abandon and restart."""
+    try:
+        import termios
+        import tty
+        fd = sys.stdin.fileno()
+        saved = termios.tcgetattr(fd)
+    except Exception:
+        return getpass.getpass(prompt)      # no line discipline to borrow
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+    typed = []
+    try:
+        # TCSADRAIN, not tty.setraw's default TCSAFLUSH: flushing DISCARDS
+        # anything already in the input queue, so a fast paste — the normal
+        # case here — loses its leading characters and the operator is told
+        # their token was cut short.
+        tty.setraw(fd, termios.TCSADRAIN)
+        while True:
+            ch = sys.stdin.read(1)
+            if ch in ("", "\r", "\n"):
+                break
+            if ch == "\x03":
+                raise KeyboardInterrupt
+            if ch == "\x04":
+                raise EOFError
+            if ch in ("\x7f", "\x08"):                  # backspace
+                if typed:
+                    typed.pop()
+                    sys.stdout.write("\b \b")
+            elif ch == "\x15":                          # ctrl-U — start over
+                sys.stdout.write("\b \b" * len(typed))
+                typed.clear()
+            elif ch >= " ":
+                typed.append(ch)
+                sys.stdout.write("*")
+            else:
+                continue                                # other control keys
+            sys.stdout.flush()
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+    return "".join(typed)
+
+
 def _prompt_for_token():
     """Ask for the token instead of taking it on the command line.
 
@@ -228,7 +282,7 @@ def _prompt_for_token():
             "credential with --cred-file instead.")
     print(PASTE_HELP)
     try:
-        value = getpass.getpass("Paste the token here (it will NOT appear on screen): ")
+        value = _read_masked("Paste the token here (shown as ****): ")
     except (EOFError, KeyboardInterrupt):
         raise Refusal("Nothing was pasted, so there is no credential to install.",
                       "Run this command again when you have a token.")
@@ -322,17 +376,18 @@ def build_plan(a):
     skeleton = gcfg.get("skeleton_template")
     cred_kind, cred_data = _validated_credential(a)
 
-    cred_path = None
-    if cred_kind:
-        gkey = (site.get("credentials") or {}).get("group_key_path")
-        if not gkey:
-            raise Refusal(
-                "This ABA installation has no place configured for a lab-shared "
-                "credential (credentials.group_key_path is not set).",
-                "Re-run without the credential option to enrol the group anyway "
-                "— each user can then connect their own subscription in "
-                "Settings → Agent. Or ask your admin to set that key.")
-        cred_path = Path(_ex(gkey))
+    # Resolved whenever the SITE names one, not only when this run supplies a
+    # credential — otherwise `--validate-only` has no path to look at and
+    # reports on a lab without ever opening the login it launches with.
+    gkey = (site.get("credentials") or {}).get("group_key_path")
+    if cred_kind and not gkey:
+        raise Refusal(
+            "This ABA installation has no place configured for a lab-shared "
+            "credential (credentials.group_key_path is not set).",
+            "Re-run without the credential option to enrol the group anyway "
+            "— each user can then connect their own subscription in "
+            "Settings → Agent. Or ask your admin to set that key.")
+    cred_path = Path(_ex(gkey)) if gkey else None
 
     plan = Plan(a.group, group_dir, root, skeleton, cred_kind, cred_path,
                 cred_data, a.site, a.by)
@@ -520,6 +575,35 @@ def _new_files_belong_to_the_lab(root: Path, want_gid: int):
             pass
 
 
+def _honours_mode_bits(root: Path):
+    """(True|False|None) — does a permission we set here MEAN anything?
+
+    Ask before reading any mode as fact. On the lab export (OneFS over NFSv4)
+    `chmod` is a silent no-op: every file reads 0777 whatever we asked for, and
+    access is decided by a server-side ACL the bits do not describe. Reading
+    0777 there and announcing "readable by anyone on the cluster" tells an
+    operator their correctly-enrolled lab is broken, and hands them a remedy no
+    admin can carry out — the same mistake the setgid check used to make.
+
+    Deliberately create PERMISSIVE and then restrict, so the answer turns on
+    whether the chmod took, not on what the create happened to yield."""
+    probe = root / f".aba-mode-check-{os.getpid()}"
+    try:
+        os.close(os.open(probe, os.O_CREAT | os.O_WRONLY | os.O_EXCL, 0o666))
+    except OSError:
+        return None
+    try:
+        os.chmod(probe, 0o600)
+        return stat.S_IMODE(probe.stat().st_mode) == 0o600
+    except OSError:
+        return None
+    finally:
+        try:
+            probe.unlink()
+        except OSError:
+            pass
+
+
 def _effective_readers(path: Path, group: str) -> str:
     """Who can actually read this file, in plain words.
 
@@ -589,8 +673,12 @@ def validate(plan):
     except (KeyError, OSError) as e:
         problems.append(f"could not check ownership of {plan.root}: {e}")
 
-    # (c) the credential, if one was placed: parses, has a known key, is private.
-    if plan.cred_kind:
+    # (c) the credential: parses, has a known key, is private.
+    # Checked whenever one is EXPECTED — because this run placed one, or
+    # because a previous run already did. `--validate-only` with no credential
+    # flag used to skip this block entirely, so it reported a lab healthy
+    # without ever looking at the login that lab launches with.
+    if plan.cred_path and (plan.cred_kind or plan.cred_path.exists()):
         if not plan.cred_path.exists():
             problems.append(f"the shared login file {plan.cred_path} is missing.")
         else:
@@ -607,15 +695,19 @@ def validate(plan):
             # one side is how 0600 survived — "not world-readable" looked right.
             if plan.cred_path.exists():
                 st = plan.cred_path.stat()
-                if st.st_mode & 0o007:
-                    problems.append(
-                        f"{plan.cred_path} is readable by anyone on the cluster "
-                        f"— it must be limited to the lab.")
-                if not st.st_mode & 0o040:
-                    problems.append(
-                        f"{plan.cred_path} is not readable by the {plan.group} "
-                        f"group, so only you would be able to start a session — "
-                        f"everyone else would silently get no login.")
+                # ...but only where a mode is evidence. Where chmod is a no-op
+                # the bits describe nothing, and the group ownership checked
+                # just below is what actually decides who can read this.
+                if _honours_mode_bits(plan.cred_path.parent):
+                    if st.st_mode & 0o007:
+                        problems.append(
+                            f"{plan.cred_path} is readable by anyone on the cluster "
+                            f"— it must be limited to the lab.")
+                    if not st.st_mode & 0o040:
+                        problems.append(
+                            f"{plan.cred_path} is not readable by the {plan.group} "
+                            f"group, so only you would be able to start a session — "
+                            f"everyone else would silently get no login.")
                 try:
                     if st.st_gid != grp.getgrnam(plan.group).gr_gid:
                         problems.append(
