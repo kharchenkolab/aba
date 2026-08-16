@@ -3,7 +3,8 @@
 
 Usage:
   enroll_group.py <group> [--site PATH] [--yes] [--dry-run] [--validate-only]
-        [--api-key sk-ant-api… | --oauth-token sk-ant-oat… | --cred-file FILE]
+        [--paste-token | --api-key sk-ant-api… | --oauth-token sk-ant-oat…
+         | --cred-file FILE]
         [--by NAME]
 
 WHO RUNS THIS: one person per lab, once, and quite possibly someone who has
@@ -136,12 +137,85 @@ def _check_group_exists(group):
             "Check the spelling. To see the groups you belong to, run:  groups")
 
 
+# Shortest body we will believe after the prefix. Real tokens run ~100 chars;
+# this only has to be long enough that a truncated copy cannot pass.
+_CRED_MIN_BODY = 20
+
+PASTE_HELP = """
+To get a token, open a SECOND terminal window and run:
+
+    claude setup-token
+
+It asks you to sign in with a browser, then prints one long line starting
+with sk-ant-oat01- . Copy that whole line and paste it below.
+"""
+
+
+def _token_as_credential(value):
+    """(kind, json_text) for a token typed or pasted by a person.
+
+    Which slot it belongs in is DETECTED from the prefix rather than asked,
+    because the operator has no way to know the difference and a credential in
+    the wrong slot resolves to a weaker auth mode — the lab quietly loses the
+    model tier it thought it was getting."""
+    value = value.strip().strip('"').strip("'").strip()
+    if not value:
+        raise Refusal(
+            "Nothing was pasted, so there is no credential to install.",
+            "Run `claude setup-token`, copy the sk-ant-oat01-… line it prints, "
+            "then run this command again.")
+    for flag, spec in CRED_KINDS.items():
+        if value.startswith(spec["prefix"]):
+            # A half-copied line still starts with the prefix. Written out, it
+            # enrols cleanly and then fails at somebody's first launch, where
+            # nothing points back to this moment.
+            if len(value) - len(spec["prefix"]) < _CRED_MIN_BODY:
+                raise Refusal(
+                    "That looks like the beginning of a token, but it was cut short.",
+                    "Select the WHOLE line — real tokens are around a hundred "
+                    "characters long — and paste it again.")
+            return flag, json.dumps({spec["json_key"]: value}) + "\n"
+    raise Refusal(
+        "That does not look like a Claude token or an Anthropic API key.",
+        "It should begin with sk-ant-oat01- (from `claude setup-token`) or "
+        "sk-ant-api- (an API key). Copy the whole line, with nothing in front "
+        "of it — a copied shell prompt or a stray quote is the usual cause.")
+
+
+def _prompt_for_token():
+    """Ask for the token instead of taking it on the command line.
+
+    `--oauth-token <secret>` works, but it leaves the secret in the shell
+    history and, while it runs, in `ps` for everyone on the login node. The
+    operator this script is written for cannot be expected to know that, so the
+    safe way has to be the easy way."""
+    if not sys.stdin.isatty():
+        raise Refusal(
+            "--paste-token needs a terminal it can ask a question on.",
+            "Run this command directly in a terminal window, or supply the "
+            "credential with --cred-file instead.")
+    print(PASTE_HELP)
+    try:
+        value = getpass.getpass("Paste the token here (it will NOT appear on screen): ")
+    except (EOFError, KeyboardInterrupt):
+        raise Refusal("Nothing was pasted, so there is no credential to install.",
+                      "Run this command again when you have a token.")
+    kind, text = _token_as_credential(value)
+    # Say enough that the operator knows the paste landed, and no more. A hidden
+    # prompt gives no feedback at all, which reads as "it didn't take".
+    print(f"· read a {kind} of {len(value.strip())} characters\n")
+    return kind, text
+
+
 def _validated_credential(a):
     """Return (kind, json_text) for the credential flags, or (None, None).
 
     Refuses a credential in the wrong slot and a --cred-file that is not the
     JSON this script writes; a 0600 file full of the wrong thing fails later,
     at a user's first launch, where nobody can connect it back to enrolment."""
+    if getattr(a, "paste_token", False):
+        return _prompt_for_token()
+
     if a.cred_file:
         p = Path(a.cred_file)
         if not p.exists():
@@ -539,6 +613,9 @@ def main(argv=None):
     c.add_argument("--api-key", help="Anthropic API key (sk-ant-api…) — lab-shared")
     c.add_argument("--oauth-token", help="Claude OAuth token (sk-ant-oat…) — lab-shared")
     c.add_argument("--cred-file", help="path to a ready credentials.json to install")
+    c.add_argument("--paste-token", action="store_true",
+                   help="ask for the token and read it without echoing — keeps it "
+                        "out of the shell history and out of `ps`")
     a = ap.parse_args(argv)
 
     try:

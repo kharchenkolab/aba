@@ -241,6 +241,113 @@ def test_the_shared_login_is_readable_by_the_LAB(site):
     assert st.st_mode & 0o007 == 0, "but the rest of the cluster must not"
 
 
+# ── --paste-token: the only credential route a novice can be talked through ─
+#
+# The other three routes each assume the operator already has the secret in a
+# file or is willing to type it after `--oauth-token`, where it lands in the
+# shell history and in `ps` for everyone on the login node. This one asks.
+
+
+def paste(monkeypatch, value, tty=True):
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: tty, raising=False)
+    monkeypatch.setattr(eg.getpass, "getpass", lambda prompt="": value)
+
+
+def test_a_pasted_token_enrols_the_lab(site, capsys, monkeypatch):
+    paste(monkeypatch, OAUTH)
+    assert eg.main([REAL_GROUP, "--site", site["cfg"], "--yes", "--paste-token"]) == 0
+    cred = json.loads((site["groups"] / "testlab" / "aba" / ".credentials.json").read_text())
+    assert cred == {"claude_code_oauth_token": OAUTH}
+
+
+def test_the_pasted_secret_never_reaches_the_screen(site, capsys, monkeypatch):
+    """A hidden prompt that then ECHOES the value in a confirmation line is
+    worse than no hiding at all: the operator believes it was private.
+
+    The feedback the operator does need — did my paste land? — is the LENGTH,
+    which is not the secret."""
+    paste(monkeypatch, OAUTH)
+    assert eg.main([REAL_GROUP, "--site", site["cfg"], "--yes", "--paste-token"]) == 0
+    out = capsys.readouterr()
+    assert OAUTH not in out.out and OAUTH not in out.err
+    assert str(len(OAUTH)) in out.out, "the operator must see that the paste landed"
+
+
+def test_an_api_key_pasted_goes_in_the_api_key_slot(site, monkeypatch):
+    """The operator is not asked which kind it is — they have no way to know.
+    Detected from the prefix, because the wrong slot silently degrades the
+    lab's auth mode until someone's first launch."""
+    paste(monkeypatch, APIKEY)
+    assert eg.main([REAL_GROUP, "--site", site["cfg"], "--yes", "--paste-token"]) == 0
+    cred = json.loads((site["groups"] / "testlab" / "aba" / ".credentials.json").read_text())
+    assert cred == {"anthropic_api_key": APIKEY}
+
+
+@pytest.mark.parametrize("pasted", [
+    "",                                  # hit enter
+    "   \n  ",                           # pasted nothing but whitespace
+    "ghp_wrongthing",                    # a token, just not ours
+    "$ sk-ant-oat01-" + "t" * 20,        # copied the shell prompt too
+    "sk-ant-oat01",                      # copied only as far as the prefix
+    "Bearer sk-ant-oat01-" + "t" * 20,   # copied it out of a header
+])
+def test_a_bad_paste_creates_nothing(site, capsys, monkeypatch, pasted):
+    """WIDE on purpose: every one of these is a real way a paste goes wrong,
+    and each must cost the operator nothing but a retry."""
+    before = snapshot(site["groups"])
+    paste(monkeypatch, pasted)
+    assert eg.main([REAL_GROUP, "--site", site["cfg"], "--yes", "--paste-token"]) == 2
+    assert snapshot(site["groups"]) == before
+    err = capsys.readouterr().err
+    assert "Traceback" not in err
+    assert "What to do" in err, "a refusal without a next step strands this operator"
+
+
+def test_surrounding_quotes_are_forgiven(site, monkeypatch):
+    """Pasting from a place that added quotes is not an error worth a refusal."""
+    paste(monkeypatch, f'  "{OAUTH}"  ')
+    assert eg.main([REAL_GROUP, "--site", site["cfg"], "--yes", "--paste-token"]) == 0
+    cred = json.loads((site["groups"] / "testlab" / "aba" / ".credentials.json").read_text())
+    assert cred == {"claude_code_oauth_token": OAUTH}
+
+
+def test_without_a_terminal_it_refuses_rather_than_echoing(site, capsys, monkeypatch):
+    """getpass falls back to VISIBLE input when it cannot get a tty, and warns
+    on stderr. For this script that fallback is the failure: the secret appears
+    on screen, and in a piped/CI context it would be captured in a log."""
+    before = snapshot(site["groups"])
+    paste(monkeypatch, OAUTH, tty=False)
+    assert eg.main([REAL_GROUP, "--site", site["cfg"], "--yes", "--paste-token"]) == 2
+    assert snapshot(site["groups"]) == before
+    assert "--cred-file" in capsys.readouterr().err, "name the route that does work"
+
+
+def test_giving_up_at_the_prompt_is_not_a_crash(site, capsys, monkeypatch):
+    """Ctrl-C or Ctrl-D at a password prompt is the commonest thing a nervous
+    operator does. It must read as 'nothing happened', not as breakage."""
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
+
+    def bail(prompt=""):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(eg.getpass, "getpass", bail)
+    before = snapshot(site["groups"])
+    assert eg.main([REAL_GROUP, "--site", site["cfg"], "--yes", "--paste-token"]) == 2
+    assert snapshot(site["groups"]) == before
+    assert "Traceback" not in capsys.readouterr().err
+
+
+def test_pasting_is_not_consent(site, monkeypatch):
+    """The token is collected before the plan is shown, so that the plan can
+    say which credential mode the lab will get. Collecting it must not be read
+    as agreeing to the plan."""
+    paste(monkeypatch, OAUTH)
+    monkeypatch.setattr("builtins.input", lambda *_: "n")
+    before = snapshot(site["groups"])
+    assert eg.main([REAL_GROUP, "--site", site["cfg"], "--paste-token"]) == 0
+    assert snapshot(site["groups"]) == before
+
+
 # ── validation is ARMED: it must be able to FAIL ───────────────────────────
 
 def _secondary_gid():
