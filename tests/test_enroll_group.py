@@ -241,6 +241,58 @@ def test_the_shared_login_is_readable_by_the_LAB(site):
     assert st.st_mode & 0o007 == 0, "but the rest of the cluster must not"
 
 
+# ── --site defaults to the deployment this copy was installed into ──────────
+#
+# The default used to be /cluster/aba/site.yaml, which exists on no cluster we
+# run on, so every operator had to be told a path — and telling them the WRONG
+# lane's path is how a lab gets enrolled into staging and never appears.
+
+
+@pytest.fixture
+def deployed(tmp_path, monkeypatch):
+    """A share laid out the way deploy.sh lays it out: <share>/ops/<script>."""
+    monkeypatch.delenv("ABA_SITE_CONFIG", raising=False)
+    share = tmp_path / "share"
+    (share / "ops").mkdir(parents=True)
+    (share / "site.yaml").write_text("scopes: {}\n")
+    monkeypatch.setattr(eg, "__file__", str(share / "ops" / "enroll-group.py"))
+    monkeypatch.setattr(eg, "PORTABLE_SITE", tmp_path / "nowhere" / "site.yaml")
+    return share
+
+
+def test_the_default_site_is_the_one_beside_this_copy(deployed):
+    """Staged copy → staged site; production copy → production site. The
+    script's own location is the only thing that distinguishes the lanes, and
+    it cannot drift the way a hardcoded path can."""
+    assert eg.default_site() == deployed / "site.yaml"
+
+
+def test_an_explicit_setting_still_wins(deployed, tmp_path, monkeypatch):
+    elsewhere = tmp_path / "other.yaml"
+    elsewhere.write_text("scopes: {}\n")
+    monkeypatch.setenv("ABA_SITE_CONFIG", str(elsewhere))
+    assert eg.default_site() == elsewhere
+
+
+def test_a_setting_that_points_nowhere_is_reported_not_silently_replaced(
+        deployed, tmp_path, monkeypatch, capsys):
+    """If someone set ABA_SITE_CONFIG and it is wrong, say so. Quietly using a
+    different site instead is how a group lands in the wrong deployment."""
+    monkeypatch.setenv("ABA_SITE_CONFIG", str(tmp_path / "typo.yaml"))
+    assert eg.main([REAL_GROUP]) == 2
+    assert "typo.yaml" in capsys.readouterr().err
+
+
+def test_no_deployment_found_asks_rather_than_guessing(tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv("ABA_SITE_CONFIG", raising=False)
+    monkeypatch.setattr(eg, "__file__", str(tmp_path / "loose" / "enroll-group.py"))
+    monkeypatch.setattr(eg, "PORTABLE_SITE", tmp_path / "nowhere" / "site.yaml")
+    assert eg.default_site() is None
+    assert eg.main([REAL_GROUP, "--yes"]) == 2
+    err = capsys.readouterr().err
+    assert "Traceback" not in err and "--site" in err
+
+
 # ── --paste-token: the only credential route a novice can be talked through ─
 #
 # The other three routes each assume the operator already has the secret in a

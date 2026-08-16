@@ -104,7 +104,35 @@ class Plan:
         self.already = False            # workspace already exists and is ours
 
 
+def default_site():
+    """Where site.yaml is, without the operator having to know.
+
+    The deployed copy of this script lives at <share>/ops/enroll-group.py and
+    the site config at <share>/site.yaml, so the script's OWN location names
+    the deployment it belongs to. That is the one answer that stays right in
+    both lanes: the staged copy defaults to the staged site, the production
+    copy to the production site, with nothing hardcoded to drift.
+
+    Order: an explicit ABA_SITE_CONFIG, then our own share, then the portable
+    default for sites laid out the documented way. Returns a path that EXISTS,
+    or None — a default nobody set is worse than no default, because the
+    operator is then debugging a path they never chose."""
+    env = (os.environ.get("ABA_SITE_CONFIG") or "").strip()
+    if env:
+        return Path(env)                 # honour it even if wrong: say so plainly
+    for cand in (Path(__file__).resolve().parent.parent / "site.yaml",
+                 PORTABLE_SITE):
+        if cand.exists():
+            return cand
+    return None
+
+
 def _read_site(path):
+    if path is None:
+        raise Refusal(
+            "I could not work out which ABA deployment to enrol this group in.",
+            "Pass it explicitly:  --site /path/to/site.yaml\nYour cluster admin "
+            "can tell you where ABA is installed.")
     p = Path(path)
     if not p.exists():
         raise Refusal(
@@ -136,6 +164,10 @@ def _check_group_exists(group):
             f"There is no unix group called {group!r} on this cluster.",
             "Check the spelling. To see the groups you belong to, run:  groups")
 
+
+# Where site.yaml sits on a deployment laid out the documented way, for sites
+# that are not the share this script was deployed into.
+PORTABLE_SITE = Path("/cluster/aba/site.yaml")
 
 # Shortest body we will believe after the prefix. Real tokens run ~100 chars;
 # this only has to be long enough that a truncated copy cannot pass.
@@ -598,9 +630,9 @@ def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="enroll-group", description="Enrol a lab group in ABA.")
     ap.add_argument("group", help="the lab's unix group name")
-    ap.add_argument("--site", default=os.environ.get("ABA_SITE_CONFIG",
-                                                     "/cluster/aba/site.yaml"),
-                    help="site.yaml (default: $ABA_SITE_CONFIG)")
+    ap.add_argument("--site", default=default_site(),
+                    help="site.yaml (default: $ABA_SITE_CONFIG, else the "
+                         "site.yaml beside this script's own deployment)")
     ap.add_argument("--by", default=getpass.getuser(), help="who is enrolling (for the record)")
     ap.add_argument("--yes", action="store_true", help="skip the confirmation question")
     ap.add_argument("--dry-run", action="store_true",
