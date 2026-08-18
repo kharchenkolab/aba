@@ -165,6 +165,67 @@ def _check_group_exists(group):
             "Check the spelling. To see the groups you belong to, run:  groups")
 
 
+def _needs_a_writable_parent(root: Path):
+    """Refuse unless this operator could actually create/fill <root>.
+
+    Reached from two states — root absent, and root present but empty — which
+    the old single `else` conflated. Same requirement either way, so it is one
+    function rather than two copies that can drift."""
+    parent = root.parent
+    if not parent.exists():
+        raise Refusal(
+            f"The folder {parent} does not exist, so I cannot create {root}.",
+            "This usually means the lab has no shared directory yet. Ask "
+            "your cluster admin to create it.")
+    if not os.access(parent, os.W_OK):
+        raise Refusal(
+            f"You do not have permission to create {root}.",
+            f"Ask someone who can write to {parent} to run this command, or "
+            "ask your cluster admin for access.")
+
+
+def _visible(path: Path):
+    """True/False — or None when the answer is hidden from us.
+
+    exists()/is_dir()/iterdir() look like yes-or-no questions and are not:
+    they ignore ENOENT, ENOTDIR, EBADF and ELOOP, so a DENIED stat comes
+    straight back out as PermissionError. Letting it is wrong here: a lab
+    directory we are not allowed to look at is not an absent one, and treating
+    it as absent sends this script off to create a folder it has no business
+    creating. So the caller gets three answers and has to handle the third."""
+    try:
+        path.stat()
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return None
+
+
+def _nonempty(path: Path):
+    """True/False — or None when we may stat the directory but not read it.
+
+    A directory with execute but not read permission answers every
+    (path / marker) probe and still refuses to list itself, so this is a
+    genuinely separate outcome from "empty", not a tidier spelling of it."""
+    try:
+        return any(path.iterdir())
+    except OSError:
+        return None
+
+
+def _not_ours_to_see(path: Path, group):
+    """The refusal for a lab tree this operator cannot look into.
+
+    Wrong-person-at-the-keyboard is the likeliest way this command is run
+    (the operator walking a lab through enrolment is usually not in that lab),
+    so it is the one failure that most needs to say so in those words."""
+    return Refusal(
+        f"You are not allowed to look inside {path}, so this command cannot "
+        f"tell whether {group} is already enrolled.",
+        f"Enrolment has to be run by a member of {group}. Ask someone in the "
+        f"lab to run this same command, or ask your cluster admin for access.")
+
 # Where site.yaml sits on a deployment laid out the documented way, for sites
 # that are not the share this script was deployed into.
 PORTABLE_SITE = Path("/cluster/aba/site.yaml")
@@ -394,26 +455,28 @@ def build_plan(a):
 
     _check_group_exists(a.group)          # FIRST, and fatal
 
-    # Target state: ours (re-run), foreign (refuse), or new (needs a writable parent).
-    if root.exists() and any((root / m).exists() for m in OURS_MARKERS):
+    # Target state: ours (re-run), foreign (refuse), or new (needs a writable
+    # parent) — and "cannot tell", which is none of those and gets its own say.
+    here = _visible(root)
+    if here is None:
+        raise _not_ours_to_see(root.parent, a.group)
+    marks = [_visible(root / m) for m in OURS_MARKERS] if here else []
+    if None in marks:
+        raise _not_ours_to_see(root, a.group)
+    if any(marks):
         plan.already = True
-    elif root.exists() and any(root.iterdir()):
-        raise Refusal(
-            f"{root} already exists and is not an ABA workspace.",
-            "Something else is using that folder. Move it aside (or ask your "
-            "admin to), then run this again.")
+    elif here:
+        used = _nonempty(root)
+        if used is None:
+            raise _not_ours_to_see(root, a.group)
+        if used:
+            raise Refusal(
+                f"{root} already exists and is not an ABA workspace.",
+                "Something else is using that folder. Move it aside (or ask "
+                "your admin to), then run this again.")
+        _needs_a_writable_parent(root)
     else:
-        parent = root.parent
-        if not parent.exists():
-            raise Refusal(
-                f"The folder {parent} does not exist, so I cannot create {root}.",
-                "This usually means the lab has no shared directory yet. Ask "
-                "your cluster admin to create it.")
-        if not os.access(parent, os.W_OK):
-            raise Refusal(
-                f"You do not have permission to create {root}.",
-                f"Ask someone who can write to {parent} to run this command, or "
-                "ask your cluster admin for access.")
+        _needs_a_writable_parent(root)
 
     if skeleton and not Path(skeleton).is_dir():
         raise Refusal(
@@ -633,11 +696,20 @@ def validate(plan):
     to catch the case where the writes 'succeeded' and the lab still will not
     appear. Returns a list of problems; empty means enrolled for real."""
     problems = []
-    if not plan.root.is_dir():
+    here = _visible(plan.root)
+    if here is None:
+        return [f"{plan.root} cannot be looked at from this account, so nothing "
+                f"about {plan.group}'s enrolment can be confirmed from here — "
+                f"ask a member of {plan.group} to run this check."]
+    if not here:
         return [f"{plan.root} does not exist."]
+    if not plan.root.is_dir():
+        return [f"{plan.root} is not a folder, so ABA cannot use it as a workspace."]
 
-    # (a) the form's own predicate: at least one marker, and readable.
-    if not any((plan.root / m).exists() for m in OURS_MARKERS):
+    # (a) the form's own predicate: at least one marker, and readable. A marker
+    # we are not allowed to stat is not a marker that is absent, and the form
+    # will not be able to see it either — so it reads as missing, not as a crash.
+    if not any(_visible(plan.root / m) for m in OURS_MARKERS):
         problems.append(
             f"{plan.root} has none of the markers ABA looks for "
             f"({', '.join(OURS_MARKERS)}) — the lab will not appear on the form.")

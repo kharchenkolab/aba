@@ -762,3 +762,90 @@ def test_the_enrolled_lab_passes_the_launch_gate(site, tmp_path, monkeypatch):
     assert "ANTHROPIC_API_KEY=" not in env
     # never echoed to the terminal, only to the 0600 env file
     assert OAUTH not in (staged / "status.yaml").read_text()
+
+
+# ── the wrong person at the keyboard ────────────────────────────────────────
+# The operator walking a lab through enrolment is usually NOT in that lab, so
+# this is the likeliest way the command is run and the one failure that most
+# needs to say so in words. It used to say the opposite of words: pathlib's
+# predicates ignore ENOENT/ENOTDIR/EBADF/ELOOP and nothing else, so a DENIED
+# stat has always come straight back out — `root.exists()` escaped build_plan's own
+# permission check — which exists, is correct, and was simply never reached —
+# and surfaced as "something went wrong that I did not expect (PermissionError
+# ...)". Caught live, dry-running mendjan.grp from an account outside it.
+
+@pytest.fixture
+def hidden(site):
+    """The lab's shared folder, present but not lookable-into from here."""
+    lab = site["groups"] / "testlab"
+    lab.chmod(0o000)
+    try:
+        if os.access(lab / "aba", os.F_OK):
+            pytest.skip("running with rights that ignore mode bits (root?)")
+        yield site
+    finally:
+        lab.chmod(0o755)            # or tmp_path cleanup cannot run
+
+
+def test_a_lab_you_cannot_look_into_names_who_should_run_it(hidden, capsys):
+    rc = eg.main([REAL_GROUP, "--site", hidden["cfg"], "--dry-run"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "did not expect" not in err, \
+        "the likeliest operator error must not surface as an internal crash"
+    assert "PermissionError" not in err and "Traceback" not in err
+    assert f"member of {REAL_GROUP}" in err, "it must name who CAN run it"
+
+
+def test_a_hidden_lab_is_never_treated_as_an_absent_one(hidden, capsys):
+    """The real run, not --dry-run: a credential is in hand and --yes is set,
+    so this is the path that would actually write.
+
+    Asserting only "nothing was created" would NOT discriminate — the crash
+    creates nothing either. What separates the two is whether the operator is
+    told who can do this instead."""
+    rc = eg.main([REAL_GROUP, "--site", hidden["cfg"], "--yes",
+                  "--oauth-token", OAUTH])
+    assert rc == 2
+    both = capsys.readouterr()
+    lab = hidden["groups"] / "testlab"
+    lab.chmod(0o755)                    # the test cannot stat it either
+    try:
+        assert not (lab / "aba").exists()
+    finally:
+        lab.chmod(0o000)
+    assert f"member of {REAL_GROUP}" in both.err, \
+        "a real enrolment attempt must explain itself as well as a dry run does"
+    assert OAUTH not in (both.out + both.err)
+
+
+def test_validate_only_on_a_hidden_lab_reports_rather_than_crashing(site, capsys):
+    assert enrol(site) == 0                     # enrolled while we still could
+    capsys.readouterr()
+    (site["groups"] / "testlab").chmod(0o000)
+    try:
+        if os.access(site["groups"] / "testlab" / "aba", os.F_OK):
+            pytest.skip("running with rights that ignore mode bits (root?)")
+        rc = eg.main([REAL_GROUP, "--site", site["cfg"], "--validate-only"])
+    finally:
+        (site["groups"] / "testlab").chmod(0o755)
+    both = capsys.readouterr()
+    assert "did not expect" not in both.err and "Traceback" not in both.err
+    assert rc != 0, "an unverifiable enrolment must not report success"
+    assert REAL_GROUP in (both.out + both.err)
+
+
+def test_hidden_absent_and_present_are_three_answers_not_two(tmp_path):
+    """_visible's whole reason to exist. False and None must not collapse."""
+    box = tmp_path / "box"; box.mkdir()
+    (box / "there").touch()
+    assert eg._visible(box / "there") is True
+    assert eg._visible(box / "nope") is False
+    box.chmod(0o000)
+    try:
+        if os.access(box / "there", os.F_OK):
+            pytest.skip("running with rights that ignore mode bits (root?)")
+        assert eg._visible(box / "there") is None, \
+            "a denied stat is not an absent file"
+    finally:
+        box.chmod(0o755)
