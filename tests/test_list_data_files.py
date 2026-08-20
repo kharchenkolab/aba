@@ -30,8 +30,13 @@ def _isolate(tmp_path, monkeypatch):
     dd = tmp_path / "data"; dd.mkdir()
     monkeypatch.setattr(file_io, "_registered_datasets", lambda: [])
     import core.config as cfg
+    import core.projects as prj
     monkeypatch.setattr(cfg, "project_data_dir", lambda pid: dd)
-    monkeypatch.setattr(cfg, "current_project_id", lambda: "test")
+    # current_project_id lives on core.projects, not core.config — patching the
+    # wrong module raised AttributeError in the fixture, so every test in this
+    # file errored before reaching its assertions and the whole guard measured
+    # nothing. Found 2026-08-20 while changing the module it guards.
+    monkeypatch.setattr(prj, "current_project_id", lambda: "test")
     return dd
 
 

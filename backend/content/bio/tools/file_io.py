@@ -183,21 +183,66 @@ def _registered_datasets() -> list[dict]:
     return out
 
 
+def _readable(p: Path):
+    """True / False — or None when the answer is hidden from us.
+
+    `stat()` looks like a yes-or-no question and is not: pathlib ignores
+    ENOENT, ENOTDIR, EBADF and ELOOP and nothing else, so a DENIED stat comes
+    straight back out as PermissionError. Out-of-project paths are exactly
+    where that happens (another lab's share under /groups), so the third
+    answer has to be a value the caller handles: reporting a denied path as
+    absent sends the agent off to describe a folder it was never allowed to
+    see, and letting the error escape turns a routine permission problem into
+    an internal one.
+    """
+    try:
+        p.stat()
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return None
+
+
+def _listable(d: Path) -> bool:
+    """Can we actually open this directory — asked by TRYING, not by mode bits.
+
+    `os.access` is not usable here: on the NFSv4/OneFS trees these shares live
+    on, every path reads 0777 and the ACL does the enforcing, so the mode says
+    yes to a directory that refuses to open. One real scandir is the only
+    honest answer.
+    """
+    try:
+        next(iter(d.iterdir()), None)
+        return True
+    except OSError:
+        return False
+
+
 def inspect_upload(input_: dict) -> dict:
     """
     Inspect a file or directory. Auto-extracts archives.
 
     Path resolution (in order):
-      1. Absolute path that exists inside DATA_DIR → use as-is.
-      2. Relative path → resolved against DATA_DIR; if it exists, use.
-      3. Otherwise, look up registered datasets by basename. If exactly
-         ONE matches, auto-resolve to its `artifact_path` (which may
-         live in work/ or any absolute location) and continue with a
-         `path_corrected` field in the result. This handles the case
-         where the agent constructs a DATA_DIR-shaped path from prior
-         instead of using the `path` field returned by list_data_files.
-      4. No unambiguous match → return error WITH the list of
-         registered datasets so the agent can pick one.
+      1. Relative path → resolved against DATA_DIR.
+      2. Any path this workspace can READ → use as-is, wherever it lives.
+         There is no containment gate: inspection reads, and reads carry no
+         containment risk (`read_file` runs the same reasoning through
+         `_resolve_project_path(enforce_sandbox=False)`). Out-of-project data
+         is a first-class case — `register_dataset` already records such a
+         path IN PLACE with no copy, so refusing to LOOK at what the
+         workspace will happily REGISTER had it backwards.
+      3. Path that does not exist → look up registered datasets by basename.
+         If exactly ONE matches, auto-resolve to its `artifact_path` and
+         continue with a `path_corrected` field. This handles the case where
+         the agent constructs a DATA_DIR-shaped path from prior instead of
+         using the `path` field returned by list_data_files.
+      4. No unambiguous match → return error WITH the list of registered
+         datasets so the agent can pick one.
+
+    A path we are not allowed to read is reported as DENIED, never as absent
+    and never as an empty folder — those are different facts, and only the
+    first one names something the user can go fix.
 
     Returns:
       {
@@ -222,39 +267,44 @@ def inspect_upload(input_: dict) -> dict:
     _data_dir = project_data_dir(current_project_id())
     if not p.is_absolute():
         p = _data_dir / p
-    # Snapshot the registered set once — used both for the
-    # "absolute path matches a registered dataset" accept and for
-    # the basename-match auto-resolve fallback.
+    # Only the basename fallback needs the registered set now: an existing
+    # path is accepted on its own evidence, not on being registered.
     registered = _registered_datasets()
-    registered_paths = {d.get("path"): d for d in registered if d.get("path")}
     resolved: Optional[Path] = None
-    # 1. Exact match against a registered artifact_path — accept even
-    #    if it sits outside DATA_DIR (registered datasets are allowed
-    #    to live in work/ or any absolute location).
+    denied: Optional[Path] = None
     try:
         rp = p.resolve()
-        if str(rp) in registered_paths and rp.exists():
-            resolved = rp
-    except FileNotFoundError:
+    except OSError:            # symlink loop and friends — treat as unresolvable
         rp = None
-    # 2. Path resolves under DATA_DIR and exists — typical local upload.
-    if resolved is None and rp is not None:
-        if rp.exists() and str(rp).startswith(str(_data_dir.resolve())):
+    # ANY path we can read, wherever it lives. The old gate accepted only
+    # DATA_DIR / REFS_DIR / an exactly-matching registered artifact_path and
+    # answered a real, readable shared folder with "path not found" — a false
+    # claim about existence, made to the one caller least able to check it.
+    # Live (bug report 2026-08-20): an agent pointed at a group share had no
+    # door that could open it — list_data_files covers registered datasets and
+    # DATA_DIR, find_files searches the custody chain by NAME (and the name was
+    # the unknown), read_file rejects a directory — and described the folder
+    # from its path name instead. Fabrication is the agent's error; leaving it
+    # no truthful way to answer is ours.
+    if rp is not None:
+        seen = _readable(rp)
+        if seen:
             resolved = rp
-    # 2b. Path resolves under REFS_DIR and exists — content-addressed shared
-    # references the user uploaded directly (e.g. /workspace/aba-runtime/refs/
-    # GSE192391/...). Treat the refs tree as a third trusted root so the
-    # agent can `inspect_upload` files placed there before a reference
-    # entity exists. Tightening (proper reference-registration flow) is
-    # deferred — for now, accept any existing path under REFS_DIR.
-    if resolved is None and rp is not None:
-        try:
-            from core.config import REFS_DIR
-            refs_root = REFS_DIR.resolve()
-            if rp.exists() and str(rp).startswith(str(refs_root)):
-                resolved = rp
-        except Exception:
-            pass
+        elif seen is None:
+            denied = rp
+
+    if denied is not None:
+        # Not "not found": the path is there, we just cannot look. Substituting
+        # a same-basename registered dataset here would paper over a permission
+        # problem by inspecting a DIFFERENT file, so this end-stops instead.
+        return {
+            "error": f"permission denied: {denied}",
+            "hint": ("The path exists but this workspace cannot read it — that "
+                     "is not the same as it being absent, and nothing here can "
+                     "say what is inside it. Ask whoever owns it for read "
+                     "access, or have someone who has access run this. Do not "
+                     "describe its contents."),
+        }
 
     path_corrected: Optional[dict] = None
     if resolved is None:
@@ -333,14 +383,40 @@ def inspect_upload(input_: dict) -> dict:
 def _describe_directory(root: Path, *, kind: str = "directory",
                         extracted_to: Optional[str] = None,
                         original_path: Optional[str] = None) -> dict:
-    """Walk a directory tree and produce a structured listing."""
+    """Walk a directory tree and produce a structured listing.
+
+    Declares its own bounds. Now that any readable path is inspectable, the
+    mixed-permission tree is the normal case (a shared /groups folder with one
+    subdirectory closed off), and both ways of getting that wrong are silent:
+    `rglob` swallows PermissionError mid-walk, so an unenterable subtree just
+    vanishes from the listing, and an unenterable ROOT yields nothing at all —
+    which renders as "empty directory", the flat opposite of the truth.
+    """
+    if not _listable(root):
+        return {
+            "root": str(root), "kind": kind, "files": [], "unreadable": ["."],
+            "suggested_loader": "",
+            "summary": (f"{root} exists but cannot be listed from this "
+                        "workspace — this is NOT an empty folder, and nothing "
+                        "here says what is in it"),
+        }
     files = []
+    unreadable: list[str] = []
     for f in sorted(root.rglob("*")):
-        if f.is_file():
-            rel = f.relative_to(root)
-            files.append(_describe_file(f, rel_path=str(rel)))
-        # Skip directory entries — implied by files' paths.
+        try:
+            if f.is_file():
+                rel = f.relative_to(root)
+                files.append(_describe_file(f, rel_path=str(rel)))
+            elif f.is_dir() and not _listable(f):
+                unreadable.append(str(f.relative_to(root)))
+            # Skip readable directory entries — implied by files' paths.
+        except OSError:
+            unreadable.append(str(f.relative_to(root)))
     summary = _summarize_files(files)
+    if unreadable:
+        summary += (f" · INCOMPLETE: {len(set(unreadable))} entr"
+                    f"{'y' if len(set(unreadable)) == 1 else 'ies'} could not "
+                    "be read, so anything inside them is missing from this list")
     suggested = _suggest_loader_for_files(files, root)
     result = {
         "root": str(root),
@@ -349,6 +425,8 @@ def _describe_directory(root: Path, *, kind: str = "directory",
         "suggested_loader": suggested,
         "summary": summary,
     }
+    if unreadable:
+        result["unreadable"] = sorted(set(unreadable))
     if extracted_to:
         result["extracted_to"] = extracted_to
     if original_path:
