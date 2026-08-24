@@ -263,7 +263,6 @@ def _submit_harness(monkeypatch, name):
     block, recording whatever reaches the substrate."""
     import core.graph.jobs as gjobs
     import core.jobs.weft_submitter as ws
-    from core import projects
     submitted: list = []
 
     class _Cap:
@@ -273,9 +272,11 @@ def _submit_harness(monkeypatch, name):
     monkeypatch.setattr(ws, "_adapter", lambda: _Cap())
     monkeypatch.setattr(gjobs, "update_job", lambda *a, **k: None)
     monkeypatch.setattr(ws, "site_contract", lambda s: "shared-fs")
-    pid = projects.create_project(name)["id"]
-    projects.set_current(pid)
-    return ws, pid, submitted
+    # A LITERAL project id, never projects.create_project(): submit() reads
+    # the project from params, and creating one moves the global "current
+    # project" — which the capability probe resolves through, so it silently
+    # broke an unrelated test later in the same process.
+    return ws, f"prj_{name}", submitted
 
 
 def test_submit_refuses_when_env_unresolved(monkeypatch):
