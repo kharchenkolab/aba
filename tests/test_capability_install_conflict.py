@@ -149,3 +149,49 @@ def test_pre_lever_substrate_degrades_instead_of_crashing(penv, monkeypatch):
     assert out["satisfied"] is True
     assert ad.calls and "fast" not in ad.calls[0], "retried without the kwarg"
     assert rows["rev"] == 1, "the successful install IS recorded"
+
+
+def test_every_agent_facing_install_solves_at_add():
+    """The guard above was written for the python/pypi lane after the
+    2026-07-26 incident and never crossed to R — so the R lanes kept
+    DEFERRING the solve, and a capability install that contradicted the
+    base left the project's R session un-snapshottable exactly as pypi
+    once did. The consequence only shows up later and elsewhere: the
+    live session keeps working, and the next BACKGROUND R job fails to
+    mint an EnvID (field report, 2026-08).
+
+    This is a CALLER claim, so it needs caller coverage — the behavioural
+    test above pins project_env.install's end of the contract, and cannot
+    see a call site that never asks. Every agent-facing capability install
+    in discovery.py must ask for the solve; a new lane that forgets fails
+    here rather than in someone's background job.
+    """
+    import ast
+    import pathlib
+
+    src = pathlib.Path("backend/content/bio/tools/discovery.py")
+    tree = ast.parse(src.read_text())
+    missing, seen = [], 0
+    for n in ast.walk(tree):
+        if not isinstance(n, ast.Call):
+            continue
+        f = n.func
+        if not (isinstance(f, ast.Attribute) and f.attr == "install"
+                and isinstance(f.value, ast.Name)
+                and f.value.id in ("project_env", "_penv")):
+            continue
+        seen += 1
+        kw = {k.arg: k for k in n.keywords}
+        ok = (isinstance(kw.get("solve_at_add"), ast.keyword)
+              and isinstance(kw["solve_at_add"].value, ast.Constant)
+              and kw["solve_at_add"].value.value is True)
+        if not ok:
+            eco = kw.get("eco")
+            eco_s = (eco.value.value if eco is not None
+                     and isinstance(eco.value, ast.Constant) else "?")
+            missing.append(f"{src.name}:{n.lineno} (eco={eco_s!r})")
+
+    assert seen >= 4, f"expected the known install lanes, found {seen}"
+    assert not missing, (
+        "agent-facing capability install(s) still DEFER the conflict check, "
+        "leaving the session un-snapshottable: " + ", ".join(missing))

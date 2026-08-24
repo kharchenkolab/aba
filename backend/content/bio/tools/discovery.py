@@ -1081,6 +1081,7 @@ def _cran_lane(pid: str, spec: str, *, repos: "list | None" = None,
     from core.compute import project_env
     try:
         res = project_env.install(pid, "r", [spec], eco="cran",
+                                  solve_at_add=True,
                                   **({"cran_repos": list(repos)} if repos else {}),
                                   **({"verify": verify} if verify else {}))
         return True, None, (res if isinstance(res, dict) else {})
@@ -1255,7 +1256,7 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
                 f"bioconductor-{_pkg.lower()}" if _src == "bioconductor" else f"r-{_pkg.lower()}")
               try:
                 project_env.install(pid, "r", [conda_name], eco="conda",
-                                    verify=_vblock)
+                                    solve_at_add=True, verify=_vblock)
               except Exception:  # noqa: BLE001 — no conda build / cold base
                 # Second lane: the substrate's cran layer (session rlib riding
                 # the base — delta-only, works on ANY base incl. adopted
@@ -2070,7 +2071,7 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
             _spec = _c["spec"] if isinstance(_c, dict) else _c
             _penv.install(str(_projects.current() or "_none"), "python",
                           [_spec] if isinstance(_spec, str) else list(_spec),
-                          eco="conda")
+                          eco="conda", solve_at_add=True)
         except Exception as e:  # noqa: BLE001
             from core.compute.errors import describe
             if _mod:

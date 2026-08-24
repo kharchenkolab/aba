@@ -254,3 +254,86 @@ def test_exec_record_env_identity_grades_each_lane():
         == {"env_grade": "local"}
     # a session object that predates these attributes must not explode
     assert _env_identity(_S())["env_grade"] == "local"
+
+
+# ── the SHARED-FS / scheduler submit lane (the sibling nobody drove) ─────────
+
+def _submit_harness(monkeypatch, name):
+    """Drive the real WeftSubmitter.submit() far enough to reach the env
+    block, recording whatever reaches the substrate."""
+    import core.graph.jobs as gjobs
+    import core.jobs.weft_submitter as ws
+    from core import projects
+    submitted: list = []
+
+    class _Cap:
+        def sync_call(self, _name, task, *a, **k):
+            submitted.append(task)
+            return {"job_id": "jb_" + name}
+    monkeypatch.setattr(ws, "_adapter", lambda: _Cap())
+    monkeypatch.setattr(gjobs, "update_job", lambda *a, **k: None)
+    monkeypatch.setattr(ws, "site_contract", lambda s: "shared-fs")
+    pid = projects.create_project(name)["id"]
+    projects.set_current(pid)
+    return ws, pid, submitted
+
+
+def test_submit_refuses_when_env_unresolved(monkeypatch):
+    """THE bug-#1 swallow (field report, 2026-08). `_detached_env` was taught
+    to refuse — and every test above drives `_detached_env`. The OTHER
+    consumer, `submit()`, kept printing a warning and submitting with
+    env_id=None, on the premise (its own comment) that "the job will fail
+    loudly on the node". It does not: the node has no compute substrate by
+    design, so `run_r_code` asks for one and reports
+    `substrate_offline: compute substrate not configured yet` — a platform
+    outage. The user's agent duly filed one.
+
+    Foreground R keeps working the whole time (it rides the live session),
+    so this presents as "background jobs are broken" with no local cause.
+    """
+    calls = _break_snapshot(monkeypatch, ComputeError(
+        "env.solve_conflict", "spec 'aba-p-default-r' is unsatisfiable as pinned",
+        stage="solve", hints={"solver_message": "no candidates for r-signac"}))
+    ws, pid, submitted = _submit_harness(monkeypatch, "wsubrefuse")
+    job = {"id": "job_ref1", "kind": "run_r", "title": "bg r",
+           "params": {"code": "1+1", "run_id": "run_ref1",
+                      "project_id": pid, "timeout_s": 600}}
+    with pytest.raises(ComputeError) as ei:
+        ws.WeftSubmitter(site="hpc").submit(job)
+    assert calls, "ARMED: the snapshot must have been consulted"
+    assert ei.value.code == "env.unresolved"
+    assert not submitted, \
+        "the job was SUBMITTED with no env — the node cannot recover from this"
+
+
+def test_submit_still_honours_the_explicit_system_lever(monkeypatch):
+    """WIDE, and the second way the two lanes had drifted: `_detached_env`
+    reads env='system' as the deliberate bare-interpreter lever, while
+    submit() had no such branch — it reached the unknown-named-env path and
+    got the right answer only by falling through the swallow. Removing the
+    swallow must not take the lever with it."""
+    from core.compute import base_env, project_env
+    monkeypatch.setattr(project_env, "snapshot",
+                        lambda *a, **k: pytest.fail("system lever must not snapshot"))
+    monkeypatch.setattr(base_env, "require",
+                        lambda lang: pytest.fail("system lever must not require a pack"))
+    ws, pid, submitted = _submit_harness(monkeypatch, "wsubsystem")
+    job = {"id": "job_sys1", "kind": "run_python", "title": "bare",
+           "params": {"code": "print(1)", "env": "system", "run_id": "run_sys1",
+                      "project_id": pid, "timeout_s": 600}}
+    ws.WeftSubmitter(site="hpc").submit(job)
+    assert submitted, "ARMED: the explicit lever must still submit"
+    assert not submitted[-1].get("env"), "the bare lever carries no env"
+
+
+def test_submit_refuses_an_unknown_named_env(monkeypatch):
+    """The named-env refusal, same drift: a caller who NAMES an env and gets
+    a typo must be told, not silently run somewhere else."""
+    ws, pid, submitted = _submit_harness(monkeypatch, "wsubnamed")
+    job = {"id": "job_nm1", "kind": "run_r", "title": "named",
+           "params": {"code": "1+1", "env": "no-such-env", "run_id": "run_nm1",
+                      "project_id": pid, "timeout_s": 600}}
+    with pytest.raises(ComputeError) as ei:
+        ws.WeftSubmitter(site="hpc").submit(job)
+    assert ei.value.code == "env.unknown"
+    assert not submitted, "an unknown named env must not submit bare"

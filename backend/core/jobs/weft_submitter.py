@@ -423,41 +423,33 @@ class WeftSubmitter:
         env_id = None
         env_source = None
         if kind in ("run_python", "run_r"):
-            from core.compute import base_env, named_envs, project_env
             lang = "r" if kind == "run_r" else "python"
-            try:
-                # The GPU rule is consulted FIRST — it also owns `env=` naming
-                # the declared pack itself (the cue advertises that name, so
-                # this door must open it; named_envs would refuse it as an
-                # unknown isolated env). env_source stamps the trade: the
-                # shared pack does NOT carry the project's own installs, and a
-                # missing import must read as that.
-                gid = _gpu_env_for(params, lang)
-                if gid:
-                    env_id = gid
-                    from core import config as _cfg
-                    env_source = f"gpu_pack:{_cfg.settings.gpu_env_pack.get()}"
-                elif params.get("env"):
-                    row = named_envs.resolve(str(pid), params["env"])
-                    if row is None:
-                        print(f"[jobs.weft] unknown isolated env {params['env']!r} for "
-                              f"project {pid} — the job will fail loudly on the node")
-                    else:
-                        env_id = row["env_id"]
-                else:
-                    base_env.require(lang)      # weft-only: no served-base fallback
-                    env_id = project_env.snapshot(str(pid), lang)   # identity; store op, no realize
-            except ComputeError as e:
-                if e.code == "gpu_env_pack.unknown":
-                    # Misconfiguration, not a node-side condition: falling
-                    # through would run the GPU job on CPU torch (the
-                    # scVI-on-CPU class). Stop the submit.
-                    raise
-                print(f"[jobs.weft] env identity resolution failed ({e}) — the job "
-                      f"will fail loudly on the node (no served-base fallback)")
-            except Exception as e:  # noqa: BLE001
-                print(f"[jobs.weft] env identity resolution failed ({e}) — the job "
-                      f"will fail loudly on the node (no served-base fallback)")
+            # ONE set of identity rules for both submit lanes (the same reason
+            # _gpu_env_for exists). This used to be a SECOND COPY of them, and
+            # the copies drifted twice: `_detached_env` learned to REFUSE an
+            # env it cannot resolve while this lane went on printing a warning
+            # and submitting with env_id=None, and `_detached_env` grew the
+            # env='system' bare lever this lane never had (it reached the same
+            # answer only by falling through the swallow).
+            #
+            # The swallow's premise — "the job will fail loudly on the node" —
+            # was false. slurm_entry runs as `python -m`, so the FastAPI
+            # lifespan never runs and the node has no compute substrate BY
+            # DESIGN; a step that reaches for one is told
+            # `substrate_offline: compute substrate not configured yet`,
+            # which reads as a platform outage rather than an unresolved env.
+            # Field report 2026-08: background R failed instantly with exactly
+            # that, foreground R kept working (it rides the live session), and
+            # the agent filed an outage bug. Refuse at submit, where the levers
+            # are, instead of degrading into a misleading node-side message.
+            gid = _gpu_env_for(params, lang)
+            if gid:
+                # env_source stamps the trade: the shared GPU pack does NOT
+                # carry the project's own installs, so a missing import in a
+                # GPU job reads as that rather than as a mystery.
+                from core import config as _cfg
+                env_source = f"gpu_pack:{_cfg.settings.gpu_env_pack.get()}"
+            env_id, _env_name = self._detached_env(params, str(pid), lang)
         spec_path.write_text(json.dumps({
             "code": params.get("code", ""), "kind": kind, "project_id": str(pid),
             # Run UNDER the Run captured at submit — artifacts land in the Run's

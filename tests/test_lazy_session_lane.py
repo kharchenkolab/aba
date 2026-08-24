@@ -628,3 +628,42 @@ def test_reextend_same_packages_idempotent(lazy, monkeypatch):
     assert len(named_envs.resolve("prj_id", "pinny")["layers"]) == 1
     out3 = named_envs.extend("prj_id", "pinny", ["scipy==1.12"])   # changed pin
     assert out3["status"] != "cached" and len(solved) == n + 1
+
+
+def test_isolated_env_specs_carry_bioconda():
+    """Bug #2 (pilot, 2026-08): `make_isolated_env` authored a spec with NO
+    channels, so every isolated env solved against weft's conda-forge-only
+    default — and r-signac, the whole bioconductor-* set, samtools and bwa
+    live on bioconda. The reported symptom was "no candidates were found";
+    the cause is a spec that never asked for the channel.
+
+    WIDE on purpose — both lanes are affected and only one was reported:
+      * R, where it was reported (r-signac, bioconductor-*);
+      * python, which is where the cold-base refusal SENDS people —
+        conda_packages=['samtools'] is the remedy that lever advertises,
+        and samtools is bioconda-only, so the advertised remedy could not
+        solve either.
+    `extend` layers ride extends_env and inherit the parent's channels, so
+    the root spec is the one place this has to be right.
+
+    The lesson was already written down twice — in r_bio.yaml ("weft's
+    default is conda-forge only, so without this every bioconda-only dep is
+    'no candidates'") and in ensure_tool_env's `channels` argument — and
+    never reached _spec_for. This test is what keeps it there.
+    """
+    from core.compute.named_envs import _spec_for
+
+    for kw, why in (
+        (dict(language="r", packages=["r-signac"]), "R lane (reported)"),
+        (dict(language="r", packages=["ggplot2"]), "R lane, cran-only deps"),
+        (dict(language="python", packages=["numpy"],
+              conda_packages=["samtools"]), "python eco passthrough"),
+        (dict(language="python", packages=["numpy"]), "plain python lane"),
+    ):
+        spec = _spec_for("prj_ch", "iso", **kw)
+        chans = spec.get("channels")
+        assert chans, f"{why}: spec carries no channels — conda-forge only"
+        assert "bioconda" in chans, f"{why}: bioconda missing from {chans}"
+        # conda-forge first is the conventional bioconda order; bioconda
+        # first silently prefers its (older) rebuilds of conda-forge deps
+        assert chans[0] == "conda-forge", f"{why}: wrong order {chans}"

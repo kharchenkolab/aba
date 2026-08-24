@@ -26,14 +26,65 @@ def _interp_from_activation(spec: dict) -> str | None:
         return spec["interp"]
     prefix = os.environ.get("CONDA_PREFIX")
     if not prefix:
-        return None                       # no activation → run.py raises loudly
+        # None here is NOT self-explanatory: run.py's default lane asks for a
+        # compute substrate, and this process has none by design. _activation_
+        # verdict() is what turns that into an honest message — see there.
+        return None
     exe = "Rscript" if spec.get("kind") == "run_r" else "python"
     return str(Path(prefix) / "bin" / exe)
+
+
+def _activation_verdict(spec: dict) -> str | None:
+    """Why this job cannot honestly run here — or None to proceed.
+
+    slurm_entry is started as ``python -m``, so the FastAPI lifespan never
+    runs and this process has NO compute substrate: that is deliberate, the
+    node runs only what the scheduler mounted for the task. The consequence
+    used to be silent and misleading. A job whose env was never activated
+    resolved no interpreter, run.py fell into its default lane, asked for the
+    substrate that was never going to be here, and the step failed with
+    ``substrate_offline: compute substrate not configured yet`` — which reads
+    as the cluster being broken. Foreground work kept running the whole time
+    (it rides the live session, not a node), so the report that reached us
+    was "background jobs fail instantly, no output" (field report, 2026-08).
+
+    Three cases, and only the middle one is a failure:
+      * no ``env_id`` — deliberately bare (the ``env='system'`` lever): run
+        on the node's own interpreter, as asked;
+      * ``env_id`` set but nothing activated — an ACTIVATION failure, named
+        as one here rather than discovered as a missing substrate;
+      * ``env_id`` set and a DIFFERENT env activated — refuse; running the
+        job in the wrong environment silently is the worse outcome.
+    """
+    want = spec.get("env_id")
+    if not want or spec.get("interp"):
+        return None                        # bare by design, or explicit override
+    if not os.environ.get("CONDA_PREFIX"):
+        return (f"environment {want} was never activated on this node — "
+                f"CONDA_PREFIX is unset, so there is no interpreter to run "
+                f"the job in. This is an environment-activation failure, not "
+                f"a fault in the job's code and not a cluster outage: this "
+                f"node runs only what the scheduler mounts for the task. "
+                f"Check the job's task record for an activation error, then "
+                f"re-submit.")
+    seen = os.environ.get("WEFT_ENV_ID")
+    if seen and seen != want:
+        return (f"the job asked for environment {want} but {seen} was "
+                f"activated on this node — refusing to run in the wrong "
+                f"environment rather than reporting results from it.")
+    return None
 
 
 def main() -> int:
     with open(sys.argv[1]) as f:
         spec = json.load(f)
+    # Before anything is dispatched: can this node honestly run the job it
+    # was given? Same shape as the GPU preflight and the numpy canary below.
+    _verdict = _activation_verdict(spec)
+    if _verdict:
+        with open(spec["result_path"], "w") as f:
+            json.dump({"error": _verdict, "returncode": 1}, f, default=str)
+        return 1
     from core.exec.run import run_python_code, run_r_code
     # stream=True tees the child's stdout/stderr to THIS process's stdout, which
     # sbatch captures to job.log (-o) — so the running job is tailable live

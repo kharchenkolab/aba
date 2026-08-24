@@ -194,6 +194,17 @@ def resolve_env(project_id, language: str, explicit=None) -> Optional[str]:
 
 # ── create / extend ──────────────────────────────────────────────────────────
 
+# weft solves against conda-forge ALONE unless a spec names its channels.
+# Isolated-env specs are authored HERE, from scratch, with nothing upstream to
+# inherit from — so bioconda has to be named or every bioconductor-*, r-signac,
+# samtools or bwa request comes back "no candidates" (reported from the field,
+# 2026-08, on both lanes). conda-forge first is the conventional bioconda order;
+# bioconda first silently prefers its older rebuilds of conda-forge deps. The
+# base pack YAMLs carry the same pair for the same reason. `extend` layers ride
+# extends_env and inherit these, so this is the one place it has to be right.
+_ISO_CHANNELS = ["conda-forge", "bioconda"]
+
+
 def _spec_for(project_id: str, name: str, language: str,
               packages: list[str], python_version: Optional[str] = None,
               conda_packages: Optional[list[str]] = None) -> dict:
@@ -230,9 +241,9 @@ def _spec_for(project_id: str, name: str, language: str,
         deps: dict = {"conda": [_rbase, *kern, *_all_conda]}
         if cran:
             deps["cran"] = cran
-        return {"name": label, "deps": deps}
+        return {"name": label, "channels": list(_ISO_CHANNELS), "deps": deps}
     pyspec = f"python ={python_version}" if python_version else "python =3.12"
-    return {"name": label,
+    return {"name": label, "channels": list(_ISO_CHANNELS),
             "deps": {"conda": [pyspec, "ipykernel", *(conda_packages or [])],
                      "pypi": list(packages)}}
 
