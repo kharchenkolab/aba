@@ -28,7 +28,11 @@ BODY_BUDGET = 1050
 def _redact(s: str) -> str:
     if not s:
         return ""
-    s = re.sub(r"/Users/[^/\s]+", "~", s)                 # home dir
+    # Home dirs, all three layouts. /Users was the only one covered, so on
+    # every Linux deployment — which is all the clusters — usernames and full
+    # home paths travelled verbatim in an email the user never saw a diff of,
+    # and ate budget that the diagnosis needed.
+    s = re.sub(r"/(?:Users|users|home)/[^/\s]+", "~", s)
     s = re.sub(r"sk-ant-[A-Za-z0-9_\-]+", "<token>", s)    # anthropic tokens
     return s.strip()
 
@@ -43,6 +47,40 @@ def _aba_commit() -> str:
         return "unknown"
 
 
+def _release_tag() -> str:
+    """What code this is. `_aba_commit()` shells out to git IN THE SOURCE
+    TREE, and a release deploy is a manifest + a SIF with no .git anywhere —
+    so every report from a real user said "unknown" while the release id
+    (which embeds the commit, e.g. 2026.08.18-6c1b6783) sat in config."""
+    try:
+        from core.release import active_release_id
+        rid = active_release_id()
+        if rid:
+            return str(rid)
+    except Exception:  # noqa: BLE001 — personal/fat install, no release layout
+        pass
+    return _aba_commit()
+
+
+def _short_model(m: str) -> str:
+    """`claude-haiku-4-5-20251001` → `haiku-4-5`. The vendor prefix is
+    constant and the snapshot date is recoverable from the release id."""
+    m = (m or "?").removeprefix("claude-")
+    return re.sub(r"-\d{8}$", "", m)
+
+
+def _clip_subject(s: str, n: int) -> str:
+    """Clip to n chars on a WORD boundary. A hard slice cuts wherever the
+    limit falls, and the subject is the first thing a triager reads."""
+    if len(s) <= n:
+        return s
+    cut = s[:n - 1]
+    sp = cut.rfind(" ")
+    if sp > n // 2:                       # don't strand a one-word subject
+        cut = cut[:sp]
+    return cut.rstrip(" ,.;:-") + "…"
+
+
 def _report_id() -> str:
     import secrets
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%MZ-") + secrets.token_hex(2)
@@ -53,8 +91,8 @@ def _assemble(headline: str, what_doing: str, diagnosis: str, error_tail: str, c
     # Leading blank line = where the mail client drops the cursor, so the user
     # types their note immediately; the divider marks where the auto-report begins.
     lead = "\n—— your notes above · ABA report below ——\n\n"
-    foot = ("\nNeed more? Reply — we'll have Guide (in your ABA) pull the exact "
-            "detail you ask for.\n" + ctxline)
+    # Kept deliberately short: every char here is one the diagnosis loses.
+    foot = "\nReply and we'll have Guide pull any further detail.\n" + ctxline
 
     # Bugfixer-facing labels (the reader is a developer/agent, not the user).
     def build(s, d, e):
@@ -211,15 +249,20 @@ def build_bug_report_impl(input_: dict, ctx: dict | None = None) -> dict:
             pid = None
     # Compact, slash-delimited locator line (no labels — it's for the agent/parser,
     # not the user). Positional schema:
-    #   commit / os release / arch / node / user / project / model / thread / focus / report-id
-    ctxline = (f"— {_aba_commit()}/{platform.system()} {platform.release()}/{platform.machine()}/"
-               f"{node}/{user}/{pid or '—'}/{(config.settings.model_snapshot.get() or '?')}/{tid}/{focus}/{rid}")
+    #   release / arch / node / user / project / model / thread / focus / report-id
+    # The kernel string used to sit between release and arch — "Linux
+    # 6.12.0-124.56.1.el10_1.x86_64" — 36 chars that are identical in every
+    # report from a cluster, and it named the architecture a second time.
+    # Positions are fixed; an unknown field is "—", never omitted.
+    ctxline = (f"— {_release_tag()}/{platform.machine()}/"
+               f"{node}/{user}/{pid or '—'}/"
+               f"{_short_model(config.settings.model_snapshot.get())}/{tid}/{focus}/{rid}")
 
     body = _assemble(headline, what_doing, diagnosis, error_tail, ctxline)
     # Lead the subject with 🪲 so the team can filter on it (matches the bug
     # glyph used in the UI; plain text can't carry the SVG, so this is the
     # closest stand-in — deliberately not the 🐛 caterpillar).
-    subject = (f"🪲 ABA bug: {headline}")[:80]
+    subject = _clip_subject(f"🪲 ABA bug: {headline}", 80)
     q = urllib.parse.urlencode({"subject": subject, "body": body}, quote_via=urllib.parse.quote)
     mailto_url = f"mailto:{FEEDBACK_TO}?{q}".replace("%0A", "%0D%0A")
 

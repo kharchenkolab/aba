@@ -1,0 +1,82 @@
+id: r_bioconda_package
+smoke: true      # routine tier: ~3 min, no data files. This is the lane the
+                 # 2026-08 "r-signac cannot be installed" report came through.
+title: A Bioconductor package that lives only on bioconda installs and loads
+domain: technical
+gpu: false
+summary: >
+  Channel coverage, which the suite had none of. Every R package the scenarios named —
+  RNetCDF, Seurat, jsonlite, praise — happens to live on conda-forge, and isolated-env
+  specs were authored with no channel list at all, so they solved against conda-forge
+  alone. A conda-forge-resident package solves identically either way, so no scenario
+  could tell a correct channel list from a missing one, and the suite stayed green while
+  the entire bioconda half of the R ecosystem was unreachable.
+
+  What the user actually hit: asking for Signac produced "no candidates were found" from
+  the isolated-env solver, while the conda lane refused separately because the shared base
+  is a read-only adopted image. Two different-looking refusals, one cause — the spec never
+  asked for the bioconda channel.
+
+  ComplexHeatmap is chosen for three properties, not for its content: it is published ONLY
+  on bioconda (so a conda-forge-only solve cannot find it), it is not in the R base pack
+  (so this is a real install), and it has no heavy system dependencies (so the scenario
+  tests channel resolution rather than a build).
+lifecycle: []
+data_files: []
+
+steps:
+- id: s1
+  kind: analyze
+  actor: agent
+  prompt: >
+    I'd like to use ComplexHeatmap in R for plotting. Please get it installed and confirm it
+    actually loads.
+  expect:
+    tools_used: [ensure_capability]
+    tool_max_calls:
+      ensure_capability: 3     # a lane that cannot work must not be retry-looped
+    must_mention: ["ComplexHeatmap"]
+    must_not:
+    - "no candidates"
+    - "does not exist"
+    - "no such package"
+    - "not a real package"
+    - "I cannot"
+    checks: >
+      ComplexHeatmap is a Bioconductor package published on bioconda and nowhere else.
+      Whichever lane serves it — the project session or an isolated env — the solve must
+      LIST the bioconda channel or it fails with "no candidates were found for
+      bioconductor-complexheatmap", which reads as though the package does not exist.
+
+      PASS requires that the agent reaches a state where the package genuinely loads and
+      shows the output proving it. Hard failure modes: concluding the package or its name
+      is wrong (the cause is a missing channel, not a missing package); looping the same
+      failing install; or claiming success with no evidence of a load.
+
+- id: s2
+  kind: analyze
+  actor: agent
+  prompt: >
+    Good — now draw a small heatmap from a 10x5 matrix of random numbers with it, and save it
+    as a PNG.
+  expect:
+    tools_used: [run_r]
+    must_not: ["could not find function", "there is no package", "not installed", "I cannot"]
+    checks: >
+      The environment reached in s1 must be USABLE and must persist to the next turn: the
+      agent calls ComplexHeatmap::Heatmap on a small matrix and writes a PNG. Whichever
+      route it took (an isolated env passed per call with env=, or one promoted with
+      set_active_env) has to keep working here. A failure means the env was reached but not
+      durable.
+
+expected_overall:
+  planted_truth: >
+    There is no dataset — the ground truth is channel resolution. bioconductor-* packages
+    exist only on bioconda, so any spec that names one must also name that channel. Nothing
+    about the package is unusual; what is under test is whether the environment the platform
+    authors on the user's behalf can see the half of the R ecosystem that Bioconductor lives on.
+  notes: >
+    Fails if the install ends in "no candidates were found", if the agent reports the package
+    as nonexistent or misnamed, or if the heatmap step cannot find the function. The scenario
+    is deliberately about a package the suite would otherwise never touch: keep at least one
+    bioconductor-* target here (tests/test_regtest_coverage_matrix.py holds that line).
