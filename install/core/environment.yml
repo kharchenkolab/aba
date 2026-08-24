@@ -77,7 +77,17 @@ dependencies:
       - fastapi
       - uvicorn[standard]
       - python-multipart   # FastAPI UploadFile/File/Form on the upload routes
-      - anthropic
+      # PINNED below 1.0: anthropic 1.0.0 swapped its HTTP transport from
+      # `httpx` to `httpx2` and REJECTS an httpx client —
+      #   TypeError: Invalid `http_client` argument; Expected an instance of
+      #   `httpx2.AsyncClient` but got <class 'httpx.AsyncClient'>
+      # core/llm.py passes one deliberately (HTTP/2 needs httpx[http2]'s h2
+      # extras, below). An unpinned rebuild therefore produces an image where
+      # EVERY turn reports "No model provider is connected yet" — a total
+      # outage with no code change. Caught 2026-08-25 by the deploy's surface
+      # tier, on a staged image, before promote. Same shape as the `mcp` pin
+      # below; lift this only together with a move to httpx2.
+      - anthropic <1
       - openai        # OpenAI/Codex provider (core/runtime/llm_runtime_openai.py):
                       # api.openai.com ChatCompletions + the ChatGPT/Codex Responses API
       # anthropic's AsyncClient runs over HTTP/2 (see core/llm.py); without

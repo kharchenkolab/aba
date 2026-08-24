@@ -36,7 +36,7 @@ def test_get_model_returns_current_value_from_config_env(tmp_path):
     assert "available" in out and isinstance(out["available"], list)
     assert any(m["id"] == "claude-haiku-4-5" for m in out["available"])
     assert any(m["id"] == "claude-sonnet-4-6" for m in out["available"])
-    assert any(m["id"] == "claude-opus-4-7" for m in out["available"])
+    assert any(m["id"] == "claude-opus-5" for m in out["available"])
 
 
 def test_get_model_falls_back_to_default_when_unset(tmp_path):
@@ -57,11 +57,11 @@ def test_set_model_persists_to_config_env(tmp_path):
                  CLAUDE_CODE_OAUTH_TOKEN="sk-ant-oat-x",
                  ABA_LLM_CREDENTIAL="oauth_cc")
 
-    res = auth.set_model_tool({"model": "claude-opus-4-7"})
+    res = auth.set_model_tool({"model": "claude-opus-5"})
     assert res.get("ok") is True
     # File on disk got the new value
     text = config_env().read_text()
-    assert "ABA_MODEL=claude-opus-4-7" in text or "ABA_MODEL='claude-opus-4-7'" in text
+    assert "ABA_MODEL=claude-opus-5" in text or "ABA_MODEL='claude-opus-5'" in text
     # Existing credential lines preserved (don't blow them away on model change)
     assert "CLAUDE_CODE_OAUTH_TOKEN" in text
     assert "ABA_LLM_CREDENTIAL" in text

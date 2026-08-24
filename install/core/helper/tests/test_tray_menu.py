@@ -151,7 +151,7 @@ _AVAILABLE = [
      "note": "Best for simple lookups."},
     {"id": "claude-sonnet-4-6", "label": "Sonnet 4.6 (balanced)",
      "note": "Most real work."},
-    {"id": "claude-opus-4-7",   "label": "Opus 4.7 (highest quality)",
+    {"id": "claude-opus-5",   "label": "Opus 5 (highest quality)",
      "note": "Complex multi-step."},
 ]
 

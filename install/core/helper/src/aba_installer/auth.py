@@ -173,7 +173,7 @@ def set_apikey(payload: ApiKeyIn) -> dict:
     # Default to Opus — Haiku (the backend default) is underpowered for real
     # bioinformatics, and subscription/key users can afford the strongest model.
     # User-overridable via ABA_MODEL.
-    entries.setdefault("ABA_MODEL", "claude-opus-4-7")
+    entries.setdefault("ABA_MODEL", "claude-opus-5")
     _write_config_env(entries)
     return {"ok": True, "persisted": True}
 
@@ -195,7 +195,7 @@ def _persist_oauth_token(token: str) -> None:
     # Default to Opus — Haiku (the backend default) is underpowered for real
     # bioinformatics, and subscription/key users can afford the strongest model.
     # User-overridable via ABA_MODEL.
-    entries.setdefault("ABA_MODEL", "claude-opus-4-7")
+    entries.setdefault("ABA_MODEL", "claude-opus-5")
     _write_config_env(entries)
 
 
@@ -471,10 +471,10 @@ _AVAILABLE_MODELS = [
      "note": "Best for simple lookups / quick edits. Default for cost."},
     {"id": "claude-sonnet-4-6", "label": "Sonnet 4.6  (balanced)",
      "note": "Recommended for most real work. Good quality, reasonable cost."},
-    {"id": "claude-opus-4-7",   "label": "Opus 4.7  (highest quality)",
+    {"id": "claude-opus-5",     "label": "Opus 5  (highest quality)",
      "note": "Best for complex multi-step bioinformatics. Higher cost / latency."},
 ]
-_DEFAULT_MODEL = "claude-opus-4-7"      # mirrors auth.py:175 default for authed users
+_DEFAULT_MODEL = "claude-opus-5"      # mirrors auth.py:175 default for authed users
 _MODEL_IDS = {m["id"] for m in _AVAILABLE_MODELS}
 
 

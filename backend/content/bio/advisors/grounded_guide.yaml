@@ -36,7 +36,7 @@ role: primary
 #
 # Selected via env override: `export ABA_PRIMARY_SPEC=grounded_guide`
 # or per-thread via the chat header's "Backend" dropdown.
-model: claude-opus-4-7
+model: claude-opus-5
 system_prompt: ../prompts/identity.md
 manifest_role: primary
 # `prompt_mode: standard` does two things:

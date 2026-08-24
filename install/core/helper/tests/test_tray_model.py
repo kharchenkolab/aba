@@ -66,9 +66,9 @@ def test_set_model_posts_to_endpoint_with_payload():
 
 def test_set_model_no_apply_when_unchanged():
     def fake(req, timeout=None):
-        return _StubResp({"ok": True, "model": "claude-opus-4-7",
+        return _StubResp({"ok": True, "model": "claude-opus-5",
                           "applied_on_next_turn": False})
-    res = actions.set_model(model_id="claude-opus-4-7", port=8765, urlopen=fake)
+    res = actions.set_model(model_id="claude-opus-5", port=8765, urlopen=fake)
     assert res.ok
     assert res.applied_on_next_turn is False
 
