@@ -1,0 +1,92 @@
+id: r_background_capability
+smoke: true      # routine tier: this is the cell the suite never covered, and
+                 # the bug that lived in it reached production. ~3 min, no data.
+title: An R package installed into the project is usable from a BACKGROUND R job
+domain: technical
+gpu: false
+requires: slurm
+summary: >
+  The empty cell. Of 48 scenarios, three assert on a background job and none of them
+  mentions R; two put run_r in tools_used and neither uses background. Every background
+  scenario is Python, every R scenario is foreground — so the R background lane shipped
+  with no agent-level coverage at all, and that is exactly where the 2026-08 field report
+  landed: "background R jobs fail instantly, no output".
+
+  The mechanism the scenario pins: installing an R capability into the project session
+  makes that session's frozen identity go stale. FOREGROUND R keeps working, because it
+  rides the live session and never needs the frozen identity. A BACKGROUND job does need
+  it — it must mint an EnvID to hand the node. When that mint failed, the submitter used
+  to print a warning and submit anyway with no env; the node then had nothing activated,
+  reached for a compute substrate it does not have by design, and reported
+  `substrate_offline: compute substrate not configured yet`. The agent read that as a
+  cluster outage and filed a platform bug. Nothing in the message pointed at the install.
+
+  So the contract is BOTH halves: the background R job must actually run in the
+  environment that carries the package (the ordinary success path), and if the
+  environment genuinely cannot be resolved the failure must name THAT — never a
+  substrate/outage message, which sends the agent and the user somewhere useless.
+  'praise' is a tiny pure-R package with no compiled code or system deps, chosen so the
+  scenario tests the LANE and not a build.
+lifecycle: []
+data_files: []
+
+steps:
+- id: s1
+  kind: analyze
+  actor: agent
+  prompt: >
+    I need the R package praise available in this project. Please install it and confirm it
+    actually loads.
+  expect:
+    tools_used: [ensure_capability]
+    must_mention: ["praise"]
+    must_not: ["I cannot", "does not exist", "no such package"]
+    checks: >
+      praise is a tiny CRAN package that is NOT in the R base pack, so this is a real
+      capability install into the project's R session — the state that used to leave the
+      session un-snapshottable. The agent must verify the load rather than assert it
+      (a library()/requireNamespace() call whose output it shows).
+
+- id: s2
+  kind: analyze
+  actor: agent
+  prompt: >
+    Now run that as a BACKGROUND job (background=true), so it doesn't tie up my session:
+    load praise and print one compliment, plus R.version.string.
+  expect:
+    tools_used: [run_r]
+    background_job:
+      ok: true                         # status done, returncode 0, no error
+      stdout_contains: ["R version"]   # R actually ran, in a real R
+      stdout_absent:
+      - "substrate"                    # the misleading node-side message
+      - "compute substrate not configured"
+      - "environment pack is not available"
+    must_not: ["I cannot", "not available", "cluster is down", "outage"]
+    checks: >
+      THE regression. The background R job must complete in the environment that carries
+      praise: returncode 0, R's own version string in stdout, and the package loaded.
+      It would FAIL (returncode 1, elapsed_s null, no R output) if the submitter could not
+      mint the session's frozen EnvID and submitted the job with no environment — the exact
+      2026-08 failure.
+
+      The stdout_absent list is the honesty half and matters as much as the success half:
+      whatever happens, the words "substrate" / "compute substrate not configured yet" /
+      "the R environment pack is not available" must NOT appear. The compute node has no
+      environment substrate by design (the job entry runs as `python -m`, so the service
+      lifespan never runs), so any message blaming one is telling the user about a
+      component that was never going to be there and hiding the real cause.
+
+expected_overall:
+  planted_truth: >
+    There is no dataset — the ground truth is the background-R contract. A package installed
+    into the project session must be present in a background R job, because the job runs the
+    session's frozen snapshot. Foreground success proves nothing about this lane: the two
+    resolve the environment by different routes, which is why the bug was invisible until a
+    user backgrounded something.
+  notes: >
+    Fails if: the background R job returns non-zero or produces no R output; the job runs
+    but praise is missing (it ran somewhere other than the project's environment); or any
+    failure is reported as a substrate/outage problem instead of naming the environment.
+    Requires ABA_BATCH_SUBMITTER=slurm — a local background job resolves its environment
+    differently and cannot reproduce this.

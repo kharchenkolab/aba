@@ -24,6 +24,41 @@ spec:
   # bioconda-only dep is "no candidates" (r-presto reported first). conda-forge
   # first is the standard bioconda channel order.
   channels: [conda-forge, bioconda]
+  # What this pack PROMISES. weft enforces it as a realize postcondition, so a
+  # pack that cannot LOAD what it advertises fails to publish instead of
+  # shipping. This is not a restatement of the dep list: a conda package whose
+  # payload arrives via a POST-LINK script (the bioconductor-*data packages)
+  # installs as a few KB of scripts and is present by every name-based check
+  # while being empty in fact. bioconductor-genomeinfodbdata is exactly that,
+  # and it is why DESeq2/GenomeInfoDb/GenomicRanges never loaded in the
+  # published pack — discovered 2026-08, long after shipping. Everything
+  # `import_names` advertises must appear here (guarded by
+  # tests/test_base_pack_completeness.py).
+  verify:
+    loads: [Seurat, Matrix, igraph, irlba, dplyr, ggrepel, hdf5r, presto,
+            BiocManager, biomaRt, SingleCellExperiment, DESeq2, edgeR, limma,
+            GenomeInfoDb, GenomicRanges, SummarizedExperiment,
+            Rsamtools, Signac]
+  # bioconductor-genomeinfodbdata ships NO payload. The conda package is two
+  # scripts totalling 127 bytes; its post-link.sh calls
+  #     installBiocDataPackage.sh "genomeinfodbdata-1.2.13"
+  # to fetch the real data at install time. pixi/rattler STAGE post-link
+  # scripts and never run them, so conda-meta records the package as installed
+  # while GenomeInfoDbData does not exist on disk — and GenomeInfoDb,
+  # GenomicRanges, SummarizedExperiment and DESeq2 all then fail to load. That
+  # is why DESeq2 has never worked in a published pack (found 2026-08, while
+  # investigating an unrelated report).
+  #
+  # Deliver the SAME version from a pinned URL — never "latest", because an
+  # EnvID must mean one thing in every realization — then remove the staged
+  # script: removing it is how weft's post-link check is acknowledged, and it
+  # refuses the build if we don't.
+  post_install:
+  - |
+    set -eu
+    Rscript -e 'install.packages("https://bioconductor.org/packages/3.20/data/annotation/src/contrib/GenomeInfoDbData_1.2.13.tar.gz", repos = NULL, type = "source")'
+    Rscript -e 'library(GenomeInfoDbData)'
+    rm -f "$CONDA_PREFIX/bin/.bioconductor-genomeinfodbdata-post-link.sh"
   deps:
     conda:
       - r-base =4.4.*
@@ -49,6 +84,11 @@ spec:
       - bioconductor-deseq2
       - bioconductor-edger
       - bioconductor-limma
+      # ATAC / alignment: both reported missing from the field (2026-08).
+      # Signac is the Seurat-side ATAC toolkit and rides the Seurat stack
+      # already here; Rsamtools is what anything touching BAM/tabix needs.
+      - bioconductor-rsamtools
+      - r-signac
       # zlib DEV headers (zlib.h), not just the runtime libzlib the R stack
       # pulls in transitively: the cran lane below compiles from source
       # whenever PPM has no matching binary, and lstar's C++ core includes

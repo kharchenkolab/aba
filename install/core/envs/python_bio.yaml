@@ -28,6 +28,15 @@ import_names:
 # --- verbatim weft EnvSpec (aba adds nothing here; solving is weft's job) ---
 spec:
   platforms: [linux-64, osx-arm64]
+  # What this pack PROMISES. weft enforces it as a realize postcondition, so a
+  # pack that cannot import what it advertises fails to publish instead of
+  # shipping. Name-based checks can't see this: a conda package whose payload
+  # arrives via a post-link script is present by name and empty in fact.
+  # Everything `import_names` advertises must appear here (guarded by
+  # tests/test_base_pack_completeness.py).
+  verify:
+    import: [numpy, pandas, pyarrow, scipy, matplotlib, sklearn, h5py,
+             anndata, scanpy, scvi, leidenalg, igraph, ipykernel, zarr]
   deps:
     conda:
       - python =3.12
