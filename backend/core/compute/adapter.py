@@ -266,7 +266,8 @@ class WeftAdapter:
                 print(f"[compute] site {name!r} ({kind}) failed to register: "
                       f"{r.get('error')}: {r.get('detail')}")
             else:
-                print(f"[compute] registered site {name!r} ({kind}) from {path.name}")
+                print(f"[compute] registered site {name!r} ({kind}) "
+                      f"from the deployment's declared sites")
 
     # -- pass-through machinery ------------------------------------------------
     # Substrate kwarg compatibility lives HERE, at the one point every weft call

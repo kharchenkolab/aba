@@ -179,3 +179,40 @@ def test_adapter_registers_site_yaml_sites_not_just_weft_sites(monkeypatch):
         "_register_configured_sites still reads weft-sites.yaml directly — a "
         "site declared in site.yaml is reported as present and never "
         "registered with weft")
+
+
+def test_registration_actually_runs_without_exploding(tmp_path, monkeypatch):
+    """BEHAVIOURAL companion to the source check above.
+
+    The source assertion ("does it call list_declared_sites") passed while the
+    rewritten body still referenced a `path` variable the rewrite had deleted:
+    `NameError: name 'path' is not defined`, raised at boot, surfaced only as
+    "weft substrate failed to start". A grep cannot see that. Drive the method
+    against a fake weft and assert it both registers the declared site AND
+    returns cleanly — the claim is "registration works", not "the text
+    mentions the resolver".
+    """
+    from core.compute.adapter import WeftAdapter
+
+    sc = tmp_path / "site.yaml"; sc.write_text(SITE_WITH_CLUSTER)
+    home = tmp_path / "home"; home.mkdir()
+    monkeypatch.setenv("ABA_SITE_CONFIG", str(sc))
+    monkeypatch.setenv("ABA_HOME", str(home))
+    for m in ("core.config", "core.compute.sites_config"):
+        sys.modules.pop(m, None)
+
+    registered: list[tuple] = []
+
+    class _FakeWeft:
+        def register_site(self, name, kind, cfg):
+            registered.append((name, kind, cfg)); return {"ok": True}
+
+    a = WeftAdapter.__new__(WeftAdapter)          # no substrate needed
+    a._weft = _FakeWeft()
+    a.pixi_bin = "/bin/true"
+    a._register_configured_sites(set())           # must not raise
+
+    names = [n for n, _k, _c in registered]
+    assert "cluster" in names, f"declared site never registered: {names}"
+    kind = next(k for n, k, _c in registered if n == "cluster")
+    assert kind == "slurm"
