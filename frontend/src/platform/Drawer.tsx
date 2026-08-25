@@ -553,7 +553,16 @@ export function JobsTab({ jobs }: { jobs: JobInfo[] }) {
   useEffect(() => {
     if (!expandedId) return
     const row = jobs.find(j => j.id === expandedId)
-    if (!row || (row.status !== 'queued' && row.status !== 'running')) return
+    if (!row || (row.status !== 'queued' && row.status !== 'running')) {
+      // ONE last fetch on the transition to terminal. Stopping the poll the
+      // moment the row settles leaves the cached detail as the copy taken up
+      // to 4s BEFORE the end — finished_at still null (so the duration ticked
+      // forever) and the final log_tail chunk missing. Live 2026-08-25.
+      if (row && details[expandedId] && !details[expandedId].finished_at) {
+        fetchDetail(expandedId, true)
+      }
+      return
+    }
     const h = window.setInterval(() => { fetchDetail(expandedId, true) }, 4000)
     return () => window.clearInterval(h)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -787,7 +796,7 @@ export function JobDetailPanel({ job, detail, loading, onDismissed }: { job: Job
   const code = detail.params?.code || ''
   const out = detail.log_tail || ''
   const err = detail.error || ''
-  const duration = durationFmt(detail.started_at, detail.finished_at)
+  const duration = durationFmt(detail.started_at, detail.finished_at, detail.status || job.status)
   return (
     <div className="jobs__detail">
       <div className="jobs__detail-meta">
@@ -886,8 +895,17 @@ function fmtTimeStr(iso: string): string {
 }
 
 /** "32s" / "2m 14s" — readable elapsed between start and finish. */
-function durationFmt(startIso: string | null, finishIso: string | null): string {
+const TERMINAL = new Set(['done', 'failed', 'error', 'cancelled', 'canceled'])
+
+/** Elapsed time. The Date.now() fallback is for a job still RUNNING; for one
+ * that has ENDED it is a clock that ticks forever on finished work — which is
+ * what a stale detail snapshot (finished_at still null) produced live on
+ * 2026-08-25. A terminal job with no finish stamp renders nothing rather than
+ * a growing number that looks like data. */
+function durationFmt(startIso: string | null, finishIso: string | null,
+                     status?: string | null): string {
   if (!startIso) return ''
+  if (!finishIso && status && TERMINAL.has(status)) return ''
   const start = Date.parse(startIso); if (Number.isNaN(start)) return ''
   const end = finishIso ? Date.parse(finishIso) : Date.now()
   if (Number.isNaN(end)) return ''

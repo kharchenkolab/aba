@@ -95,16 +95,41 @@ def declared_slurm_sites(home) -> list[str]:
     This is what decides whether `ABA_BATCH_SUBMITTER=slurm` actually routes to
     the cluster: with none declared, `core.jobs.submitter._slurm_lane` prints a
     note and hands the job to the LOCAL lane."""
-    p = sites_config_path_for(home)
-    if not p.is_file():
-        return []
+    import os
+
     import yaml
-    try:
-        doc = yaml.safe_load(p.read_text()) or {}
-    except Exception:  # noqa: BLE001 — a broken file declares nothing
-        return []
-    return [str(s.get("name")) for s in (doc.get("sites") or [])
-            if isinstance(s, dict) and str(s.get("kind") or "").strip().lower() == "slurm"]
+
+    def _slurm_named(entries) -> list[str]:
+        return [str(s.get("name")) for s in (entries or [])
+                if isinstance(s, dict)
+                and str(s.get("kind") or "").strip().lower() == "slurm"]
+
+    found: list[str] = []
+    # (1) the deployment's own site.yaml (`compute.sites`). A SHARED deployment
+    #     declares its cluster here because weft-sites.yaml lives in $ABA_HOME
+    #     and every user gets a fresh one with no installer step to write it.
+    #     Reading only weft-sites.yaml is why slurm looked covered: the sweep
+    #     ran against a personal install, which HAS the file, while the shipped
+    #     OOD shape never did (found 2026-08-25, after every background job on
+    #     that deployment had been quietly running in the session container).
+    sc = (os.environ.get("ABA_SITE_CONFIG") or "").strip()
+    if sc:
+        try:
+            sp = Path(sc).expanduser()
+            if sp.is_file():
+                doc = yaml.safe_load(sp.read_text()) or {}
+                found += _slurm_named((doc.get("compute") or {}).get("sites"))
+        except Exception:  # noqa: BLE001 — a broken file declares nothing
+            pass
+    # (2) the operator's per-home override
+    p = sites_config_path_for(home)
+    if p.is_file():
+        try:
+            doc = yaml.safe_load(p.read_text()) or {}
+            found += _slurm_named(doc.get("sites"))
+        except Exception:  # noqa: BLE001
+            pass
+    return list(dict.fromkeys(found))
 
 
 def scontrol_ping() -> bool:

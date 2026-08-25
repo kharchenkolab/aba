@@ -84,6 +84,41 @@ def _slurm_lane(kind: str | None = None) -> "BatchSubmitter":
     return _local_lane()
 
 
+def check_slurm_site_declared() -> dict:
+    """Self-check: a deployment asking for Slurm must HAVE a Slurm site.
+
+    `_slurm_lane` degrades to the local weft lane when none is declared, so
+    jobs still run — but they run inside the user's own session container,
+    with no scheduler and no allocation, while the user believes they are on
+    the cluster. Live 2026-08-25 (OOD): site.yaml said submitter: slurm, no
+    site was declared anywhere, and the only trace was one print. The degrade
+    stays (a hard failure would strand every background job on a
+    misconfigured deployment); what changes is that it is now VISIBLE where
+    misconfiguration is looked for.
+    """
+    try:
+        if submitter_name() != "slurm":
+            return {"ok": True, "severity": "info",
+                    "detail": "local submitter — no cluster site required"}
+        from core.jobs.weft_submitter import weft_slurm_site
+        site = weft_slurm_site()
+        if site:
+            return {"ok": True, "severity": "info",
+                    "detail": f"slurm site {site!r} declared"}
+        return {
+            "ok": False, "severity": "high",
+            "detail": ("this deployment asks for the SLURM submitter but no "
+                       "slurm-kind compute site is declared, so every "
+                       "background job runs LOCALLY inside the session "
+                       "container — no scheduler, no allocation. Declare one "
+                       "under `compute.sites` in site.yaml (or in "
+                       "$ABA_HOME/weft-sites.yaml)."),
+        }
+    except Exception as e:  # noqa: BLE001 — a check must not break boot
+        return {"ok": False, "severity": "warning",
+                "detail": f"could not determine the slurm site: {e}"}
+
+
 def get_submitter(kind: str | None = None) -> "BatchSubmitter":
     """The active submitter for this deployment. Lazy imports avoid a cycle
     (runner ⇆ submitter) and keep Slurm code off the import path when local.

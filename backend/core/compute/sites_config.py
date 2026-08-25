@@ -39,12 +39,88 @@ def read_sites_config() -> dict:
     return yaml.safe_load(path.read_text()) or {}
 
 
+def _site_yaml_sites() -> list[dict]:
+    """Compute sites declared by the DEPLOYMENT, in site.yaml `compute.sites`.
+
+    weft-sites.yaml lives in $ABA_HOME and is written by the installer, so it
+    can only ever describe ONE user's machine. A shared deployment gives every
+    user a fresh ABA_HOME, so there is no installer step and no file — which
+    is exactly what happened on the OOD cluster (2026-08-25): site.yaml said
+    `jobs.submitter: slurm`, no site was declared anywhere, and every
+    background job silently ran inside the user's session container instead of
+    on the scheduler. A deployment-wide fact belongs in the deployment's own
+    config file.
+    """
+    try:
+        from pathlib import Path as _P
+
+        import yaml
+
+        from core import config
+        raw_path = (config.settings.site_config.get() or "").strip()
+        if not raw_path:
+            return []
+        sp = _P(raw_path).expanduser()
+        if not sp.is_file():
+            return []
+        doc = yaml.safe_load(sp.read_text()) or {}
+    except Exception:  # noqa: BLE001 — no/broken site.yaml is not a boot error
+        return []
+    raw = ((doc.get("compute") or {}).get("sites")) or []
+    return [_expand_site(e) for e in raw
+            if isinstance(e, dict) and e.get("name")]
+
+
+def _expand_site(entry: dict) -> dict:
+    """Expand {user}/{home}/{group} through a site entry, at every depth.
+
+    A shared deployment declares ONE site for ALL its users, so its paths have
+    to be per-user templates — a literal weft root would put every user of the
+    cluster in one workspace. These are the same placeholders the bundle
+    scopes already accept, so the deployment author only learns one rule.
+    Nested values (policy.storage.scratch) expand too: half-expanded config is
+    worse than none, because it fails later and somewhere else.
+    """
+    import os
+    from pathlib import Path as _P
+    # $USER first, then the passwd entry — the same order core/bundle/
+    # scope_resolver uses, so a site path and a bundle path can never expand
+    # to two different users in one process.
+    user = os.environ.get("USER")
+    if not user:
+        try:
+            import pwd
+            user = pwd.getpwuid(os.getuid()).pw_name
+        except Exception:  # noqa: BLE001 — no passwd entry in some containers
+            user = "unknown"
+    home = str(_P.home())
+    group = os.environ.get("ABA_GROUP") or ""
+
+    def walk(v):
+        if isinstance(v, str):
+            return (v.replace("{user}", user)
+                     .replace("{home}", home)
+                     .replace("{group}", group))
+        if isinstance(v, dict):
+            return {k: walk(x) for k, x in v.items()}
+        if isinstance(v, list):
+            return [walk(x) for x in v]
+        return v
+    return walk(dict(entry))
+
+
 def list_declared_sites() -> list[dict]:
+    """Every declared site: the deployment's (site.yaml) as the base, with the
+    operator's $ABA_HOME/weft-sites.yaml overriding BY NAME — a site.yaml
+    default must never lock out a local operator override."""
     try:
         doc = read_sites_config()
     except Exception:  # noqa: BLE001 — a broken file lists as empty; boot warns
-        return []
-    return [e for e in (doc.get("sites") or []) if isinstance(e, dict)]
+        doc = {}
+    local = [e for e in (doc.get("sites") or []) if isinstance(e, dict)]
+    by_name = {e.get("name"): e for e in _site_yaml_sites()}
+    by_name.update({e.get("name"): e for e in local})   # operator wins
+    return list(by_name.values())
 
 
 def aba_keys(name: str) -> dict:

@@ -72,6 +72,8 @@ async def on_startup():
         selfcheck.register("base_dir_shared", check_base_dir_shared)
         selfcheck.register("settings_valid", check_settings_valid)
         selfcheck.register("compute_substrate", check_compute)
+        from core.jobs.submitter import check_slurm_site_declared
+        selfcheck.register("slurm_site_declared", check_slurm_site_declared)
         for _r in selfcheck.run():
             if not _r["ok"]:
                 print(f"[startup] SELFCHECK {_r['severity'].upper()}: {_r['name']} — {_r['detail']}")

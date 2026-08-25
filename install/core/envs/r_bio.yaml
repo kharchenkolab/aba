@@ -38,7 +38,7 @@ spec:
     loads: [Seurat, Matrix, igraph, irlba, dplyr, ggrepel, hdf5r, presto,
             BiocManager, biomaRt, SingleCellExperiment, DESeq2, edgeR, limma,
             GenomeInfoDb, GenomicRanges, SummarizedExperiment,
-            Rsamtools, Signac]
+            Rsamtools, Signac, apeglm]
   # bioconductor-genomeinfodbdata ships NO payload. The conda package is two
   # scripts totalling 127 bytes; its post-link.sh calls
   #     installBiocDataPackage.sh "genomeinfodbdata-1.2.13"
@@ -89,6 +89,12 @@ spec:
       # already here; Rsamtools is what anything touching BAM/tabix needs.
       - bioconductor-rsamtools
       - r-signac
+      # DESeq2's standard LFC-shrinkage companion. Measured on the cold-base
+      # path (2026-08-25): absent, a user pays ~2 min of source build for it —
+      # RcppNumerical is a heavy template compile, plus bbmle/emdbook/coda/
+      # mvtnorm/numDeriv/bdsmatrix. Shipping it makes that zero for everyone,
+      # and DESeq2 without apeglm is half the usual workflow.
+      - bioconductor-apeglm
       # zlib DEV headers (zlib.h), not just the runtime libzlib the R stack
       # pulls in transitively: the cran lane below compiles from source
       # whenever PPM has no matching binary, and lstar's C++ core includes
