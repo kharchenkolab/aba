@@ -39,7 +39,11 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
-MATRIX = ROOT / "regtest" / "data" / "install_matrix.json"
+# Comma-separated: field-usage rankings first, our own recipes last (they win).
+MATRIX = ",".join([
+    str(ROOT / "regtest" / "data" / "install_matrix.json"),
+    str(ROOT / "regtest" / "data" / "install_matrix_recipes.json"),
+])
 
 # A capability the base pack proves it can load must cost NOTHING to "install".
 PACK_ENV_CEILING = 0
@@ -47,12 +51,39 @@ PACK_ENV_CEILING = 0
 INSTALL_ENV_CEILING = 1
 
 
-def _load_matrix(path: Path) -> list[dict]:
-    doc = json.loads(path.read_text())
-    entries = doc.get("entries") if isinstance(doc, dict) else doc
-    if not isinstance(entries, list):
-        raise SystemExit(f"{path}: no 'entries' list")
-    return [e for e in entries if isinstance(e, dict) and e.get("name")]
+def _load_matrix(paths) -> list[dict]:
+    """Merge one or more matrix files by NAME (later files enrich earlier ones).
+
+    Two sources feed this, and they answer different questions: what the field
+    uses most (download rankings) and what OUR OWN recipes assume is installed.
+    The second is the sharper one — a tool a recipe reaches for and cannot find
+    is a promise the platform already broke — so it is merged last and wins on
+    conflicting fields."""
+    if isinstance(paths, (str, Path)):
+        paths = [x for x in str(paths).split(",") if x.strip()]
+    merged: dict[str, dict] = {}
+    seen_any = False
+    for one in paths:
+        f = Path(one)
+        if not f.exists():
+            continue
+        seen_any = True
+        doc = json.loads(f.read_text())
+        entries = doc.get("entries") if isinstance(doc, dict) else doc
+        for e in entries or []:
+            if not isinstance(e, dict) or not e.get("name"):
+                continue
+            cur = merged.setdefault(e["name"], {})
+            cur.update({k: v for k, v in e.items() if v is not None})
+            cur.setdefault("name", e["name"])
+    if not seen_any:
+        # A normal exception, not SystemExit: the pack-provided gate CATCHES
+        # this and proceeds from the packs alone. SystemExit is a
+        # BaseException, so it slipped past that guard and let a missing data
+        # file disable the regression gate — the exact "a gate that cannot run
+        # is not a gate" shape this whole probe exists to prevent.
+        raise FileNotFoundError(f"no matrix file found among: {paths}")
+    return list(merged.values())
 
 
 def pack_provided() -> dict[str, str]:
@@ -239,7 +270,11 @@ def probe_one(c, entry: dict, *, timeout: float, projects_dir: Path | None,
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", required=True)
-    ap.add_argument("--matrix", default=str(MATRIX))
+    ap.add_argument("--matrix", default=MATRIX,
+                    help="one or more JSON matrix files, comma-separated")
+    ap.add_argument("--exclude-ecosystem", default="stdlib",
+                    help="comma-separated ecosystems to skip (default: stdlib — "
+                         "a language's own standard library is not an install test)")
     ap.add_argument("--projects-dir", default=None,
                     help="PROJECTS_DIR of the server under test (for env counting)")
     ap.add_argument("--ecosystem", default=None)
@@ -263,16 +298,22 @@ def main() -> int:
     # matrix file. The packs themselves are the source; the matrix only enriches.
     if a.pack_provided_only:
         try:
-            known = {e["name"]: e for e in _load_matrix(Path(a.matrix))}
+            known = {e["name"]: e for e in _load_matrix(a.matrix)}
         except Exception:  # noqa: BLE001 — no matrix yet is fine for this scope
             known = {}
         entries = [known.get(n, {"name": n, "language": lang,
                                  "ecosystem": "base-pack", "package": None})
                    for n, lang in sorted(pack_names.items())]
     else:
-        entries = _load_matrix(Path(a.matrix))
+        try:
+            entries = _load_matrix(a.matrix)
+        except FileNotFoundError as e:
+            raise SystemExit(str(e)) from e
     if a.ecosystem:
         entries = [e for e in entries if e.get("ecosystem") == a.ecosystem]
+    if a.exclude_ecosystem:
+        _skip = {x.strip() for x in a.exclude_ecosystem.split(",") if x.strip()}
+        entries = [e for e in entries if e.get("ecosystem") not in _skip]
     if a.language:
         entries = [e for e in entries if e.get("language") == a.language]
     if a.only:
