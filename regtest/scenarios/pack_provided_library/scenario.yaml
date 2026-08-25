@@ -1,0 +1,55 @@
+id: pack_provided_library
+smoke: true      # routine tier: it must be seconds, and being seconds IS the assertion.
+title: A library the base pack already ships — recognized, not rebuilt
+domain: technical
+gpu: false
+summary: >
+  The cheapest request there is, and the one that cost a user fifteen minutes. The base
+  pack ships and VERIFIES a library; the user asks to use it. The only correct answer is
+  to recognize it and move on. Building an environment for it is not a slow success, it
+  is a failure that happens to end with the right library available.
+
+  Live, 2026-08-25. On a deployment whose mounted r-bio pack contained and verified
+  Signac, the request fell through to an external registry and built a 2.0 GB duplicate
+  R environment beside the mounted one. Two independent holes: pack recognition was keyed
+  on a hand-written two-entry alias map (against twenty verified libraries), and the
+  "already present?" probe was disabled for R without an R probe replacing it.
+
+  Nothing in the suite could see it. Every check in the vocabulary described what the
+  agent ACHIEVED, and the agent did achieve it. `envs_created_max` exists because of this
+  scenario, and this scenario exists because a fix without a witness is a fix that comes
+  back.
+
+steps:
+- id: s1
+  kind: analyze
+  actor: agent
+  prompt: >
+    I want to use Seurat in this project. Please make sure it is available and tell me
+    which version I have.
+  expect:
+    envs_created_max: 0       # THE assertion. The pack proves it loads; the answer is free.
+    step_seconds_max: 180     # generous, but a rebuild cannot fit inside it
+    must_mention: ["Seurat"]
+    must_not: ["not a real package", "does not exist", "could not find"]
+    tool_max_calls:
+      make_isolated_env: 0    # the same statement from the other side: no env, at all
+    checks: >
+      Seurat is in the shipped r-bio pack's verify.loads, so the deployment PROVES it
+      loads before the pack is allowed to publish. Recognizing that must cost nothing:
+      no isolated env, no registry search, no solve. A pass here that took minutes is
+      not a pass — read step_seconds_max as part of the contract, not as a courtesy.
+
+- id: s2
+  kind: analyze
+  actor: agent
+  prompt: >
+    Good. Now load it and print the version, so I can see it working.
+  expect:
+    envs_created_max: 0
+    tools_used: [run_r]
+    must_mention: ["Seurat"]
+    checks: >
+      Assert on the RUN, not the reply: the previous step's claim of availability is only
+      worth what an actual library() call is worth. This is the half that catches a
+      confident "it's ready" over an env where it is not.
