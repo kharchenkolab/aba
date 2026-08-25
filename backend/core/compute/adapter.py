@@ -242,16 +242,19 @@ class WeftAdapter:
         or an operator wrote. Registered once (weft persists them); errors are
         LOUD but never boot-blocking (a dead login node must not stop the
         server; doctor + the site's own errors surface it)."""
-        path = sites_config_path()
-        if not path.exists():
-            return
+        # ONE resolver for "what sites are declared" — sites_config.
+        # list_declared_sites() merges the deployment's site.yaml
+        # (`compute.sites`) with the operator's $ABA_HOME/weft-sites.yaml.
+        # Reading the file directly here meant a site.yaml-declared cluster was
+        # REPORTED as present (weft_slurm_site, the boot self-check) and never
+        # registered with weft — a green light over the same broken lane.
+        from core.compute.sites_config import list_declared_sites
         try:
-            import yaml
-            doc = yaml.safe_load(path.read_text()) or {}
+            entries = list_declared_sites()
         except Exception as e:  # noqa: BLE001
-            print(f"[compute] unreadable sites config {path}: {e}")
+            print(f"[compute] unreadable sites config: {e}")
             return
-        for entry in (doc.get("sites") or []):
+        for entry in entries:
             name = (entry or {}).get("name")
             kind = (entry or {}).get("kind")
             cfg = dict((entry or {}).get("config") or {})

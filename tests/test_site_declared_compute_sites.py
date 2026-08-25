@@ -154,3 +154,28 @@ def test_regtest_precondition_sees_site_yaml_sites(tmp_path, monkeypatch):
     assert "cluster" in got, (
         f"site.yaml declares a slurm site; the regtest probe reports {got} and "
         f"would decline every requires:slurm scenario on this deployment shape")
+
+
+def test_adapter_registers_site_yaml_sites_not_just_weft_sites(monkeypatch):
+    """Declaring a site and REGISTERING it are two different code paths, and
+    fixing only the first is worse than fixing neither.
+
+    Caught on myself, 2026-08-25: after teaching `list_declared_sites()` about
+    site.yaml, `weft_slurm_site()` answered "cluster" and the new self-check
+    reported healthy — while `WeftAdapter._register_configured_sites` still
+    read `sites_config_path()` (weft-sites.yaml) directly and registered
+    nothing. The deployment then claims a cluster it never told weft about:
+    a GREEN light over the same broken lane, which is worse than the silent
+    degrade it replaced.
+
+    Source-level assertion on purpose: registration needs a live substrate, so
+    the reachable thing to pin is that the two paths read the SAME resolver.
+    """
+    import inspect
+
+    from core.compute.adapter import WeftAdapter
+    src = inspect.getsource(WeftAdapter._register_configured_sites)
+    assert "list_declared_sites" in src, (
+        "_register_configured_sites still reads weft-sites.yaml directly — a "
+        "site declared in site.yaml is reported as present and never "
+        "registered with weft")
