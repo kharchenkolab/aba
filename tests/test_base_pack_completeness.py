@@ -158,3 +158,50 @@ def test_base_packs_verify_what_they_advertise():
         "base pack(s) ship with no load-check, so a package that is present "
         "in name but empty in fact publishes clean: " + "; ".join(missing_block))
     assert not unproven, "; ".join(unproven)
+
+
+def test_every_verified_library_is_recognizable_as_pack_provided():
+    """The INVERSE of the guard above, and the one that actually bit a user.
+
+    The rule up there is `import_names ⊆ verify`: whatever the pack ADVERTISES
+    must be proven to load. That is a containment in the safe direction — a
+    two-entry `import_names` satisfies it trivially, which is exactly what
+    r-bio had: two advertised names against twenty verified libraries.
+
+    `ensure_capability` asks the opposite question — "is this name already
+    provided?" — via `env_packs.packs_providing`. With recognition keyed on
+    `import_names`, the answer for eighteen of r-bio's twenty libraries was
+    "no". Live, 2026-08-25: a user asked for a library the mounted base pack
+    ships and verifies. Nothing could say so, the request fell through to an
+    external registry, and it built a 2.0 GB duplicate R environment beside
+    the one already mounted — a correct-looking success that was entirely
+    wasted work.
+
+    So: every name the pack PROVES it can load must be recognizable as
+    provided. `verify` is the strongest claim in the pack (the build fails
+    without it), so it is the right source of truth for recognition, and this
+    guard is what keeps the two from drifting apart again.
+    """
+    sys.path.insert(0, str(ROOT / "backend"))
+    from core.compute import env_packs as ep
+
+    # Drive the REAL packs_providing over the packs this repo SHIPS, not over
+    # whatever bundle happens to be installed on the machine running the test —
+    # otherwise the guard measures the developer's ~/.aba, which is exactly the
+    # stale copy that made this bug invisible for a day.
+    docs = {(d.get("name") or f): d for f, d in _pack_docs()}
+    ep._packs = lambda: docs                    # noqa: SLF001 — guarding this function
+    unrecognized = []
+    for name, doc in docs.items():
+        spec = doc.get("spec") or {}
+        verify = spec.get("verify") or {}
+        proven = [str(x) for k in ("loads", "import", "imports")
+                  for x in (verify.get(k) or [])]
+        assert proven, f"{name}: no spec.verify block — the guard above covers that"
+        for lib in proven:
+            if name not in ep.packs_providing(lib):
+                unrecognized.append(f"{name}:{lib}")
+    assert not unrecognized, (
+        "these libraries are PROVEN to load in their pack but packs_providing() "
+        "cannot tell the agent so, i.e. ensure_capability will route them to an "
+        "external registry and build a duplicate env: " + ", ".join(unrecognized))

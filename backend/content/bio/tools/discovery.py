@@ -1775,7 +1775,26 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         # name, probed by real import name).
         # The import probe answers "does `import X` work in run_PYTHON" — for an
         # R-scoped request that is the wrong question in the exact way this
-        # parameter exists to prevent, so gate it off.
+        # parameter exists to prevent, so gate it off. R gets its OWN probe
+        # first (below): gating the python one off left R with NO
+        # already-present check at all on this path, which is how a request for
+        # a library sitting in the mounted base pack reached an external
+        # registry. Live 2026-08-25 — Signac.
+        if language == "r":
+            from core import projects as _prj_r
+            _pid_r = str(_prj_r.current() or "default")
+            for _lib in (name,):
+                try:
+                    _ver = _r_version_in_session(_pid_r, _lib)
+                except Exception:  # noqa: BLE001 — no session yet → fall through
+                    _ver = None
+                if _ver:
+                    return {"status": "ready", "name": name, "archetype": "r_package",
+                            "library": _lib, "version": _ver, "ready_in": "r",
+                            "note": _mismatch_note +
+                                    f"Already available — library({_lib}) {_ver} works in "
+                                    f"run_r (provided by the base env pack or a prior "
+                                    f"install); no install needed."}
         _probes = ([name] if name.isidentifier() and language != "r" else [])
         try:
             from core.compute import env_packs as _ep

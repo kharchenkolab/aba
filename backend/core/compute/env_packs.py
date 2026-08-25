@@ -102,14 +102,63 @@ def import_names_for_package(package: str) -> list[str]:
 
 
 def packs_providing(import_name: str) -> list[str]:
-    """Which packs declare (in deps or import_names) a given import name — used
-    to tell the agent 'that's already in base python-bio', not 'not installable'."""
+    """Which packs provide a given import/library name — used to tell the agent
+    "that's already in base r-bio", not "not installable".
+
+    THREE sources, because each alone is partial:
+
+    * ``spec.verify`` (``loads`` for R, ``import`` for python) — the pack's own
+      list of names it PROVES load at build time. This is the authoritative
+      answer and the only one that carries correct R capitalization
+      (``Signac``, ``Seurat``, ``Rsamtools``, ``DESeq2``).
+    * ``import_names`` — hand-written aliases, for the cases where the import
+      name is not derivable from the dep at all.
+    * ``spec.deps`` — the conda/pypi package names, for callers that ask that way.
+
+    Only the last two were consulted, and `import_names` is hand-maintained: for
+    r-bio it held TWO entries against twenty verified libraries. So
+    ``packs_providing("DESeq2")`` answered "r-bio" while ``"Signac"``,
+    ``"Seurat"``, ``"Rsamtools"`` and ``"apeglm"`` answered "nothing" — although
+    the pack ships and verifies all four. Live (2026-08-25): a user asked for
+    Signac on a deployment whose mounted base pack already contained it; nothing
+    could say so, and the request built a 2.0 GB duplicate R environment.
+
+    An entry in ``verify`` is a stronger claim than one in ``deps``: the pack
+    build FAILS unless the library actually loads (`verify.loads`), so a name
+    listed there is provided in fact, not merely requested. This is why the
+    guard in tests/test_base_pack_completeness.py now runs BOTH directions —
+    every advertised name verified, and every verified name recognizable here."""
     hits = []
     for name, doc in _packs().items():
         names = set((doc.get("import_names") or {}).values())
         names |= set((doc.get("import_names") or {}).keys())
-        deps = (doc.get("spec") or {}).get("deps") or {}
+        spec = doc.get("spec") or {}
+        verify = spec.get("verify") or {}
+        for key in ("loads", "import", "imports"):
+            v = verify.get(key)
+            if isinstance(v, list):
+                names |= {str(x) for x in v}
+        deps = spec.get("deps") or {}
         flat = " ".join(str(x) for v in deps.values() if isinstance(v, list) for x in v)
         if import_name in names or import_name in flat.split():
             hits.append(name)
     return hits
+
+
+def pack_verified_names(pack: str | None = None) -> dict[str, list[str]]:
+    """``{pack: [names it PROVES load]}`` from each pack's ``spec.verify``.
+
+    Exposed so a guard can walk the real shipped list rather than a copy of it
+    (a copy is what let the advertised set drift to two entries)."""
+    out: dict[str, list[str]] = {}
+    for name, doc in _packs().items():
+        if pack is not None and name != pack:
+            continue
+        verify = ((doc.get("spec") or {}).get("verify") or {})
+        got: list[str] = []
+        for key in ("loads", "import", "imports"):
+            v = verify.get(key)
+            if isinstance(v, list):
+                got += [str(x) for x in v]
+        out[name] = list(dict.fromkeys(got))
+    return out
