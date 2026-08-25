@@ -11,6 +11,7 @@ offloaded to another node).
 from __future__ import annotations
 
 import os
+import pathlib
 import subprocess
 import sys
 from pathlib import Path
@@ -495,6 +496,31 @@ def check_base_dir_shared() -> dict:
     # Job-wrap (fat or weft SIF): offloaded jobs re-enter the SIF, so the baked base is
     # reachable (its being node-local/in-image is by design). Don't flag it as unreachable.
     if (config.settings.job_wrap.get() or "").strip().lower() == "sif":
+        # The exemption is only as good as the mechanism it names, and that
+        # mechanism is GONE. It pointed at slurm_submitter._job_body, deleted
+        # with the sbatch lane (880604c0). The weft lane that replaced it
+        # builds the node command as `{sys.executable} -m core.jobs.
+        # slurm_entry` and never re-enters the image; ABA_JOB_WRAP has one
+        # consumer left in the tree and it is not the submitter.
+        #
+        # Measured 2026-08-25 on the shipped OOD shape: the job reached Slurm
+        # (sacct COMPLETED), the node ran it bare, and cmd.sh died with
+        # "/opt/aba-venv/bin/python: No such file or directory", exit 127 —
+        # while /api/health said ok, warnings=[], because of this branch. An
+        # exemption that outlives its mechanism does not merely fail to help;
+        # it silences the one check that would have caught the failure.
+        from core.jobs.weft_submitter import __file__ as _ws
+        if "apptainer exec" not in pathlib.Path(_ws).read_text():
+            return {
+                "ok": False, "severity": "high",
+                "detail": ("ABA_JOB_WRAP=sif promises offloaded jobs re-enter the "
+                           "image via `apptainer exec`, but the active weft submit "
+                           "lane does not wrap — it runs the controller python by "
+                           "absolute path on a bare node. With an in-image base "
+                           "that path does not exist there and EVERY offloaded job "
+                           "exits 127. Use a slim SIF (image.base_dir on shared FS) "
+                           "or a native shared install until the wrap exists."),
+            }
         return {"ok": True, "severity": "info",
                 "detail": ("SIF + job-wrap (ABA_JOB_WRAP=sif): offloaded jobs re-enter the "
                            "image via `apptainer exec`, so the baked in-image base is reachable — "
