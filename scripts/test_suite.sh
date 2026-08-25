@@ -25,7 +25,11 @@ BASELINE="tests/KNOWN_FAILURES.txt"
 UPDATE=""; [ "${1:-}" = "--update-baseline" ] && UPDATE=1
 OUT="$(mktemp)"; trap 'rm -f "$OUT"' EXIT
 
-FILES=$(find tests backend/tests -name 'test_*.py' -not -path '*/node_modules/*' | sort)
+# ABA_TEST_FILES limits the sweep to a space-separated subset — for fast
+# iteration, and for red-proofing this gate itself (a gate nobody has
+# watched fail is decoration; that is how the deploy's surface tier came
+# to be unrunnable for months).
+FILES="${ABA_TEST_FILES:-$(find tests backend/tests -name 'test_*.py' -not -path '*/node_modules/*' | sort)}"
 n=0; total=$(echo "$FILES" | wc -l)
 for f in $FILES; do
   n=$((n+1)); printf '\r  [%3d/%3d] %-58s' "$n" "$total" "$(basename "$f")" >&2
