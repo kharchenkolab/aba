@@ -308,7 +308,8 @@ def ensure_component(kind: str, cid: str, builder, share: Optional[str] = None) 
 
 
 def compose_release(version: str, components: dict, *,
-                    share: Optional[str] = None, built_at: Optional[str] = None) -> Path:
+                    share: Optional[str] = None, built_at: Optional[str] = None,
+                    provenance: Optional[dict] = None) -> Path:
     """A release = relative symlinks to component versions + a manifest recording which it pins.
     `components` is {kind: cid} — e.g. slim uses {sif,env,opt} (code lives in the SIF); a checkout
     deploy might use {repo,env,opt}. ~0 bytes; a component is shared by reference across every
@@ -327,6 +328,17 @@ def compose_release(version: str, components: dict, *,
     manifest = {"version": version, "components": dict(components)}
     if built_at:
         manifest["built_at"] = built_at
+    # WHAT WENT IN, not just which bytes. The release version names the aba
+    # commit; the SUBSTRATE was pinned by a floating `WEFT_REF=main` and
+    # re-cloned on every build, so two releases of the same aba commit could
+    # (and did) carry substrates 64 commits apart with nothing recording it —
+    # found 2026-08-25, after a release had already shipped a substrate nobody
+    # had reviewed. A component id addresses bytes; it does not say what those
+    # bytes were built FROM. You cannot roll back to a revision you never wrote
+    # down, and you cannot attribute a behaviour change to a substrate you
+    # cannot name.
+    if provenance:
+        manifest["provenance"] = {k: str(v) for k, v in provenance.items() if v}
     (rel / "manifest.json").write_text(json.dumps(manifest))
     return rel
 
@@ -375,7 +387,8 @@ def _refuse_stale_reuse(kind: str, cid: str, src: str, existing: Path) -> None:
 
 def stage_release(version: str, components: "dict[str, tuple[str, str]]", *,
                   share: Optional[str] = None, do_promote: bool = False,
-                  built_at: Optional[str] = None) -> dict:
+                  built_at: Optional[str] = None,
+                  provenance: Optional[dict] = None) -> dict:
     """DEPLOY-side orchestration (called by deploy.sh). `components` = {kind: (cid, src_path)}:
     ensure each as a content-addressed component under $ABA_SHARE (copy src → components/kind/cid,
     **skipping the copy when the cid already exists** — so a code-only upgrade never re-copies the
@@ -400,7 +413,8 @@ def stage_release(version: str, components: "dict[str, tuple[str, str]]", *,
         comp_ids[kind] = cid
         if existed:
             reused.append(f"{kind}/{cid}")
-    compose_release(version, comp_ids, share=str(root), built_at=built_at)
+    compose_release(version, comp_ids, share=str(root), built_at=built_at,
+                    provenance=provenance)
     if do_promote:
         promote(version, str(root))
     return {"version": version, "components": comp_ids, "reused": reused,
@@ -483,6 +497,10 @@ def _cli(argv: "list[str] | None" = None) -> int:
     s.add_argument("--version", required=True)
     s.add_argument("--component", action="append", required=True, metavar="kind=cid=src")
     s.add_argument("--promote", action="store_true")
+    s.add_argument("--provenance", action="append", default=[], metavar="key=value",
+                   help="what this release was BUILT FROM (e.g. weft=<sha>) — "
+                        "recorded in the manifest; component ids address bytes, "
+                        "not the revisions they came from")
     a = ap.parse_args(argv)
     if a.cmd == "list":
         cur = resolve_current()
@@ -510,7 +528,13 @@ def _cli(argv: "list[str] | None" = None) -> int:
         for c in a.component:
             k, cid, src = c.split("=", 2)
             comps[k] = (cid, src)
-        print(json.dumps(stage_release(a.version, comps, do_promote=a.promote)))
+        prov = {}
+        for pv in (a.provenance or []):
+            k, _, v = pv.partition("=")
+            if k and v:
+                prov[k] = v
+        print(json.dumps(stage_release(a.version, comps, do_promote=a.promote,
+                                       provenance=prov or None)))
     return 0
 
 
