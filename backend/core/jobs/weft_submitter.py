@@ -51,6 +51,25 @@ _ABA_LEVERS = {
         "package in an isolated env (make_isolated_env) rather than the "
         "project's default session, which must stay solvable for every other "
         "remote step.",
+    # The substrate's own hints here are correct and useless TO AN AGENT: both
+    # levers (a pack `post_install` step, or the site's post_link policy) are
+    # edits to deployment configuration that no agent can make. Left to fall
+    # through, the agent reads a fix it cannot perform and either loops on it
+    # or invents a substitute. Say what IS reachable from here.
+    "env.post_link_scripts":
+        "this package ships a conda POST-LINK script that the packer stages "
+        "but never runs, so it would install with its payload MISSING and fail "
+        "to load later — the substrate refuses rather than hand you a broken "
+        "env. Neither fix is yours to make (a pinned post_install step in the "
+        "environment pack, or a site policy change), so: use a different "
+        "package if one serves, otherwise tell the user this needs an operator "
+        "to add the payload step to the pack, naming the packages from the "
+        "error detail.",
+    "env.activation_failed":
+        "the environment never activated on the compute node, so the job's "
+        "code did not run at all — this is infrastructure, not your code and "
+        "not the package. Re-submitting once is reasonable; if it repeats, "
+        "report it rather than rewriting the analysis.",
 }
 
 

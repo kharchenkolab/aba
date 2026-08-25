@@ -24,7 +24,14 @@ def _interp_from_activation(spec: dict) -> str | None:
     Falls back to a spec-carried `interp` (legacy path / explicit override)."""
     if spec.get("interp"):
         return spec["interp"]
-    prefix = os.environ.get("CONDA_PREFIX")
+    # WEFT_PREFIX is the substrate's OWN statement that activation took; it is
+    # exported by the activation guard in cmd.sh only after CONDA_PREFIX has
+    # been checked to be real, and the guard exits 78 before user code
+    # otherwise. CONDA_PREFIX is an inference over pixi shell-hook fallout that
+    # anything in the chain can clobber, and it cannot distinguish "activation
+    # failed" from "submitted deliberately bare". Prefer the fact; keep the
+    # inference as the fallback for substrates predating the guard.
+    prefix = os.environ.get("WEFT_PREFIX") or os.environ.get("CONDA_PREFIX")
     if not prefix:
         # None here is NOT self-explanatory: run.py's default lane asks for a
         # compute substrate, and this process has none by design. _activation_
@@ -59,10 +66,15 @@ def _activation_verdict(spec: dict) -> str | None:
     want = spec.get("env_id")
     if not want or spec.get("interp"):
         return None                        # bare by design, or explicit override
-    if not os.environ.get("CONDA_PREFIX"):
+    if not (os.environ.get("WEFT_PREFIX") or os.environ.get("CONDA_PREFIX")):
         return (f"environment {want} was never activated on this node — "
-                f"CONDA_PREFIX is unset, so there is no interpreter to run "
-                f"the job in. This is an environment-activation failure, not "
+                f"neither WEFT_PREFIX nor CONDA_PREFIX is set, so there is no "
+                f"interpreter to run the job in. (A current substrate refuses "
+                f"earlier than this: its activation guard exits 78 from cmd.sh "
+                f"before user code, classified env.activation_failed. Reaching "
+                f"here means the guard did not run — an older substrate, or a "
+                f"task submitted with no env.) This is an environment-"
+                f"activation failure, not "
                 f"a fault in the job's code and not a cluster outage: this "
                 f"node runs only what the scheduler mounts for the task. "
                 f"Check the job's task record for an activation error, then "

@@ -17,6 +17,7 @@ Two instruments:
      the contract is checked exactly where payloads cross into aba's model.
 """
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -24,37 +25,16 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 VENDORED = ROOT / "tests" / "schemas" / "ensure_envelope.schema.json"
 
-# WHERE the substrate checkout might be. One hard-coded guess
-# (~/aba/weft/...) meant this instrument silently skipped on every box that
-# keeps weft anywhere else — including the one it was written on, where the
-# checkout lives under /scratch. A cross-repo drift guard that never runs is
-# the same defect as no guard, minus the honesty: found 2026-08-25 with 72
-# unexamined substrate commits waiting, any of which could have moved the
-# contract. Look in the places weft actually lives, and let a box say so
-# explicitly with ABA_WEFT_SRC.
+# WHERE the substrate checkout is: tests/_weft_checkout.py, one owner. This
+# file used to carry its own single hard-coded guess (~/aba/weft/...), which
+# matched nothing on the box it was written on — so this guard silently skipped
+# while 72 substrate commits landed, any of which could have moved the
+# contract it exists to protect.
+sys.path.insert(0, str(ROOT / "tests"))
+from _weft_checkout import find_weft_file, tried  # noqa: E402
+
 _REL = ("documentation", "ensure_envelope.schema.json")
-
-
-def _sibling_candidates() -> "list[Path]":
-    import os
-    out: list[Path] = []
-    env = (os.environ.get("ABA_WEFT_SRC") or "").strip()
-    if env:
-        out.append(Path(env).expanduser())
-    home = Path.home()
-    out += [home / "aba" / "weft",
-            home / "weft",
-            home / "weft-src" / "weft",
-            ROOT.parent / "weft",
-            Path("/scratch/users") / home.name / "aba-weft" / "repo" / "weft"]
-    return [c.joinpath(*_REL) for c in out]
-
-
-def _sibling() -> "Path | None":
-    return next((p for p in _sibling_candidates() if p.exists()), None)
-
-
-SIBLING = _sibling()
+SIBLING = find_weft_file(*_REL)
 
 pytestmark = pytest.mark.platform
 
@@ -109,9 +89,8 @@ def test_vendored_matches_sibling_checkout():
     if SIBLING is None:
         # Name every path tried. A bare "no checkout here" reads as "nothing to
         # do"; the list makes a WRONG guess visible instead of invisible.
-        pytest.skip("no weft checkout found — looked in: "
-                    + ", ".join(str(p) for p in _sibling_candidates())
-                    + " (set ABA_WEFT_SRC to the checkout root)")
+        pytest.skip("no weft checkout with the schema — looked in: "
+                    + tried(*_REL) + " (set ABA_WEFT_SRC to the checkout root)")
     assert VENDORED.read_text() == SIBLING.read_text(), (
         "envelope contract drift: the substrate's schema differs from the "
         "vendored copy — a versioned contract event; update tests/schemas/, "

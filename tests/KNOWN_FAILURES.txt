@@ -116,5 +116,3 @@ tests/test_scribe_round_trip.py::test_recover_rebuilds_db_from_sidecars
 tests/test_suite_census.py::test_every_test_file_is_accounted_for
 tests/test_thread_spec_selection.py::test_default_when_nothing_set
 tests/test_turn_context_golden.py::test_turn_context_matches_golden
-tests/test_weft_submitter.py::test_offline_substrate_falls_back_to_worker
-tests/test_weft_submitter.py::test_worker_escape_hatch
