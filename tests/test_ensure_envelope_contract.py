@@ -23,7 +23,38 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 VENDORED = ROOT / "tests" / "schemas" / "ensure_envelope.schema.json"
-SIBLING = Path.home() / "aba" / "weft" / "documentation" / "ensure_envelope.schema.json"
+
+# WHERE the substrate checkout might be. One hard-coded guess
+# (~/aba/weft/...) meant this instrument silently skipped on every box that
+# keeps weft anywhere else — including the one it was written on, where the
+# checkout lives under /scratch. A cross-repo drift guard that never runs is
+# the same defect as no guard, minus the honesty: found 2026-08-25 with 72
+# unexamined substrate commits waiting, any of which could have moved the
+# contract. Look in the places weft actually lives, and let a box say so
+# explicitly with ABA_WEFT_SRC.
+_REL = ("documentation", "ensure_envelope.schema.json")
+
+
+def _sibling_candidates() -> "list[Path]":
+    import os
+    out: list[Path] = []
+    env = (os.environ.get("ABA_WEFT_SRC") or "").strip()
+    if env:
+        out.append(Path(env).expanduser())
+    home = Path.home()
+    out += [home / "aba" / "weft",
+            home / "weft",
+            home / "weft-src" / "weft",
+            ROOT.parent / "weft",
+            Path("/scratch/users") / home.name / "aba-weft" / "repo" / "weft"]
+    return [c.joinpath(*_REL) for c in out]
+
+
+def _sibling() -> "Path | None":
+    return next((p for p in _sibling_candidates() if p.exists()), None)
+
+
+SIBLING = _sibling()
 
 pytestmark = pytest.mark.platform
 
@@ -75,8 +106,12 @@ def check_envelope(env: dict) -> "list[str]":
 
 
 def test_vendored_matches_sibling_checkout():
-    if not SIBLING.exists():
-        pytest.skip("no sibling weft checkout on this box")
+    if SIBLING is None:
+        # Name every path tried. A bare "no checkout here" reads as "nothing to
+        # do"; the list makes a WRONG guess visible instead of invisible.
+        pytest.skip("no weft checkout found — looked in: "
+                    + ", ".join(str(p) for p in _sibling_candidates())
+                    + " (set ABA_WEFT_SRC to the checkout root)")
     assert VENDORED.read_text() == SIBLING.read_text(), (
         "envelope contract drift: the substrate's schema differs from the "
         "vendored copy — a versioned contract event; update tests/schemas/, "
