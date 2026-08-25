@@ -313,6 +313,19 @@ def resolve_target(tgt: dict, produced: dict, created: dict) -> dict:
 REQUIRES = ""
 
 
+def _named_env_count(pid) -> "int | None":
+    """How many named/isolated envs this project has, or None if unmeasurable.
+
+    None is NOT zero: a check that asked to be measured and wasn't must fail
+    loudly rather than pass on an absent number (same arming rule as
+    cache_hit_min)."""
+    try:
+        from core.compute import named_envs
+        return len(named_envs.list_names(str(pid)))
+    except Exception:  # noqa: BLE001 — substrate offline / no registry yet
+        return None
+
+
 def await_jobs(client, job_ids, timeout_s: float) -> list[dict]:
     """Poll each background job to a terminal state, then read its result from disk.
     Returns [{job_id, status, returncode, error, stdout, ok}] — `ok` = ran clean
@@ -425,6 +438,33 @@ def run_checks(step, cap, cmetrics, prev_msgs, client, pid, tid, created, produc
             for s in (bj.get("stdout_absent") or []):
                 if s.lower() in joined:
                     fails.append(f"background_job.stdout_absent:{s!r} present ({summ})")
+    # COST ceilings. `envs_created_max: 0` is the strongest statement a
+    # capability scenario can make: "answer this from what is already here".
+    # Without it, "install X" scenarios pass whether X was recognized as
+    # already present or rebuilt from scratch beside itself.
+    if "envs_created_max" in exp:
+        _before, _after = cap.get("envs_before"), cap.get("envs_after")
+        if _before is None or _after is None:
+            fails.append("envs_created_max: env count was NOT MEASURED for this step "
+                         "(substrate offline?) — an unmeasured ceiling is a failure, "
+                         "not a pass")
+        else:
+            _made = _after - _before
+            if _made > int(exp["envs_created_max"]):
+                fails.append(
+                    f"envs_created_max: the step created {_made} named env(s), "
+                    f"ceiling is {exp['envs_created_max']}. Building an environment "
+                    f"for something the base pack already provides is wasted work "
+                    f"the user pays for in minutes and gigabytes, even when the "
+                    f"answer is eventually correct.")
+    if "step_seconds_max" in exp:
+        _el = cap.get("elapsed_s")
+        if _el is None:
+            fails.append("step_seconds_max: step duration was NOT MEASURED — "
+                         "an unmeasured ceiling is a failure, not a pass")
+        elif _el > float(exp["step_seconds_max"]):
+            fails.append(f"step_seconds_max: step took {_el}s, ceiling is "
+                         f"{exp['step_seconds_max']}s")
     for k, n in (exp.get("produces") or {}).items():
         got = sum(1 for a in produced_arts if a.get("kind") == k)
         if got < n:
@@ -793,9 +833,23 @@ def main() -> int:
                     if step.get("new_thread"):
                         tid = client.post("/api/threads", json={"project_id": pid,
                                           "title": f"{SCENARIO}:{sid}"}).json().get("id")
+                    # COST measurement, taken around the turn because both ends
+                    # are needed. Every other check in the vocabulary asks what
+                    # the agent ACHIEVED; these two ask what it SPENT. A suite
+                    # that can only reward achievement cannot see the failure
+                    # mode where the right answer is reached the ruinous way —
+                    # live 2026-08-25, a request for a library already mounted
+                    # in the base pack built a 2.0 GB duplicate environment and
+                    # every assertion passed.
+                    _envs_before = _named_env_count(pid)
+                    _t_step = time.time()
                     cap = call_with_timeout(drive_turn, TURN_TIMEOUT_S, client, pid, tid,
                                             step["prompt"],
                                             resume_answer=step.get("resume_answer", "Yes, go ahead."))
+                    if isinstance(cap, dict):
+                        cap["elapsed_s"] = round(time.time() - _t_step, 1)
+                        cap["envs_before"] = _envs_before
+                        cap["envs_after"] = _named_env_count(pid)
                     _reqf = new_request_files(seen_reqs)
                     cmetrics = context_metrics(_reqf)
                     produced[sid] = discover_new_artifacts(client, pid, tid, seen_artifacts)

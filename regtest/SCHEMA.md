@@ -104,6 +104,17 @@ expected_overall:
   (poll `/api/jobs/{id}`, then read its result), then asserts on its OUTCOME — ran clean, stdout
   has / lacks substrings — not merely that it was submitted. Pair with `requires: slurm` so the
   real Slurm `job.sh` path (module load + python-env sanitize) is exercised.
+- **cost ceilings** — `envs_created_max: n` (named/isolated envs the step may create)
+  and `step_seconds_max: n` (wall clock). Every other check here asks what the agent
+  ACHIEVED; these ask what it SPENT, and without them a scenario cannot tell the right
+  answer from the ruinously-obtained right answer. `envs_created_max: 0` is the natural
+  assertion for any "I need library X" step where X ships in a base pack: it says
+  *answer from what is already mounted*. Live 2026-08-25 — a request for a library the
+  mounted pack already contained (and verifies) built a 2.0 GB duplicate environment
+  over ~15 minutes; `background_job.ok` and `must_mention` were both satisfiable by
+  that outcome, so nothing in the suite could see it. ARMED: if the ceiling is
+  requested and the measurement is missing, the step FAILS — an unmeasured ceiling
+  never passes silently.
 - **produces** — `{figure: n, table: n}` ≥ counts from the turn's run-artifacts.
 - **state** (queried after the step via manifest + entities):
   `pinned_results_min`, `manifest_contains` / `manifest_not_contains`,
