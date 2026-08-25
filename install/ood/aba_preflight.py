@@ -412,14 +412,23 @@ def main():
                 lines.append(f"export ABA_BASE_DIR={shq(ex(img['base_dir']))}")
             if img.get("tools_dir"):
                 lines.append(f"export ABA_TOOLS_DIR={shq(ex(img['tools_dir']))}")
-        # Job-wrap mode (misc/fatagain.md). A FAT SIF bakes the env + interpreter +
-        # backend INSIDE the image (image.sif but NO base_dir), so offloaded env-jobs
-        # must RE-ENTER it via `apptainer exec` (slurm_submitter reads ABA_JOB_WRAP).
-        # A slim SIF / versioned release mounts a shared base (base_dir present) → jobs
-        # run BARE. Derived from sif-without-base; explicit image.job_wrap overrides.
-        _sif = relenv.get("ABA_SIF") if relenv else img.get("sif")
-        _base = relenv.get("ABA_BASE_DIR") if relenv else img.get("base_dir")
-        _wrap = (img.get("job_wrap") or "").strip().lower() or ("sif" if (_sif and not _base) else "")
+        # Job-wrap mode (misc/fatagain.md) — DECLARED ONLY, never derived.
+        #
+        # This used to read `sif AND NOT base_dir` and emit ABA_JOB_WRAP=sif,
+        # on the reasoning that a fat SIF's offloaded jobs must re-enter the
+        # image via `apptainer exec`. The reader of that variable
+        # (slurm_submitter._job_body) was deleted with the sbatch lane, so the
+        # derivation began promising a mechanism nothing implements — and
+        # `check_base_dir_shared` treated the promise as proof and fell silent
+        # while every offloaded job exited 127 (live 2026-08-25, OOD).
+        #
+        # The weft answer to "sif without base_dir" is not a wrap, it is the
+        # DETACHED site contract: the node runs its own interpreter on code
+        # shipped as data, so ABA's runtime never needs to be there. Deriving
+        # a wrap mode from the image shape now asserts the opposite. An
+        # operator who really has a wrapping lane can still declare
+        # `image.job_wrap` explicitly.
+        _wrap = (img.get("job_wrap") or "").strip().lower()
         if _wrap:
             lines.append(f"export ABA_JOB_WRAP={shq(_wrap)}")
         # background-job offload: site.yaml jobs.submitter (local|slurm) +

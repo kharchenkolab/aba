@@ -128,9 +128,13 @@ if [ -n "${ABA_SIF:-}" ]; then
     _sess_tmp_cleanup="$_sess_tmp"                    # only WE made it → shutdown() rm -rf's it
   fi
   envs+=( --env "TMPDIR=${_sess_tmp}" )
-  # ABA_SIF + ABA_JOB_WRAP: forwarded so the containerized backend's slurm_submitter
-  # can wrap offloaded env-jobs by RE-ENTERING this image (apptainer exec) under a fat
-  # deployment (ABA_JOB_WRAP=sif). Unset/bare (slim) → offloaded jobs run bare, as before.
+  # ABA_SIF is forwarded so the backend knows which image it is running from.
+  # ABA_JOB_WRAP rides along for deployments that DECLARE image.job_wrap; it is no
+  # longer derived from the image shape, and no weft submit lane wraps. Under this
+  # (weft) profile the controller runtime exists only inside the image, which is why
+  # a cluster site here resolves to the DETACHED contract: offloaded jobs ship their
+  # code as data and run the node's own interpreter inside a weft-mounted science
+  # env. No re-entry, by design — see docs/arch/envs.md §Shared-FS reachability.
   # ABA_BATCH_SUBMITTER is the SELECTOR that decides local-vs-slurm; it MUST be forwarded
   # or submitter_name() reads an unset var inside --containall, returns "local", and every
   # "background" job silently runs IN-PROCESS on the session node instead of on Slurm —

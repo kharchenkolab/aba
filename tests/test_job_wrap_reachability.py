@@ -88,3 +88,26 @@ def test_local_submitter_still_exempt(monkeypatch):
     from core.jobs import submitter as sub
     monkeypatch.setattr(sub, "submitter_name", lambda: "local")
     assert env_integrity.check_base_dir_shared()["ok"] is True
+
+
+def test_preflight_does_not_manufacture_a_wrap_promise(tmp_path):
+    """The deployment must not DERIVE a wrap mode it has no lane for.
+
+    aba_preflight used to emit `ABA_JOB_WRAP=sif` for any image.sif without an
+    image.base_dir — which under the weft profile is every deployment. Nothing
+    consumed it except the exemption above, so the derivation's only effect was
+    to silence the check. The weft answer to sif-without-base is the DETACHED
+    site contract, not a wrap; an operator who has a wrapping lane declares
+    `image.job_wrap` by hand."""
+    import re
+    src = (REPO / "install" / "ood" / "aba_preflight.py").read_text()
+    # the assignment that computes _wrap must not consult the image shape
+    m = re.search(r"^\s*_wrap = .*$", src, re.M)
+    assert m, "the _wrap assignment moved — re-read this guard"
+    line = m.group(0)
+    assert "job_wrap" in line, line
+    for derived in ("ABA_SIF", "base_dir", "ABA_BASE_DIR", '"sif"', "'sif'"):
+        assert derived not in line, (
+            f"aba_preflight derives the job-wrap mode from {derived!r} again: {line.strip()!r}. "
+            "A wrap mode that no submit lane implements does not make jobs work; "
+            "it only suppresses check_base_dir_shared.")
