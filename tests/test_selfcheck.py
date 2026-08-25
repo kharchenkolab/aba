@@ -208,17 +208,34 @@ def test_base_check_slurm_in_image_in_allocation_warns():
 
 
 def test_base_check_slurm_wrap_mode_ok():
-    # fat SIF + job-wrap (ABA_JOB_WRAP=sif): offloaded env-jobs RE-ENTER the image via
-    # apptainer exec, so a node-local/in-image base is reachable — the wrap flip must
-    # override what would otherwise be the 'single-node' HIGH on a bare submit node.
+    # job-wrap (ABA_JOB_WRAP=sif) is supposed to mean offloaded jobs RE-ENTER the
+    # image via apptainer exec, making a node-local/in-image base reachable and
+    # overriding what would otherwise be the 'single-node' HIGH.
+    #
+    # That is only true while some lane ACTUALLY wraps. The lane it named
+    # (slurm_submitter._job_body) went with the sbatch retirement, and the weft
+    # lane runs the controller python by absolute path on a bare node — so the
+    # exemption became a promise nothing kept, and it silenced this very check
+    # while every offloaded job exited 127 (measured on the OOD shape,
+    # 2026-08-25). The check now verifies the mechanism; assert whichever answer
+    # is CORRECT for the tree as it stands, so this test needs no edit on the
+    # day a wrap lands.
+    from pathlib import Path as _P
+    _ws = _P(__file__).resolve().parents[1] / "backend" / "core" / "jobs" / "weft_submitter.py"
+    wraps = "apptainer exec" in _ws.read_text()
     os.environ["ABA_BATCH_SUBMITTER"] = "slurm"
     os.environ["ABA_JOB_WRAP"] = "sif"
     orig = _patch_base_kind("node_local", "/opt/aba-venv on squashfs (node-local / in-image)")
     unslurm = _set_slurm(False)                      # worst case sans wrap → HIGH
     try:
         r = env_integrity.check_base_dir_shared()
-        assert r["ok"] is True and r["severity"] == "info", r
-        assert "wrap" in r["detail"].lower() or "re-enter" in r["detail"].lower(), r
+        if wraps:
+            assert r["ok"] is True and r["severity"] == "info", r
+            assert "wrap" in r["detail"].lower() or "re-enter" in r["detail"].lower(), r
+        else:
+            # no lane wraps: the honest answer is that offload cannot work
+            assert r["ok"] is False and r["severity"] == "high", r
+            assert "127" in r["detail"], r
     finally:
         unslurm(); env_integrity.base_fs_kind = orig
         os.environ.pop("ABA_BATCH_SUBMITTER", None)
