@@ -26,6 +26,20 @@ becomes the one people trust, because it is the one that is green.
 - **Assert on RECORDED state, not on the agent's account of it.** An agent reported
   "tracked as outputs" for a run in which nothing was tracked. Only the graph
   distinguishes that from the run where it was true.
+- **Assert what the turn COST, not only what it achieved.** For a long time every check
+  in the vocabulary described achievement — text, tools, artifacts, a clean job — so a
+  scenario could reward doing more and never penalise doing far too much. Live
+  2026-08-25: a request for a library the mounted base pack already contained and
+  verified built a 2.0 GB duplicate environment over ~15 minutes, and every assertion in
+  the suite was satisfiable by that outcome. `envs_created_max` and `step_seconds_max`
+  (`regtest/SCHEMA.md`) are the two-sided half; use them on any step whose correct answer
+  is *cheap*, and read `envs_created_max: 0` as "answer from what is already mounted".
+- **Test the REQUEST, not the repair.** After a production incident the reflex is to
+  guard the mechanism that was fixed. That guard encodes the model of the bug, so it
+  passes whenever the model was incomplete — and the same user request fails again. The
+  guard that cannot be fooled is the original request, replayed against the shipped
+  artifact: hence `live_install_probe` and the `pack_provided_library` scenario, both of
+  which enter exactly where the user enters.
 - **A scenario that runs alone cannot see what only happens when turns overlap.**
   Every scenario here drives one thread to completion, so for a long time nothing
   crossed. The cross-project write leak (2026-07-27) was found only because two
@@ -119,6 +133,7 @@ Each is a live-agent study in the same style, differing in what it stresses:
 | `datasets/ui_study.py` | browser-driven UI/UX evaluation |
 | `placement/study.py` | tool-argument correctness for placement decisions (`standard` catalog tier) |
 | `harness/live_surface_probe.py` | a DEPLOYED server over real HTTP + SSE: outputs manifest, artifact uniqueness, store collapse, every URL serves, transport truth, surface parity — across `mixed`/`table`/`figure`/`store` prompt shapes |
+| `harness/live_install_probe.py` | **the science gate**: asks a DEPLOYED server for a library, one real turn per package, and judges what the request COST — named envs created, wall seconds, and (with `--background`) which site the offloaded job landed on. Package set is data (`regtest/data/install_matrix*.json`); the `--pack-provided-only` scope is self-sufficient from the shipped packs' own `spec.verify`, so a missing data file cannot switch the gate off. Wired as `deploy.sh verify --install`, gating promote |
 | `harness/live_audit.py` | the same surface oracle over *every project* on a running server — the "first click after coming back" check |
 | `harness/env_check.py` | the env-promotion chain against a deployed backend, no LLM, no HTTP |
 | `harness/replay.py` | in-process replay of the real turn flow for output-serving/durability work |

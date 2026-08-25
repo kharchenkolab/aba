@@ -1,0 +1,2137 @@
+{
+  "generated": "2026-08-25",
+  "source_tree": "/users/peter.kharchenko/aba.next/aba-recipe-pack",
+  "files_scanned": 335,
+  "entries": [
+    {
+      "name": "numpy",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "numpy",
+      "import_name": "numpy",
+      "n_recipes": 94,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "pandas",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "pandas",
+      "import_name": "pandas",
+      "n_recipes": 69,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "requests",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "requests",
+      "import_name": "requests",
+      "n_recipes": 57,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "scipy",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "scipy",
+      "import_name": "scipy",
+      "n_recipes": 49,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "Seurat",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-seurat",
+      "import_name": "Seurat",
+      "n_recipes": 39,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "scanpy",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "scanpy",
+      "import_name": "scanpy",
+      "n_recipes": 38,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "anndata",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "anndata",
+      "import_name": "anndata",
+      "n_recipes": 37,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "lstar",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "lstar-sc",
+      "import_name": "lstar",
+      "n_recipes": 31,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "ggplot2",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-ggplot2",
+      "import_name": "ggplot2",
+      "n_recipes": 26,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "biopython",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "biopython",
+      "import_name": "Bio",
+      "n_recipes": 25,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "matplotlib",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "matplotlib",
+      "import_name": "matplotlib",
+      "n_recipes": 23,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "patchwork",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-patchwork",
+      "import_name": "patchwork",
+      "n_recipes": 21,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "cowplot",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-cowplot",
+      "import_name": "cowplot",
+      "n_recipes": 19,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "scikit-image",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "scikit-image",
+      "import_name": "skimage",
+      "n_recipes": 18,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "dplyr",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-dplyr",
+      "import_name": "dplyr",
+      "n_recipes": 17,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "nextflow",
+      "language": "cli",
+      "ecosystem": "bioconda",
+      "package": "nextflow",
+      "import_name": null,
+      "n_recipes": 12,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "opencv-python",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "opencv-python",
+      "import_name": "cv2",
+      "n_recipes": 12,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "scvi-tools",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "scvi-tools",
+      "import_name": "scvi",
+      "n_recipes": 12,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "pagoda2",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-pagoda2",
+      "import_name": "pagoda2",
+      "n_recipes": 10,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "singularity",
+      "language": "cli",
+      "ecosystem": "unknown",
+      "package": "singularity",
+      "import_name": null,
+      "n_recipes": 10,
+      "source": "aba-recipe-pack",
+      "verified": false
+    },
+    {
+      "name": "SingleCellExperiment",
+      "language": "r",
+      "ecosystem": "bioconductor",
+      "package": "bioconductor-singlecellexperiment",
+      "import_name": "SingleCellExperiment",
+      "n_recipes": 9,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "Azimuth",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-azimuth",
+      "import_name": "Azimuth",
+      "n_recipes": 8,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "DESeq2",
+      "language": "r",
+      "ecosystem": "bioconductor",
+      "package": "bioconductor-deseq2",
+      "import_name": "DESeq2",
+      "n_recipes": 8,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "apptainer",
+      "language": "cli",
+      "ecosystem": "unknown",
+      "package": "apptainer",
+      "import_name": null,
+      "n_recipes": 8,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "leidenalg",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "leidenalg",
+      "import_name": "leidenalg",
+      "n_recipes": 8,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "presto",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-presto",
+      "import_name": "presto",
+      "n_recipes": 8,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "BiocManager",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-biocmanager",
+      "import_name": "BiocManager",
+      "n_recipes": 7,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "nf-core",
+      "language": "cli",
+      "ecosystem": "pypi",
+      "package": "nf-core",
+      "import_name": null,
+      "n_recipes": 7,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "scikit-learn",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "scikit-learn",
+      "import_name": "sklearn",
+      "n_recipes": 7,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "torch",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "torch",
+      "import_name": "torch",
+      "n_recipes": 7,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "uwot",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-uwot",
+      "import_name": "uwot",
+      "n_recipes": 7,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "Matrix",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-matrix",
+      "import_name": "Matrix",
+      "n_recipes": 6,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "SimpleITK",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "SimpleITK",
+      "import_name": "SimpleITK",
+      "n_recipes": 6,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "gzip",
+      "language": "python",
+      "ecosystem": "stdlib",
+      "package": null,
+      "import_name": "gzip",
+      "n_recipes": 6,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "igraph",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "igraph",
+      "import_name": "igraph",
+      "n_recipes": 6,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "limma",
+      "language": "r",
+      "ecosystem": "bioconductor",
+      "package": "bioconductor-limma",
+      "import_name": "limma",
+      "n_recipes": 6,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "os",
+      "language": "python",
+      "ecosystem": "stdlib",
+      "package": null,
+      "import_name": "os",
+      "n_recipes": 6,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "pydeseq2",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "pydeseq2",
+      "import_name": "pydeseq2",
+      "n_recipes": 6,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "reticulate",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-reticulate",
+      "import_name": "reticulate",
+      "n_recipes": 6,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "scales",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-scales",
+      "import_name": "scales",
+      "n_recipes": 6,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "MAST",
+      "language": "r",
+      "ecosystem": "bioconductor",
+      "package": "bioconductor-mast",
+      "import_name": "MAST",
+      "n_recipes": 5,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "conos",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-conos",
+      "import_name": "conos",
+      "n_recipes": 5,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "docker",
+      "language": "cli",
+      "ecosystem": "unknown",
+      "package": null,
+      "import_name": null,
+      "n_recipes": 5,
+      "source": "aba-recipe-pack",
+      "verified": false
+    },
+    {
+      "name": "nibabel",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "nibabel",
+      "import_name": "nibabel",
+      "n_recipes": 5,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "pickle",
+      "language": "python",
+      "ecosystem": "stdlib",
+      "package": null,
+      "import_name": "pickle",
+      "n_recipes": 5,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "subprocess",
+      "language": "python",
+      "ecosystem": "stdlib",
+      "package": null,
+      "import_name": "subprocess",
+      "n_recipes": 5,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "tidyr",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-tidyr",
+      "import_name": "tidyr",
+      "n_recipes": 5,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "zellkonverter",
+      "language": "r",
+      "ecosystem": "bioconductor",
+      "package": "bioconductor-zellkonverter",
+      "import_name": "zellkonverter",
+      "n_recipes": 5,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "FlowCytometryTools",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "FlowCytometryTools",
+      "import_name": "FlowCytometryTools",
+      "n_recipes": 4,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "decoupler",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "decoupler",
+      "import_name": "decoupler",
+      "n_recipes": 4,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "edgeR",
+      "language": "r",
+      "ecosystem": "bioconductor",
+      "package": "bioconductor-edger",
+      "import_name": "edgeR",
+      "n_recipes": 4,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "ggrepel",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-ggrepel",
+      "import_name": "ggrepel",
+      "n_recipes": 4,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "glmGamPoi",
+      "language": "r",
+      "ecosystem": "bioconductor",
+      "package": "bioconductor-glmgampoi",
+      "import_name": "glmGamPoi",
+      "n_recipes": 4,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "harmony",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-harmony",
+      "import_name": "harmony",
+      "n_recipes": 4,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "harmonypy",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "harmonypy",
+      "import_name": "harmonypy",
+      "n_recipes": 4,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "hdf5r",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-hdf5r",
+      "import_name": "hdf5r",
+      "n_recipes": 4,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "re",
+      "language": "python",
+      "ecosystem": "stdlib",
+      "package": null,
+      "import_name": "re",
+      "n_recipes": 4,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "remotes",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-remotes",
+      "import_name": "remotes",
+      "n_recipes": 4,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "sccore",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-sccore",
+      "import_name": "sccore",
+      "n_recipes": 4,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "statsmodels",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "statsmodels",
+      "import_name": "statsmodels",
+      "n_recipes": 4,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "time",
+      "language": "python",
+      "ecosystem": "stdlib",
+      "package": null,
+      "import_name": "time",
+      "n_recipes": 4,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "BPCells",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-bpcells",
+      "import_name": "BPCells",
+      "n_recipes": 3,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "BSgenome.Hsapiens.UCSC.hg38",
+      "language": "r",
+      "ecosystem": "bioconductor",
+      "package": "bioconductor-bsgenome.hsapiens.ucsc.hg38",
+      "import_name": "BSgenome.Hsapiens.UCSC.hg38",
+      "n_recipes": 3,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "EnsDb.Hsapiens.v86",
+      "language": "r",
+      "ecosystem": "bioconductor",
+      "package": "bioconductor-ensdb.hsapiens.v86",
+      "import_name": "EnsDb.Hsapiens.v86",
+      "n_recipes": 3,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "SeuratWrappers",
+      "language": "r",
+      "ecosystem": "unknown",
+      "package": null,
+      "import_name": "SeuratWrappers",
+      "n_recipes": 3,
+      "source": "aba-recipe-pack",
+      "verified": false
+    },
+    {
+      "name": "beautifulsoup4",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "beautifulsoup4",
+      "import_name": "bs4",
+      "n_recipes": 3,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "gatk4",
+      "language": "cli",
+      "ecosystem": "bioconda",
+      "package": "gatk4",
+      "import_name": null,
+      "n_recipes": 3,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "gget",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "gget",
+      "import_name": "gget",
+      "n_recipes": 3,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "qs",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-qs",
+      "import_name": "qs",
+      "n_recipes": 3,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "samtools",
+      "language": "cli",
+      "ecosystem": "bioconda",
+      "package": "samtools",
+      "import_name": null,
+      "n_recipes": 3,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "seaborn",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "seaborn",
+      "import_name": "seaborn",
+      "n_recipes": 3,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "urllib",
+      "language": "python",
+      "ecosystem": "stdlib",
+      "package": null,
+      "import_name": "urllib",
+      "n_recipes": 3,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "utils",
+      "language": "r",
+      "ecosystem": "stdlib",
+      "package": null,
+      "import_name": "utils",
+      "n_recipes": 3,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "DeepPurpose",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "DeepPurpose",
+      "import_name": "DeepPurpose",
+      "n_recipes": 2,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "GEOparse",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "GEOparse",
+      "import_name": "GEOparse",
+      "n_recipes": 2,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "IRdisplay",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-irdisplay",
+      "import_name": "IRdisplay",
+      "n_recipes": 2,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "R.utils",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-r.utils",
+      "import_name": "R.utils",
+      "n_recipes": 2,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "RColorBrewer",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-rcolorbrewer",
+      "import_name": "RColorBrewer",
+      "n_recipes": 2,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "SeuratData",
+      "language": "r",
+      "ecosystem": "unknown",
+      "package": null,
+      "import_name": "SeuratData",
+      "n_recipes": 2,
+      "source": "aba-recipe-pack",
+      "verified": false
+    },
+    {
+      "name": "SeuratDisk",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-seuratdisk",
+      "import_name": "SeuratDisk",
+      "n_recipes": 2,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "Signac",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-signac",
+      "import_name": "Signac",
+      "n_recipes": 2,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "biovizBase",
+      "language": "r",
+      "ecosystem": "bioconductor",
+      "package": "bioconductor-biovizbase",
+      "import_name": "biovizBase",
+      "n_recipes": 2,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "celltypist",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "celltypist",
+      "import_name": "celltypist",
+      "n_recipes": 2,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "cnvkit",
+      "language": "cli",
+      "ecosystem": "bioconda",
+      "package": "cnvkit",
+      "import_name": null,
+      "n_recipes": 2,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "cobra",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "cobra",
+      "import_name": "cobra",
+      "n_recipes": 2,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "concurrent",
+      "language": "python",
+      "ecosystem": "stdlib",
+      "package": null,
+      "import_name": "concurrent",
+      "n_recipes": 2,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "curl",
+      "language": "cli",
+      "ecosystem": "unknown",
+      "package": "curl",
+      "import_name": null,
+      "n_recipes": 2,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "data.table",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-data.table",
+      "import_name": "data.table",
+      "n_recipes": 2,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "dython",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "dython",
+      "import_name": "dython",
+      "n_recipes": 2,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "gseapy",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "gseapy",
+      "import_name": "gseapy",
+      "n_recipes": 2,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "kb-python",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "kb-python",
+      "import_name": "kb",
+      "n_recipes": 2,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "leidenAlg",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-leidenalg",
+      "import_name": "leidenAlg",
+      "n_recipes": 2,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "macs3",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "macs3",
+      "import_name": "MACS3",
+      "n_recipes": 2,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "nf-core/rnaseq",
+      "language": "cli",
+      "ecosystem": "unknown",
+      "package": null,
+      "import_name": null,
+      "n_recipes": 2,
+      "source": "aba-recipe-pack",
+      "verified": false
+    },
+    {
+      "name": "nf-core/sarek",
+      "language": "cli",
+      "ecosystem": "unknown",
+      "package": null,
+      "import_name": null,
+      "n_recipes": 2,
+      "source": "aba-recipe-pack",
+      "verified": false
+    },
+    {
+      "name": "numcodecs",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "numcodecs",
+      "import_name": "numcodecs",
+      "n_recipes": 2,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "patsy",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "patsy",
+      "import_name": "patsy",
+      "n_recipes": 2,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "scib-metrics",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "scib-metrics",
+      "import_name": "scib_metrics",
+      "n_recipes": 2,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "scrublet",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "scrublet",
+      "import_name": "scrublet",
+      "n_recipes": 2,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "shutil",
+      "language": "python",
+      "ecosystem": "stdlib",
+      "package": null,
+      "import_name": "shutil",
+      "n_recipes": 2,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "strelka",
+      "language": "cli",
+      "ecosystem": "bioconda",
+      "package": "strelka",
+      "import_name": null,
+      "n_recipes": 2,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "tempfile",
+      "language": "python",
+      "ecosystem": "stdlib",
+      "package": null,
+      "import_name": "tempfile",
+      "n_recipes": 2,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "tidyverse",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-tidyverse",
+      "import_name": "tidyverse",
+      "n_recipes": 2,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "trackpy",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "trackpy",
+      "import_name": "trackpy",
+      "n_recipes": 2,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "ADFR-Suite",
+      "language": "cli",
+      "ecosystem": "unknown",
+      "package": "adfr-suite",
+      "import_name": null,
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": false
+    },
+    {
+      "name": "ComplexHeatmap",
+      "language": "r",
+      "ecosystem": "bioconductor",
+      "package": "bioconductor-complexheatmap",
+      "import_name": "ComplexHeatmap",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "DADA2",
+      "language": "r",
+      "ecosystem": "bioconductor",
+      "package": "bioconductor-dada2",
+      "import_name": "DADA2",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "DescTools",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-desctools",
+      "import_name": "DescTools",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "FactoMineR",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-factominer",
+      "import_name": "FactoMineR",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "FastTree",
+      "language": "cli",
+      "ecosystem": "bioconda",
+      "package": "fasttree",
+      "import_name": null,
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "GenomicRanges",
+      "language": "r",
+      "ecosystem": "bioconductor",
+      "package": "bioconductor-genomicranges",
+      "import_name": "GenomicRanges",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "PMA",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-pma",
+      "import_name": "PMA",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "PyPDF2",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "PyPDF2",
+      "import_name": "PyPDF2",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "PyTDC",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "PyTDC",
+      "import_name": "tdc",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "QIIME2",
+      "language": "cli",
+      "ecosystem": "unknown",
+      "package": "qiime2",
+      "import_name": null,
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": false
+    },
+    {
+      "name": "R",
+      "language": "cli",
+      "ecosystem": "unknown",
+      "package": "r-base",
+      "import_name": null,
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": false
+    },
+    {
+      "name": "Rsamtools",
+      "language": "r",
+      "ecosystem": "bioconductor",
+      "package": "bioconductor-rsamtools",
+      "import_name": "Rsamtools",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "ViennaRNA",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "ViennaRNA",
+      "import_name": "RNA",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "accelerate",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "accelerate",
+      "import_name": "accelerate",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "adjusttext",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "adjustText",
+      "import_name": "adjustText",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "arc-state",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "arc-state",
+      "import_name": "state",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "arxiv",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "arxiv",
+      "import_name": "arxiv",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "ascat",
+      "language": "cli",
+      "ecosystem": "bioconda",
+      "package": "ascat",
+      "import_name": null,
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "autodock-vina",
+      "language": "cli",
+      "ecosystem": "bioconda",
+      "package": "autodock-vina",
+      "import_name": null,
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "autosite",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "autosite",
+      "import_name": "autosite",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": false
+    },
+    {
+      "name": "bbknn",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "bbknn",
+      "import_name": "bbknn",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "bcftools",
+      "language": "cli",
+      "ecosystem": "bioconda",
+      "package": "bcftools",
+      "import_name": null,
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "bedtools",
+      "language": "cli",
+      "ecosystem": "bioconda",
+      "package": "bedtools",
+      "import_name": null,
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "bismark",
+      "language": "cli",
+      "ecosystem": "bioconda",
+      "package": "bismark",
+      "import_name": null,
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "bwa-mem2",
+      "language": "cli",
+      "ecosystem": "bioconda",
+      "package": "bwa-mem2",
+      "import_name": null,
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "bwa-meth",
+      "language": "cli",
+      "ecosystem": "bioconda",
+      "package": "bwameth",
+      "import_name": null,
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "car",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-car",
+      "import_name": "car",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "caret",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-caret",
+      "import_name": "caret",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "cellpose",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "cellpose",
+      "import_name": "cellpose",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "cooler",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "cooler",
+      "import_name": "cooler",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "cpp11",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-cpp11",
+      "import_name": "cpp11",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "datetime",
+      "language": "python",
+      "ecosystem": "stdlib",
+      "package": null,
+      "import_name": "datetime",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "deepvariant",
+      "language": "cli",
+      "ecosystem": "bioconda",
+      "package": "deepvariant",
+      "import_name": null,
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "devtools",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-devtools",
+      "import_name": "devtools",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "diffdock",
+      "language": "python",
+      "ecosystem": "unknown",
+      "package": null,
+      "import_name": null,
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": false
+    },
+    {
+      "name": "dsb",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-dsb",
+      "import_name": "dsb",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "factoextra",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-factoextra",
+      "import_name": "factoextra",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "fair-esm",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "fair-esm",
+      "import_name": "esm",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "ffq",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "ffq",
+      "import_name": "ffq",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "findMotifsGenome.pl",
+      "language": "cli",
+      "ecosystem": "bioconda",
+      "package": "homer",
+      "import_name": null,
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "flowkit",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "flowkit",
+      "import_name": "flowkit",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "future",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-future",
+      "import_name": "future",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "gPCA",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-gpca",
+      "import_name": "gPCA",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "googlesearch-python",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "googlesearch-python",
+      "import_name": "googlesearch",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "grid",
+      "language": "r",
+      "ecosystem": "stdlib",
+      "package": null,
+      "import_name": "grid",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "homer",
+      "language": "cli",
+      "ecosystem": "bioconda",
+      "package": "homer",
+      "import_name": null,
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "infotheo",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-infotheo",
+      "import_name": "infotheo",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "iqtree",
+      "language": "cli",
+      "ecosystem": "bioconda",
+      "package": "iqtree",
+      "import_name": null,
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "itertools",
+      "language": "python",
+      "ecosystem": "stdlib",
+      "package": null,
+      "import_name": "itertools",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "json",
+      "language": "python",
+      "ecosystem": "stdlib",
+      "package": null,
+      "import_name": "json",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "kBET",
+      "language": "r",
+      "ecosystem": "unknown",
+      "package": null,
+      "import_name": "kBET",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": false
+    },
+    {
+      "name": "langchain-core",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "langchain-core",
+      "import_name": "langchain_core",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "lumpyexpress",
+      "language": "cli",
+      "ecosystem": "bioconda",
+      "package": "lumpy-sv",
+      "import_name": null,
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "mafft",
+      "language": "cli",
+      "ecosystem": "bioconda",
+      "package": "mafft",
+      "import_name": null,
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "metagenomics",
+      "language": "cli",
+      "ecosystem": "unknown",
+      "package": null,
+      "import_name": null,
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": false
+    },
+    {
+      "name": "methyldackel",
+      "language": "cli",
+      "ecosystem": "bioconda",
+      "package": "methyldackel",
+      "import_name": null,
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "milopy",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "git+https://github.com/emdann/milopy.git",
+      "import_name": "milopy",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "msprime",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "msprime",
+      "import_name": "msprime",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "mudata",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "mudata",
+      "import_name": "mudata",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "muon",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "muon",
+      "import_name": "muon",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "muscat",
+      "language": "r",
+      "ecosystem": "bioconductor",
+      "package": "bioconductor-muscat",
+      "import_name": "muscat",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "muscle",
+      "language": "cli",
+      "ecosystem": "bioconda",
+      "package": "muscle",
+      "import_name": null,
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "naniar",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-naniar",
+      "import_name": "naniar",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "networkx",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "networkx",
+      "import_name": "networkx",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "nf-core/ampliseq",
+      "language": "cli",
+      "ecosystem": "unknown",
+      "package": null,
+      "import_name": null,
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": false
+    },
+    {
+      "name": "nf-core/scrnaseq",
+      "language": "cli",
+      "ecosystem": "unknown",
+      "package": null,
+      "import_name": null,
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": false
+    },
+    {
+      "name": "nilearn",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "nilearn",
+      "import_name": "nilearn",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "nnunet",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "nnunet",
+      "import_name": "nnunet",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": false
+    },
+    {
+      "name": "omnipath",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "omnipath",
+      "import_name": "omnipath",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "palantir",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "palantir",
+      "import_name": "palantir",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "panhumanpy",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "panhumanpy",
+      "import_name": "panhumanpy",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "pertpy",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "pertpy",
+      "import_name": "pertpy",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "plannotate",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "plannotate",
+      "import_name": "plannotate",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "png",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-png",
+      "import_name": "png",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "popv",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "popv",
+      "import_name": "popv",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "prefetch",
+      "language": "cli",
+      "ecosystem": "bioconda",
+      "package": "sra-tools",
+      "import_name": null,
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "prepare_receptor",
+      "language": "cli",
+      "ecosystem": "unknown",
+      "package": "adfr-suite",
+      "import_name": null,
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": false
+    },
+    {
+      "name": "prokka",
+      "language": "cli",
+      "ecosystem": "bioconda",
+      "package": "prokka",
+      "import_name": null,
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "pvca",
+      "language": "r",
+      "ecosystem": "bioconductor",
+      "package": "bioconductor-pvca",
+      "import_name": "pvca",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "pybedtools",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "pybedtools",
+      "import_name": "pybedtools",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "pybiomart",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "pybiomart",
+      "import_name": "pybiomart",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "pykalman",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "pykalman",
+      "import_name": "pykalman",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "pyliftover",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "pyliftover",
+      "import_name": "pyliftover",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "pymed",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "pymed",
+      "import_name": "pymed",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "pyscreener",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "pyscreener",
+      "import_name": "pyscreener",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "pysradb",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "pysradb",
+      "import_name": "pysradb",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "python-libsbml",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "python-libsbml",
+      "import_name": "libsbml",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "rdkit",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "rdkit",
+      "import_name": "rdkit",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "reportlab",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "reportlab",
+      "import_name": "reportlab",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "roxygen2",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-roxygen2",
+      "import_name": "roxygen2",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "scanorama",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "scanorama",
+      "import_name": "scanorama",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "scholarly",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "scholarly",
+      "import_name": "scholarly",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "scran",
+      "language": "r",
+      "ecosystem": "bioconductor",
+      "package": "bioconductor-scran",
+      "import_name": "scran",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "scry",
+      "language": "r",
+      "ecosystem": "bioconductor",
+      "package": "bioconductor-scry",
+      "import_name": "scry",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "sctransform",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-sctransform",
+      "import_name": "sctransform",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "scvelo",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "scvelo",
+      "import_name": "scvelo",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "snapatac2",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "snapatac2",
+      "import_name": "snapatac2",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "snpEff",
+      "language": "cli",
+      "ecosystem": "bioconda",
+      "package": "snpeff",
+      "import_name": null,
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "sra-tools",
+      "language": "cli",
+      "ecosystem": "bioconda",
+      "package": "sra-tools",
+      "import_name": null,
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "stats",
+      "language": "r",
+      "ecosystem": "stdlib",
+      "package": null,
+      "import_name": "stats",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "synapseclient",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "synapseclient",
+      "import_name": "synapseclient",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "tqdm",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "tqdm",
+      "import_name": "tqdm",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "transcriptformer",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "transcriptformer",
+      "import_name": "transcriptformer",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "transformers",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "transformers",
+      "import_name": "transformers",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "typst",
+      "language": "python",
+      "ecosystem": "pypi",
+      "package": "typst",
+      "import_name": "typst",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "variancePartition",
+      "language": "r",
+      "ecosystem": "bioconductor",
+      "package": "bioconductor-variancepartition",
+      "import_name": "variancePartition",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "vcd",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-vcd",
+      "import_name": "vcd",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    },
+    {
+      "name": "visdat",
+      "language": "r",
+      "ecosystem": "cran",
+      "package": "r-visdat",
+      "import_name": "visdat",
+      "n_recipes": 1,
+      "source": "aba-recipe-pack",
+      "verified": true
+    }
+  ]
+}

@@ -130,6 +130,15 @@ def _consume(stream, cap: dict) -> None:
             r = ev.get("result") or {}
             if isinstance(r, dict) and r.get("job_id"):
                 cap.setdefault("jobs", []).append(r["job_id"])
+            # The PLATFORM's own verdict on the request is recorded state, not
+            # the agent's account of it — keep it, so "it is ready" can be
+            # checked against what ensure_capability actually returned.
+            if isinstance(r, dict) and r.get("status"):
+                cap.setdefault("cap_results", []).append(
+                    {"tool": ev.get("name"), "status": r.get("status"),
+                     "version": r.get("version"), "library": r.get("library"),
+                     "import_name": r.get("import_name"),
+                     "packs": r.get("packs")})
         elif t in ("error", "cancelled"):
             cap["errors"].append(str(ev)[:300])
         elif t == "text":
@@ -195,7 +204,8 @@ def _await_job(c, jid: str, timeout_s: float) -> dict:
 
 def _drive(c, pid: str, tid: str, text: str, timeout: float) -> dict:
     """One agent turn; returns the capture. Approval gates resolved like the UI."""
-    cap: dict = {"run_id": None, "tools": [], "errors": [], "text": [], "jobs": []}
+    cap: dict = {"run_id": None, "tools": [], "errors": [], "text": [],
+                 "jobs": [], "cap_results": []}
     with c.stream("POST", "/api/chat", timeout=timeout,
                   json={"text": text, "project_id": pid, "thread_id": tid}) as r:
         r.raise_for_status()
@@ -307,10 +317,25 @@ def probe_one(c, entry: dict, *, timeout: float, projects_dir: Path | None,
     row["pack_provided"] = provided
     ceiling = PACK_ENV_CEILING if provided else INSTALL_ENV_CEILING
 
-    if not ok:
+    # TWO kinds of recorded proof, and neither is the agent's prose:
+    #   * an exec record — something actually ran and exited clean;
+    #   * the platform's own ensure_capability verdict for THIS name.
+    # Requiring an exec was too strict: recognizing a pack-provided library is
+    # correctly answered without running anything, and marking that
+    # "unavailable" would have punished exactly the behaviour this probe was
+    # built to reward. Requiring only the verdict would be too loose — it is a
+    # claim about an env, and DESeq2 taught us a claim about an env can be
+    # false. So: accept either, and RECORD which, so a run that was only ever
+    # asserted is visible as such instead of banked as proof.
+    verdicts = [r for r in (cap.get("cap_results") or [])
+                if str(r.get("status") or "") in
+                ("ready", "provided_by_pack", "already_available")]
+    row["platform_verdict"] = verdicts[0] if verdicts else None
+    row["proof"] = ("executed" if ok else "asserted" if verdicts else "none")
+    if not ok and not verdicts:
         row["verdict"] = "unavailable"
-        row["detail"] = ("nothing executed cleanly for this request — "
-                         + exec_detail)
+        row["detail"] = ("neither an exec record nor a platform readiness verdict "
+                         "for this request — " + exec_detail)
         return row
     if made is None:
         row["verdict"] = "unmeasured"
@@ -430,6 +455,11 @@ def main() -> int:
             and (r.get("seconds") or 0) > a.strict_seconds]
     bad = [r for r in rows if r.get("verdict") in
            ("wasteful", "unavailable", "unmeasured", "background_failed", "error")]
+    _proof = {}
+    for r in rows:
+        _proof[r.get("proof", "?")] = _proof.get(r.get("proof", "?"), 0) + 1
+    print("  proof: " + ", ".join(f"{k}={v}" for k, v in sorted(_proof.items()))
+          + "   (asserted = the platform said ready but nothing ran)")
     if a.background:
         _where = {}
         for r in rows:
