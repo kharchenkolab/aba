@@ -308,6 +308,11 @@ def resolve_target(tgt: dict, produced: dict, created: dict) -> dict:
 
 
 # ---------- background jobs (async: submitted this turn, finish later) ----------
+# The active scenario's `requires:` (set in main once the spec is read). Read by
+# run_checks to hold a scenario to the lane it claims to exercise.
+REQUIRES = ""
+
+
 def await_jobs(client, job_ids, timeout_s: float) -> list[dict]:
     """Poll each background job to a terminal state, then read its result from disk.
     Returns [{job_id, status, returncode, error, stdout, ok}] — `ok` = ran clean
@@ -322,9 +327,16 @@ def await_jobs(client, job_ids, timeout_s: float) -> list[dict]:
     out = []
     for jid in job_ids:
         status, deadline, res, done = None, time.time() + timeout_s, {}, False
+        site = None
         while time.time() < deadline:
             try:
-                status = (client.get(f"/api/jobs/{jid}").json() or {}).get("status")
+                row = client.get(f"/api/jobs/{jid}").json() or {}
+                status = row.get("status")
+                # WHERE it ran, from the submitter's own record. A scenario that
+                # asserts only "the job succeeded" cannot tell the cluster from
+                # the session container, and on 2026-08-25 that difference was
+                # the whole bug.
+                site = (row.get("params") or {}).get("weft_site") or site
             except Exception:
                 status = None
             for h in glob.glob(str(RUN / "**" / jid / "result.json"), recursive=True):
@@ -337,7 +349,7 @@ def await_jobs(client, job_ids, timeout_s: float) -> list[dict]:
             time.sleep(3)
         rc, err = res.get("returncode"), res.get("error")
         out.append({"job_id": jid, "status": status, "returncode": rc, "error": err,
-                    "stdout": res.get("stdout") or "",
+                    "stdout": res.get("stdout") or "", "site": site,
                     "ok": done and err is None and rc in (None, 0)})
     return out
 
@@ -386,9 +398,26 @@ def run_checks(step, cap, cmetrics, prev_msgs, client, pid, tid, created, produc
         if not results:
             fails.append("background_job: no background job was submitted this turn")
         else:
-            summ = [{k: r.get(k) for k in ("job_id", "status", "returncode", "error")} for r in results]
+            summ = [{k: r.get(k) for k in ("job_id", "status", "returncode", "error", "site")} for r in results]
             if bj.get("ok") and not any(r["ok"] for r in results):
                 fails.append(f"background_job.ok: no job ran clean ({summ})")
+            # AUTOMATIC: a `requires: slurm` scenario must have run ON the cluster.
+            # No scenario opts into this and none can forget it. `_slurm_lane`
+            # degrades to the LOCAL weft lane whenever the deployment declares no
+            # slurm site, so a green `background_job.ok` on such a deployment
+            # means "a job ran in the session container" while the scenario's row
+            # in the sweep says the scheduler is covered. That is precisely the
+            # state the OOD deployment shipped in (2026-08-25), and the reason
+            # slurm looked extensively tested when it was not exercised at all.
+            if REQUIRES == "slurm":
+                misplaced = [r for r in results
+                             if str(r.get("site") or "local").strip().lower() == "local"]
+                if misplaced:
+                    fails.append(
+                        "background_job.placement: `requires: slurm` but the job ran on the "
+                        f"LOCAL lane ({[r['job_id'] for r in misplaced]}) — the deployment "
+                        "declares no slurm-kind weft site, so submitter._slurm_lane degraded "
+                        f"silently ({summ})")
             joined = " ".join((r.get("stdout") or "") for r in results).lower()
             for s in (bj.get("stdout_contains") or []):
                 if s.lower() not in joined:
@@ -658,6 +687,8 @@ def main() -> int:
     # the real job.sh module-load path). Skip cleanly when it's not the active one —
     # a local-submitter background job wouldn't test what the scenario is guarding.
     req = (spec.get("requires") or "").strip().lower()
+    global REQUIRES
+    REQUIRES = req
     if req == "slurm":
         from core.jobs.submitter import submitter_name
         if submitter_name() != "slurm":

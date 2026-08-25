@@ -308,14 +308,37 @@ from its *library* needs, and lives at the **base** tier, not the library tier:
 
 **Shared-FS reachability under Slurm** (`env_integrity.check_envs_dir_shared` /
 `check_base_dir_shared`). A background job on a compute node must be able to *reach* the env the
-controller provisioned, and *how* it reaches it depends on the delivery mode: with **bare
-offload** (a native install or a slim SIF) the node runs the interpreter directly, so the env
-area **and** base must sit on **shared FS**, classified empirically by mount fstype
-(`/proc/self/mountinfo`), not path prefix; with **wrapped offload** (`ABA_JOB_WRAP=sif`, a fat or
-weft SIF) the job re-enters the image via `apptainer exec`, so an in-image base is correct, not a
-defect. Under the default **weft SIF profile** the image bakes only the slim controller runtime —
-the science envs are **weft images adopted read-only on the node** (via the site's `ro_roots`,
-the deployment's published env tree) — so an offloaded job reaches its interpreter either way.
+controller provisioned, and *how* it reaches it depends on the **site contract**
+(`weft_submitter.site_contract`), which is a fact about the DELIVERY MODE, not about the cluster:
+
+- **shared-fs** — the node runs `{sys.executable} -m core.jobs.slurm_entry` directly, so ABA's
+  own runtime **and** the env area must sit on **shared FS**, classified empirically by mount
+  fstype (`/proc/self/mountinfo`), not path prefix. This is the fast path for a **native
+  install** or a **slim SIF with `image.base_dir` on shared FS**, and it is the *only* lane that
+  can host a **Nextflow head** on the node (the head needs `core.exec.nextflow`).
+- **detached** — the node runs **nothing of ABA's**. The job's code travels as a CAS payload and
+  is executed by a stdlib-only harness (`core/jobs/detached_entry.py`) under the *node's* own
+  `python3`/`Rscript`, which weft points at the mounted env prefix. Results come back over the
+  data plane. This is the default for any site with a `host:`, and for any host-less site whose
+  controller interpreter is not on shared FS.
+
+**Under the default weft SIF profile the contract is `detached`, and that is the point.** The
+controller runtime is baked into the app image, so `sys.executable` (`/opt/aba-venv/bin/python`)
+does not exist on a bare node. Avoiding a per-job `apptainer exec` re-entry is a reason weft was
+adopted: the science envs are **weft images adopted read-only on the node** (via the site's
+`ro_roots`, the deployment's published env tree), so a `run_python`/`run_r` job already has
+everything it needs there. **SIF re-entry is required only if you insist on the shared-fs lane in
+a containerized deployment** — which is the one configuration nothing asks for. The one job kind
+the detached harness cannot take is the **Nextflow head**; under a detached cluster site
+`submitter._slurm_lane` keeps it on the controller, where it fans the real work out to Slurm
+through Nextflow's own executor (the normal nf-core shape).
+
+`site_contract` MEASURES this rather than guessing (`controller_entry_reachable`, the same
+mount-fstype classifier the self-check uses); an explicit `aba.contract` in the site declaration
+still wins. Guessing cost two production incidents — an OrbStack VM mounting a mac's filesystem
+at identical paths (arm64 python on Linux), and the 2026-08-25 OOD cluster (exit 127 on every
+offloaded job) — hence the rule stated in `core/compute/inference.py`: **a visible path is not a
+shared-fs contract.**
 Install-time is a hard gate (`aba doctor` + a definitive `sbatch` probe on a native install); a
 loud-but-boot **runtime self-check** surfaces the rest on `/api/health` (`degraded` +
 `warnings[]`) and `/api/admin/selfcheck` — the guard that still fires under a SIF/OOD deploy where

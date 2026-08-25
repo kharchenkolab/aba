@@ -218,12 +218,47 @@ def weft_slurm_site() -> Optional[str]:
     return None
 
 
+def controller_entry_reachable() -> bool:
+    """Can a BARE compute node execute `{sys.executable} -m core.jobs.slurm_entry`?
+
+    This is the whole promise of the shared-fs lane, and the ONLY thing that
+    makes it different from the detached one. It is a property of the
+    DELIVERY MODE, not of the site: the command names the controller's
+    interpreter by absolute path, so it runs on the node only when that path
+    resolves there — i.e. when ABA's own runtime sits on shared FS.
+
+    Under the default **weft SIF profile** it does not: the controller runtime
+    is baked into the app image (`/opt/aba-venv/bin/python`, an in-image
+    squashfs/overlay path) and a Slurm job runs BARE on the node. That is not
+    a gap to be closed by re-entering the image for every job — avoiding
+    exactly that is why the detached lane exists (misc/detached_compute.md):
+    the code travels as data and runs under the node's own interpreter, with
+    the science env supplied by weft as a read-only mount.
+
+    Empirical (mount fstype via env_integrity), never a path-prefix guess —
+    the same classifier the `check_base_dir_shared` self-check uses, so the
+    lane and the warning about the lane cannot disagree.
+
+    Third time this invariant has bitten (see the inference.py note): a
+    VISIBLE PATH IS NOT A SHARED-FS CONTRACT.
+    """
+    try:
+        from core.exec.env_integrity import _classify_fs
+        kind, _detail = _classify_fs(sys.executable)
+    except Exception:  # noqa: BLE001 — an unclassifiable base is not a promise
+        return False
+    return kind == "shared"
+
+
 def site_contract(site: str) -> str:
     """'shared-fs' | 'detached' for a declared site — data-driven. The aba
     sidecar's explicit `contract` wins; else a site with a `host` (remote
     transport) is DETACHED from this controller (no shared FS, possibly a
-    different OS), while a host-less site (local transport on the submit
-    node — the deployment-declared cluster case) is shared-fs."""
+    different OS). A host-less site (local transport on the submit node — the
+    deployment-declared cluster case) is shared-fs ONLY IF this controller's
+    own entry point is reachable from a bare node; a containerized deployment
+    is host-less AND detached, and guessing otherwise costs every offloaded
+    job an exit 127 (live 2026-08-25, OOD)."""
     if site == "local":
         return "shared-fs"
     try:
@@ -233,7 +268,10 @@ def site_contract(site: str) -> str:
             return c
         for e in list_declared_sites():
             if e.get("name") == site:
-                return "detached" if (e.get("config") or {}).get("host") else "shared-fs"
+                if (e.get("config") or {}).get("host"):
+                    return "detached"
+                return ("shared-fs" if controller_entry_reachable()
+                        else "detached")
     except Exception:  # noqa: BLE001
         pass
     # Not in the deployment yaml (registered ad hoc): DETACHED. Shared-fs is a

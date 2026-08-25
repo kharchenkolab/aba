@@ -493,6 +493,24 @@ def check_base_dir_shared() -> dict:
     from core.jobs.submitter import submitter_name
     if submitter_name() != "slurm":
         return {"ok": True, "severity": "info", "detail": "local submitter — base sharing N/A"}
+    # DETACHED cluster site: the base is not part of the contract at all. The
+    # node never runs ABA's own interpreter — the job's code travels as a CAS
+    # payload and runs under the NODE's python/Rscript, with the science env
+    # supplied by weft as a read-only mount. Whether the controller's base is
+    # in-image is then simply not a fact about reachability, and this check
+    # must not manufacture a warning (or, worse, demand a SIF re-entry the
+    # design deliberately avoids) out of it.
+    try:
+        from core.jobs.weft_submitter import site_contract, weft_slurm_site
+        _site = weft_slurm_site()
+        if _site and site_contract(_site) == "detached":
+            return {"ok": True, "severity": "info",
+                    "detail": (f"cluster site {_site!r} is DETACHED — offloaded jobs "
+                               "carry their code as data and run the node's own "
+                               "interpreter under a weft-mounted env; the controller "
+                               "base is never named on the node.")}
+    except Exception:  # noqa: BLE001 — fall through to the base-reachability rules
+        pass
     # Job-wrap (fat or weft SIF): offloaded jobs re-enter the SIF, so the baked base is
     # reachable (its being node-local/in-image is by design). Don't flag it as unreachable.
     if (config.settings.job_wrap.get() or "").strip().lower() == "sif":
@@ -518,8 +536,13 @@ def check_base_dir_shared() -> dict:
                            "lane does not wrap — it runs the controller python by "
                            "absolute path on a bare node. With an in-image base "
                            "that path does not exist there and EVERY offloaded job "
-                           "exits 127. Use a slim SIF (image.base_dir on shared FS) "
-                           "or a native shared install until the wrap exists."),
+                           "exits 127. The FIX IS NOT TO BUILD THE WRAP: declare the "
+                           "cluster site's contract as `detached` (site.yaml "
+                           "`compute.sites[].aba.contract`) so jobs ship their code "
+                           "as data and run the node's own interpreter — that is what "
+                           "the detached lane is for. A slim SIF (image.base_dir on "
+                           "shared FS) or a native shared install also satisfies the "
+                           "shared-fs lane."),
             }
         return {"ok": True, "severity": "info",
                 "detail": ("SIF + job-wrap (ABA_JOB_WRAP=sif): offloaded jobs re-enter the "

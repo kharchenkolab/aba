@@ -64,20 +64,33 @@ def _local_lane() -> "BatchSubmitter":
 def _slurm_lane(kind: str | None = None) -> "BatchSubmitter":
     """The cluster lane (W3.3): a weft task on the deployment's slurm-kind
     site when one is declared (weft-sites.yaml) and the substrate is up.
-    Nextflow heads ride the SAME bare weft task: the command
-    `python -m core.jobs.slurm_entry` dispatches `run_nextflow` on the node
-    (slurm_entry.py), the node runs the head over the shared FS (host-by-default),
-    and WeftSubmitter already forwards the nextflow spec + routes resume by
-    weft_id (runner.py). `kind` is retained for the call interface.
+    Nextflow heads ride the SAME bare weft task ON A SHARED-FS SITE: the
+    command `python -m core.jobs.slurm_entry` dispatches `run_nextflow` on the
+    node (slurm_entry.py), the node runs the head over the shared FS, and
+    WeftSubmitter already forwards the nextflow spec + routes resume by
+    weft_id (runner.py).
+
+    On a DETACHED site the head stays HERE. The detached lane carries a
+    stdlib-only harness that runs one python/R script (detached_entry.py) —
+    it has no `run_nextflow` branch, and giving it one would mean shipping
+    `core.exec.nextflow` to the node, which is the whole thing the lane
+    exists to avoid. It does not need to: a Nextflow head is an ORCHESTRATOR,
+    not compute. It fans the real work out to Slurm through Nextflow's own
+    executor (the deployment's nextflow config), so running it on the
+    controller is the normal nf-core shape, not a degrade. Without this a
+    nextflow job took the detached branch and was submitted as an EMPTY
+    user_code.py — a job that succeeds having run nothing.
 
     Weft-only (W3.4 tail): the legacy sbatch lane is GONE. A cluster deployment
     declares a slurm-kind weft site (`host:` omitted = local transport on the
     submit node); with none declared we degrade to the LOCAL weft lane so jobs
     still run (on this node) — never a hard failure, never sbatch."""
-    del kind  # nextflow no longer special-cased — same lane as python/R
-    from core.jobs.weft_submitter import WeftSubmitter, weft_slurm_site
+    from core.jobs.weft_submitter import (WeftSubmitter, site_contract,
+                                          weft_slurm_site)
     site = weft_slurm_site()
     if site:
+        if kind == "run_nextflow" and site_contract(site) == "detached":
+            return _local_lane()
         return WeftSubmitter(site=site)
     print("[jobs] ABA_BATCH_SUBMITTER=slurm but no slurm-kind weft site declared "
           "(weft-sites.yaml) — running background jobs on the LOCAL weft lane")

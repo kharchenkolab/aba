@@ -206,7 +206,11 @@ compute stacks, mounted read-only on the node via the site's `ro_roots` (the dep
 published env tree — `ABA_WEFT_PUBLISH_TREE` / `site.yaml` `envs.publish_tree`; consumers
 `env_adopt` by name, no solve — the adapter injects the tree into every site's `ro_roots` at
 registration). There is no separate controller-env-on-FS here — no `env` component, which is
-why the launcher leaves `ABA_BASE_DIR` unset and offloaded jobs re-enter the image. The
+why the launcher leaves `ABA_BASE_DIR` unset **and why a cluster site under this profile is
+`detached`, not shared-fs**: the controller's interpreter lives only inside the image, so a
+bare compute node cannot run it. Offloaded jobs therefore ship their code as data and run the
+node's own interpreter under a weft-mounted env — they do **not** re-enter the image, and
+nothing here needs them to (see `envs.md` §Shared-FS reachability). The
 content-addressed `components/` tier itself does still apply: a weft release is
 `releases/<ver>/sif -> ../../components/sif/<cid>`, so two releases built from the same image
 share one copy of its bytes. `<cid>` must be derived from the artifact's CONTENT —
