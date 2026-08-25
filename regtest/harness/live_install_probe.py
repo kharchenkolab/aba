@@ -126,6 +126,10 @@ def _consume(stream, cap: dict) -> None:
             cap["run_id"] = ev.get("run_id") or cap.get("run_id")
         elif t == "tool_call":
             cap["tools"].append(ev.get("name"))
+        elif t == "tool_result":
+            r = ev.get("result") or {}
+            if isinstance(r, dict) and r.get("job_id"):
+                cap.setdefault("jobs", []).append(r["job_id"])
         elif t in ("error", "cancelled"):
             cap["errors"].append(str(ev)[:300])
         elif t == "text":
@@ -165,6 +169,50 @@ def _prompt_for(entry: dict) -> str:
             f"Please make sure it is available and show me its version.")
 
 
+def _await_job(c, jid: str, timeout_s: float) -> dict:
+    """Poll one background job to a terminal state and report WHERE it ran.
+
+    "Can I install it" and "can I use it on the cluster" are different
+    questions with different failure modes — a library present on the login
+    node and absent on a compute node is a normal, invisible way for this to
+    break. The site comes from the submitter's own record, so a job that
+    quietly ran on the local lane is not counted as cluster coverage."""
+    deadline = time.time() + timeout_s
+    row: dict = {}
+    while time.time() < deadline:
+        try:
+            row = c.get(f"/api/jobs/{jid}").json() or {}
+        except Exception:  # noqa: BLE001
+            row = {}
+        if (row.get("status") or "") in ("done", "failed", "cancelled"):
+            break
+        time.sleep(5)
+    params = row.get("params") or {}
+    return {"job_id": jid, "status": row.get("status"),
+            "site": params.get("weft_site"),
+            "log_tail": (row.get("log_tail") or "")[-300:]}
+
+
+def _drive(c, pid: str, tid: str, text: str, timeout: float) -> dict:
+    """One agent turn; returns the capture. Approval gates resolved like the UI."""
+    cap: dict = {"run_id": None, "tools": [], "errors": [], "text": [], "jobs": []}
+    with c.stream("POST", "/api/chat", timeout=timeout,
+                  json={"text": text, "project_id": pid, "thread_id": tid}) as r:
+        r.raise_for_status()
+        _consume(r, cap)
+    for _ in range(6):
+        rid = cap["run_id"]
+        if not rid:
+            break
+        if c.get(f"/api/turns/{rid}").json().get("state") != "awaiting_user":
+            break
+        with c.stream("POST", f"/api/turns/{rid}/resume", timeout=timeout,
+                      json={"user_text": "Yes, go ahead."}) as r2:
+            r2.raise_for_status()
+            _consume(r2, cap)
+    return cap
+
+
 def _exec_ok(c, pid: str, run_ids: list[str]) -> tuple[bool, str]:
     """Did SOMETHING actually execute successfully for this request?
 
@@ -187,7 +235,8 @@ def _exec_ok(c, pid: str, run_ids: list[str]) -> tuple[bool, str]:
 
 
 def probe_one(c, entry: dict, *, timeout: float, projects_dir: Path | None,
-              pack_names) -> dict:
+              pack_names, background: bool = False,
+              job_timeout: float = 900.0) -> dict:
     name = entry["name"]
     slug = "".join(ch if ch.isalnum() else "-" for ch in name).lower()[:40]
     # One bad entry must not end a 100+ package sweep: record and move on.
@@ -203,25 +252,9 @@ def probe_one(c, entry: dict, *, timeout: float, projects_dir: Path | None,
         return {**entry, "verdict": "error", "detail": "project/thread creation failed"}
 
     envs_before = _env_count(projects_dir, pid)
-    cap = {"run_id": None, "tools": [], "errors": [], "text": []}
     t0 = time.time()
     try:
-        with c.stream("POST", "/api/chat", timeout=timeout,
-                      json={"text": _prompt_for(entry), "project_id": pid,
-                            "thread_id": tid}) as r:
-            r.raise_for_status()
-            _consume(r, cap)
-        for _ in range(6):
-            rid = cap["run_id"]
-            if not rid:
-                break
-            st = c.get(f"/api/turns/{rid}").json().get("state")
-            if st != "awaiting_user":
-                break
-            with c.stream("POST", f"/api/turns/{rid}/resume", timeout=timeout,
-                          json={"user_text": "Yes, go ahead."}) as r2:
-                r2.raise_for_status()
-                _consume(r2, cap)
+        cap = _drive(c, pid, tid, _prompt_for(entry), timeout)
     except Exception as e:  # noqa: BLE001 — a wedged turn is a finding, not a crash
         return {**entry, "verdict": "error", "seconds": round(time.time() - t0, 1),
                 "detail": f"{type(e).__name__}: {e}"[:300]}
@@ -242,6 +275,34 @@ def probe_one(c, entry: dict, *, timeout: float, projects_dir: Path | None,
     row = {**entry, "project_id": pid, "seconds": seconds,
            "envs_created": made, "tools": len(cap["tools"]),
            "turn_errors": len(cap["errors"]), "exec": exec_detail}
+
+    # SECOND question: does it work OFF the login node? A library present where
+    # the controller runs and absent on a compute node is a normal way for this
+    # to break, and it is invisible to a probe that only ever runs in-session.
+    if background and ok:
+        try:
+            bcap = _drive(c, pid, tid,
+                          f"Now run that as a background job on the cluster: load "
+                          f"{name} there and print its version.", timeout)
+            jobs = [_await_job(c, j, job_timeout) for j in (bcap.get("jobs") or [])]
+        except Exception as e:  # noqa: BLE001
+            jobs = []
+            row["background_error"] = f"{type(e).__name__}: {e}"[:200]
+        row["jobs"] = jobs
+        if not jobs:
+            row["background"] = "not_submitted"
+        elif not any((j.get("status") == "done") for j in jobs):
+            row["background"] = "failed"
+            row["verdict"] = "background_failed"
+            row["detail"] = (f"usable in-session but the offloaded job did not "
+                             f"complete: {jobs}")
+            return row
+        elif all(str(j.get("site") or "local").lower() == "local" for j in jobs):
+            # Not a failure of the LIBRARY, but the run proves nothing about the
+            # cluster — say so rather than banking it as cluster coverage.
+            row["background"] = "ran_locally"
+        else:
+            row["background"] = "on_cluster"
     provided = name in pack_names
     row["pack_provided"] = provided
     ceiling = PACK_ENV_CEILING if provided else INSTALL_ENV_CEILING
@@ -286,6 +347,10 @@ def main() -> int:
                     help="JSON file; existing entries are SKIPPED (resumable)")
     ap.add_argument("--pack-provided-only", action="store_true",
                     help="only the names a shipped base pack proves it loads")
+    ap.add_argument("--background", action="store_true",
+                    help="also ask for a background/cluster run of each library and "
+                         "judge WHERE it landed")
+    ap.add_argument("--job-timeout", type=float, default=900.0)
     ap.add_argument("--strict-seconds", type=float, default=0.0,
                     help="also fail any entry slower than this")
     a = ap.parse_args()
@@ -343,7 +408,8 @@ def main() -> int:
                   f"({e.get('ecosystem')})…", flush=True)
             row = probe_one(c, e, timeout=a.timeout,
                             projects_dir=Path(a.projects_dir) if a.projects_dir else None,
-                            pack_names=pack_names)
+                            pack_names=pack_names, background=a.background,
+                            job_timeout=a.job_timeout)
             print(f"    -> {row['verdict']}  {row.get('seconds')}s  "
                   f"envs={row.get('envs_created')}", flush=True)
             rows.append(row)
@@ -356,14 +422,21 @@ def main() -> int:
         by.setdefault(r.get("verdict", "?"), []).append(r["name"])
     print("\n== install probe summary ==")
     for v in ("ready_from_pack", "installed", "wasteful", "unavailable",
-              "unmeasured", "error"):
+              "unmeasured", "background_failed", "error"):
         if by.get(v):
             print(f"  {v:16s} {len(by[v]):3d}   {', '.join(sorted(by[v])[:12])}"
                   + (" …" if len(by[v]) > 12 else ""))
     slow = [r for r in rows if a.strict_seconds
             and (r.get("seconds") or 0) > a.strict_seconds]
     bad = [r for r in rows if r.get("verdict") in
-           ("wasteful", "unavailable", "unmeasured", "error")]
+           ("wasteful", "unavailable", "unmeasured", "background_failed", "error")]
+    if a.background:
+        _where = {}
+        for r in rows:
+            _where.setdefault(r.get("background", "n/a"), 0)
+            _where[r.get("background", "n/a")] += 1
+        print("  background placement: "
+              + ", ".join(f"{k}={v}" for k, v in sorted(_where.items())))
     for r in bad:
         print(f"  FAIL {r['name']}: {r.get('detail') or r['verdict']}")
     if slow:

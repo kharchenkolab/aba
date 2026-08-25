@@ -1,0 +1,1408 @@
+{
+  "generated": "2026-08-25",
+  "sources": [
+    "https://bioconductor.org/packages/stats/",
+    "https://bioconductor.org/packages/stats/bioc/bioc_pkg_scores.tab",
+    "https://anaconda.org/bioconda",
+    "https://api.anaconda.org/package/bioconda/",
+    "https://anaconda.org/conda-forge",
+    "https://cranlogs.r-pkg.org/downloads/total/last-month/",
+    "https://cran.r-project.org/web/views/Omics.html",
+    "https://cran.r-project.org/web/views/Phylogenetics.html",
+    "https://pypi.org/",
+    "https://pypistats.org/",
+    "https://bioconda.github.io/conda-package_index.html"
+  ],
+  "entries": [
+    {
+      "name": "samtools",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "samtools",
+      "import_name": null,
+      "popularity_rank": 1,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "htslib",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "htslib",
+      "import_name": null,
+      "popularity_rank": 2,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "bcftools",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "bcftools",
+      "import_name": null,
+      "popularity_rank": 3,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "bedtools",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "bedtools",
+      "import_name": null,
+      "popularity_rank": 4,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "Bowtie2",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "bowtie2",
+      "import_name": null,
+      "popularity_rank": 5,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "BLAST",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "blast",
+      "import_name": null,
+      "popularity_rank": 6,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "Picard",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "picard",
+      "import_name": null,
+      "popularity_rank": 7,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "DIAMOND",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "diamond",
+      "import_name": null,
+      "popularity_rank": 8,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "HMMER",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "hmmer",
+      "import_name": null,
+      "popularity_rank": 9,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "BWA",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "bwa",
+      "import_name": null,
+      "popularity_rank": 10,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "BBMap",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "bbmap",
+      "import_name": null,
+      "popularity_rank": 11,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "Snakemake",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "snakemake",
+      "import_name": null,
+      "popularity_rank": 12,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "STAR",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "star",
+      "import_name": null,
+      "popularity_rank": 13,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "Cutadapt",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "cutadapt",
+      "import_name": null,
+      "popularity_rank": 14,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "FastTree",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "fasttree",
+      "import_name": null,
+      "popularity_rank": 15,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "minimap2",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "minimap2",
+      "import_name": null,
+      "popularity_rank": 16,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "RAxML",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "raxml",
+      "import_name": null,
+      "popularity_rank": 17,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "FastQC",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "fastqc",
+      "import_name": null,
+      "popularity_rank": 18,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "MAFFT",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "mafft",
+      "import_name": null,
+      "popularity_rank": 19,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "deepTools",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "deeptools",
+      "import_name": null,
+      "popularity_rank": 20,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "GATK",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "gatk4",
+      "import_name": null,
+      "popularity_rank": 21,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "IQ-TREE",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "iqtree",
+      "import_name": null,
+      "popularity_rank": 22,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "HTSeq",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "htseq",
+      "import_name": null,
+      "popularity_rank": 23,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "VSEARCH",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "vsearch",
+      "import_name": null,
+      "popularity_rank": 24,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "MultiQC",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "multiqc",
+      "import_name": null,
+      "popularity_rank": 25,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "FreeBayes",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "freebayes",
+      "import_name": null,
+      "popularity_rank": 26,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "SPAdes",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "spades",
+      "import_name": null,
+      "popularity_rank": 27,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "seqkit",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "seqkit",
+      "import_name": null,
+      "popularity_rank": 28,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "seqtk",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "seqtk",
+      "import_name": null,
+      "popularity_rank": 29,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "StringTie",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "stringtie",
+      "import_name": null,
+      "popularity_rank": 30,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "fastp",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "fastp",
+      "import_name": null,
+      "popularity_rank": 31,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "SRA-Tools",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "sra-tools",
+      "import_name": null,
+      "popularity_rank": 32,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "VCFtools",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "vcftools",
+      "import_name": null,
+      "popularity_rank": 33,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "Salmon",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "salmon",
+      "import_name": null,
+      "popularity_rank": 34,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "MUSCLE",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "muscle",
+      "import_name": null,
+      "popularity_rank": 35,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "SnpEff",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "snpeff",
+      "import_name": null,
+      "popularity_rank": 36,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "Nextflow",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "nextflow",
+      "import_name": null,
+      "popularity_rank": 37,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "sambamba",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "sambamba",
+      "import_name": null,
+      "popularity_rank": 38,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "Trimmomatic",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "trimmomatic",
+      "import_name": null,
+      "popularity_rank": 39,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "HISAT2",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "hisat2",
+      "import_name": null,
+      "popularity_rank": 40,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "BUSCO",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "busco",
+      "import_name": null,
+      "popularity_rank": 41,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "MetaPhlAn",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "metaphlan",
+      "import_name": null,
+      "popularity_rank": 42,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "Subread",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "subread",
+      "import_name": null,
+      "popularity_rank": 43,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "TrimGalore",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "trim-galore",
+      "import_name": null,
+      "popularity_rank": 44,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "kallisto",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "kallisto",
+      "import_name": null,
+      "popularity_rank": 45,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "Prokka",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "prokka",
+      "import_name": null,
+      "popularity_rank": 46,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "MACS2",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "macs2",
+      "import_name": null,
+      "popularity_rank": 47,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "Kraken2",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "kraken2",
+      "import_name": null,
+      "popularity_rank": 48,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "PLINK",
+      "ecosystem": "bioconda",
+      "language": "cli",
+      "package": "plink",
+      "import_name": null,
+      "popularity_rank": 49,
+      "source": "bioconda-downloads",
+      "verified": true
+    },
+    {
+      "name": "DESeq2",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-deseq2",
+      "import_name": "DESeq2",
+      "popularity_rank": 21,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "edgeR",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-edger",
+      "import_name": "edgeR",
+      "popularity_rank": 26,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "limma",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-limma",
+      "import_name": "limma",
+      "popularity_rank": 18,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "clusterProfiler",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-clusterprofiler",
+      "import_name": "clusterProfiler",
+      "popularity_rank": 30,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "ComplexHeatmap",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-complexheatmap",
+      "import_name": "ComplexHeatmap",
+      "popularity_rank": 42,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "fgsea",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-fgsea",
+      "import_name": "fgsea",
+      "popularity_rank": 28,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "enrichplot",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-enrichplot",
+      "import_name": "enrichplot",
+      "popularity_rank": 27,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "ggtree",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-ggtree",
+      "import_name": "ggtree",
+      "popularity_rank": 20,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "treeio",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-treeio",
+      "import_name": "treeio",
+      "popularity_rank": 22,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "Biostrings",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-biostrings",
+      "import_name": "Biostrings",
+      "popularity_rank": 9,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "GenomicRanges",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-genomicranges",
+      "import_name": "GenomicRanges",
+      "popularity_rank": 10,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "SummarizedExperiment",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-summarizedexperiment",
+      "import_name": "SummarizedExperiment",
+      "popularity_rank": 12,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "SingleCellExperiment",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-singlecellexperiment",
+      "import_name": "SingleCellExperiment",
+      "popularity_rank": 43,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "Rsamtools",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-rsamtools",
+      "import_name": "Rsamtools",
+      "popularity_rank": 23,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "rtracklayer",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-rtracklayer",
+      "import_name": "rtracklayer",
+      "popularity_rank": 39,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "biomaRt",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-biomart",
+      "import_name": "biomaRt",
+      "popularity_rank": 40,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "GenomicFeatures",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-genomicfeatures",
+      "import_name": "GenomicFeatures",
+      "popularity_rank": 48,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "AnnotationDbi",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-annotationdbi",
+      "import_name": "AnnotationDbi",
+      "popularity_rank": 15,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "GEOquery",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-geoquery",
+      "import_name": "GEOquery",
+      "popularity_rank": 58,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "GSVA",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-gsva",
+      "import_name": "GSVA",
+      "popularity_rank": 69,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "scater",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-scater",
+      "import_name": "scater",
+      "popularity_rank": 73,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "scran",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-scran",
+      "import_name": "scran",
+      "popularity_rank": 84,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "sva",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-sva",
+      "import_name": "sva",
+      "popularity_rank": 72,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "VariantAnnotation",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-variantannotation",
+      "import_name": "VariantAnnotation",
+      "popularity_rank": 78,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "phyloseq",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-phyloseq",
+      "import_name": "phyloseq",
+      "popularity_rank": 86,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "EnhancedVolcano",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-enhancedvolcano",
+      "import_name": "EnhancedVolcano",
+      "popularity_rank": 89,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "TCGAbiolinks",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-tcgabiolinks",
+      "import_name": "TCGAbiolinks",
+      "popularity_rank": 97,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "SingleR",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-singler",
+      "import_name": "SingleR",
+      "popularity_rank": 98,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "tximport",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-tximport",
+      "import_name": "tximport",
+      "popularity_rank": 108,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "org.Hs.eg.db",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-org.hs.eg.db",
+      "import_name": "org.Hs.eg.db",
+      "popularity_rank": null,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "DiffBind",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-diffbind",
+      "import_name": "DiffBind",
+      "popularity_rank": 218,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "ChIPseeker",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-chipseeker",
+      "import_name": "ChIPseeker",
+      "popularity_rank": 153,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "maftools",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-maftools",
+      "import_name": "maftools",
+      "popularity_rank": 150,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "methylKit",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-methylkit",
+      "import_name": "methylKit",
+      "popularity_rank": 257,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "minfi",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-minfi",
+      "import_name": "minfi",
+      "popularity_rank": 154,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "Rsubread",
+      "ecosystem": "bioconductor",
+      "language": "r",
+      "package": "bioconductor-rsubread",
+      "import_name": "Rsubread",
+      "popularity_rank": 173,
+      "source": "bioconductor-stats",
+      "verified": true
+    },
+    {
+      "name": "Seurat",
+      "ecosystem": "cran",
+      "language": "r",
+      "package": "r-seurat",
+      "import_name": "Seurat",
+      "popularity_rank": 12,
+      "source": "cranlogs",
+      "verified": true
+    },
+    {
+      "name": "SeuratObject",
+      "ecosystem": "cran",
+      "language": "r",
+      "package": "r-seuratobject",
+      "import_name": "SeuratObject",
+      "popularity_rank": 14,
+      "source": "cranlogs",
+      "verified": true
+    },
+    {
+      "name": "Signac",
+      "ecosystem": "cran",
+      "language": "r",
+      "package": "r-signac",
+      "import_name": "Signac",
+      "popularity_rank": 22,
+      "source": "cranlogs",
+      "verified": true
+    },
+    {
+      "name": "harmony",
+      "ecosystem": "cran",
+      "language": "r",
+      "package": "r-harmony",
+      "import_name": "harmony",
+      "popularity_rank": 17,
+      "source": "cranlogs",
+      "verified": true
+    },
+    {
+      "name": "SoupX",
+      "ecosystem": "cran",
+      "language": "r",
+      "package": "r-soupx",
+      "import_name": "SoupX",
+      "popularity_rank": 26,
+      "source": "cranlogs",
+      "verified": true
+    },
+    {
+      "name": "WGCNA",
+      "ecosystem": "cran",
+      "language": "r",
+      "package": "r-wgcna",
+      "import_name": "WGCNA",
+      "popularity_rank": 10,
+      "source": "cranlogs",
+      "verified": true
+    },
+    {
+      "name": "ape",
+      "ecosystem": "cran",
+      "language": "r",
+      "package": "r-ape",
+      "import_name": "ape",
+      "popularity_rank": 8,
+      "source": "cranlogs",
+      "verified": true
+    },
+    {
+      "name": "phangorn",
+      "ecosystem": "cran",
+      "language": "r",
+      "package": "r-phangorn",
+      "import_name": "phangorn",
+      "popularity_rank": 18,
+      "source": "cranlogs",
+      "verified": true
+    },
+    {
+      "name": "phytools",
+      "ecosystem": "cran",
+      "language": "r",
+      "package": "r-phytools",
+      "import_name": "phytools",
+      "popularity_rank": 20,
+      "source": "cranlogs",
+      "verified": true
+    },
+    {
+      "name": "vegan",
+      "ecosystem": "cran",
+      "language": "r",
+      "package": "r-vegan",
+      "import_name": "vegan",
+      "popularity_rank": 9,
+      "source": "cranlogs",
+      "verified": true
+    },
+    {
+      "name": "adegenet",
+      "ecosystem": "cran",
+      "language": "r",
+      "package": "r-adegenet",
+      "import_name": "adegenet",
+      "popularity_rank": 16,
+      "source": "cranlogs",
+      "verified": true
+    },
+    {
+      "name": "pegas",
+      "ecosystem": "cran",
+      "language": "r",
+      "package": "r-pegas",
+      "import_name": "pegas",
+      "popularity_rank": 21,
+      "source": "cranlogs",
+      "verified": true
+    },
+    {
+      "name": "picante",
+      "ecosystem": "cran",
+      "language": "r",
+      "package": "r-picante",
+      "import_name": "picante",
+      "popularity_rank": 23,
+      "source": "cranlogs",
+      "verified": true
+    },
+    {
+      "name": "seqinr",
+      "ecosystem": "cran",
+      "language": "r",
+      "package": "r-seqinr",
+      "import_name": "seqinr",
+      "popularity_rank": 19,
+      "source": "cranlogs",
+      "verified": true
+    },
+    {
+      "name": "qqman",
+      "ecosystem": "cran",
+      "language": "r",
+      "package": "r-qqman",
+      "import_name": "qqman",
+      "popularity_rank": 25,
+      "source": "cranlogs",
+      "verified": true
+    },
+    {
+      "name": "msigdbr",
+      "ecosystem": "cran",
+      "language": "r",
+      "package": "r-msigdbr",
+      "import_name": "msigdbr",
+      "popularity_rank": 15,
+      "source": "cranlogs",
+      "verified": true
+    },
+    {
+      "name": "gprofiler2",
+      "ecosystem": "cran",
+      "language": "r",
+      "package": "r-gprofiler2",
+      "import_name": "gprofiler2",
+      "popularity_rank": 24,
+      "source": "cranlogs",
+      "verified": true
+    },
+    {
+      "name": "pheatmap",
+      "ecosystem": "cran",
+      "language": "r",
+      "package": "r-pheatmap",
+      "import_name": "pheatmap",
+      "popularity_rank": 11,
+      "source": "cranlogs",
+      "verified": true
+    },
+    {
+      "name": "circlize",
+      "ecosystem": "cran",
+      "language": "r",
+      "package": "r-circlize",
+      "import_name": "circlize",
+      "popularity_rank": 13,
+      "source": "cranlogs",
+      "verified": true
+    },
+    {
+      "name": "ggplot2",
+      "ecosystem": "cran",
+      "language": "r",
+      "package": "r-ggplot2",
+      "import_name": "ggplot2",
+      "popularity_rank": 1,
+      "source": "cranlogs",
+      "verified": true
+    },
+    {
+      "name": "dplyr",
+      "ecosystem": "cran",
+      "language": "r",
+      "package": "r-dplyr",
+      "import_name": "dplyr",
+      "popularity_rank": 2,
+      "source": "cranlogs",
+      "verified": true
+    },
+    {
+      "name": "data.table",
+      "ecosystem": "cran",
+      "language": "r",
+      "package": "r-data.table",
+      "import_name": "data.table",
+      "popularity_rank": 4,
+      "source": "cranlogs",
+      "verified": true
+    },
+    {
+      "name": "tidyverse",
+      "ecosystem": "cran",
+      "language": "r",
+      "package": "r-tidyverse",
+      "import_name": "tidyverse",
+      "popularity_rank": 3,
+      "source": "cranlogs",
+      "verified": true
+    },
+    {
+      "name": "igraph",
+      "ecosystem": "cran",
+      "language": "r",
+      "package": "r-igraph",
+      "import_name": "igraph",
+      "popularity_rank": 5,
+      "source": "cranlogs",
+      "verified": true
+    },
+    {
+      "name": "ggpubr",
+      "ecosystem": "cran",
+      "language": "r",
+      "package": "r-ggpubr",
+      "import_name": "ggpubr",
+      "popularity_rank": 7,
+      "source": "cranlogs",
+      "verified": true
+    },
+    {
+      "name": "BiocManager",
+      "ecosystem": "cran",
+      "language": "r",
+      "package": "r-biocmanager",
+      "import_name": "BiocManager",
+      "popularity_rank": 6,
+      "source": "cranlogs",
+      "verified": true
+    },
+    {
+      "name": "scanpy",
+      "ecosystem": "pypi",
+      "language": "python",
+      "package": "scanpy",
+      "import_name": "scanpy",
+      "popularity_rank": 9,
+      "source": "pypistats",
+      "verified": true
+    },
+    {
+      "name": "anndata",
+      "ecosystem": "pypi",
+      "language": "python",
+      "package": "anndata",
+      "import_name": "anndata",
+      "popularity_rank": 7,
+      "source": "pypistats",
+      "verified": true
+    },
+    {
+      "name": "Biopython",
+      "ecosystem": "pypi",
+      "language": "python",
+      "package": "biopython",
+      "import_name": "Bio",
+      "popularity_rank": 5,
+      "source": "pypistats",
+      "verified": true
+    },
+    {
+      "name": "pysam",
+      "ecosystem": "pypi",
+      "language": "python",
+      "package": "pysam",
+      "import_name": "pysam",
+      "popularity_rank": 8,
+      "source": "pypistats",
+      "verified": true
+    },
+    {
+      "name": "scvi-tools",
+      "ecosystem": "pypi",
+      "language": "python",
+      "package": "scvi-tools",
+      "import_name": "scvi",
+      "popularity_rank": 17,
+      "source": "pypistats",
+      "verified": true
+    },
+    {
+      "name": "squidpy",
+      "ecosystem": "pypi",
+      "language": "python",
+      "package": "squidpy",
+      "import_name": "squidpy",
+      "popularity_rank": 21,
+      "source": "pypistats",
+      "verified": true
+    },
+    {
+      "name": "muon",
+      "ecosystem": "pypi",
+      "language": "python",
+      "package": "muon",
+      "import_name": "muon",
+      "popularity_rank": 27,
+      "source": "pypistats",
+      "verified": true
+    },
+    {
+      "name": "scikit-bio",
+      "ecosystem": "pypi",
+      "language": "python",
+      "package": "scikit-bio",
+      "import_name": "skbio",
+      "popularity_rank": 16,
+      "source": "pypistats",
+      "verified": true
+    },
+    {
+      "name": "pyranges",
+      "ecosystem": "pypi",
+      "language": "python",
+      "package": "pyranges",
+      "import_name": "pyranges",
+      "popularity_rank": 22,
+      "source": "pypistats",
+      "verified": true
+    },
+    {
+      "name": "pybedtools",
+      "ecosystem": "pypi",
+      "language": "python",
+      "package": "pybedtools",
+      "import_name": "pybedtools",
+      "popularity_rank": 14,
+      "source": "pypistats",
+      "verified": true
+    },
+    {
+      "name": "cyvcf2",
+      "ecosystem": "pypi",
+      "language": "python",
+      "package": "cyvcf2",
+      "import_name": "cyvcf2",
+      "popularity_rank": 13,
+      "source": "pypistats",
+      "verified": true
+    },
+    {
+      "name": "gffutils",
+      "ecosystem": "pypi",
+      "language": "python",
+      "package": "gffutils",
+      "import_name": "gffutils",
+      "popularity_rank": 20,
+      "source": "pypistats",
+      "verified": true
+    },
+    {
+      "name": "DendroPy",
+      "ecosystem": "pypi",
+      "language": "python",
+      "package": "dendropy",
+      "import_name": "dendropy",
+      "popularity_rank": 18,
+      "source": "pypistats",
+      "verified": true
+    },
+    {
+      "name": "ETE3",
+      "ecosystem": "pypi",
+      "language": "python",
+      "package": "ete3",
+      "import_name": "ete3",
+      "popularity_rank": 15,
+      "source": "pypistats",
+      "verified": true
+    },
+    {
+      "name": "gseapy",
+      "ecosystem": "pypi",
+      "language": "python",
+      "package": "gseapy",
+      "import_name": "gseapy",
+      "popularity_rank": 11,
+      "source": "pypistats",
+      "verified": true
+    },
+    {
+      "name": "pyensembl",
+      "ecosystem": "pypi",
+      "language": "python",
+      "package": "pyensembl",
+      "import_name": "pyensembl",
+      "popularity_rank": 23,
+      "source": "pypistats",
+      "verified": true
+    },
+    {
+      "name": "pyBigWig",
+      "ecosystem": "pypi",
+      "language": "python",
+      "package": "pyBigWig",
+      "import_name": "pyBigWig",
+      "popularity_rank": 12,
+      "source": "pypistats",
+      "verified": true
+    },
+    {
+      "name": "harmonypy",
+      "ecosystem": "pypi",
+      "language": "python",
+      "package": "harmonypy",
+      "import_name": "harmonypy",
+      "popularity_rank": 19,
+      "source": "pypistats",
+      "verified": true
+    },
+    {
+      "name": "celltypist",
+      "ecosystem": "pypi",
+      "language": "python",
+      "package": "celltypist",
+      "import_name": "celltypist",
+      "popularity_rank": 26,
+      "source": "pypistats",
+      "verified": true
+    },
+    {
+      "name": "scikit-allel",
+      "ecosystem": "pypi",
+      "language": "python",
+      "package": "scikit-allel",
+      "import_name": "allel",
+      "popularity_rank": 25,
+      "source": "pypistats",
+      "verified": true
+    },
+    {
+      "name": "bioframe",
+      "ecosystem": "pypi",
+      "language": "python",
+      "package": "bioframe",
+      "import_name": "bioframe",
+      "popularity_rank": 24,
+      "source": "pypistats",
+      "verified": true
+    },
+    {
+      "name": "cooler",
+      "ecosystem": "pypi",
+      "language": "python",
+      "package": "cooler",
+      "import_name": "cooler",
+      "popularity_rank": 28,
+      "source": "pypistats",
+      "verified": true
+    },
+    {
+      "name": "umap-learn",
+      "ecosystem": "pypi",
+      "language": "python",
+      "package": "umap-learn",
+      "import_name": "umap",
+      "popularity_rank": 6,
+      "source": "pypistats",
+      "verified": true
+    },
+    {
+      "name": "leidenalg",
+      "ecosystem": "pypi",
+      "language": "python",
+      "package": "leidenalg",
+      "import_name": "leidenalg",
+      "popularity_rank": 10,
+      "source": "pypistats",
+      "verified": true
+    },
+    {
+      "name": "numpy",
+      "ecosystem": "pypi",
+      "language": "python",
+      "package": "numpy",
+      "import_name": "numpy",
+      "popularity_rank": 1,
+      "source": "pypistats",
+      "verified": true
+    },
+    {
+      "name": "pandas",
+      "ecosystem": "pypi",
+      "language": "python",
+      "package": "pandas",
+      "import_name": "pandas",
+      "popularity_rank": 2,
+      "source": "pypistats",
+      "verified": true
+    },
+    {
+      "name": "scikit-learn",
+      "ecosystem": "pypi",
+      "language": "python",
+      "package": "scikit-learn",
+      "import_name": "sklearn",
+      "popularity_rank": 3,
+      "source": "pypistats",
+      "verified": true
+    },
+    {
+      "name": "h5py",
+      "ecosystem": "pypi",
+      "language": "python",
+      "package": "h5py",
+      "import_name": "h5py",
+      "popularity_rank": 4,
+      "source": "pypistats",
+      "verified": true
+    }
+  ]
+}
