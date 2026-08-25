@@ -122,10 +122,19 @@ def _consume(stream, cap: dict) -> None:
         except Exception:  # noqa: BLE001
             continue
         t = ev.get("type")
-        if t == "run_started":
-            cap["run_id"] = ev.get("run_id") or cap.get("run_id")
-        elif t == "tool_call":
-            cap["tools"].append(ev.get("name"))
+        # Count every event type seen. An instrument that parses the wrong
+        # event names measures nothing and reports it as "the agent did
+        # nothing" — which is indistinguishable from a finding. `kinds` is
+        # what lets the probe notice it has gone blind (see _instrument_fault).
+        cap["kinds"][t] = cap["kinds"].get(t, 0) + 1
+        # run_id rides on ANY event, not a dedicated one. Keying it to a
+        # `run_started` type meant run_id stayed None, so the approval-gate
+        # resume loop below never ran and every turn that paused for approval
+        # was silently abandoned half-done.
+        if ev.get("run_id"):
+            cap["run_id"] = ev["run_id"]
+        if t in ("tool_start", "tool_call"):
+            cap["tools"].append(ev.get("name") or ev.get("tool") or "?")
         elif t == "tool_result":
             r = ev.get("result") or {}
             if isinstance(r, dict) and r.get("job_id"):
@@ -205,7 +214,7 @@ def _await_job(c, jid: str, timeout_s: float) -> dict:
 def _drive(c, pid: str, tid: str, text: str, timeout: float) -> dict:
     """One agent turn; returns the capture. Approval gates resolved like the UI."""
     cap: dict = {"run_id": None, "tools": [], "errors": [], "text": [],
-                 "jobs": [], "cap_results": []}
+                 "jobs": [], "cap_results": [], "kinds": {}}
     with c.stream("POST", "/api/chat", timeout=timeout,
                   json={"text": text, "project_id": pid, "thread_id": tid}) as r:
         r.raise_for_status()
@@ -221,6 +230,26 @@ def _drive(c, pid: str, tid: str, text: str, timeout: float) -> dict:
             r2.raise_for_status()
             _consume(r2, cap)
     return cap
+
+
+def _instrument_fault(cap: dict, executed: bool) -> str | None:
+    """Is this probe BLIND rather than the deployment broken?
+
+    Written after the probe read the wrong SSE event names, recorded zero tool
+    calls for all 33 packages, and produced a "the agent never checked
+    anything" finding that was purely an artifact of its own parser. A measured
+    zero and an unmeasured zero look identical in a results table, so the
+    instrument has to be able to tell them apart and say so.
+
+    Two tells: no events at all (nothing was parsed), or a turn that demonstrably
+    RAN something while the parser saw no tool events (the names are wrong)."""
+    if not cap.get("kinds"):
+        return "no SSE events parsed at all — wrong stream format or dead turn"
+    if executed and not cap.get("tools"):
+        return (f"a turn produced exec records but the parser saw NO tool events; "
+                f"event types present: {sorted(cap['kinds'])} — the probe is reading "
+                f"the wrong event names and its tool/job counts are meaningless")
+    return None
 
 
 def _exec_ok(c, pid: str, run_ids: list[str]) -> tuple[bool, str]:
@@ -284,7 +313,13 @@ def probe_one(c, entry: dict, *, timeout: float, projects_dir: Path | None,
 
     row = {**entry, "project_id": pid, "seconds": seconds,
            "envs_created": made, "tools": len(cap["tools"]),
-           "turn_errors": len(cap["errors"]), "exec": exec_detail}
+           "turn_errors": len(cap["errors"]), "exec": exec_detail,
+           "event_kinds": sorted(cap.get("kinds") or {})}
+    _fault = _instrument_fault(cap, ok)
+    if _fault:
+        row["verdict"] = "instrument_fault"
+        row["detail"] = _fault
+        return row
 
     # SECOND question: does it work OFF the login node? A library present where
     # the controller runs and absent on a compute node is a normal way for this
@@ -463,14 +498,15 @@ def main() -> int:
         by.setdefault(r.get("verdict", "?"), []).append(r["name"])
     print("\n== install probe summary ==")
     for v in ("ready_from_pack", "installed", "wasteful", "unavailable",
-              "unmeasured", "background_failed", "error"):
+              "unmeasured", "background_failed", "instrument_fault", "error"):
         if by.get(v):
             print(f"  {v:16s} {len(by[v]):3d}   {', '.join(sorted(by[v])[:12])}"
                   + (" …" if len(by[v]) > 12 else ""))
     slow = [r for r in rows if a.strict_seconds
             and (r.get("seconds") or 0) > a.strict_seconds]
     bad = [r for r in rows if r.get("verdict") in
-           ("wasteful", "unavailable", "unmeasured", "background_failed", "error")]
+           ("wasteful", "unavailable", "unmeasured", "background_failed",
+            "instrument_fault", "error")]
     _proof = {}
     for r in rows:
         _proof[r.get("proof", "?")] = _proof.get(r.get("proof", "?"), 0) + 1

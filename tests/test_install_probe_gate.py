@@ -86,3 +86,52 @@ def test_missing_matrix_is_a_normal_exception():
     import live_install_probe as lip
     with pytest.raises(FileNotFoundError):
         lip._load_matrix("/nonexistent/one.json,/nonexistent/two.json")
+
+
+def _cap(kinds=None, tools=None):
+    return {"kinds": kinds or {}, "tools": tools or []}
+
+
+def test_probe_reports_its_own_blindness_not_a_finding():
+    """A measured zero and an unmeasured zero must not look alike.
+
+    The probe read the wrong SSE event names — `tool_call` where the server
+    emits `tool_start` — so it recorded zero tool calls for all 33 packages in
+    its first real run. That reads in the results table as "the agent never
+    checked anything", which is a striking finding and was entirely an artifact
+    of the parser. It also meant `run_id` was never set, so the approval-gate
+    resume loop never ran and any turn that paused for approval was abandoned
+    half-finished and scored as a failure of the deployment.
+
+    An instrument that cannot detect its own blindness will keep producing
+    confident findings about nothing."""
+    import live_install_probe as lip
+    # ran something, but the parser saw no tool events => the parser is wrong
+    fault = lip._instrument_fault(_cap(kinds={"text": 4, "tool_start": 2}), True)
+    assert fault and "wrong event names" in fault, fault
+    # nothing parsed at all
+    assert lip._instrument_fault(_cap(), False), "empty stream must be a fault"
+
+
+def test_a_genuinely_quiet_turn_is_not_a_fault():
+    """WIDE: an advice turn that runs nothing is a legitimate observation, not
+    an instrument failure — the tell is exec-records-without-tool-events."""
+    import live_install_probe as lip
+    assert lip._instrument_fault(_cap(kinds={"text": 3}), False) is None
+
+
+def test_a_normal_turn_is_not_a_fault():
+    import live_install_probe as lip
+    assert lip._instrument_fault(
+        _cap(kinds={"text": 3, "tool_start": 1}, tools=["run_r"]), True) is None
+
+
+def test_the_parser_accepts_the_event_names_the_server_actually_emits():
+    """Pin the names against the probe that is known to work against a real
+    server (live_surface_probe), so the two cannot drift apart again."""
+    src = (REPO / "regtest" / "harness" / "live_install_probe.py").read_text()
+    assert '"tool_start"' in src, "the server emits tool_start; the probe must read it"
+    # run_id must be taken from any event, not gated on one type
+    assert 'if ev.get("run_id"):' in src, (
+        "run_id rides on any event — gating it on a single event type left the "
+        "approval-gate resume loop dead")
