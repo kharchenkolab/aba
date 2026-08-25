@@ -317,6 +317,16 @@ def probe_one(c, entry: dict, *, timeout: float, projects_dir: Path | None,
         made = envs_after[0] - envs_before[0]
         adds = envs_after[1] - envs_before[1]
 
+    # A turn can legitimately END by submitting a background job — the work is
+    # real, it is just not finished when the stream closes. Judging exec records
+    # at that moment reports "nothing ran" for a request that ran plenty.
+    # Found in the sweep's own first results: an entry that spent 16 minutes,
+    # built an env and submitted a job scored `unavailable`.
+    submitted = list(cap.get("jobs") or [])
+    if submitted:
+        row_jobs = [_await_job(c, j, job_timeout) for j in submitted]
+    else:
+        row_jobs = []
     try:
         ents = c.get("/api/entities",
                      params={"project_id": pid, "include_archived": True}).json()
@@ -326,11 +336,24 @@ def probe_one(c, entry: dict, *, timeout: float, projects_dir: Path | None,
     except Exception as e:  # noqa: BLE001
         return {**entry, "verdict": "error", "seconds": seconds,
                 "detail": f"state read: {type(e).__name__}: {e}"[:300]}
+    if not ok and row_jobs:
+        # the job IS the proof for an async turn
+        done = [j for j in row_jobs if j.get("status") == "done"]
+        if done:
+            ok = True
+            exec_detail = (f"no synchronous exec, but {len(done)}/{len(row_jobs)} "
+                           f"submitted job(s) completed")
 
     row = {**entry, "project_id": pid, "seconds": seconds,
            "envs_created": made, "session_adds": adds,
            "tools": len(cap["tools"]),
+           # WHICH tools, not just how many. Both of the sweep's first two
+           # failures had healthy tool activity and no exec record, and a bare
+           # count could not say whether the deployment failed or the probe
+           # judged too early.
+           "tool_names": sorted(set(cap["tools"]))[:12],
            "turn_errors": len(cap["errors"]), "exec": exec_detail,
+           "submitted_jobs": row_jobs,
            "event_kinds": sorted(cap.get("kinds") or {})}
     _fault = _instrument_fault(cap, ok)
     if _fault:

@@ -174,3 +174,96 @@ def test_unreadable_registry_is_none_not_zero(tmp_path):
     (d / "weft_envs.json").write_text("{ this is not json")
     assert lip._env_count(tmp_path, "p2") is None
     assert lip._env_count(None, "p2") is None
+
+
+def test_a_turn_that_ends_by_submitting_a_job_is_not_a_failure(monkeypatch):
+    """An async turn has not finished when the stream closes.
+
+    The sweep's own first results scored `unavailable` on an entry that had
+    spent sixteen minutes, built an environment and submitted a background job:
+    real work, judged at the instant the SSE stream closed, before the job it
+    had just started could produce an exec record. The verdict said the
+    deployment could not provide the tool; what it actually measured was the
+    probe's impatience.
+
+    A submitted job is the proof for that shape of turn — so await it, and only
+    then decide."""
+    import live_install_probe as lip
+
+    class _C:
+        def post(self, path, **kw):
+            return type("R", (), {"json": lambda _s: {"id": "p1"}})()
+
+        def get(self, path, **kw):
+            if path.startswith("/api/entities"):
+                return type("R", (), {"json": lambda _s: []})()
+            return type("R", (), {"json": lambda _s: {}})()
+
+        def stream(self, *a, **kw):
+            raise AssertionError("unused")
+
+    # a turn that ran tools and submitted one job that COMPLETED
+    monkeypatch.setattr(lip, "_drive", lambda *a, **k: {
+        "run_id": "r1", "tools": ["ensure_capability", "run_python"],
+        "errors": [], "text": [], "jobs": ["j1"], "cap_results": [],
+        "kinds": {"tool_start": 2, "job_submitted": 1, "done": 1}})
+    monkeypatch.setattr(lip, "_await_job",
+                        lambda c, j, t: {"job_id": j, "status": "done",
+                                         "site": "cluster"})
+    monkeypatch.setattr(lip, "_env_count", lambda d, p: (0, 0))
+
+    row = lip.probe_one(_C(), {"name": "thing", "language": "python"},
+                        timeout=1, projects_dir=None, pack_names={})
+    assert row["verdict"] != "unavailable", row
+    assert row["submitted_jobs"], row
+    assert "job" in row["exec"], row["exec"]
+
+
+def test_a_submitted_job_that_failed_is_still_a_failure(monkeypatch):
+    """ARMED: awaiting the job must not become a way to pass on nothing."""
+    import live_install_probe as lip
+
+    class _C:
+        def post(self, path, **kw):
+            return type("R", (), {"json": lambda _s: {"id": "p1"}})()
+
+        def get(self, path, **kw):
+            if path.startswith("/api/entities"):
+                return type("R", (), {"json": lambda _s: []})()
+            return type("R", (), {"json": lambda _s: {}})()
+
+    monkeypatch.setattr(lip, "_drive", lambda *a, **k: {
+        "run_id": "r1", "tools": ["run_python"], "errors": [], "text": [],
+        "jobs": ["j1"], "cap_results": [], "kinds": {"tool_start": 1}})
+    monkeypatch.setattr(lip, "_await_job",
+                        lambda c, j, t: {"job_id": j, "status": "failed"})
+    monkeypatch.setattr(lip, "_env_count", lambda d, p: (0, 0))
+
+    row = lip.probe_one(_C(), {"name": "thing", "language": "python"},
+                        timeout=1, projects_dir=None, pack_names={})
+    assert row["verdict"] == "unavailable", row
+
+
+def test_the_row_names_which_tools_ran(monkeypatch):
+    """A bare count cannot tell a probe gap from a product gap — both of the
+    sweep's first failures had healthy tool activity."""
+    import live_install_probe as lip
+
+    class _C:
+        def post(self, path, **kw):
+            return type("R", (), {"json": lambda _s: {"id": "p1"}})()
+
+        def get(self, path, **kw):
+            if path.startswith("/api/entities"):
+                return type("R", (), {"json": lambda _s: []})()
+            return type("R", (), {"json": lambda _s: {}})()
+
+    monkeypatch.setattr(lip, "_drive", lambda *a, **k: {
+        "run_id": "r1", "tools": ["ensure_capability", "ensure_capability",
+                                  "search_bioconda"],
+        "errors": [], "text": [], "jobs": [], "cap_results": [],
+        "kinds": {"tool_start": 3}})
+    monkeypatch.setattr(lip, "_env_count", lambda d, p: (0, 0))
+    row = lip.probe_one(_C(), {"name": "thing", "language": "python"},
+                        timeout=1, projects_dir=None, pack_names={})
+    assert row["tool_names"] == ["ensure_capability", "search_bioconda"], row
