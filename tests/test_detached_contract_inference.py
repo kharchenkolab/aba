@@ -1,6 +1,6 @@
 """A containerized deployment is host-less AND detached.
 
-Live, 2026-08-25 (OOD, cbe-next). Once a slurm site was finally declared, jobs
+Live, 2026-08-25 (a containerized OOD deployment). Once a slurm site was finally declared, jobs
 reached the scheduler and then died on the node with
 
     cmd.sh: line 34: /opt/aba-venv/bin/python: No such file or directory   # 127

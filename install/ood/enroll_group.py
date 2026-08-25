@@ -92,8 +92,8 @@ class Plan:
 
     def __init__(self, group, group_dir, root, skeleton, cred_kind, cred_path,
                  cred_data, site_path, by):
-        self.group = group              # unix group name, e.g. tanaka.grp
-        self.group_dir = group_dir      # on-disk folder name, e.g. tanaka
+        self.group = group              # unix group name, e.g. <lab>.grp
+        self.group_dir = group_dir      # on-disk folder name, e.g. <lab>
         self.root = root                # the ABA workspace path
         self.skeleton = skeleton
         self.cred_kind = cred_kind      # None | "oauth-token" | "api-key" | "file"

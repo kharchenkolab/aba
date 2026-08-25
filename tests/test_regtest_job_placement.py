@@ -1,6 +1,6 @@
 """A `requires: slurm` scenario must PROVE the job ran on the cluster.
 
-Live, 2026-08-25 (OOD, cbe-next). `ABA_BATCH_SUBMITTER=slurm` was set and no
+Live, 2026-08-25 (a containerized OOD deployment). `ABA_BATCH_SUBMITTER=slurm` was set and no
 slurm-kind weft site was declared, so `submitter._slurm_lane` printed one line
 and returned the LOCAL lane. Every "cluster" job ran inside the user's session
 container.

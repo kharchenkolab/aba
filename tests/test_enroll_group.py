@@ -470,7 +470,7 @@ def test_pasting_is_not_consent(site, monkeypatch):
 
 # ── a mode is only evidence where modes are honoured ────────────────────────
 #
-# Live catch, 2026-08-16: a real enrolment into /groups/tanaka wrote a correct
+# Live catch, 2026-08-16: a real enrolment into a group tree wrote a correct
 # credential, printed "readable by: … this filesystem does not appear to honour
 # permission bits", and then FAILED validation with "readable by anyone on the
 # cluster" — reading as fact the very mode the line above had just explained
@@ -772,7 +772,7 @@ def test_the_enrolled_lab_passes_the_launch_gate(site, tmp_path, monkeypatch):
 # stat has always come straight back out — `root.exists()` escaped build_plan's own
 # permission check — which exists, is correct, and was simply never reached —
 # and surfaced as "something went wrong that I did not expect (PermissionError
-# ...)". Caught live, dry-running mendjan.grp from an account outside it.
+# ...)". Caught live, dry-running a real lab group from an account outside it.
 
 @pytest.fixture
 def hidden(site):

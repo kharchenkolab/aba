@@ -1,6 +1,6 @@
 """A missing SYSTEM library must be diagnosable AND escapable.
 
-Live 2026-07-22 on an adopted read-only base (cbe-next), walking the real agent
+Live 2026-07-22 on an adopted read-only base, walking the real agent
 path for an R package whose build needs a system library the base lacks:
 
     ensure_capability('RNetCDF', language='r')

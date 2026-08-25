@@ -1,6 +1,6 @@
 """A deployment that asks for Slurm must not run jobs locally in silence.
 
-Live, 2026-08-25 (OOD, cbe-next). site.yaml declared `jobs: {submitter: slurm}`
+Live, 2026-08-25 (a containerized OOD deployment). site.yaml declared `jobs: {submitter: slurm}`
 and the cluster was ready, but no slurm-kind weft site was declared anywhere.
 `core/jobs/submitter._slurm_lane` handles that by printing one line to the
 server log and returning the LOCAL lane, so every background job ran inside

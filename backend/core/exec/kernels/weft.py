@@ -61,7 +61,7 @@ def _reticulate_pin_r(remote: bool = False) -> str:
     pinning: `/Users/…/.aba/env/bin/python` does not exist on a Linux node, so
     reticulate is aimed at a missing binary and the failure names a path from a
     machine the user never touched. Verified live on mendel — the R setup block
-    carried `Sys.setenv(RETICULATE_PYTHON='/Users/peter.kharchenko/.aba/env/bin/
+    carried `Sys.setenv(RETICULATE_PYTHON='/Users/<user>/.aba/env/bin/
     python')`. The DATA_DIR/ARTIFACTS_DIR lines beside it were already
     remote-aware; this pin was added later (2026-07-21) and never audited for
     the remote case — the same class as the controller-`setwd` incident.
