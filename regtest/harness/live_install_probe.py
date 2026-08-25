@@ -367,6 +367,12 @@ def main() -> int:
     ap.add_argument("--language", default=None)
     ap.add_argument("--only", default=None, help="comma-separated names")
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--top", type=int, default=0,
+                    help="highest-priority N: most-used by OUR recipes first, "
+                         "then field download rank")
+    ap.add_argument("--skip-pack-provided", action="store_true",
+                    help="exclude names a base pack already provides (they have "
+                         "their own scope, --pack-provided-only)")
     ap.add_argument("--timeout", type=float, default=900.0)
     ap.add_argument("--results", default=None,
                     help="JSON file; existing entries are SKIPPED (resumable)")
@@ -419,6 +425,16 @@ def main() -> int:
         except Exception:  # noqa: BLE001
             done = {}
     entries = [e for e in entries if e["name"] not in done]
+    if a.top:
+        # Priority = what OUR OWN recipes reach for most, then field usage.
+        # A tool a recipe assumes and cannot get is a promise already broken,
+        # so recipe frequency outranks download popularity.
+        entries.sort(key=lambda e: (-(e.get("n_recipes") or 0),
+                                    e.get("popularity_rank") or 10_000,
+                                    e.get("name", "")))
+        entries = entries[:a.top]
+    if a.skip_pack_provided:
+        entries = [e for e in entries if e["name"] not in pack_names]
     if a.limit:
         entries = entries[:a.limit]
 
