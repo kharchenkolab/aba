@@ -62,19 +62,44 @@ def _substrate():
 
 # ── selection / fallback (no substrate needed) ───────────────────────────────
 
-def test_offline_substrate_falls_back_to_worker(monkeypatch):
+def test_offline_substrate_does_not_degrade_into_the_worker(monkeypatch):
+    """An offline substrate must REFUSE, not quietly run in-process.
+
+    This test used to assert the opposite — that a down substrate fell back to
+    the in-process LocalSubmitter — and it kept asserting it for months after
+    the cutover retired that lane, sitting in KNOWN_FAILURES as a permanent
+    entry nobody could ever clear. A stale test is worse than a missing one:
+    the only way to make this pass again was to REINTRODUCE the silent
+    degrade, so the suite was quietly rewarding the defect.
+
+    The current contract is an honest refusal at submit, carrying the
+    substrate's own typed error. Science jobs cannot run without their envs, so
+    running them somewhere else is not a rescue — it is the same
+    work-relocated-in-silence failure as the slurm lane's local degrade."""
     import core.compute.adapter as ad
     from core.jobs.submitter import get_submitter_for
     monkeypatch.setattr(ad, "_status", {"ok": False, "severity": "warning",
                                         "detail": "down"})
-    sub = get_submitter_for("inline")
-    assert type(sub).__name__ == "LocalSubmitter"
+    assert type(get_submitter_for("inline")).__name__ == "WeftSubmitter"
 
 
-def test_worker_escape_hatch(monkeypatch):
+def test_the_worker_escape_hatch_is_gone(monkeypatch):
+    """`ABA_BATCH_SUBMITTER=worker` is no longer a lane, and an unknown value
+    must fall through to the weft local lane rather than resurrect one."""
     monkeypatch.setenv("ABA_BATCH_SUBMITTER", "worker")
     from core.jobs.submitter import get_submitter
-    assert type(get_submitter()).__name__ == "LocalSubmitter"
+    assert type(get_submitter()).__name__ == "WeftSubmitter"
+
+
+def test_a_legacy_row_still_has_a_cancel_owner(monkeypatch):
+    """WIDE: LocalSubmitter survives for exactly one job — cancelling a row
+    recorded BEFORE the cutover. Retiring the lane must not strand those."""
+    import core.compute.adapter as ad
+    from core.jobs.runner import _submitter_for_job
+    monkeypatch.setattr(ad, "_status", {"ok": False, "severity": "warning",
+                                        "detail": "down"})
+    assert type(_submitter_for_job({"params": {"submission": "inline"}})
+                ).__name__ == "LocalSubmitter"
 
 
 @pytest.mark.skipif(not weft_ok, reason="weft substrate unavailable")

@@ -67,13 +67,17 @@ def _activation_verdict(spec: dict) -> str | None:
     if not want or spec.get("interp"):
         return None                        # bare by design, or explicit override
     if not (os.environ.get("WEFT_PREFIX") or os.environ.get("CONDA_PREFIX")):
+        # Deliberately says nothing about the compute substrate. The original
+        # defect this message replaced was `substrate_offline: compute
+        # substrate not configured yet`, which reads as a platform outage and
+        # got an outage bug filed against a working cluster — so
+        # test_slurm_entry_activation asserts the word never returns here, and
+        # it caught this text carrying an explanatory aside about the
+        # activation guard. Operator detail belongs in the task record, not in
+        # the sentence a user reads.
         return (f"environment {want} was never activated on this node — "
                 f"neither WEFT_PREFIX nor CONDA_PREFIX is set, so there is no "
-                f"interpreter to run the job in. (A current substrate refuses "
-                f"earlier than this: its activation guard exits 78 from cmd.sh "
-                f"before user code, classified env.activation_failed. Reaching "
-                f"here means the guard did not run — an older substrate, or a "
-                f"task submitted with no env.) This is an environment-"
+                f"interpreter to run the job in. This is an environment-"
                 f"activation failure, not "
                 f"a fault in the job's code and not a cluster outage: this "
                 f"node runs only what the scheduler mounts for the task. "
