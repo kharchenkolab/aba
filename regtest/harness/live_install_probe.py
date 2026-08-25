@@ -154,17 +154,29 @@ def _consume(stream, cap: dict) -> None:
             cap["text"].append(str(ev.get("text") or ""))
 
 
-def _env_count(projects_dir: Path | None, pid: str) -> int | None:
-    """Named/isolated envs recorded for a project, or None if unreadable.
+def _env_count(projects_dir: Path | None, pid: str) -> "tuple[int, int] | None":
+    """``(named_envs, session_additions)`` for a project, or None if unreadable.
+
+    TWO numbers, because there are two ways to spend on a request and only one
+    of them mints a named env. A session install adds packages to the project's
+    default weft session and creates NO named env — so counting named envs
+    alone reported "cost nothing" for a request that had just installed and
+    solved a package. That understates cost in exactly the direction that
+    flatters us, and would have let the original incident hide again had it
+    taken the session lane instead of the isolated-env lane.
 
     None is not zero: an unmeasured ceiling must fail, never pass."""
     if projects_dir is None:
         return None
     p = Path(projects_dir) / str(pid) / "weft_envs.json"
     if not p.exists():
-        return 0
+        return (0, 0)
     try:
-        return len((json.loads(p.read_text()) or {}).get("envs") or {})
+        doc = json.loads(p.read_text()) or {}
+        named = len(doc.get("envs") or {})
+        adds = sum(len((row or {}).get("additions") or [])
+                   for row in (doc.get("default") or {}).values())
+        return (named, adds)
     except Exception:  # noqa: BLE001
         return None
 
@@ -299,7 +311,11 @@ def probe_one(c, entry: dict, *, timeout: float, projects_dir: Path | None,
                 "detail": f"{type(e).__name__}: {e}"[:300]}
     seconds = round(time.time() - t0, 1)
     envs_after = _env_count(projects_dir, pid)
-    made = None if (envs_before is None or envs_after is None) else envs_after - envs_before
+    if envs_before is None or envs_after is None:
+        made = adds = None
+    else:
+        made = envs_after[0] - envs_before[0]
+        adds = envs_after[1] - envs_before[1]
 
     try:
         ents = c.get("/api/entities",
@@ -312,7 +328,8 @@ def probe_one(c, entry: dict, *, timeout: float, projects_dir: Path | None,
                 "detail": f"state read: {type(e).__name__}: {e}"[:300]}
 
     row = {**entry, "project_id": pid, "seconds": seconds,
-           "envs_created": made, "tools": len(cap["tools"]),
+           "envs_created": made, "session_adds": adds,
+           "tools": len(cap["tools"]),
            "turn_errors": len(cap["errors"]), "exec": exec_detail,
            "event_kinds": sorted(cap.get("kinds") or {})}
     _fault = _instrument_fault(cap, ok)
@@ -384,7 +401,12 @@ def probe_one(c, entry: dict, *, timeout: float, projects_dir: Path | None,
             + (" — this library is PROVEN to load in a shipped base pack, so "
                "the correct answer costs nothing" if provided else ""))
         return row
-    row["verdict"] = "ready_from_pack" if made == 0 else "installed"
+    if made > 0:
+        row["verdict"] = "installed"           # an isolated env was built for it
+    elif adds:
+        row["verdict"] = "installed_session"   # solved into the project session
+    else:
+        row["verdict"] = "ready_from_pack"     # nothing was spent
     return row
 
 
@@ -497,7 +519,8 @@ def main() -> int:
     for r in rows:
         by.setdefault(r.get("verdict", "?"), []).append(r["name"])
     print("\n== install probe summary ==")
-    for v in ("ready_from_pack", "installed", "wasteful", "unavailable",
+    for v in ("ready_from_pack", "installed_session", "installed", "wasteful",
+              "unavailable",
               "unmeasured", "background_failed", "instrument_fault", "error"):
         if by.get(v):
             print(f"  {v:16s} {len(by[v]):3d}   {', '.join(sorted(by[v])[:12])}"

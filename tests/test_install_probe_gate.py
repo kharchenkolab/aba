@@ -135,3 +135,42 @@ def test_the_parser_accepts_the_event_names_the_server_actually_emits():
     assert 'if ev.get("run_id"):' in src, (
         "run_id rides on any event — gating it on a single event type left the "
         "approval-gate resume loop dead")
+
+
+def test_a_session_install_is_not_a_free_answer(tmp_path):
+    """Cost has two shapes and only one of them mints a named env.
+
+    `ensure_capability` can satisfy a request by installing into the project's
+    DEFAULT weft session, which creates no named env at all. Counting named
+    envs alone therefore reported "envs=0, ready_from_pack" — cost nothing —
+    for a request that had just resolved, fetched and solved a package. It
+    flatters the result in the one direction that matters, and had the original
+    incident taken the session lane instead of the isolated-env lane, this
+    probe would have called it free."""
+    import live_install_probe as lip
+    pid = "p1"
+    d = tmp_path / pid
+    d.mkdir()
+    reg = d / "weft_envs.json"
+
+    reg.write_text(json.dumps({"envs": {}, "default": {}}))
+    assert lip._env_count(tmp_path, pid) == (0, 0)
+
+    # a session install: no named env, one recorded addition
+    reg.write_text(json.dumps(
+        {"envs": {}, "default": {"python": {"additions": [{"specs": ["x"]}]}}}))
+    assert lip._env_count(tmp_path, pid) == (0, 1)
+
+    # an isolated env: named env, no session addition
+    reg.write_text(json.dumps({"envs": {"iso": {}}, "default": {}}))
+    assert lip._env_count(tmp_path, pid) == (1, 0)
+
+
+def test_unreadable_registry_is_none_not_zero(tmp_path):
+    """ARMED: an unmeasured cost must not read as no cost."""
+    import live_install_probe as lip
+    d = tmp_path / "p2"
+    d.mkdir()
+    (d / "weft_envs.json").write_text("{ this is not json")
+    assert lip._env_count(tmp_path, "p2") is None
+    assert lip._env_count(None, "p2") is None
