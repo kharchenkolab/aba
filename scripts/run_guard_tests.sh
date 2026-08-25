@@ -97,6 +97,30 @@ FILES=(
   tests/test_data_ledger.py
   tests/test_provenance_evidence.py
   tests/test_delete_blockers.py
+  # deployment shape + substrate contract (the 2026-08 field incidents). These
+  # guard facts about the configuration we SHIP — a cluster site being declared
+  # and registered, the site contract measured rather than guessed, the node's
+  # activation proof, the substrate refusals an agent can act on, and the
+  # release naming what it was built from. Every one of them exists because a
+  # green instrument reported on something other than what it appeared to.
+  tests/test_site_declared_compute_sites.py
+  tests/test_slurm_lane_declared.py
+  tests/test_detached_contract_inference.py
+  tests/test_job_wrap_reachability.py
+  tests/test_substrate_error_levers.py
+  tests/test_release_provenance.py
+  tests/test_running_build_visible.py
+  tests/test_llm_sdk_pin.py
+  # install-sweep instruments (see misc/install_sweep.md): the cost vocabulary,
+  # the probe's own gates, and the placement oracle. Pure — no live server.
+  tests/test_regtest_cost_ceilings.py
+  tests/test_regtest_job_placement.py
+  tests/test_regtest_coverage_matrix.py
+  tests/test_install_probe_gate.py
+  # agent-facing surfaces hardened alongside them
+  tests/test_bug_report_composer.py
+  tests/test_credential_truthfulness.py
+  tests/test_inspect_upload_paths.py
   # regtest oracle + probe evaluators (pure, no live server)
   tests/test_transport_oracle.py
   tests/test_live_surface_probe_eval.py
