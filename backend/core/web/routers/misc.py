@@ -102,4 +102,36 @@ def health():
     key off `degraded`/`worst`; full details are on /api/admin/selfcheck."""
     from core.runtime import selfcheck
     return {"ok": True, "degraded": selfcheck.degraded(),
-            "worst": selfcheck.worst_severity(), "warnings": selfcheck.warnings()}
+            "worst": selfcheck.worst_severity(), "warnings": selfcheck.warnings(),
+            **_running_build()}
+
+
+def _running_build() -> dict:
+    """WHICH build is answering: ``{release, built_from}``.
+
+    Health said whether the server was well and never which server it was. That
+    is fine until two builds are in play — and two builds are always in play
+    during a rollout. A probe recording results, an operator reading a warning,
+    a report comparing yesterday to today: each has to attribute what it sees to
+    a build, and each was left to infer it from a deploy log.
+
+    `built_from` is the release manifest's provenance block — notably the
+    SUBSTRATE revision, which is not derivable from the release id at all: the
+    substrate ref floated for months, so the same aba version shipped different
+    weft revisions and nothing served that fact (found 2026-08-25, after a
+    64-commit substrate change reached users unnoticed).
+
+    Never raises: health is a liveness signal and must answer even when the
+    release layout is absent (a personal install has none)."""
+    try:
+        from core.release import active_release_id, read_manifest
+        rel = active_release_id()
+        if not rel:
+            return {}
+        out = {"release": rel}
+        prov = (read_manifest(rel) or {}).get("provenance") or {}
+        if prov:
+            out["built_from"] = prov
+        return out
+    except Exception:  # noqa: BLE001 — never break liveness over provenance
+        return {}

@@ -244,6 +244,21 @@ def _drive(c, pid: str, tid: str, text: str, timeout: float) -> dict:
     return cap
 
 
+def running_build(c) -> dict:
+    """``{release, built_from}`` of the server under test, or {}.
+
+    Every row records it. A sweep runs for hours and a release can be promoted
+    underneath it, at which point a single results file silently spans two
+    builds with nothing to say which row came from which — the same provenance
+    gap that let a substrate change reach users unnoticed, one layer down. A
+    result that cannot be attributed to a build is not evidence about a build."""
+    try:
+        h = c.get("/api/health").json() or {}
+        return {k: h[k] for k in ("release", "built_from") if k in h}
+    except Exception:  # noqa: BLE001 — an older server just says nothing
+        return {}
+
+
 def _instrument_fault(cap: dict, executed: bool) -> str | None:
     """Is this probe BLIND rather than the deployment broken?
 
@@ -287,8 +302,9 @@ def _exec_ok(c, pid: str, run_ids: list[str]) -> tuple[bool, str]:
 
 def probe_one(c, entry: dict, *, timeout: float, projects_dir: Path | None,
               pack_names, background: bool = False,
-              job_timeout: float = 900.0) -> dict:
+              job_timeout: float = 900.0, build: dict | None = None) -> dict:
     name = entry["name"]
+    entry = {**entry, **(build or {})}          # every row says which build produced it
     slug = "".join(ch if ch.isalnum() else "-" for ch in name).lower()[:40]
     # One bad entry must not end a 100+ package sweep: record and move on.
     try:
@@ -524,13 +540,16 @@ def main() -> int:
 
     rows = list(done.values())
     with httpx.Client(base_url=a.base, timeout=a.timeout) as c:
+        build = running_build(c)
+        if build:
+            print(f"[install-probe] server build: {build}", flush=True)
         for i, e in enumerate(entries, 1):
             print(f"[install-probe] {i}/{len(entries)} {e['name']} "
                   f"({e.get('ecosystem')})…", flush=True)
             row = probe_one(c, e, timeout=a.timeout,
                             projects_dir=Path(a.projects_dir) if a.projects_dir else None,
                             pack_names=pack_names, background=a.background,
-                            job_timeout=a.job_timeout)
+                            job_timeout=a.job_timeout, build=build)
             print(f"    -> {row['verdict']}  {row.get('seconds')}s  "
                   f"envs={row.get('envs_created')}", flush=True)
             rows.append(row)
