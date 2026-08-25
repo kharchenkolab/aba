@@ -56,12 +56,25 @@ A **`BatchSubmitter`** (`core/jobs/submitter.py`) is the pluggable placement —
 `submit`/`cancel`/`poll`/`info`. The live implementation is **`WeftSubmitter`**
 (`weft_submitter.py`): it runs the job as a **weft task** — on this node or on a declared
 remote/cluster site — and resolves completion by polling the substrate. It carries **two
-transports**, chosen by the site's contract (`site_contract`): **shared-fs** (controller and node
-see the same paths — the local node and shared-filesystem Slurm clusters) writes
+transports**, chosen by the site's contract (`site_contract`): **shared-fs** writes
 `job_spec.json`/`result.json` into a scratch dir the node reads directly, and the node runs the
-same `python -m core.jobs.slurm_entry` entry an interactive run uses; **detached** (a host-bearing
-ssh site that shares nothing) ships the code *as data* over the weft data plane and runs a
-stdlib-only payload harness. `get_submitter()` maps the `config.env` toggle
+same `python -m core.jobs.slurm_entry` entry an interactive run uses; **detached** ships the code
+*as data* over the weft data plane and runs a stdlib-only payload harness under the node's own
+interpreter.
+
+**What picks between them is whether ABA's OWN runtime can execute on a bare node** — the
+shared-fs command names `sys.executable` by absolute path, and that is its entire premise. A
+native install or a slim SIF with a shared `image.base_dir` satisfies it; the default **weft SIF
+profile does not**, because the controller runtime lives inside the app image, so those
+deployments are detached even though the site is host-less and the filesystem *is* shared.
+`site_contract` therefore MEASURES the premise (`controller_entry_reachable`, mount-fstype
+classification) rather than inferring it from the presence of a `host:` key. Detached is not a
+degraded mode here: shipping code as data is precisely how a containerized controller drives a
+cluster **without** re-entering its image for every job. The one thing the payload harness cannot
+run is a **Nextflow head** (it needs `core.exec.nextflow`); on a detached site `_slurm_lane` keeps
+the head on the controller, from which Nextflow's own executor submits the real work.
+
+`get_submitter()` maps the `config.env` toggle
 `ABA_BATCH_SUBMITTER=local|slurm` (a topology fact exactly like `ABA_ACCELERATOR`, owned by
 [`deployment-and-access.md`](deployment-and-access.md)) onto a lane: `local` → a **local-site weft
 task**; `slurm` → a weft task on the declared **Slurm-kind site** (`_slurm_lane` →
@@ -77,10 +90,11 @@ run_python/run_r(background) ─ submit_*_job ─► create_job(row, status=queu
                                                     │  get_submitter_for(submission)
                        ┌────────────────────────────┴──────────────────────────────┐
              WeftSubmitter.submit  (a weft task)                  substrate offline →
-               ├ shared-fs (local node · Slurm site):             typed refusal at submit
+               ├ shared-fs (controller runtime reachable on the node):  typed refusal at submit
                │   python -m core.jobs.slurm_entry <spec> → result.json   (no in-process fallback)
-               └ detached (ssh site): code-as-data payload →
-                   python3 payload/aba_entry.py → result.json (data plane)
+               └ detached (ssh site, OR any containerized controller):
+                   code-as-data payload → python3 payload/aba_entry.py
+                   → result.json (data plane)      [nextflow head stays local]
                        │  _weft_poll_loop watches for a terminal state
                        └───────────────► _finalize_job(result)
                                              │  exec record → on_job_complete (harvest) → status=done|failed
