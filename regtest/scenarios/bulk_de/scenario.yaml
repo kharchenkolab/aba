@@ -1,19 +1,60 @@
 id: bulk_de
 title: Bulk RNA-seq differential expression with a batch covariate (R/DESeq2)
 domain: transcriptomics
-prompt: I have a bulk RNA-seq count table at DATA_DIR/counts.csv (genes × samples) and a sample sheet
-  DATA_DIR/samples.csv with a `condition` column (control vs treated) and a `batch` column. Using DESeq2
-  in R, find the genes differentially expressed between treated and control while controlling for batch,
-  and show me the top hits.
+smoke: true
+summary: >
+  Upgraded from v1 to v2 on 2026-08-25 for one reason: as a v1 stub its only assertion was
+  must_mention [DESeq2, batch, condition] with an empty must_not — satisfiable by an agent
+  that TALKS about DESeq2. It was green throughout the period in which DESeq2 could not load
+  at all in the published R pack (bioconductor-genomeinfodbdata ships its payload via a
+  conda post-link script the packer never runs, so GenomeInfoDb/GenomicRanges/DESeq2 were
+  present by name and empty in fact). A keyword check on prose cannot see that; a results
+  TABLE cannot be produced without the library actually running.
 data_files:
 - counts.csv
 - samples.csv
-expected:
-  must_mention:
-  - DESeq2
-  - batch
-  - condition
-  must_not: []
-  notes: 'Design ~ batch + condition. Truth: 150 planted DE genes (69 up / 81 down) on a negative-binomial
-    sim. Agent should read deseq2-r, install DESeq2 (conda binary), report a sensible DE count in BOTH
-    directions, not just up. No fabrication of counts.'
+lifecycle: []
+
+steps:
+- id: s1
+  kind: analyze
+  actor: agent
+  prompt: >
+    I have a bulk RNA-seq count table at DATA_DIR/counts.csv (genes × samples) and a sample
+    sheet DATA_DIR/samples.csv with a `condition` column (control vs treated) and a `batch`
+    column. Using DESeq2 in R, find the genes differentially expressed between treated and
+    control while controlling for batch, and show me the top hits.
+  expect:
+    tools_used: [run_r]
+    produces:
+      table: 1            # a real DE results table — unobtainable without DESeq2 running
+    must_mention: [DESeq2, batch, condition]
+    must_not:
+    # the shapes a broken/absent DESeq2 actually produces
+    - "there is no package called"
+    - "could not find function"
+    - "unable to load shared object"
+    - "failed to load namespace"
+    # and the shape of quietly doing something else instead
+    - "instead of DESeq2"
+    - "simulated"
+    checks: >
+      Design ~ batch + condition. Planted truth: 150 DE genes (69 up / 81 down) on a
+      negative-binomial simulation. PASS requires a real DESeq2 run in R producing a results
+      table the agent reports from — a sensible DE count in BOTH directions, not just up, and
+      no fabricated numbers.
+
+      The load-bearing assertion is `produces: {table: 1}`. Naming DESeq2 in prose is not
+      evidence it ran; a results table is. If DESeq2 cannot load in the deployment's R pack,
+      this step must FAIL rather than pass on a fluent description of what DESeq2 would have
+      found.
+
+expected_overall:
+  planted_truth: >
+    150 differentially expressed genes (69 up, 81 down) between treated and control, with a
+    batch effect that must be controlled for; ~ batch + condition recovers them, ~ condition
+    alone does not.
+  notes: >
+    Fails if DESeq2 does not actually load, if no results table is produced, or if the agent
+    reports counts in one direction only. Kept in the smoke tier: it is the cheapest scenario
+    that exercises the Bioconductor half of the R pack end to end.

@@ -37,7 +37,17 @@ steps:
     we've got to work with in there.
   expect:
     tools_used: [list_data_files]
-    must_mention: ["CM_sub_all_regres_metrics"]
+    tool_max_calls:
+      list_data_files: 3      # one listing answers this; looping is its own failure
+    must_mention:
+    - "CM_sub_all_regres_metrics"
+    # A POSITIVE grounding fact, not just the absence of invented ones: pct_mito
+    # is a column name that exists only inside the file. It cannot be guessed
+    # from the folder's name, and an agent that describes the folder without
+    # opening anything cannot produce it. The must_not list below catches
+    # fabrication; this catches the quieter failure of a correct-sounding
+    # summary that was never grounded in the data at all.
+    - "pct_mito"
     must_not:
     # Sidecars a real 10x multiome directory would carry. None exist here, so
     # naming one is only possible by inferring from the folder's name. An agent

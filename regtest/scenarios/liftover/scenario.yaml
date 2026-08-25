@@ -1,14 +1,29 @@
 id: liftover
 title: Coordinate liftover hg19 → hg38
 domain: genomics
-prompt: I have some genomic positions in the old hg19 assembly in DATA_DIR/positions.bed. Convert them
-  to the current hg38 coordinates.
+summary: 'Upgraded v1 -> v2 on 2026-08-25. As a v1 stub its only assertion was prose (must_mention/must_not),
+  which an agent satisfies by DESCRIBING the analysis. The same weakness let bulk_de stay green for the
+  whole period in which DESeq2 could not load at all. `produces` is the assertion that cannot be talked
+  past: the converted hg38 coordinate file only exists if the work actually ran.'
 data_files:
 - positions.bed
-expected:
-  must_mention:
-  - hg38
-  must_not: []
+lifecycle: []
+steps:
+- id: s1
+  kind: analyze
+  actor: agent
+  prompt: I have some genomic positions in the old hg19 assembly in DATA_DIR/positions.bed. Convert them
+    to the current hg38 coordinates.
+  expect:
+    must_mention:
+    - hg38
+    must_not: []
+    produces:
+      file: 1
+    checks: 4 real hg19 intervals (APOE/EGFR/BRCA1/KRAS). Expect successful conversion, chromosome preserved,
+      positions shifted ~0.3–0.5 Mb (e.g. APOE chr19:45.41M → ~44.91M). Must not fabricate — if a position
+      is unmapped, say so.
+expected_overall:
   notes: 4 real hg19 intervals (APOE/EGFR/BRCA1/KRAS). Expect successful conversion, chromosome preserved,
     positions shifted ~0.3–0.5 Mb (e.g. APOE chr19:45.41M → ~44.91M). Must not fabricate — if a position
     is unmapped, say so.

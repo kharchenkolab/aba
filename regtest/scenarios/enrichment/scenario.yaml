@@ -1,13 +1,27 @@
 id: enrichment
 title: Over-representation / pathway enrichment of a gene list
 domain: functional_genomics
-prompt: DATA_DIR/genes.txt has a list of genes that came out of my screen (one per line). What biological
-  processes or pathways are over-represented in this list?
+summary: 'Upgraded v1 -> v2 on 2026-08-25. As a v1 stub its only assertion was prose (must_mention/must_not),
+  which an agent satisfies by DESCRIBING the analysis. The same weakness let bulk_de stay green for the
+  whole period in which DESeq2 could not load at all. `produces` is the assertion that cannot be talked
+  past: an over-representation result table only exists if the work actually ran.'
 data_files:
 - genes.txt
-expected:
-  must_mention:
-  - cell cycle
-  must_not: []
+lifecycle: []
+steps:
+- id: s1
+  kind: analyze
+  actor: agent
+  prompt: DATA_DIR/genes.txt has a list of genes that came out of my screen (one per line). What biological
+    processes or pathways are over-represented in this list?
+  expect:
+    must_mention:
+    - cell cycle
+    must_not: []
+    produces:
+      table: 1
+    checks: Genes are canonical cell-cycle/mitosis (CDK1, CCNB1, AURKA, PLK1, …). Enrichment should rank
+      cell cycle / mitosis / nuclear division at top (GO + KEGG via Enrichr/gget).
+expected_overall:
   notes: Genes are canonical cell-cycle/mitosis (CDK1, CCNB1, AURKA, PLK1, …). Enrichment should rank
     cell cycle / mitosis / nuclear division at top (GO + KEGG via Enrichr/gget).
