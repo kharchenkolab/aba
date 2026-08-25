@@ -44,8 +44,20 @@ if [ -n "$UPDATE" ]; then
 fi
 [ -f "$BASELINE" ] || { echo "no $BASELINE — run with --update-baseline once" >&2; exit 2; }
 
-NEW=$(comm -13 "$BASELINE" "$OUT"); FIXED=$(comm -23 "$BASELINE" "$OUT")
-echo "failures: $(wc -l < "$OUT")   baseline: $(wc -l < "$BASELINE")"
+# In subset mode compare only the baseline entries for files we actually RAN,
+# or every unrun file reads as "now passing" and the operator learns to ignore
+# the section — which is how a gate stops being read at all.
+CMP="$(mktemp)"; trap 'rm -f "$OUT" "$CMP"' EXIT
+if [ -n "${ABA_TEST_FILES:-}" ]; then
+  : > "$CMP"
+  for f in $FILES; do grep -F "$f::" "$BASELINE" >> "$CMP" || true; done
+  sort -u "$CMP" -o "$CMP"
+else
+  cp "$BASELINE" "$CMP"
+fi
+
+NEW=$(comm -13 "$CMP" "$OUT"); FIXED=$(comm -23 "$CMP" "$OUT")
+echo "failures: $(wc -l < "$OUT")   baseline: $(wc -l < "$CMP")"
 rc=0
 if [ -n "$NEW" ]; then
   echo; echo "REGRESSIONS — failing and not in the baseline:"; echo "$NEW" | sed 's/^/  /'; rc=1
