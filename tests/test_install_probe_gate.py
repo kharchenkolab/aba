@@ -267,3 +267,61 @@ def test_the_row_names_which_tools_ran(monkeypatch):
     row = lip.probe_one(_C(), {"name": "thing", "language": "python"},
                         timeout=1, projects_dir=None, pack_names={})
     assert row["tool_names"] == ["ensure_capability", "search_bioconda"], row
+
+
+def test_a_real_load_probe_counts_as_proof(monkeypatch):
+    """`inspect_env(name=…)` MEASURES an environment; it does not claim about one.
+
+    It runs a real requireNamespace/import in the runtime the job would use and
+    returns {loads, version} — the same question this probe asks, answered by
+    the platform's own probe. Excluding it scored `reticulate` as `unavailable`
+    on a deployment where it loads at 1.46.0: the agent looked, found it
+    present, and correctly did nothing, and the probe recorded that as a failure
+    to provide it."""
+    import live_install_probe as lip
+
+    class _C:
+        def post(self, path, **kw):
+            return type("R", (), {"json": lambda _s: {"id": "p1"}})()
+
+        def get(self, path, **kw):
+            if path.startswith("/api/entities"):
+                return type("R", (), {"json": lambda _s: []})()
+            return type("R", (), {"json": lambda _s: {}})()
+
+    monkeypatch.setattr(lip, "_env_count", lambda d, p: (0, 0))
+    monkeypatch.setattr(lip, "_drive", lambda *a, **k: {
+        "run_id": "r1", "tools": ["inspect_env"], "errors": [], "text": [],
+        "jobs": [], "kinds": {"tool_start": 1},
+        "cap_results": [{"tool": "inspect_env", "status": "ok",
+                         "loads": True, "version": "1.46.0"}]})
+    row = lip.probe_one(_C(), {"name": "thing", "language": "r"},
+                        timeout=1, projects_dir=None, pack_names={})
+    assert row["verdict"] == "ready_from_pack", row
+    assert row["proof"] == "asserted", row
+
+
+def test_a_probe_that_ran_and_found_nothing_is_not_proof(monkeypatch):
+    """ARMED, and the trap: inspect_env returns `status: "ok"` meaning THE PROBE
+    RAN, with `loads: false` meaning the package is absent. Keying on status
+    would turn an honest "I checked, it is not there" into evidence that it is."""
+    import live_install_probe as lip
+
+    class _C:
+        def post(self, path, **kw):
+            return type("R", (), {"json": lambda _s: {"id": "p1"}})()
+
+        def get(self, path, **kw):
+            if path.startswith("/api/entities"):
+                return type("R", (), {"json": lambda _s: []})()
+            return type("R", (), {"json": lambda _s: {}})()
+
+    monkeypatch.setattr(lip, "_env_count", lambda d, p: (0, 0))
+    monkeypatch.setattr(lip, "_drive", lambda *a, **k: {
+        "run_id": "r1", "tools": ["inspect_env"], "errors": [], "text": [],
+        "jobs": [], "kinds": {"tool_start": 1},
+        "cap_results": [{"tool": "inspect_env", "status": "ok",
+                         "loads": False, "version": None}]})
+    row = lip.probe_one(_C(), {"name": "thing", "language": "r"},
+                        timeout=1, projects_dir=None, pack_names={})
+    assert row["verdict"] == "unavailable", row

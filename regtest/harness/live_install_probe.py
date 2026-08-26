@@ -142,9 +142,10 @@ def _consume(stream, cap: dict) -> None:
             # The PLATFORM's own verdict on the request is recorded state, not
             # the agent's account of it — keep it, so "it is ready" can be
             # checked against what ensure_capability actually returned.
-            if isinstance(r, dict) and r.get("status"):
+            if isinstance(r, dict) and (r.get("status") or "loads" in r):
                 cap.setdefault("cap_results", []).append(
                     {"tool": ev.get("name"), "status": r.get("status"),
+                     "loads": r.get("loads"),
                      "version": r.get("version"), "library": r.get("library"),
                      "import_name": r.get("import_name"),
                      "packs": r.get("packs")})
@@ -418,9 +419,21 @@ def probe_one(c, entry: dict, *, timeout: float, projects_dir: Path | None,
     # claim about an env, and DESeq2 taught us a claim about an env can be
     # false. So: accept either, and RECORD which, so a run that was only ever
     # asserted is visible as such instead of banked as proof.
+    # `inspect_env(name=...)` runs a REAL requireNamespace/import in the actual
+    # runtime and reports {loads, version}. That is not a claim about an env, it
+    # is a measurement of one — the same question this probe asks, answered by
+    # the platform's own probe. Excluding it scored `reticulate` as
+    # `unavailable` on a deployment where it loads at 1.46.0: the agent looked,
+    # found it present, and correctly did nothing, and the probe called that a
+    # failure to provide it.
+    #
+    # `status: "ok"` is about the PROBE having run, not about the package —
+    # `{status: ok, loads: false}` is an honest "I checked, it is not there" and
+    # must never count as proof. Key on `loads`, not on status.
     verdicts = [r for r in (cap.get("cap_results") or [])
                 if str(r.get("status") or "") in
-                ("ready", "provided_by_pack", "already_available")]
+                ("ready", "provided_by_pack", "already_available")
+                or r.get("loads") is True]
     row["platform_verdict"] = verdicts[0] if verdicts else None
     row["proof"] = ("executed" if ok else "asserted" if verdicts else "none")
     if not ok and not verdicts:
