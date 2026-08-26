@@ -40,6 +40,7 @@ orchestrator context.
 """
 from __future__ import annotations
 import argparse
+import re as _re
 import json
 import sys
 import time
@@ -190,6 +191,10 @@ def evaluate_shape(shape: str, expect: dict, runs_data: list[dict],
 
 
 # ---------- live driving ----------
+# the subject count the arming check reads back out of the report
+_OUTS_RE = _re.compile(r"outputs (\d+)")
+
+
 def _drive_shape(c, shape: str, spec: dict, timeout: float) -> tuple[list[str], list[str]]:
     pid = c.post("/api/projects", json={"name": f"live-probe-{shape}"}).json().get("id")
     c.post(f"/api/projects/{pid}/open")
@@ -303,9 +308,22 @@ def run(base: str, shapes: list[str], timeout: float) -> int:
     print("\n=== LIVE SURFACE PROBE ===", flush=True)
     for ln in report:
         print(ln, flush=True)
+    # ARM IT. "every produced output is advertised, unique, servable, and
+    # substrate-executed" is VACUOUSLY TRUE of zero outputs — a turn that
+    # answered in prose and ran nothing prints the strongest pass in the
+    # suite. Same class as the install gate that only asked for libraries the
+    # pack already had, and the audit that walked zero projects: a corpus
+    # drawn from what already works cannot fail. Count the subjects.
+    checked = sum(int(m.group(1)) for ln in report
+                  for m in [_OUTS_RE.search(ln)] if m)
+    if not all_fails and not checked:
+        print("UNARMED — the shapes drove turns but produced NO outputs, so "
+              "nothing was checked. A pass here would be a claim about an "
+              "empty set.", flush=True)
+        return 1
     if not all_fails:
-        print("PASS — every produced output is advertised, unique, servable, "
-              "and substrate-executed.", flush=True)
+        print(f"PASS — {checked} produced output(s): every one advertised, "
+              f"unique, servable, and substrate-executed.", flush=True)
         return 0
     print(f"FAIL — {len(all_fails)} surface defect(s):", flush=True)
     for f in all_fails:

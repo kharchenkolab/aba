@@ -666,6 +666,21 @@ def main() -> int:
     bad = [r for r in rows if r.get("verdict") in
            ("wasteful", "unavailable", "unverified", "unmeasured",
             "background_failed", "turn_failed", "instrument_fault", "error")]
+    # ARM IT. A gate called --install that only ever asks for libraries the
+    # pack already ships cannot install anything: every row comes back
+    # `ready_from_pack` and the run reports 46/46 having never executed the
+    # install path once. That is what shipped an environment with no C++
+    # compiler and no libxml2 headers — the two failures a single real install
+    # would have caught, past three green gates.
+    #
+    # So: unless the caller explicitly scoped to recognition
+    # (--pack-provided-only), the run MUST have exercised a real install.
+    installed_rows = [r for r in rows
+                      if r.get("verdict") in ("installed", "installed_session",
+                                              "wasteful")
+                      or (r.get("envs_created") or 0) > 0
+                      or (r.get("session_adds") or 0) > 0]
+    unarmed = (not a.pack_provided_only) and rows and not installed_rows
     _proof = {}
     for r in rows:
         _proof[r.get("proof", "?")] = _proof.get(r.get("proof", "?"), 0) + 1
@@ -683,7 +698,13 @@ def main() -> int:
     if slow:
         print(f"  SLOW (> {a.strict_seconds}s): "
               + ", ".join(f"{r['name']}={r['seconds']}s" for r in slow))
-    return 1 if (bad or slow) else 0
+    if unarmed:
+        print(f"  UNARMED: {len(rows)} package(s) checked and NOT ONE was "
+              f"installed — every request was already provided by the pack, "
+              f"so the install path never executed. This is not a pass. "
+              f"Widen the scope (drop --pack-provided-only) or say "
+              f"--pack-provided-only to gate recognition ONLY.")
+    return 1 if (bad or slow or unarmed) else 0
 
 
 if __name__ == "__main__":

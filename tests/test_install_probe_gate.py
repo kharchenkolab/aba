@@ -167,6 +167,56 @@ def test_turn_failed_gates_the_release():
         "turn_failed must be in the set that fails the gate")
 
 
+def test_a_run_that_installed_nothing_is_not_a_pass():
+    """The gate that could not fail.
+
+    `deploy.sh verify --install` passed `--pack-provided-only`: it asked only
+    for libraries the pack already ships, so every row came back
+    `ready_from_pack` and 46/46 read as a green install gate while the install
+    path had never executed once. Two defects walked straight through it — an
+    isolated env with no C++ compiler, and a cran toolchain with no libxml2
+    headers — and both were found by a user on the first real request.
+
+    A measured zero and an unmeasured zero look identical in a results table.
+    Scope that CAN install and installed nothing is unmeasured."""
+    src = (REPO / "regtest" / "harness" / "live_install_probe.py").read_text()
+    tail = src[src.index("    installed_rows = ["):]
+    assert "unarmed" in tail and "pack_provided_only" in tail
+    ret = src[src.index("    return 1 if ("):]
+    assert "unarmed" in ret[:80], (
+        "the arming check must GATE the exit code, not just print")
+
+
+def test_recognition_only_scope_is_still_allowed_to_install_nothing():
+    """WIDE: the other side. `--pack-provided-only` is a legitimate question —
+    'does the pack still recognise what it ships' — and zero installs is the
+    CORRECT answer there. Arming it would make the honest scope unusable."""
+    src = (REPO / "regtest" / "harness" / "live_install_probe.py").read_text()
+    line = [l for l in src.splitlines() if l.strip().startswith("unarmed = ")]
+    assert line and "not a.pack_provided_only" in line[0], line
+
+
+def test_the_shipped_gate_asks_for_something_the_pack_lacks():
+    """The arming check only bites if the DEFAULT scope can install. A default
+    of pack-provided-only would satisfy every assertion above and still test
+    nothing — which is exactly how this shipped."""
+    vsh = None
+    for cand in (REPO.parent / "aba-vbc" / "verify.sh",):
+        if cand.exists():
+            vsh = cand.read_text()
+    if vsh is None:
+        pytest.skip("aba-vbc checkout not alongside this one")
+    assert "--install) INSTALL=mixed" in vsh, (
+        "--install must default to a scope that installs")
+    mixed = [l for l in vsh.splitlines() if l.startswith("_MIXED_SET=")]
+    assert mixed, "no default corpus"
+    names = mixed[0].split('"')[1].split(",")
+    assert "scrublet" in names, (
+        "the corpus must include the sdist-build path — the one that failed "
+        "live with a missing g++")
+    assert len(names) >= 4
+
+
 def test_the_parser_accepts_the_event_names_the_server_actually_emits():
     """Pin the names against the probe that is known to work against a real
     server (live_surface_probe), so the two cannot drift apart again."""

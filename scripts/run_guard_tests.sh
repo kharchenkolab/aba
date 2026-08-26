@@ -19,6 +19,8 @@ PY="${PYTHON:-python3}"
 FILES=(
   # suite integrity: every test file gated, excluded-with-rationale, or legacy
   tests/test_suite_census.py
+  # the PROPERTY guard for the dominant instrument defect
+  tests/test_gates_are_armed.py
   # shared-agent-input guards (tool catalog / prompts / cache placement)
   tests/test_tool_conventions.py
   tests/test_tool_catalog_liveness.py
@@ -145,6 +147,8 @@ FILES=(
   backend/tests/test_project_delete_reclaims.py
   backend/tests/test_addition_records_its_repos.py
   backend/tests/test_orphan_reclaim.py
+  backend/tests/test_source_builds_have_a_toolchain.py
+  backend/tests/test_failures_name_their_cause.py
   # runtime translation
   tests/test_openai_runtime_translation.py
   tests/test_openai_runtime_skeleton.py
