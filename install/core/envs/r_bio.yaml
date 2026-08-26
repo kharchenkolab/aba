@@ -34,11 +34,26 @@ spec:
   # published pack — discovered 2026-08, long after shipping. Everything
   # `import_names` advertises must appear here (guarded by
   # tests/test_base_pack_completeness.py).
+  # This list is BOTH a build gate and the agent's recognition surface:
+  # `env_packs.packs_providing` reads it, so a library the pack ships but does
+  # not list here is one the agent cannot be told it already has — and will
+  # cheerfully rebuild into a private env. Measured 2026-08-26: the pack mounts
+  # 230 R libraries and advertised 20, and a live sweep caught seven requests
+  # building environments for things already mounted.
+  #
+  # The second group below was added from EVIDENCE, not intent: each was
+  # confirmed to load by requireNamespace against the published image. Two
+  # candidates the sweep reported as present (BPCells, SeuratWrappers) were
+  # checked the same way, came back absent, and are deliberately NOT here —
+  # which is also how the probe's "a clean exec is proof" bug was found.
   verify:
     loads: [Seurat, Matrix, igraph, irlba, dplyr, ggrepel, hdf5r, presto,
             BiocManager, biomaRt, SingleCellExperiment, DESeq2, edgeR, limma,
             GenomeInfoDb, GenomicRanges, SummarizedExperiment,
-            Rsamtools, Signac, apeglm]
+            Rsamtools, Signac, apeglm,
+            # verified present 2026-08-26 (requireNamespace, published image)
+            IRdisplay, RColorBrewer, cowplot, data.table, future, ggplot2,
+            patchwork, png, sctransform, tidyr, uwot, reticulate, scales]
   # bioconductor-genomeinfodbdata ships NO payload. The conda package is two
   # scripts totalling 127 bytes; its post-link.sh calls
   #     installBiocDataPackage.sh "genomeinfodbdata-1.2.13"
