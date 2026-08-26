@@ -114,7 +114,11 @@ describe('the rule above is the one useChat actually applies', () => {
 
   it('ends buffering on the server marker, not on a timer', () => {
     expect(src).toContain("ev.type === 'caught_up'")
-    const loop = src.slice(src.indexOf("if (ev.type === 'caught_up')"))
-    expect(loop.slice(0, 400)).toContain('replaying = false')
+    // read the BRANCH, not a byte window — a fixed-width slice fails the day
+    // someone adds a comment inside it, which is a test breaking on prose
+    const from = src.indexOf("if (ev.type === 'caught_up')")
+    const branch = src.slice(from, src.indexOf("} else if", from))
+    expect(branch).toContain('replaying = false')
+    expect(branch).not.toContain('setTimeout')
   })
 })
