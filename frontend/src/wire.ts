@@ -17,6 +17,12 @@ export interface ManifestEvent extends TurnEventBase {
   run_id: string;
 }
 
+/** Boundary between the REPLAYED backlog and live streaming on a reattach. A client rebuilding an in-flight turn folds the replayed events into state WITHOUT rendering them — replaying them visibly re-animates work the user already watched — and renders once when this arrives. `replayed` is how many events preceded it, so a reattach with an empty backlog costs no extra render. Emitted at the one place that knows the boundary (turn_sink.stream_from_sink); a timer cannot substitute, since a turn mid-install is legitimately silent for minutes. */
+export interface CaughtUpEvent extends TurnEventBase {
+  type: 'caught_up';
+  replayed: number;
+}
+
 /** A streamed chunk of assistant text. */
 export interface DeltaEvent extends TurnEventBase {
   type: 'delta';
@@ -211,6 +217,7 @@ export interface ConsoleEvent {
 /** Every event the per-turn chat stream can carry. */
 export type SSEEvent =
   | ManifestEvent
+  | CaughtUpEvent
   | DeltaEvent
   | ToolStartEvent
   | ToolProgressEvent

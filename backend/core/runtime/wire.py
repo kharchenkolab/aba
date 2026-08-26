@@ -62,6 +62,17 @@ EVENTS: dict[str, EventSpec] = {s.name: s for s in [
         "Turn-start drawer sidecar: the structured Manifest snapshot + the run_id "
         "the client needs for Stop/reattach.",
         {"manifest": "ManifestSnapshot", "run_id": "string"}),
+    _ev("caught_up", "turn",
+        "Boundary between the REPLAYED backlog and live streaming on a "
+        "reattach. A client rebuilding an in-flight turn folds the replayed "
+        "events into state WITHOUT rendering them — replaying them visibly "
+        "re-animates work the user already watched — and renders once when "
+        "this arrives. `replayed` is how many events preceded it, so a "
+        "reattach with an empty backlog costs no extra render. Emitted at the "
+        "one place that knows the boundary (turn_sink.stream_from_sink); a "
+        "timer cannot substitute, since a turn mid-install is legitimately "
+        "silent for minutes.",
+        {"replayed": "number"}),
     _ev("delta", "turn", "A streamed chunk of assistant text.",
         {"text": "string"}),
     _ev("tool_start", "turn",

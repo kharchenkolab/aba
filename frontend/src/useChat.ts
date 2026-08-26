@@ -477,6 +477,17 @@ export function useChat(
       if (opts.resumeRunId) { setPendingClarification(null); setPendingApproval(null) }
       const assistantId = `a-${Date.now()}`
       const streamingBlocks: Block[] = []
+      // CATCH-UP vs LIVE. Reattaching to a turn in flight rebuilds its state
+      // by replaying the event log — necessary, because mid-turn assistant
+      // output is not persisted anywhere else. Replaying it VISIBLY re-animates
+      // work already watched: switch into a thread and the tool it is running
+      // appears to start over. So during catch-up the handlers still fold every
+      // event into `streamingBlocks`, and `paint` simply does not render; the
+      // server's `caught_up` marker (turn_sink.stream_from_sink) ends the
+      // buffering deterministically — "quiet for a while" is not a boundary,
+      // since a turn mid-install is legitimately silent for minutes.
+      let replaying = !!opts.reattachRunId
+      const paint = (m: DisplayMessage | null) => { if (!replaying) setStreamMsg(m) }
       setStreamMsg({ id: assistantId, role: 'assistant', blocks: [] })
       const live = () => genRef.current === myGen   // false once the thread switched
 
@@ -593,6 +604,16 @@ export function useChat(
             // Observability Console: fold the event into the shared feed.
             noteTurnEvent(ev)
 
+            if (ev.type === 'caught_up') {
+              // End of the replayed backlog: render the rebuilt turn ONCE, in
+              // whatever state it is actually in, then stream live.
+              replaying = false
+              if (ev.replayed) {
+                setStreamMsg({ id: assistantId, role: 'assistant',
+                               blocks: [...streamingBlocks] })
+              }
+              continue
+            }
             if (ev.type === 'job_submitted') {
               // Jobs tab: upsert by id.
               const j = ev.job
@@ -616,13 +637,13 @@ export function useChat(
               } else {
                 streamingBlocks.push({ type: 'text', text: ev.text })
               }
-              setStreamMsg({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
+              paint({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
             } else if (ev.type === 'tool_start') {
               streamingBlocks.push({
                 type: 'tool_start', name: ev.name, input: ev.input,
                 tool_use_id: ev.tool_use_id,
               })
-              setStreamMsg({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
+              paint({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
             } else if (ev.type === 'tool_progress') {
               // Surface the live phase line on the running tool so a long
               // install/compile/download shows movement, not a dead spinner.
@@ -633,7 +654,7 @@ export function useChat(
                 : streamingBlocks[streamingBlocks.length - 1]
               if (target && target.type === 'tool_start') {
                 ;(target as { type: 'tool_start'; progress?: string }).progress = ev.message ?? undefined
-                setStreamMsg({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
+                paint({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
               }
             } else if (ev.type === 'tool_chunk') {
               // #334 Phase 1 — live-tail of run_python / run_r stdout/stderr
@@ -670,7 +691,7 @@ export function useChat(
                   }
                   t.liveElapsedS = ev.elapsed_s
                   t.lastChunkAt = Date.now()
-                  setStreamMsg({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
+                  paint({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
                 }
               }
             } else if (ev.type === 'tool_result') {
@@ -690,7 +711,7 @@ export function useChat(
                   })
                 }
               }
-              setStreamMsg({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
+              paint({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
             } else if (ev.type === 'plan') {
               // T2.5: forward all structured fields. Steps may be strings
               // (legacy / coerced) or PlanStepShape objects.
@@ -703,7 +724,7 @@ export function useChat(
                 steps: ev.steps,
                 concerns: ev.concerns,
               })
-              setStreamMsg({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
+              paint({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
             } else if (ev.type === 'deferred_tool_pending') {
               // Fix #5 — tool returned {deferred:true,job_id}. Clear the
               // spinner on its tool_start chip (turn is halted in
@@ -715,21 +736,21 @@ export function useChat(
               if (target && target.type === 'tool_start') {
                 ;(target as { type: 'tool_start'; deferred?: boolean; deferredJobId?: string }).deferred = true
                 ;(target as { type: 'tool_start'; deferredJobId?: string }).deferredJobId = ev.deferred_id
-                setStreamMsg({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
+                paint({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
               }
             } else if (ev.type === 'clarification_pending') {
               // B1 — Guide paused the turn on ask_clarification. Show the
               // question with an inline mini-composer; user's reply goes to
               // /api/turns/{run_id}/resume.
               streamingBlocks.push({ type: 'notice', text: `?  ${ev.question}` })
-              setStreamMsg({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
+              paint({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
               setPendingClarification({ runId: ev.run_id, question: ev.question, enable: ev.enable })
             } else if (ev.type === 'approval_pending') {
               // P1 #3 — a flagged tool wants explicit approval before running.
               // Rare by design; the ApprovalBar surfaces the tool name + a
               // short summary of what it's about to do.
               streamingBlocks.push({ type: 'notice', text: `Approve ${ev.tool_name}? ${ev.summary}` })
-              setStreamMsg({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
+              paint({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
               setPendingApproval({
                 runId: ev.run_id, toolName: ev.tool_name,
                 summary: ev.summary, policy: ev.policy ?? '',

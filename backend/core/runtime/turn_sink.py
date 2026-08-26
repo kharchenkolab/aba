@@ -456,8 +456,25 @@ async def stream_from_sink(sink: TurnSink, *, since: int = 0
         # If the client missed events older than the tail's start, those
         # are lost (until C-2's disk replay) — but the gap is visible
         # via the seq jump, so a reattach with since=0 is always safe.
+        _last = since
+        _n = 0
         for seq, payload in sink.replay_since(since):
+            _last, _n = seq, _n + 1
             yield _format(seq, payload)
+
+        # The REPLAY/LIVE boundary, named. A client reattaching to a turn in
+        # flight has to rebuild that turn's state from the event log, and the
+        # only honest way to do that is to replay it — but replaying it
+        # VISIBLY re-animates work the user already watched: switch into a
+        # thread and the tool it is running appears to start again. Buffering
+        # the catch-up needs a deterministic end, and "no events for a while"
+        # is not one (a turn mid-install is legitimately silent for minutes).
+        #
+        # Carries the last replayed seq so a client tracking lastSeq can apply
+        # it idempotently; `replayed` lets a client skip buffering entirely
+        # when there was nothing to catch up on.
+        from core.runtime import wire as _wire
+        yield _format(_last, _wire.caught_up(replayed=_n))
 
         # 2. Live-stream. Heartbeat on timeout to keep the connection
         # alive during quiet periods (e.g. mid-tool, no progress events).
