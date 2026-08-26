@@ -18,6 +18,21 @@ from pydantic import Field
 from core import config
 
 
+# Statuses that mean "the caller can use this package now" — the ONE list.
+#
+# `ready_isolated` (an auto-provisioned isolated env) is genuine readiness and
+# is the one most easily forgotten, because it is the only value that names HOW
+# rather than WHETHER. A second, shorter copy of this set in the install probe
+# failed a release on a scrublet install that had built, imported at rc=0, and
+# reported `ready_isolated` — the gate did not know the word (2026-08-26).
+#
+# Anything reading a per-package status imports this rather than restating it.
+READY_STATUSES = frozenset({
+    "ok", "ready", "reference", "available", "ready_isolated",
+    "provided_by_pack", "already_available",
+})
+
+
 def _why_not_ready(r: dict, limit: int = 220) -> str:
     """The REASON one package is not ready, not the category of reason.
 
@@ -374,8 +389,7 @@ def register_discovery_tools(mcp: FastMCP) -> None:
             # Several packages: ensure each; aggregate a per-package result list.
             # one ready-vocabulary (M5): ready_isolated (auto-isolated env)
             # and provided_by_pack are genuine readiness; 'deferred' is not
-            _READY = {"ok", "ready", "reference", "available",
-                      "ready_isolated", "provided_by_pack"}
+            _READY = READY_STATUSES
             results = [_impl({"name": n, **_env, **({"force": True} if force else {})}, ctx)
                        for n in names]
             not_ready = [r for r in results if r.get("status") not in _READY]

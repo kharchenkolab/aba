@@ -260,6 +260,31 @@ def running_build(c) -> dict:
         return {}
 
 
+def _ready_statuses() -> frozenset:
+    """The platform's OWN list of statuses meaning "usable now".
+
+    Imported, never restated. This probe carried a shorter copy — missing
+    `ready_isolated`, the status an auto-provisioned isolated env returns — and
+    failed a release on a scrublet install that had built, imported at rc=0,
+    and said `ready_isolated`. A gate with its own dialect of the product's
+    vocabulary reports on a product that does not exist.
+
+    The fallback is for a probe run against a tree whose backend is not
+    importable; it must stay a SUPERSET-shaped literal, not a shorter one."""
+    try:
+        import sys as _sys
+        _b = str(ROOT / "backend")
+        if _b not in _sys.path:
+            _sys.path.insert(0, _b)
+        from content.bio.mcp_servers.aba_core.tools.discovery import (
+            READY_STATUSES)
+        return frozenset(READY_STATUSES)
+    except Exception:  # noqa: BLE001
+        return frozenset({"ok", "ready", "reference", "available",
+                          "ready_isolated", "provided_by_pack",
+                          "already_available"})
+
+
 def _instrument_fault(cap: dict, executed: bool) -> str | None:
     """Is this probe BLIND rather than the deployment broken?
 
@@ -483,9 +508,14 @@ def probe_one(c, entry: dict, *, timeout: float, projects_dir: Path | None,
     # `status: "ok"` is about the PROBE having run, not about the package —
     # `{status: ok, loads: false}` is an honest "I checked, it is not there" and
     # must never count as proof. Key on `loads`, not on status.
+    # The SAME WORD means different things per tool: `ensure_capability`
+    # returning `ok` means the package is usable; `inspect_env` returning
+    # `{status: ok, loads: false}` means "I checked, it is NOT there". So the
+    # status vocabulary is only consulted for the capability tools, and a probe
+    # result is judged on `loads` alone.
     verdicts = [r for r in (cap.get("cap_results") or [])
-                if str(r.get("status") or "") in
-                ("ready", "provided_by_pack", "already_available")
+                if (r.get("tool") != "inspect_env"
+                    and str(r.get("status") or "") in _ready_statuses())
                 or r.get("loads") is True]
     row["platform_verdict"] = verdicts[0] if verdicts else None
     # PROOF MUST BE ABOUT THIS PACKAGE. An exec record only says that SOMETHING

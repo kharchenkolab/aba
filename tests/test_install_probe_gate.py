@@ -519,3 +519,43 @@ def test_assumed_is_reported_as_its_own_class():
     bad = src[src.index("    bad = [r for r in rows"):]
     bad = bad[:bad.index("]")]
     assert "assumed_from_pack" not in bad, "must not fail the gate"
+
+
+def test_the_probe_uses_the_PRODUCT_readiness_vocabulary():
+    """The gate must not speak its own dialect of the product's vocabulary.
+
+    This probe carried a private, shorter copy of the "usable now" statuses —
+    missing `ready_isolated`, which is what an auto-provisioned isolated env
+    returns. On 2026-08-26 it failed a release on a scrublet install that had
+    BUILT (weft's toolchain retry), IMPORTED at returncode 0, and reported
+    `ready_isolated`. Everything worked; the gate did not know the word.
+
+    A gate with its own copy of a vocabulary reports on a product that does not
+    exist. There is one owner now and the probe imports it.
+    """
+    sys.path.insert(0, str(REPO / "regtest" / "harness"))
+    import live_install_probe as lip
+    ready = lip._ready_statuses()
+    assert "ready_isolated" in ready, (
+        "an isolated-env install is genuine readiness — the status names HOW, "
+        "not WHETHER")
+    from content.bio.mcp_servers.aba_core.tools.discovery import READY_STATUSES
+    assert ready == frozenset(READY_STATUSES), (
+        "the probe's set has drifted from the product's")
+
+
+def test_the_probe_does_not_restate_the_vocabulary_inline():
+    """A literal list of statuses in the verdict filter is the copy that
+    drifted. The fallback literal is allowed — and must be a superset."""
+    src = (REPO / "regtest" / "harness" / "live_install_probe.py").read_text()
+    verdicts = src[src.index("    verdicts = [r for r in"):]
+    verdicts = verdicts[:verdicts.index("row[\"platform_verdict\"]")]
+    assert '"ready"' not in verdicts and '"provided_by_pack"' not in verdicts, (
+        f"the verdict filter restates statuses inline: {verdicts}")
+    assert "_ready_statuses()" in verdicts
+
+    from content.bio.mcp_servers.aba_core.tools.discovery import READY_STATUSES
+    fb = src[src.index("except Exception:  # noqa: BLE001\n        return frozenset({"):]
+    fb = fb[:fb.index("})")]
+    for st in READY_STATUSES:
+        assert st in fb, f"fallback is missing {st!r} — it must be a superset"
