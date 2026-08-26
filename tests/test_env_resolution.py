@@ -233,6 +233,10 @@ _POINTER_READERS = {
 # code must either take a resolved env from its caller or be argued in here.
 _DEFAULT_SESSION_CONSUMERS = {
     "core/compute/project_env.py": "self — the default-session manager",
+    "tests/test_source_builds_have_a_toolchain.py":
+        "a GUARD on project_env.install itself (that a cran install sends the "
+        "build_deps its source builds need) — it calls the default-session API "
+        "because that API is its subject, not because it resolves an env",
     "core/exec/env_integrity.py":
         "default arm after the resolve_env decision (package probe), plus "
         "multi-env reports (overview/layers enumerate every tier explicitly)",

@@ -240,6 +240,24 @@ _R_POST_INSTALL = [
 ]
 
 
+# Conda packages that make a SOURCE BUILD possible in an isolated env.
+#
+# weft ships compilers to the cran session lane via its own toolchain prefix
+# (`ensure_toolchain`), but an EnvSpec has no build-only layer — pixi/uv build
+# an sdist INSIDE the env, with only what the env declares. An env with no
+# compiler cannot build one, and roughly half of the scientific python stack
+# still ships sdists for something.
+#
+# Live 2026-08-26: a scrublet request died realizing its env with
+# `error: [Errno 2] No such file or directory: 'g++'` while building `annoy`.
+# It surfaced to the user as "env solve error" and the agent substituted a
+# wrapper library instead.
+#
+# Added ONLY when the env carries a pypi layer — a pure-conda env installs
+# prebuilt packages and pays nothing for this.
+_PY_BUILD_TOOLS = ("c-compiler", "cxx-compiler", "make", "pkg-config")
+
+
 def _spec_for(project_id: str, name: str, language: str,
               packages: list[str], python_version: Optional[str] = None,
               conda_packages: Optional[list[str]] = None) -> dict:
@@ -279,9 +297,12 @@ def _spec_for(project_id: str, name: str, language: str,
         return {"name": label, "channels": list(_ISO_CHANNELS), "deps": deps,
                 "post_install": list(_R_POST_INSTALL)}
     pyspec = f"python ={python_version}" if python_version else "python =3.12"
+    _pypi = list(packages)
+    _tools = list(_PY_BUILD_TOOLS) if _pypi else []
     return {"name": label, "channels": list(_ISO_CHANNELS),
-            "deps": {"conda": [pyspec, "ipykernel", *(conda_packages or [])],
-                     "pypi": list(packages)}}
+            "deps": {"conda": [pyspec, "ipykernel", *_tools,
+                               *(conda_packages or [])],
+                     "pypi": _pypi}}
 
 
 def create(project_id: str, name: str, *, language: str = "python",

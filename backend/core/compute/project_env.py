@@ -45,6 +45,25 @@ from core.compute.errors import ComputeError
 
 _ECOS = ("conda", "pypi", "cran")
 
+# Conda packages whose HEADERS/LIBS a source build needs, per ecosystem.
+#
+# weft's session toolchain ships the COMPILERS (c/cxx/fortran/make/pkg-config)
+# and nothing else; `session_install(build_deps=[...])` extends it with library
+# headers in a build-only prefix that never touches the base env. We had never
+# passed it, so every R package that configures against a system library failed
+# at build time with the library simply absent.
+#
+# Live 2026-08-26: `Cannot find xml2-config` → `configuration failed for
+# package 'XML'` → "installation of 8 packages failed", in one user request.
+# CRAN packages configure against these constantly; the toolchain prefix is
+# content-keyed on its package set and built once per site, so the cost is one
+# build, not one per install.
+_BUILD_DEPS = {
+    "cran": ["libxml2", "libcurl", "openssl", "zlib", "bzip2", "xz",
+             "libpng", "freetype", "fontconfig", "libjpeg-turbo", "icu",
+             "gsl", "hdf5", "libgit2"],
+}
+
 
 def _exe(language: str) -> str:
     return "Rscript" if language.lower() == "r" else "python"
@@ -555,10 +574,28 @@ def install(pid: str, language: str, specs: list[str], *,
             if _sh:
                 out["shadows_base"] = _sh[0] if len(_sh) == 1 else _sh
     else:
-        out = dict(named_envs._sync(
-            ad.session_install(s["session_id"], **{eco: list(specs)},
-                               **opts, **_fast_kw,
-                               **({"verify": _verify} if _verify else {}))) or {})
+        # build_deps rides on the ecosystem, not on the caller: every lane that
+        # installs cran (agent request, ranked lane, session rebuild replay)
+        # needs the same headers, and one that forgets is a build failure the
+        # user reads as "the package is broken".
+        _bd = dict(opts)
+        if eco in _BUILD_DEPS and "build_deps" not in _bd:
+            _bd["build_deps"] = list(_BUILD_DEPS[eco])
+        try:
+            out = dict(named_envs._sync(
+                ad.session_install(s["session_id"], **{eco: list(specs)},
+                                   **_bd, **_fast_kw,
+                                   **({"verify": _verify} if _verify else {}))) or {})
+        except TypeError:
+            # substrate predates build_deps — install without it rather than
+            # refusing (the old behaviour, which at least tries)
+            if "build_deps" not in _bd:
+                raise
+            _bd.pop("build_deps")
+            out = dict(named_envs._sync(
+                ad.session_install(s["session_id"], **{eco: list(specs)},
+                                   **_bd, **_fast_kw,
+                                   **({"verify": _verify} if _verify else {}))) or {})
     row = get(pid, language)
     row["additions"].append({"eco": eco, "specs": list(specs),
                              **({"opts": dict(opts)} if opts else {}),

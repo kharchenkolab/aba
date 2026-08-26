@@ -18,6 +18,45 @@ from pydantic import Field
 from core import config
 
 
+def _why_not_ready(r: dict, limit: int = 220) -> str:
+    """The REASON one package is not ready, not the category of reason.
+
+    Live 2026-08-26: a 447-second ensure_capability reported
+    `not ready: EnsDb.Hsapiens.v86(error), biovizBase(error)`. The actual cause
+    sat one layer down — `Cannot find xml2-config` → `configuration failed for
+    package 'XML'` → "installation of 8 packages failed" — and the agent, given
+    the six-character word "error", told the user "env solve error" and
+    substituted a different library.
+
+    The per-package result already carries the diagnosis (core.compute.errors
+    .describe renders weft's hints into it). The multi-name summary was
+    throwing it away. Status is kept as a prefix: it is the machine-readable
+    class, and it disambiguates `not_found` from a build failure at a glance.
+    """
+    status = str(r.get("status") or "?")
+    for key in ("note", "detail"):
+        val = str(r.get(key) or "").strip()
+        if val:
+            return f"{status} — {val[:limit]}"
+    err = r.get("error")
+    if isinstance(err, dict):
+        bits = [str(err[k]).strip() for k in ("error", "code", "detail")
+                if err.get(k)]
+        if bits:
+            return f"{status} — {' '.join(bits)[:limit]}"
+    elif err:
+        return f"{status} — {str(err)[:limit]}"
+    return status
+
+
+def _not_ready_note(not_ready: list) -> str:
+    """One line per package that did not become available, each naming its
+    cause. Semicolon-separated: a comma-joined list of sentences containing
+    commas is unreadable, and this line is what the agent acts on."""
+    return "not ready: " + "; ".join(
+        f"{r.get('name')}: {_why_not_ready(r)}" for r in not_ready)
+
+
 def register_discovery_tools(mcp: FastMCP) -> None:
     """Register the 10 discovery / search / fetch tools on `mcp`."""
 
@@ -343,8 +382,7 @@ def register_discovery_tools(mcp: FastMCP) -> None:
             out = {"status": "ok" if not not_ready else "partial",
                    "ensured": names, "results": results}
             if not_ready:
-                out["note"] = "not ready: " + ", ".join(
-                    f"{r.get('name')}({r.get('status')})" for r in not_ready)
+                out["note"] = _not_ready_note(not_ready)
             return out
 
     @mcp.tool()

@@ -83,7 +83,11 @@ def test_partial_status_when_one_not_ready():
         out = fn(["a", "b"])
     finally:
         restore()
-    assert out["status"] == "partial" and "b(not_found)" in out["note"], out
+    # The note used to be `b(not_found)` — a name and a status word. It now
+    # carries the CAUSE as well: a 447-second failure once reported
+    # `PKG(error)` and the agent, given the word "error", substituted a
+    # different library (backend/tests/test_failures_name_their_cause.py).
+    assert out["status"] == "partial" and "b: not_found" in out["note"], out
 
 
 if __name__ == "__main__":
