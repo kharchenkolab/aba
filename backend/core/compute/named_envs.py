@@ -240,22 +240,23 @@ _R_POST_INSTALL = [
 ]
 
 
-# Conda packages that make a SOURCE BUILD possible in an isolated env.
+# NOTE — deliberately NOT adding compilers here.
 #
-# weft ships compilers to the cran session lane via its own toolchain prefix
-# (`ensure_toolchain`), but an EnvSpec has no build-only layer — pixi/uv build
-# an sdist INSIDE the env, with only what the env declares. An env with no
-# compiler cannot build one, and roughly half of the scientific python stack
-# still ships sdists for something.
+# An isolated env whose pypi layer needs an sdist build once failed with
+# `error: [Errno 2] No such file or directory: 'g++'` (live 2026-08-26,
+# scrublet→annoy). The obvious fix — put `cxx-compiler` in deps.conda — is the
+# one weft explicitly DECLINED when we filed it (bug5 A2): compilers-in-deps
+# was only ever a workaround for a coverage gap on weft's side, deps.conda is
+# the honest home of RUNTIME libraries, and shipping a toolchain inside every
+# env inflates each EnvID for a build input the result does not need.
 #
-# Live 2026-08-26: a scrublet request died realizing its env with
-# `error: [Errno 2] No such file or directory: 'g++'` while building `annoy`.
-# It surfaced to the user as "env solve error" and the agent substituted a
-# wrapper library instead.
+# weft closed the gap instead: the full-prefix realize and all four session
+# pypi sites now retry ONCE with weft's own toolchain, gated on
+# env.realize_failed + a compile signature, so a solve or network failure never
+# pays for a toolchain build. Requires weft >= da84938.
 #
-# Added ONLY when the env carries a pypi layer — a pure-conda env installs
-# prebuilt packages and pays nothing for this.
-_PY_BUILD_TOOLS = ("c-compiler", "cxx-compiler", "make", "pkg-config")
+# If a package needs a linked LIBRARY at runtime (not a compiler), that is a
+# genuine dependency and belongs in conda_packages — passed by the caller.
 
 
 def _spec_for(project_id: str, name: str, language: str,
@@ -297,12 +298,9 @@ def _spec_for(project_id: str, name: str, language: str,
         return {"name": label, "channels": list(_ISO_CHANNELS), "deps": deps,
                 "post_install": list(_R_POST_INSTALL)}
     pyspec = f"python ={python_version}" if python_version else "python =3.12"
-    _pypi = list(packages)
-    _tools = list(_PY_BUILD_TOOLS) if _pypi else []
     return {"name": label, "channels": list(_ISO_CHANNELS),
-            "deps": {"conda": [pyspec, "ipykernel", *_tools,
-                               *(conda_packages or [])],
-                     "pypi": _pypi}}
+            "deps": {"conda": [pyspec, "ipykernel", *(conda_packages or [])],
+                     "pypi": list(packages)}}
 
 
 def create(project_id: str, name: str, *, language: str = "python",

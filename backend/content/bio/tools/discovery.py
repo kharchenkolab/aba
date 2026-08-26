@@ -1042,38 +1042,27 @@ def _cran_repo() -> str:
     return (os.getenv("ABA_CRAN_REPO") or "https://cloud.r-project.org").strip()
 
 
-def _r_conda_spelling(pkg: str, source: str) -> str:
-    """The CONDA name for an R package. conda-forge and bioconda spell R
-    packages `r-<lowercase>` and `bioconductor-<lowercase>`; the R world spells
-    them by their library name. One rule, one owner — see `_r_lane_request`."""
-    if pkg.startswith(("r-", "bioconductor-")):
-        return pkg
-    return (f"bioconductor-{pkg.lower()}" if source == "bioconductor"
-            else f"r-{pkg.lower()}")
-
-
 def _r_lane_request(pkg: str, source: str):
-    """One ranked-request entry: a bare name, or per-lane spellings when we
-    know better than the substrate's derivation.
+    """A ranked-request entry for an R package: the BARE name.
 
-    weft DOES derive dialects (`spec.lane_spelling`, gated on a verify
-    postcondition): an R name on the conda lane becomes `r-<lowercase>`. That
-    is right for CRAN and we leave it alone — a second implementation of a
-    derivation weft owns would be a split-brain, which its own docstring warns
-    against.
+    weft owns the dialect derivation (`spec.lane_spellings`) and, since bug5,
+    returns TWO candidates for a bare R name on the conda lane —
+    `r-<lowercase>` then `bioconductor-<lowercase>` — trying the second only on
+    a not-found miss. That closes the gap this function was written for: before
+    it, a Bioconductor ask derived `r-<name>`, missed conda by construction,
+    and fell through to the SOURCE-only cran lane.
 
-    It is WRONG for Bioconductor, and weft cannot fix that: bioconda spells
-    those `bioconductor-<lowercase>`, and nothing in a bare name says which
-    repository it came from. Only the caller knows. So `ComplexHeatmap`
-    derived to `r-complexheatmap`, missed the conda lane, and fell through to
-    the cran lane — which builds from SOURCE. Live 2026-08-26: eleven source
-    builds, ten minutes, then a failure, for packages conda ships prebuilt.
+    So we send bare names, deliberately. An explicit per-lane spelling is NOT
+    a safer superset: weft takes `cands = [ov] if ov else lane_spellings(...)`,
+    so an override SUPPRESSES the second candidate. Naming
+    `bioconductor-<x>` for something that actually lives on the CRAN mirror
+    would turn a working install into a miss — precisely the failure we were
+    trying to fix, with the sign flipped.
 
-    weft's own refusal names this lever: `per-lane spellings: {"name": "X",
-    "conda": "r-x"}`."""
-    if source != "bioconductor":
-        return pkg                       # weft's derivation is correct here
-    return {"name": pkg, "conda": _r_conda_spelling(pkg, source), "cran": pkg}
+    `source` is kept in the signature: it is the caller's fact, and the day a
+    lane needs it (a spelling weft genuinely cannot derive, e.g. a rename)
+    this is where it goes."""
+    return pkg
 
 
 def _bioc_repos() -> list:
@@ -1289,7 +1278,9 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
                               ("attempts", "verified", "resolved")
                               if _rk.get(k)}
             else:
-              conda_name = _r_conda_spelling(_pkg, _src)
+              conda_name = _pkg if _pkg.startswith(("r-", "bioconductor-")) else (
+                f"bioconductor-{_pkg.lower()}" if _src == "bioconductor"
+                else f"r-{_pkg.lower()}")
               try:
                 project_env.install(pid, "r", [conda_name], eco="conda",
                                     solve_at_add=True, verify=_vblock)

@@ -24,32 +24,39 @@ import pytest
 from core.compute import named_envs, project_env
 
 
-# ── isolated envs: carry the compiler ────────────────────────────────────────
+# ── isolated envs: do NOT carry a compiler ───────────────────────────────────
 
-def test_an_isolated_python_env_can_build_an_sdist():
+def test_an_isolated_python_env_ships_no_toolchain():
+    """We put `cxx-compiler` here after a scrublet install died on a missing
+    g++. weft DECLINED that shape when we filed it (bug5 A2): it was a
+    workaround for a coverage gap on their side, deps.conda is the honest home
+    of RUNTIME libraries, and a toolchain inside every env inflates each EnvID
+    for a build input the result never needs.
+
+    weft closed the gap instead — the full-prefix realize retries once with
+    weft's own toolchain, gated on a compile signature. So the env stays clean,
+    and this guard exists so nobody re-adds the workaround out of memory."""
     spec = named_envs._spec_for("prj", "e", "python", ["scrublet"])
     conda = spec["deps"]["conda"]
-    assert "cxx-compiler" in conda, (
-        "no C++ compiler: any pypi sdist fails with \"No such file or "
-        "directory: 'g++'\" — the live scrublet failure")
-    assert "c-compiler" in conda and "make" in conda and "pkg-config" in conda
+    assert not [p for p in conda if "compiler" in p or p == "make"], conda
+    assert spec["deps"]["pypi"] == ["scrublet"]
 
 
-def test_a_pure_conda_env_pays_nothing_for_it():
-    """WIDE: the other side. Prebuilt conda packages compile nothing, so the
-    toolchain would be dead weight in every such env."""
-    spec = named_envs._spec_for("prj", "e", "python", [],
-                                conda_packages=["numpy"])
-    assert "cxx-compiler" not in spec["deps"]["conda"]
-    assert spec["deps"]["pypi"] == []
-
-
-def test_the_python_version_pin_and_kernel_still_lead():
-    """DEGENERATE: the tools must not displace what the env is FOR."""
+def test_the_env_still_carries_what_it_is_FOR():
+    """WIDE: removing the toolchain must not disturb the interpreter pin or the
+    kernel package, which are the reasons an isolated env exists at all."""
     spec = named_envs._spec_for("prj", "e", "python", ["x"],
                                 python_version="3.10")
     conda = spec["deps"]["conda"]
     assert conda[0] == "python =3.10" and "ipykernel" in conda
+
+
+def test_a_caller_supplied_library_still_reaches_the_conda_layer():
+    """A linked library needed at RUNTIME is a genuine dependency and does
+    belong here — that is the distinction weft drew."""
+    spec = named_envs._spec_for("prj", "e", "python", ["h5py"],
+                                conda_packages=["hdf5"])
+    assert "hdf5" in spec["deps"]["conda"]
 
 
 # ── cran session installs: send build_deps ───────────────────────────────────
