@@ -66,7 +66,7 @@ LEGACY_CRAN_ADDITION = REDUNDANT_CRAN_ADDITION   # back-compat alias
 def _project(root: Path, pid: str, *, named_envs: int = 0,
              additions: "list | None" = None, snapshot: bool = False,
              entities: int = 0) -> None:
-    d = root / "projects" / pid
+    d = projects_dir(root) / pid
     for sub in ("artifacts", "data", "entities", "work"):
         (d / sub).mkdir(parents=True, exist_ok=True)
     (d / "TITLE.txt").write_text(f"fixture {pid}\n")
@@ -105,10 +105,24 @@ def _project(root: Path, pid: str, *, named_envs: int = 0,
     db.close()
 
 
+# The server reads projects from RUNTIME_DIR/projects, and RUNTIME_DIR defaults
+# to $ABA_HOME/runtime — not $ABA_HOME/projects. Seeding one directory up
+# produced a home the server could not see at all: three lived-in runs in a row
+# printed the banner, reported 33/33, and the surface audit said `audited 0
+# project(s)` in the same output. Derive the path from config rather than
+# guessing it; `test_lived_in_fixture` pins the derivation.
+_PROJECTS_REL = ("runtime", "projects")
+
+
+def projects_dir(home: Path) -> Path:
+    """Where THIS server will look for projects under `home`."""
+    return Path(home).joinpath(*_PROJECTS_REL)
+
+
 def build(home: Path) -> dict:
     """Create a lived-in ABA_HOME at `home`. Returns a summary of what it holds."""
     home = Path(home)
-    (home / "projects").mkdir(parents=True, exist_ok=True)
+    projects_dir(home).mkdir(parents=True, exist_ok=True)
 
     # The project that reproduces the incident: named envs from earlier
     # attempts, a recorded cran addition, a snapshot, and a stale base.
@@ -126,7 +140,7 @@ def build(home: Path) -> dict:
     # The on-disk tree is necessary and not sufficient; this is the sufficient
     # half, and `test_lived_in_fixture` asserts the registry agrees with disk.
     now = "2026-08-20T00:00:00Z"
-    (home / "projects" / "registry.json").write_text(json.dumps([
+    (projects_dir(home) / "registry.json").write_text(json.dumps([
         {"id": "prj_lived_in", "name": "lived in", "created_at": now,
          "last_touched": now},
         {"id": "prj_quiet", "name": "quiet", "created_at": now,

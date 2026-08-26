@@ -457,11 +457,31 @@ def probe_one(c, entry: dict, *, timeout: float, projects_dir: Path | None,
                 ("ready", "provided_by_pack", "already_available")
                 or r.get("loads") is True]
     row["platform_verdict"] = verdicts[0] if verdicts else None
-    row["proof"] = ("executed" if ok else "asserted" if verdicts else "none")
+    # PROOF MUST BE ABOUT THIS PACKAGE. An exec record only says that SOMETHING
+    # ran clean in the project — the agent explaining, in working R, that the
+    # library is unavailable produces one. Measured 2026-08-26: the sweep scored
+    # BPCells and SeuratWrappers `ready_from_pack` with `proof: executed`, and
+    # neither is in the pack; a direct requireNamespace against the published
+    # image says `absent` for both. Every "ready" count was inflated by however
+    # many of those there were.
+    #
+    # A package-specific signal is the platform's own verdict for THIS name
+    # (ensure_capability ready/provided_by_pack, or inspect_env loads=True).
+    # An exec alone now yields `unverified`: activity happened, availability was
+    # not established, and the two must not share a verdict.
+    row["proof"] = ("verified" if verdicts else "unverified" if ok else "none")
     if not ok and not verdicts:
         row["verdict"] = "unavailable"
         row["detail"] = ("neither an exec record nor a platform readiness verdict "
                          "for this request — " + exec_detail)
+        return row
+    if not verdicts:
+        # Something ran, but nothing said THIS package is available. Reporting
+        # that as success is how two packages the pack does not contain were
+        # counted as provided by it.
+        row["verdict"] = "unverified"
+        row["detail"] = ("work happened but no platform verdict names this "
+                         "package as available — " + exec_detail)
         return row
     if made is None:
         row["verdict"] = "unmeasured"
@@ -604,7 +624,7 @@ def main() -> int:
         by.setdefault(r.get("verdict", "?"), []).append(r["name"])
     print("\n== install probe summary ==")
     for v in ("ready_from_pack", "installed_session", "installed", "wasteful",
-              "unavailable",
+              "unverified", "unavailable",
               "unmeasured", "background_failed", "instrument_fault", "error"):
         if by.get(v):
             print(f"  {v:16s} {len(by[v]):3d}   {', '.join(sorted(by[v])[:12])}"
@@ -612,8 +632,8 @@ def main() -> int:
     slow = [r for r in rows if a.strict_seconds
             and (r.get("seconds") or 0) > a.strict_seconds]
     bad = [r for r in rows if r.get("verdict") in
-           ("wasteful", "unavailable", "unmeasured", "background_failed",
-            "instrument_fault", "error")]
+           ("wasteful", "unavailable", "unverified", "unmeasured",
+            "background_failed", "instrument_fault", "error")]
     _proof = {}
     for r in rows:
         _proof[r.get("proof", "?")] = _proof.get(r.get("proof", "?"), 0) + 1

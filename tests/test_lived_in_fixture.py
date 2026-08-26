@@ -35,7 +35,8 @@ def home(tmp_path):
 
 
 def _reg(home: Path, pid: str) -> dict:
-    return json.loads((home / "projects" / pid / "weft_envs.json").read_text())
+    from lived_in_home import projects_dir
+    return json.loads((projects_dir(home) / pid / "weft_envs.json").read_text())
 
 
 def test_the_project_has_a_past(home):
@@ -83,7 +84,8 @@ def test_the_recorded_addition_reproduces_the_incident_shape(home):
 def test_the_entity_graph_is_not_empty(home):
     """Several paths branch on 'is this a new project'. An empty db takes the
     new-project branch and silently tests the thing we are not testing."""
-    db = sqlite3.connect(home / "projects" / "prj_lived_in" / "project.db")
+    from lived_in_home import projects_dir
+    db = sqlite3.connect(projects_dir(home) / "prj_lived_in" / "project.db")
     n = db.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
     db.close()
     assert n >= 5, f"expected a populated graph, got {n} rows"
@@ -92,7 +94,8 @@ def test_the_entity_graph_is_not_empty(home):
 def test_the_home_holds_more_than_one_project(home):
     """Sweeps and audits iterate every project they find; a single-project home
     never exercises that."""
-    assert len({p.name for p in (home / "projects").iterdir()}) >= 2
+    from lived_in_home import projects_dir
+    assert len({p.name for p in projects_dir(home).iterdir()}) >= 2
 
 
 def test_a_fresh_home_would_fail_these_assertions(tmp_path):
@@ -101,7 +104,8 @@ def test_a_fresh_home_would_fail_these_assertions(tmp_path):
     If `mktemp -d` satisfied these, the fixture would be decoration and every
     gate built on it would be measuring nothing — which is precisely the state
     the fixture was written to end."""
-    (tmp_path / "projects" / "prj_lived_in").mkdir(parents=True)
+    from lived_in_home import projects_dir
+    (projects_dir(tmp_path) / "prj_lived_in").mkdir(parents=True)
     with pytest.raises(Exception):
         _reg(tmp_path, "prj_lived_in")
 
@@ -171,14 +175,40 @@ def test_the_projects_are_REGISTERED_not_merely_on_disk(home):
     printed "home SEEDED lived-in", and ran against a server that reported ZERO
     projects — the surface audit said so plainly (`audited 0 project(s)`) and
     both runs still reported a pass. Necessary is not sufficient."""
-    reg_path = home / "projects" / "registry.json"
+    from lived_in_home import projects_dir
+    reg_path = projects_dir(home) / "registry.json"
     assert reg_path.exists(), "no registry.json — the server will see no projects"
     reg = json.loads(reg_path.read_text())
     ids = {e["id"] for e in reg}
-    on_disk = {p.name for p in (home / "projects").iterdir()
+    on_disk = {p.name for p in projects_dir(home).iterdir()
                if p.is_dir() and p.name.startswith("prj_")}
     assert on_disk, "no project directories"
     assert on_disk <= ids, (
         f"on disk but unregistered (invisible to the server): {sorted(on_disk - ids)}")
     for e in reg:
         assert e.get("id") and e.get("name"), e
+
+
+def test_the_fixture_lands_where_the_SERVER_looks(tmp_path, monkeypatch):
+    """THE regression, and the reason three runs measured nothing.
+
+    `core.config.PROJECTS_DIR` is RUNTIME_DIR/projects and RUNTIME_DIR defaults
+    to $ABA_HOME/runtime. The fixture wrote $ABA_HOME/projects — one directory
+    up — so the server saw an empty home. Every run printed "home SEEDED
+    lived-in", reported 33/33, and said `audited 0 project(s)` in the same
+    output, and I read the first line rather than the third.
+
+    Derived, not asserted as a literal: if the server's layout moves, this
+    fails instead of the fixture silently going blind again."""
+    import sys as _sys
+    monkeypatch.setenv("ABA_HOME", str(tmp_path))
+    for k in ("ABA_RUNTIME_DIR", "ABA_PROJECTS_DIR"):
+        monkeypatch.delenv(k, raising=False)
+    for mod in [m for m in _sys.modules if m.startswith("core.")]:
+        _sys.modules.pop(mod, None)
+    _sys.path.insert(0, str(REPO / "backend"))
+    from core.config import PROJECTS_DIR
+    from lived_in_home import projects_dir
+    assert Path(PROJECTS_DIR).resolve() == projects_dir(tmp_path).resolve(), (
+        f"the fixture writes {projects_dir(tmp_path)} but the server reads "
+        f"{PROJECTS_DIR} — a home the server cannot see is not a fixture")

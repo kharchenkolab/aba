@@ -298,7 +298,7 @@ def test_a_real_load_probe_counts_as_proof(monkeypatch):
     row = lip.probe_one(_C(), {"name": "thing", "language": "r"},
                         timeout=1, projects_dir=None, pack_names={})
     assert row["verdict"] == "ready_from_pack", row
-    assert row["proof"] == "asserted", row
+    assert row["proof"] == "verified", row
 
 
 def test_a_probe_that_ran_and_found_nothing_is_not_proof(monkeypatch):
@@ -325,3 +325,62 @@ def test_a_probe_that_ran_and_found_nothing_is_not_proof(monkeypatch):
     row = lip.probe_one(_C(), {"name": "thing", "language": "r"},
                         timeout=1, projects_dir=None, pack_names={})
     assert row["verdict"] == "unavailable", row
+
+
+def _client():
+    class _C:
+        def post(self, path, **kw):
+            return type("R", (), {"status_code": 200,
+                                  "json": lambda _s: {"id": "p1"}})()
+
+        def get(self, path, **kw):
+            if path.startswith("/api/entities"):
+                return type("R", (), {"json": lambda _s: []})()
+            return type("R", (), {"json": lambda _s: {}})()
+    return _C()
+
+
+def test_a_clean_exec_alone_does_not_prove_the_package_is_there(monkeypatch):
+    """An exec record says SOMETHING ran, not that THIS package is available.
+
+    An agent explaining — in perfectly working R — that a library is not
+    available produces a clean exec record. The sweep scored `BPCells` and
+    `SeuratWrappers` as `ready_from_pack` on exactly that evidence; a direct
+    requireNamespace against the published image reports both `absent`. Every
+    "ready" total was inflated by however many of those there were, and the
+    inflation ran in the direction that flattered the result."""
+    import live_install_probe as lip
+    monkeypatch.setattr(lip, "_env_count", lambda d, p: (0, 0))
+    monkeypatch.setattr(lip, "_drive", lambda *a, **k: {
+        "run_id": "r1", "tools": ["run_r"], "errors": [], "text": [],
+        "jobs": [], "cap_results": [], "kinds": {"tool_start": 1}})
+    monkeypatch.setattr(lip, "_exec_ok", lambda c, p, r: (True, "1 clean exec"))
+    row = lip.probe_one(_client(), {"name": "thing", "language": "r"},
+                        timeout=1, projects_dir=None, pack_names={})
+    assert row["verdict"] == "unverified", row
+    assert row["proof"] == "unverified", row
+
+
+def test_a_package_specific_verdict_is_proof(monkeypatch):
+    """WIDE: the platform naming THIS package available still counts."""
+    import live_install_probe as lip
+    monkeypatch.setattr(lip, "_env_count", lambda d, p: (0, 0))
+    monkeypatch.setattr(lip, "_drive", lambda *a, **k: {
+        "run_id": "r1", "tools": ["ensure_capability"], "errors": [], "text": [],
+        "jobs": [], "cap_results": [{"status": "provided_by_pack"}],
+        "kinds": {"tool_start": 1}})
+    monkeypatch.setattr(lip, "_exec_ok", lambda c, p, r: (True, "1 clean exec"))
+    row = lip.probe_one(_client(), {"name": "thing", "language": "r"},
+                        timeout=1, projects_dir=None, pack_names={})
+    assert row["verdict"] == "ready_from_pack", row
+    assert row["proof"] == "verified", row
+
+
+def test_unverified_counts_as_a_failure_not_a_pass():
+    """ARMED: a new verdict that is not in the failure set is a new way to be
+    silently green."""
+    src = (REPO / "regtest" / "harness" / "live_install_probe.py").read_text()
+    bad = src[src.index("bad = [r for r in rows"):]
+    assert '"unverified"' in bad[:400], (
+        "the `unverified` verdict must be in the failure set, or it becomes a "
+        "quiet pass for 'we could not tell'")
