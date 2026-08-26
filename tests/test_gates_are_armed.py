@@ -84,8 +84,41 @@ def test_a_universal_pass_message_names_its_subject_count():
 def test_the_install_gate_default_scope_can_install():
     """The arming check only bites if the DEFAULT scope is capable of
     installing. `--install` defaulting to pack-provided-only satisfied every
-    structural check above and still tested nothing."""
-    vsh = REPO.parent / "aba-vbc" / "verify.sh"
-    if not vsh.exists():
+    structural check above and still tested nothing.
+
+    Checked at the ENTRY POINT the operator actually types. The first version
+    of this guard asserted on verify.sh alone and passed — while deploy.sh,
+    which is what `deploy.sh verify --install` runs, kept its OWN
+    `DO_INSTALL=pack` and forwarded `--install=pack`, taking verify.sh's
+    `--install=*` branch and bypassing the fixed default entirely. The gate
+    ran pack-provided-only for one more release with a green guard on it.
+    A guard that reads a file the shipped path does not use is decoration."""
+    vbc = REPO.parent / "aba-vbc"
+    if not (vbc / "verify.sh").exists():
         pytest.skip("aba-vbc checkout not alongside this one")
-    assert "--install) INSTALL=mixed" in vsh.read_text()
+    assert "--install) INSTALL=mixed" in (vbc / "verify.sh").read_text()
+
+    dsh = (vbc / "deploy.sh").read_text()
+    bare = [l for l in dsh.splitlines()
+            if l.strip().startswith("--install)")]
+    assert bare, "deploy.sh no longer parses a bare --install"
+    assert "pack" not in bare[0], (
+        f"deploy.sh pins its own install scope and overrides verify.sh's "
+        f"default: {bare[0].strip()}")
+
+
+def test_the_install_scope_has_exactly_one_owner():
+    """The defect was not the value, it was the SECOND copy of the decision.
+    Whatever the default becomes next, it must be decided in one place."""
+    vbc = REPO.parent / "aba-vbc"
+    if not (vbc / "verify.sh").exists():
+        pytest.skip("aba-vbc checkout not alongside this one")
+    owners = []
+    for name in ("verify.sh", "deploy.sh"):
+        for line in (vbc / name).read_text().splitlines():
+            t = line.strip()
+            if t.startswith("--install)") and "=" in t and "default" not in t:
+                owners.append(f"{name}: {t}")
+    assert len(owners) == 1, (
+        f"the bare --install default is decided in {len(owners)} places: "
+        f"{owners}")
