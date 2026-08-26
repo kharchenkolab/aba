@@ -112,7 +112,38 @@ function statusOf(result: unknown): string | undefined {
 // ── producers ────────────────────────────────────────────────────────────────
 
 /** Fold one per-turn SSE event into the feed. */
-export function noteTurnEvent(ev: SSEEvent): void {
+// Every turn event carries (run_id, seq). Reattaching to a live turn REPLAYS
+// its backlog — that is how the client rebuilds state that is persisted
+// nowhere else — so without a dedupe the Console re-logs the whole turn every
+// time you switch into the thread. Reported live 2026-08-26: "every time I
+// switch threads the log repeats entries".
+//
+// Deduping here rather than skipping the replay is deliberate: a client that
+// joins a turn mid-flight (a reload, a second tab) has never seen those events
+// and SHOULD log them. Only the second sighting of the same (run_id, seq) is
+// dropped. Bounded, so a long session cannot grow this without limit.
+const SEEN_CAP = 4000
+const seen = new Set<string>()
+
+function alreadyLogged(ev: SSEEvent, runId?: string | null): boolean {
+  const seq = (ev as { seq?: number }).seq
+  // the server stamps `seq` on every frame but `run_id` only on the manifest,
+  // so the CALLER supplies the run it is streaming
+  const run = runId || (ev as { run_id?: string }).run_id
+  if (typeof seq !== 'number' || !run) return false     // unkeyed: always log
+  const k = `${run}:${seq}`
+  if (seen.has(k)) return true
+  if (seen.size >= SEEN_CAP) {
+    // drop the oldest half — Sets iterate in insertion order
+    let n = 0
+    for (const old of seen) { seen.delete(old); if (++n >= SEEN_CAP / 2) break }
+  }
+  seen.add(k)
+  return false
+}
+
+export function noteTurnEvent(ev: SSEEvent, runId?: string | null): void {
+  if (alreadyLogged(ev, runId)) return
   const ts = Date.now()
   switch (ev.type) {
     case 'delta':

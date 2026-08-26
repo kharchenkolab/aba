@@ -602,7 +602,11 @@ export function useChat(
             }
 
             // Observability Console: fold the event into the shared feed.
-            noteTurnEvent(ev)
+            // The run id is passed EXPLICITLY: the server stamps seq on every
+            // frame but run_id only on the manifest, and the Console dedupes
+            // on (run, seq) so a reattach's replayed backlog does not re-log
+            // the whole turn every time you switch into the thread.
+            noteTurnEvent(ev, rid)
 
             if (ev.type === 'caught_up') {
               // End of the replayed backlog: render the rebuilt turn ONCE, in
