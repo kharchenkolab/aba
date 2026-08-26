@@ -61,11 +61,21 @@ def projects_rename(pid: str, req: ProjectRequest):
     return {"ok": True}
 
 
+@router.get("/api/projects/{pid}/delete-preview")
+def projects_delete_preview(pid: str) -> dict:
+    """What deleting this project would free, and what it would keep — the
+    consequence card's numbers (core.compute.reclaim.plan). Dry: touches
+    nothing, never raises on an offline substrate (unassessed envs come back
+    under `unknown`)."""
+    from core.compute import reclaim
+    return reclaim.plan(pid)
+
+
 @router.delete("/api/projects/{pid}")
 def projects_delete(pid: str):
     from core import projects
-    projects.delete_project(pid)
-    return {"current": projects.current()}
+    reclaimed = projects.delete_project(pid)
+    return {"current": projects.current(), "reclaimed": reclaimed}
 
 
 @router.get("/api/projects/{pid}/recovery-report")

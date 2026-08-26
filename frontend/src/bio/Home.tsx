@@ -18,6 +18,20 @@ import { home_tiles, card_order } from '../lib/homeTiles'
 import { ADVISORS_ENABLED } from '../lib/flags'
 import './Home.css'
 
+type DeletePreview = {
+  reclaimable_bytes?: number
+  rebuildable?: { name: string }[]
+  shared?: { name: string }[]
+  unknown?: { name: string }[]
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`
+}
+
 interface Project {
   id: string
   name: string
@@ -72,6 +86,10 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
   const [summary, setSummary] = useState<Summary | null>(null)
   const [busy, setBusy] = useState(false)
   const [modal, setModal] = useState<Modal>(null)
+  // The delete card's consequence numbers (GET .../delete-preview). Purely
+  // additive: the modal renders and works identically when this stays null,
+  // so an offline substrate never blocks a delete.
+  const [deletePreview, setDeletePreview] = useState<DeletePreview | null>(null)
   const [menuFor, setMenuFor] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   // Side rail starts capped at 5 most-recent projects so a populated
@@ -180,6 +198,17 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
       setModal(null); await load()
     } finally { setBusy(false) }
   }
+  useEffect(() => {
+    if (modal?.kind !== 'delete') { setDeletePreview(null); return }
+    let cancelled = false
+    const pid = modal.pid
+    fetch(`/api/projects/${encodeURIComponent(pid)}/delete-preview`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(p => { if (!cancelled) setDeletePreview(p) })
+      .catch(() => { /* the consequence line is an extra, never a blocker */ })
+    return () => { cancelled = true }
+  }, [modal])
+
   async function confirmDelete(pid: string) {
     setBusy(true)
     try {
@@ -478,6 +507,22 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
             <h2 className="modal__title">Delete “{modal.name}”?</h2>
             <p className="modal__body">This permanently removes the project and all of its
               datasets, analyses, figures, and findings. This can’t be undone.</p>
+            {deletePreview && (
+              <p className="modal__body">
+                {(deletePreview.rebuildable?.length ?? 0) > 0
+                  ? `Frees about ${formatBytes(deletePreview.reclaimable_bytes ?? 0)} `
+                    + `held by ${deletePreview.rebuildable!.length} `
+                    + `environment${deletePreview.rebuildable!.length === 1 ? '' : 's'} `
+                    + 'only this project uses.'
+                  : 'No environment storage to reclaim.'}
+                {(deletePreview.shared?.length ?? 0) > 0
+                  && ` ${deletePreview.shared!.length} shared with other projects `
+                     + `${deletePreview.shared!.length === 1 ? 'is' : 'are'} kept.`}
+                {(deletePreview.unknown?.length ?? 0) > 0
+                  && ` ${deletePreview.unknown!.length} could not be assessed `
+                     + '(compute unreachable) and will be left alone.'}
+              </p>
+            )}
             <div className="modal__actions">
               <button className="home__btn" disabled={busy} onClick={() => setModal(null)}>Cancel</button>
               <button className="home__btn home__btn--danger" disabled={busy}

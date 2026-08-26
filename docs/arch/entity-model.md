@@ -170,6 +170,9 @@ scope-tag flip with no byte movement yet. It is not substrate→entity promotion
 
 ## Deletion — dependents block, lineage doesn't
 
+(Deleting a whole **project** is a different verb with its own contract — what it
+reclaims, what it never touches — in [`envs.md` § Project deletion & reclaim](envs.md#project-deletion--reclaim).)
+
 Archive (`archive_entity`) is the default, reversible verb; hard delete
 (`DELETE /api/entities/{id}?hard=true`, `backend/main.py` `entities_delete`) is guarded by
 **edge semantics**, not edge existence. Every rel points source→target = "source builds on

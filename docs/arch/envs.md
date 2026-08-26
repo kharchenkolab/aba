@@ -256,6 +256,53 @@ is surfaced to the agent. Guarded by `tests/test_capability_install_conflict.py`
   realized on the node by weft; `slurm_entry` reads the activated env off `$CONDA_PREFIX`, so a
   cluster `module load` can't shadow the interpreter.
 
+## Project deletion & reclaim
+
+Deleting a project frees what only that project held, and nothing else. One owner:
+`core/compute/reclaim.py` (`plan` / `reclaim`), called by `core/projects.py::delete_project`
+and previewed by `GET /api/projects/{pid}/delete-preview`.
+
+Every resource a project touches falls in exactly one class:
+
+| class | what | on delete |
+|---|---|---|
+| **rebuildable** | the project's default session prefixes; its named/isolated env realizations | **reclaimed** — weft keeps the EnvID and the solved lock, so dropping the prefix is reclaim, not loss: it rebuilds cache-warm on next use |
+| **shared** | an `env_id` a surviving project's registry also names; any realization weft reports `read_only` (adopted from an institutional pack root) | **never touched**, whatever the bytes |
+| **valued** | retained run outputs, dataset homes, the project directory with its recovery archive and `weft_envs.json` | **never deleted**; reported so the delete card can say what survives |
+
+The rules that make it safe:
+
+- **Sessions stop before envs are evicted.** A live session holds its base env against
+  `env_evict` (weft raises `env.evict_blocked`), so the other order refuses on exactly the
+  envs worth reclaiming.
+- **EnvIDs are content-addressed, so a name is not an owner.** Two projects that asked for
+  the same packages hold the *same* id; evicting it for one steals the prefix from the other.
+  Sharing is decided by scanning the surviving projects' registries, never assumed.
+- **Can't-tell is never swept.** An unreadable project registry, an offline substrate, or an
+  env weft has no record of comes back under `unknown` — unassessed and untouched. An empty
+  survivor list would mean "nothing is shared, evict freely", which is the dangerous guess.
+- **Best-effort, never a blocker.** One refusing env, or a substrate that is down, does not
+  stop the delete or the other evictions; both are reported in `errors`.
+- **Bytes are apparent.** A realization's `bytes` is `du`: a prefix hardlinks most of its
+  blocks from the shared package cache, so the filesystem gives back less (measured ~2.4x
+  overstatement). The plan says so; the sweep reports what weft actually reclaimed.
+- **The valued rollup is only reported for the OPEN project.** `data_ledger`'s `project_id`
+  is decorative — the graph is already scoped to the active project's DB — so asking it about
+  a different project returns the current one's numbers with nothing to signal the swap. The
+  preview says the rollup is out of scope rather than printing someone else's total.
+
+Two safety floors live in weft, not here, and are relied on rather than re-implemented:
+`env_evict` **refuses** a read-only adopted realization ("not yours to evict") and **refuses**
+an env any live job/session/kernel is using. ABA classifies the read-only case first anyway,
+so a preview never promises bytes weft will refuse to give back.
+
+**What deleting does NOT do:** weft's own GC is a different mechanism and is not involved.
+`gc_plan`/`gc_sweep` list a realization only after `gc_idle_days` (default 14) of no use and
+never act without an explicit confirm — so before this lane existed, deleting a project
+reclaimed the two session prefixes and left every named/isolated env on disk indefinitely.
+The "Free up space" button (`POST /api/compute/sites/{name}/gc`) is that idle-gated GC, and
+still reports ~0 for envs used this week.
+
 ## GPU / accelerator (target hardware)
 
 A step's *hardware-variant* need (a CUDA build of torch vs the CPU build) is a distinct axis
@@ -356,6 +403,7 @@ the install-time probe can't run.
 | `core/compute/seeding.py` | managed-cluster catalog: `publish_base_packs` / `adopt_env_id` (published `image.sqfs` keyed by EnvID) |
 | `core/exec/verify.py` | the honest runtime probes: `verify_python_imports`, `gpu_capability_ok`, `torch_cuda_build` |
 | `core/exec/env_integrity.py` | read-only diagnostics (`env_overview`/`env_layers`/`python_package_status`), `ensure_sys_executable`, the Slurm shared-FS self-checks (`check_envs_dir_shared`/`check_base_dir_shared`) |
+| `core/compute/reclaim.py` | project deletion & disk reclaim: `plan` (dry consequence card) / `reclaim(confirm=True)`; the rebuildable / shared / valued classification, sessions-before-envs order, unassessed-is-untouched |
 | `core/modules/reconciler.py` · `manager.py` | disk reclaim via `env_evict(env_id, site)` (rebuild-from-lock), stop-kernel-less-holders-and-retry |
 | `core/exec/run.py` (`:44-72`) · `core/exec/kernels/weft.py` | run-lane interpreter selection (named / snapshot / base+session); the remote kernel platform re-lock |
 | `content/bio/tools/discovery.py` | agent surface: `ensure_capability` → `project_env.install` / `named_envs`, `propose_capability`, `search_bioconda`/`search_pypi` |

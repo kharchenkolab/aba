@@ -497,21 +497,27 @@ def set_project_model(pid: str, model: str) -> None:
     _emit_project_meta(pid)
 
 
-def delete_project(pid: str) -> None:
+def delete_project(pid: str) -> dict:
+    """Drop the project and reclaim what only it held; returns the reclaim
+    summary (see core.compute.reclaim)."""
     if _single():
-        return
+        return {}
     with _locked_registry() as reg:
         reg[:] = [p for p in reg if p["id"] != pid]
         survivors = list(reg)
-    # Free the project's live weft sessions before dropping the DB — otherwise
-    # the shared substrate leaks the deleted project's default-env prefixes (up
-    # to GBs each) with nothing left to reclaim them by name. Best-effort; the
+    # Free what this project alone holds, before dropping the DB — otherwise
+    # the shared substrate leaks its session prefixes AND its named/isolated
+    # envs (GBs each) with nothing left to reclaim them by name. One owner:
+    # core.compute.reclaim (docs/arch/envs.md § Project deletion & reclaim) —
+    # sessions stop first, then envs no surviving project names are evicted;
+    # shared and read-only-adopted envs are never touched. Best-effort; the
     # per-project dir + weft_envs.json intentionally STAY for recovery (I4).
+    reclaimed: dict = {}
     try:
-        from core.compute import project_env  # noqa: PLC0415
-        project_env.stop_all_sessions(pid)
-    except Exception:  # noqa: BLE001 — substrate wiring must never block delete
-        pass
+        from core.compute import reclaim as _reclaim  # noqa: PLC0415
+        reclaimed = _reclaim.reclaim(pid, confirm=True)
+    except Exception as e:  # noqa: BLE001 — substrate wiring never blocks delete
+        reclaimed = {"errors": [f"reclaim unavailable: {e}"]}
     f = _db_file(pid)
     if f.exists():
         f.unlink()
@@ -520,6 +526,7 @@ def delete_project(pid: str) -> None:
             set_current(survivors[-1]["id"])
         else:
             _park_scratch()       # true empty state — no phantom project
+    return reclaimed
 
 
 # ─── Recovery archive emit ────────────────────────────────────────────────

@@ -65,6 +65,7 @@ GET /api/notifications
 GET /api/projects
 GET /api/projects/current
 GET /api/projects/{pid}/data-ledger
+GET /api/projects/{pid}/delete-preview
 GET /api/projects/{pid}/recovery-report
 GET /api/runs/{rid}/archive
 GET /api/runs/{rid}/durable
