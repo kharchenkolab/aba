@@ -510,6 +510,25 @@ def probe_one(c, entry: dict, *, timeout: float, projects_dir: Path | None,
         # Something ran, but nothing said THIS package is available. Reporting
         # that as success is how two packages the pack does not contain were
         # counted as provided by it.
+        #
+        # ONE exception, and it is gated on a fact the agent cannot influence:
+        # a package the SHIPPED PACKS provide, which cost no env and no session
+        # addition, and whose turn ran clean. For a core library the agent
+        # reasonably skips ensure_capability and just imports it — numpy and
+        # pandas did exactly that, in 10 and 7 seconds, and failing a release
+        # for it is a false alarm. False alarms are how gates get ignored.
+        #
+        # `pack_provided` is computed from the packs on disk, not from anything
+        # the turn said, so an ABSENT package can never take this path — the
+        # BPCells/SeuratWrappers loophole stays shut. Still not "verified": the
+        # proof is circumstantial, and it is reported as its own class.
+        if row.get("pack_provided") and made == 0 and adds == 0:
+            row["verdict"] = "assumed_from_pack"
+            row["proof"] = "assumed"
+            row["detail"] = ("no platform verdict — the turn used it directly "
+                             "and it worked, at zero cost; the pack does ship "
+                             "it — " + exec_detail)
+            return row
         row["verdict"] = "unverified"
         row["detail"] = ("work happened but no platform verdict names this "
                          "package as available — " + exec_detail)
@@ -654,8 +673,8 @@ def main() -> int:
     for r in rows:
         by.setdefault(r.get("verdict", "?"), []).append(r["name"])
     print("\n== install probe summary ==")
-    for v in ("ready_from_pack", "installed_session", "installed", "wasteful",
-              "unverified", "unavailable",
+    for v in ("ready_from_pack", "assumed_from_pack", "installed_session",
+              "installed", "wasteful", "unverified", "unavailable",
               "unmeasured", "background_failed", "turn_failed",
               "instrument_fault", "error"):
         if by.get(v):

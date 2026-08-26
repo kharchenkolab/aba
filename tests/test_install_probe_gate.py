@@ -475,3 +475,47 @@ def test_unverified_counts_as_a_failure_not_a_pass():
     assert '"unverified"' in bad[:400], (
         "the `unverified` verdict must be in the failure set, or it becomes a "
         "quiet pass for 'we could not tell'")
+
+
+def test_a_core_library_used_directly_is_not_a_release_blocker():
+    """numpy and pandas failed the gate for not being ASKED about.
+
+    The agent skipped `ensure_capability` and just imported them — correct
+    behaviour for a core library, and it worked in 10 and 7 seconds at zero
+    cost. The probe scored both `unverified` and failed the release. A gate
+    that cries wolf on the product working correctly is a gate people learn to
+    override.
+    """
+    src = (REPO / "regtest" / "harness" / "live_install_probe.py").read_text()
+    blk = src[src.index('if not verdicts:'):]
+    blk = blk[:blk.index('row["verdict"] = "unverified"')]
+    assert 'row.get("pack_provided")' in blk, (
+        "the exception must be gated on the SHIPPED PACKS, not on anything "
+        "the turn said")
+    assert "made == 0" in blk and "adds == 0" in blk, (
+        "and on zero cost — an install that happened is not an assumption")
+
+
+def test_the_absent_package_loophole_stays_shut():
+    """WIDE, and the whole reason this is delicate. Two packages the pack does
+    NOT contain once scored `ready_from_pack` off a clean exec. The new class
+    must be unreachable for them: `pack_provided` is computed from the packs on
+    disk, so an absent package cannot enter it however the turn behaves."""
+    src = (REPO / "regtest" / "harness" / "live_install_probe.py").read_text()
+    assert '"assumed_from_pack"' in src
+    blk = src[src.index('if row.get("pack_provided") and made == 0'):]
+    blk = blk[:blk.index("return row")]
+    assert "assumed_from_pack" in blk and "verified" not in blk.replace(
+        '"assumed"', ''), "an assumption must never be reported as verified"
+
+
+def test_assumed_is_reported_as_its_own_class():
+    """It is not a pass and not a failure — it is a third thing, and it has to
+    be visible in the summary or it is just a silent downgrade."""
+    src = (REPO / "regtest" / "harness" / "live_install_probe.py").read_text()
+    order = src[src.index('for v in ("ready_from_pack"'):]
+    order = order[:order.index(")")]
+    assert "assumed_from_pack" in order, "absent from the printed summary"
+    bad = src[src.index("    bad = [r for r in rows"):]
+    bad = bad[:bad.index("]")]
+    assert "assumed_from_pack" not in bad, "must not fail the gate"
