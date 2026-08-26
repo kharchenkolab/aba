@@ -36,6 +36,13 @@ def main() -> int:
                     help="fast build-churn dir for netfs trees, e.g. /dev/shm/pubstage "
                          "(default: $ABA_WEFT_PUBLISH_STAGING)")
     ap.add_argument("--version", default=None, help="override the auto date+digest version")
+    ap.add_argument("--no-latest", action="store_true",
+                    help="publish the IMAGE and its catalog version WITHOUT moving "
+                         "the `latest` pointer. Consumers adopt `latest`, so a plain "
+                         "publish changes what the CURRENTLY DEPLOYED app resolves "
+                         "— before that app has been replaced. Publish --no-latest, "
+                         "promote the app, then flip: no moment exists where an app "
+                         "runs on packs it was not tested with.")
     args = ap.parse_args()
 
     import core.compute as cc
@@ -43,7 +50,8 @@ def main() -> int:
     from core.compute import seeding
 
     rows = seeding.publish_base_packs(site=args.site, tree=args.tree, packs=args.packs,
-                                      version=args.version, staging=args.staging)
+                                      version=args.version, staging=args.staging,
+                                      latest=not args.no_latest)
     ok = 0
     for r in rows:
         pub = r.get("published")
@@ -53,7 +61,8 @@ def main() -> int:
         print(f"  {'✓' if pub else '✗'} {r.get('pack'):16} {r.get('version','')}  "
               f"{mb:.0f} MB  staging={ (d.get('staging') or {}).get('used') }"
               + ("" if pub else f"  ERROR: {r.get('error') or r.get('detail')}"))
-    print(f"\n{ok}/{len(rows)} published to {args.tree}")
+    print(f"\n{ok}/{len(rows)} published to {args.tree}"
+          + ("  (latest pointer NOT moved)" if args.no_latest else ""))
     return 0 if ok == len(rows) and rows else 1
 
 

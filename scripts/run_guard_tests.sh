@@ -21,6 +21,7 @@ FILES=(
   tests/test_suite_census.py
   # the PROPERTY guard for the dominant instrument defect
   tests/test_gates_are_armed.py
+  tests/test_promote_moves_the_tested_pair.py
   # shared-agent-input guards (tool catalog / prompts / cache placement)
   tests/test_tool_conventions.py
   tests/test_tool_catalog_liveness.py

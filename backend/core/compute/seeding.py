@@ -44,6 +44,7 @@ def _version_for(spec: dict) -> str:
 def publish_base_packs(*, site: str, tree: str,
                        packs: Optional[list[str]] = None,
                        version: Optional[str] = None,
+                       latest: bool = True,
                        staging: Optional[str] = None) -> list[dict]:
     """Solve + publish every base-role pack (or the named subset) into the
     catalog `tree` on `site`. Idempotent per version (weft refuses duplicate
@@ -69,7 +70,8 @@ def publish_base_packs(*, site: str, tree: str,
             res = named_envs._sync(ad.env_ensure(spec))
             eid = res["env_id"]
             pub = named_envs._sync(ad.env_publish(eid, site, tree, name,
-                                                  version=ver, staging=staging))
+                                                  version=ver, staging=staging,
+                                                  latest=latest))
             rows.append({"pack": name, "env_id": eid, "version": ver,
                          "published": True, "detail": pub})
         except ComputeError as e:
