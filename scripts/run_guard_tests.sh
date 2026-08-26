@@ -142,6 +142,8 @@ FILES=(
   backend/tests/test_config_runtime_dir.py
   backend/tests/test_nextflow_weft_lane.py
   backend/tests/test_slurm_entry_activation.py
+  backend/tests/test_project_delete_reclaims.py
+  backend/tests/test_addition_records_its_repos.py
   # runtime translation
   tests/test_openai_runtime_translation.py
   tests/test_openai_runtime_skeleton.py

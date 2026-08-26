@@ -347,7 +347,20 @@ class WeftAdapter:
         self._weft.events_subscribe(callback)
 
     def close(self) -> None:
+        """Shut the doorway down: our worker pool AND weft's own background
+        machinery (site pollers). Closing only the pool left weft polling its
+        sites forever — each poll opening ssh sessions on the shared
+        ControlMaster — so a long-lived controller starved sshd's
+        MaxSessions over time. `Weft.close()` is idempotent and does not
+        interrupt in-flight async realizes; guarded by getattr because a
+        substrate predating the verb simply has no pollers to stop."""
         self._pool.shutdown(wait=False, cancel_futures=True)
+        try:
+            closer = getattr(self._weft, "close", None)
+            if callable(closer):
+                closer()
+        except Exception:  # noqa: BLE001 — shutdown must never raise
+            pass
 
 
 def _install_port_methods() -> None:
