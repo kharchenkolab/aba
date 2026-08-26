@@ -38,12 +38,31 @@ def test_promote_checks_pack_parity_before_moving_bytes():
 
 
 def test_the_refusal_is_fail_closed():
-    """A warning that scrolls past is how this shipped for a day. Drift stops
-    the promote."""
+    """A warning that scrolls past is how this shipped for a day.
+
+    TWO refusal tiers, and the distinction is load-bearing:
+      rc=2  the promote CANNOT complete (the pointer flip has no tool). Never
+            overridable — forcing past it lands the half-applied state.
+      rc=1  the packs differ. A judgement call an operator may override.
+    """
     s = _deploy()
-    blk = s[s.index("if ! check_pack_parity"):]
-    blk = blk[:blk.index("fi")]
-    assert "die " in blk, "drift must abort, not warn"
+    blk = s[s.index("check_pack_parity \"$STAGE_SHARE/envs\""):]
+    blk = blk[:blk.index("local vstamp")]
+    assert '"$_pp" = 2' in blk and "die " in blk, (
+        f"pre-flight failure must die unconditionally: {blk}")
+    # and the overridable tier still dies without --yes
+    assert "ASSUME_YES" in blk and blk.count("die ") >= 2, blk
+
+
+def test_the_unoverridable_tier_is_not_gated_on_yes():
+    """`--yes` skips CONFIRMATIONS. It must not skip a pre-flight that says the
+    next step cannot run — it did, and walked into the broken state."""
+    s = _deploy()
+    blk = s[s.index("check_pack_parity \"$STAGE_SHARE/envs\""):]
+    blk = blk[:blk.index("local vstamp")]
+    hard = blk[blk.index('"$_pp" = 2'):]
+    hard = hard[:hard.index("\n")]
+    assert "ASSUME_YES" not in hard, hard
 
 
 def test_the_refusal_names_the_fix_and_the_ORDERING():

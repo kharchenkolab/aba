@@ -129,14 +129,49 @@ def mirror_base_packs(*, site: str, src_tree: str, dest_tree: str,
         try:
             # identity first: adopt registers the SOURCE's env_id + lock
             eid = named_envs._sync(ad.env_adopt(site, src_tree, name))["env_id"]
+            # Carry the IMAGE across before publishing. weft's publish reuses an
+            # image already present at {tree}/envs/<env-id-hash> ("image is
+            # content-addressed and stays") and only rewrites the sidecars —
+            # which is what we want anyway, since sidecars must not carry the
+            # source tree's paths. Without this it re-runs mksquashfs, which
+            # costs ~700 MB of repackaging AND is simply absent in some
+            # environments (the release image has no /usr/sbin/mksquashfs).
+            # Local trees only: a remote destination goes through weft's own
+            # transfer plane, so leave that to publish.
+            _copied = _copy_image(src_tree, dest_tree, eid)
             pub = named_envs._sync(ad.env_publish(eid, site, dest_tree, name,
                                                   version=ver, staging=staging,
                                                   latest=latest))
             rows.append({"pack": name, "env_id": eid, "version": ver,
-                         "published": True, "detail": pub})
+                         "published": True, "image_copied": _copied,
+                         "detail": pub})
         except ComputeError as e:
             rows.append({"pack": name, "error": e.to_payload()})
     return rows
+
+
+def _copy_image(src_tree: str, dest_tree: str, env_id: str) -> bool:
+    """Copy a published image directory between two LOCAL catalog trees.
+
+    Returns True if it copied, False if the destination already had it or
+    either tree is not a local directory. Never raises: a failed copy just
+    means publish does the work the slow way."""
+    import shutil
+    from pathlib import Path as _P
+    try:
+        h = env_id.rsplit(":", 1)[-1]
+        src = _P(src_tree) / "envs" / h
+        dst = _P(dest_tree) / "envs" / h
+        if not src.is_dir() or dst.exists():
+            return False
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dst.with_name(dst.name + ".partial")
+        shutil.rmtree(tmp, ignore_errors=True)
+        shutil.copytree(src, tmp, symlinks=True)
+        tmp.rename(dst)          # atomic: a half-copied image never looks ready
+        return True
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def published_catalog(*, site: Optional[str] = None,
