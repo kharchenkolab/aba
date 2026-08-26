@@ -502,14 +502,26 @@ def test_r_lane_exhaustion_threads_attempts_and_gates_the_lecture(monkeypatch):
 
 def test_ready_set_counts_all_genuine_ready_statuses():
     """M5: ready_isolated / provided_by_pack are genuine readiness — omitting
-    them made batch results report 'partial' with a misleading note."""
+    them made batch results report 'partial' with a misleading note.
+
+    Asserted against the VALUE, not a grep of the literal: the set became a
+    module constant (READY_STATUSES) when a second, shorter copy in the install
+    probe failed a release on a working `ready_isolated` install. A source-grep
+    guard reads whichever copy it happens to point at."""
+    from content.bio.mcp_servers.aba_core.tools.discovery import READY_STATUSES
+    for status in ("ready_isolated", "provided_by_pack"):
+        assert status in READY_STATUSES, f"{status!r} missing from the ready-set"
+    assert "deferred" not in READY_STATUSES, (
+        "deferred promises nothing — not ready")
+
+
+def test_the_ready_set_has_exactly_one_definition():
+    """The copy that drifted was a second definition, not a wrong value."""
     import inspect
     from content.bio.mcp_servers.aba_core.tools import discovery as mcp_disc
     src = inspect.getsource(mcp_disc)
-    rs = src.split("_READY = ")[1].split("}")[0]
-    for status in ("ready_isolated", "provided_by_pack"):
-        assert status in rs, f"{status!r} missing from the ready-set"
-    assert "deferred" not in rs, "deferred promises nothing — not ready"
+    assert src.count("READY_STATUSES = frozenset") == 1
+    assert "_READY = {" not in src, "the inline literal is back"
 
 
 def test_error_results_carry_typed_attempts_when_available(monkeypatch):
