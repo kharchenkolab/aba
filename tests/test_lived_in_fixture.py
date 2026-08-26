@@ -232,3 +232,21 @@ def test_the_project_db_uses_the_REAL_schema(home):
     ws = db.execute("SELECT COUNT(*) FROM entities WHERE id='workspace'").fetchone()[0]
     db.close()
     assert ws == 1, "the bootstrapped workspace row is missing"
+
+
+def test_the_install_gate_defaults_to_the_lived_in_home():
+    """A default that has to be remembered is not a default.
+
+    Three defects on 2026-08-26 were reachable only from accumulated state, and
+    every gate until then ran on a `mktemp -d` home with one empty project. If
+    the harder shape is opt-in, the next person to run the gate in a hurry gets
+    the easy one and a green result. A first-ever install on an empty home is
+    still a real shape worth testing — it just has to be ASKED for."""
+    v = REPO.parent / "aba-vbc" / "verify.sh"
+    if not v.exists():
+        pytest.skip("aba-vbc checkout not present")
+    src = v.read_text()
+    assert '[ -n "$INSTALL" ] && [ -z "$LIVED_IN" ] && LIVED_IN=1' in src, (
+        "--install must default to the lived-in home")
+    assert "--fresh-home" in src, (
+        "the empty-home shape must remain reachable, explicitly")
