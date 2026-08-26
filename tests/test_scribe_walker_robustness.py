@@ -250,7 +250,16 @@ def test_kill_during_mutations_then_recover():
     # We don't know exactly how many landed (it's the whole point of the
     # smoke). Assert: recovery succeeded, at least SOME entities landed,
     # every edge references known entities (no orphans).
-    assert report.entities >= 5, f"expected ≥5 entities recovered, got {report.entities}"
+    #
+    # The counts here used to be 5 and 6 — a hard number for how many mutations
+    # happen to land in the 0.3s before SIGKILL, which is precisely the quantity
+    # the comment above says is unknowable. It held on an idle box and failed
+    # under load: the CI guard suite runs files in PARALLEL, fewer mutations
+    # landed, and a green-in-isolation test went red in the suite (2026-08-26).
+    # A flaky guard is worse than a missing one — this repo has already lost ten
+    # days to red CI hiding a real drift — so assert the invariant instead of
+    # the timing: whatever landed must be fully and consistently recovered.
+    assert report.entities >= 1, f"nothing recovered at all: {report.entities}"
     # Referential check
     db = sqlite3.connect(pdir / "project.db")
     eids = {r[0] for r in db.execute("SELECT id FROM entities").fetchall()}
@@ -260,9 +269,13 @@ def test_kill_during_mutations_then_recover():
         "   OR target_id NOT IN (SELECT id FROM entities)"
     ).fetchall()
     db.close()
-    # Note: imported scratch always has workspace bootstrapped, but we expect
-    # at least 5 analysis rows + workspace = 6
-    assert len(eids) >= 6, f"expected ≥6 rows incl workspace, got {len(eids)}"
+    # The DB must contain everything the report claims to have recovered (plus
+    # the bootstrapped workspace row). This is the timing-independent form of
+    # the old row count, and a stronger claim: it catches a report that
+    # overstates what it rebuilt, which a fixed threshold never could.
+    assert len(eids) >= report.entities, (
+        f"recovery reported {report.entities} entities but the DB holds "
+        f"{len(eids)} rows ({sorted(eids)}) — the report overstates the rebuild")
     # No orphan edges (this run produced no edges so trivially true; but
     # the check stays in place to catch future-regression).
     assert orphan == [], f"orphan edges found post-recover: {orphan}"
