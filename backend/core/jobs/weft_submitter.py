@@ -46,11 +46,27 @@ _ABA_LEVERS = {
         "make_isolated_env(name='<name>', language='python'|'r', packages=[...]) "
         "— then submit with env='<name>'; an isolated env re-locks for the "
         "site's platform automatically. (The project's DEFAULT env does not.)",
-    "env.solve_conflict":
+    "env.solve_conflict": lambda hints: (
+        # The generic lever ("build an isolated env") is right for a genuine
+        # PIN conflict and actively harmful for a name the repo set does not
+        # carry: a fresh env re-solves against the same repos and fails
+        # identically, so the agent retries and mints another. That is the
+        # retry-by-new-env mechanism — one live project accumulated FOUR envs
+        # for one library. weft distinguishes the two in its hints
+        # (ecosystem + missing); the lever must too.
+        "the R package name is not in this environment's repository set: "
+        f"{', '.join(str(m) for m in (hints.get('missing') or [])[:8])}. "
+        "Do NOT build another isolated env — a new env solves against the "
+        "same repositories and fails the same way. Check the spelling "
+        "(CRAN names are case-sensitive), or ask for the conda spelling "
+        "instead: r-<name> for a CRAN package, bioconductor-<name> for a "
+        "Bioconductor one."
+        if (hints.get("ecosystem") == "cran" and hints.get("missing"))
+        else
         "the environment could not be solved as pinned. Put the conflicting "
         "package in an isolated env (make_isolated_env) rather than the "
         "project's default session, which must stay solvable for every other "
-        "remote step.",
+        "remote step."),
     # The substrate's own hints here are correct and useless TO AN AGENT: both
     # levers (a pack `post_install` step, or the site's post_link policy) are
     # edits to deployment configuration that no agent can make. Left to fall
@@ -101,11 +117,20 @@ def _typed_task_error(raw) -> Optional[str]:
     # "env_ensure again" points at a verb it cannot call, so a correct diagnosis
     # still dead-ends. Observed live — the agent read the platform_mismatch
     # correctly and then had no action available to it.
+    hints = payload.get("hints")
+    if not isinstance(hints, dict):
+        hints = {}
     aba_lever = _ABA_LEVERS.get(str(code))
+    if callable(aba_lever):
+        # a code whose right advice depends on WHICH failure it is (see
+        # env.solve_conflict): the lever reads the substrate's own hints
+        try:
+            aba_lever = aba_lever(hints)
+        except Exception:  # noqa: BLE001 — a lever must never eat the error
+            aba_lever = None
     if aba_lever:
         return f"{msg} Fix: {aba_lever}"
-    hints = payload.get("hints")
-    if isinstance(hints, dict):
+    if hints:
         # no aba lever for this code → the substrate's own hint is the best
         # available, even if it speaks weft's vocabulary
         for key in ("suggestion", "fix", "remedy", "levers"):

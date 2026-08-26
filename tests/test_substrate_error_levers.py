@@ -1,4 +1,4 @@
-"""Two new substrate refusals, rendered as levers an AGENT can actually pull.
+"""Substrate refusals, rendered as levers an AGENT can actually pull.
 
 The substrate upgraded under us on 2026-08-25 (a floating WEFT_REF), bringing
 two refusals that did not exist when this mapping was written:
@@ -50,6 +50,44 @@ def test_activation_failure_is_not_blamed_on_the_analysis():
     infrastructure fault."""
     msg = _render("env.activation_failed").lower()
     assert "not your code" in msg or "infrastructure" in msg, msg
+
+
+def test_a_cran_name_miss_is_not_answered_with_another_env():
+    """`env.solve_conflict` carries TWO different failures. For a genuine pin
+    conflict "build an isolated env" is right. For a name the repository set
+    does not carry it is actively harmful: the new env solves against the same
+    repos and fails identically, so the agent retries and mints another. That
+    is the retry-by-new-env mechanism — one live project accumulated four envs
+    for one library and ~3.3 GB before anyone looked."""
+    msg = _render("env.solve_conflict",
+                  hints={"ecosystem": "cran", "missing": ["DESeq2"],
+                         "snapshot": "2026-08-05"})
+    low = msg.lower()
+    assert "deseq2" in low, "the lever must name the package that was missed"
+    assert "not build another" in low or "do not build" in low, msg
+    assert "bioconductor-" in low and "r-<name>" in low, (
+        "the reachable lever is the conda spelling")
+
+
+def test_a_real_pin_conflict_still_gets_the_isolated_env_lever():
+    """WIDE: the other side of the same code. An ecosystem-less conflict, and
+    a cran conflict with no missing names, both keep the original advice."""
+    for hints in ({}, {"ecosystem": "cran"}, {"missing": []},
+                  {"ecosystem": "conda", "missing": ["numpy"]}):
+        msg = _render("env.solve_conflict", hints=hints).lower()
+        assert "make_isolated_env" in msg, (hints, msg)
+
+
+def test_a_lever_that_raises_never_eats_the_error(monkeypatch):
+    """DEGENERATE: a hint-aware lever is code, and code can throw. The
+    substrate's diagnosis must still reach the agent."""
+    from core.jobs import weft_submitter as ws
+
+    def _boom(hints):
+        raise KeyError("bad lever")
+    monkeypatch.setitem(ws._ABA_LEVERS, "env.solve_conflict", _boom)
+    msg = _render("env.solve_conflict", detail="the substrate said this")
+    assert "the substrate said this" in msg, msg
 
 
 def test_unmapped_codes_still_use_the_substrate_hint():
