@@ -614,10 +614,23 @@ def ensure_ranked(pid: str, language: str, names: list[str], *,
         for a in _landed:
             eco = a.get("lane")
             if eco in _ECOS:
+                # The REPO SET is part of what happened, not a call detail: a
+                # cran addition solved against the Bioconductor repos resolves
+                # only against those repos. Recorded without them, the replay
+                # on the next base change re-solves against the base's CRAN
+                # snapshot alone and cannot find the package — weft answers
+                # `cran_no_candidates`, whose r_repositories lever names
+                # exactly this. The session then fails at realize for EVERY r
+                # call, from an addition that installed fine when it was made.
+                # (Live 2026-08-26, prj_c30313c2.) Only the cran lane consumes
+                # cran_repos; other lanes record none.
+                _opts = ({"cran_repos": list(cran_repos)}
+                         if cran_repos and eco == "cran" else {})
                 row["additions"].append(
                     {"eco": eco,
                      "specs": [a.get("spelling") or a.get("package")
                                or (names[0] if names else "")],
+                     **({"opts": _opts} if _opts else {}),
                      **({"verify": dict(verify)} if verify else {}),
                      "at": time.time()})
         row["rev"] = int(row.get("rev") or 0) + 1
