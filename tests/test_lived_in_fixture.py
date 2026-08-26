@@ -161,3 +161,24 @@ def test_an_unopenable_project_is_an_error_not_a_fresh_one(monkeypatch):
                         projects_dir=None, pack_names={}, project="prj_missing")
     assert row["verdict"] == "error", row
     assert "refusing to fall back" in row["detail"], row
+
+
+def test_the_projects_are_REGISTERED_not_merely_on_disk(home):
+    """A project the server cannot see is a directory, not a fixture.
+
+    `core.projects.list_projects` reads `projects/registry.json`; it does not
+    scan the filesystem. The first two lived-in runs wrote the directories,
+    printed "home SEEDED lived-in", and ran against a server that reported ZERO
+    projects — the surface audit said so plainly (`audited 0 project(s)`) and
+    both runs still reported a pass. Necessary is not sufficient."""
+    reg_path = home / "projects" / "registry.json"
+    assert reg_path.exists(), "no registry.json — the server will see no projects"
+    reg = json.loads(reg_path.read_text())
+    ids = {e["id"] for e in reg}
+    on_disk = {p.name for p in (home / "projects").iterdir()
+               if p.is_dir() and p.name.startswith("prj_")}
+    assert on_disk, "no project directories"
+    assert on_disk <= ids, (
+        f"on disk but unregistered (invisible to the server): {sorted(on_disk - ids)}")
+    for e in reg:
+        assert e.get("id") and e.get("name"), e

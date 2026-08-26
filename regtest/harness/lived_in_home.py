@@ -119,6 +119,20 @@ def build(home: Path) -> dict:
     # iterate every project they find.
     _project(home, "prj_quiet", named_envs=0, entities=1)
 
+    # REGISTER them. A project the server cannot see is not a fixture, it is a
+    # directory. `core.projects` lists from `projects/registry.json`, NOT from
+    # what is on disk — so the first two lived-in runs seeded the home, printed
+    # the banner, and ran against a server reporting ZERO projects. Both passed.
+    # The on-disk tree is necessary and not sufficient; this is the sufficient
+    # half, and `test_lived_in_fixture` asserts the registry agrees with disk.
+    now = "2026-08-20T00:00:00Z"
+    (home / "projects" / "registry.json").write_text(json.dumps([
+        {"id": "prj_lived_in", "name": "lived in", "created_at": now,
+         "last_touched": now},
+        {"id": "prj_quiet", "name": "quiet", "created_at": now,
+         "last_touched": now},
+    ], indent=2))
+
     return {
         "home": str(home),
         "projects": 2,
