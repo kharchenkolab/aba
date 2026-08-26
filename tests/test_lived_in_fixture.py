@@ -93,3 +93,60 @@ def test_a_fresh_home_would_fail_these_assertions(tmp_path):
     (tmp_path / "projects" / "prj_lived_in").mkdir(parents=True)
     with pytest.raises(Exception):
         _reg(tmp_path, "prj_lived_in")
+
+
+def test_the_probe_can_run_inside_an_existing_project(monkeypatch):
+    """Seeding a lived-in home is worthless if the probe still mints a fresh
+    project per package.
+
+    That is exactly what happened on the first lived-in run: the home was
+    seeded, the banner said so, the gate reported 33/33 — and every package had
+    been tested in a brand-new project created three seconds earlier. The
+    fixture was decoration, one layer above the armed guard written to stop
+    fixtures being decoration."""
+    sys.path.insert(0, str(REPO / "regtest" / "harness"))
+    import live_install_probe as lip
+
+    created = []
+
+    class _C:
+        def post(self, path, **kw):
+            created.append(path)
+            return type("R", (), {"status_code": 200,
+                                  "json": lambda _s: {"id": "thr_x"}})()
+
+        def get(self, path, **kw):
+            if path.startswith("/api/entities"):
+                return type("R", (), {"json": lambda _s: []})()
+            return type("R", (), {"json": lambda _s: {}})()
+
+    monkeypatch.setattr(lip, "_env_count", lambda d, p: (0, 0))
+    monkeypatch.setattr(lip, "_drive", lambda *a, **k: {
+        "run_id": "r1", "tools": ["ensure_capability"], "errors": [], "text": [],
+        "jobs": [], "cap_results": [{"status": "ready"}], "kinds": {"tool_start": 1}})
+
+    lip.probe_one(_C(), {"name": "thing", "language": "r"}, timeout=1,
+                  projects_dir=None, pack_names={}, project="prj_lived_in")
+    assert not any(p == "/api/projects" for p in created), (
+        "with --project set, the probe must NOT create a project: " + str(created))
+    assert "/api/projects/prj_lived_in/open" in created, created
+
+
+def test_an_unopenable_project_is_an_error_not_a_fresh_one(monkeypatch):
+    """ARMED: falling back to a new project would turn 'we tested accumulated
+    state' into 'we tested nothing' and report it as a pass."""
+    sys.path.insert(0, str(REPO / "regtest" / "harness"))
+    import live_install_probe as lip
+
+    class _C:
+        def post(self, path, **kw):
+            return type("R", (), {"status_code": 404,
+                                  "json": lambda _s: {}})()
+
+        def get(self, path, **kw):
+            return type("R", (), {"json": lambda _s: {}})()
+
+    row = lip.probe_one(_C(), {"name": "thing", "language": "r"}, timeout=1,
+                        projects_dir=None, pack_names={}, project="prj_missing")
+    assert row["verdict"] == "error", row
+    assert "refusing to fall back" in row["detail"], row

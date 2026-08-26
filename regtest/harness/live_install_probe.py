@@ -303,14 +303,36 @@ def _exec_ok(c, pid: str, run_ids: list[str]) -> tuple[bool, str]:
 
 def probe_one(c, entry: dict, *, timeout: float, projects_dir: Path | None,
               pack_names, background: bool = False,
-              job_timeout: float = 900.0, build: dict | None = None) -> dict:
+              job_timeout: float = 900.0, build: dict | None = None,
+              project: str | None = None) -> dict:
     name = entry["name"]
     entry = {**entry, **(build or {})}          # every row says which build produced it
     slug = "".join(ch if ch.isalnum() else "-" for ch in name).lower()[:40]
     # One bad entry must not end a 100+ package sweep: record and move on.
     try:
-        pid = c.post("/api/projects", json={"name": f"install-{slug}"}).json().get("id")
-        c.post(f"/api/projects/{pid}/open")
+        if project:
+            # Run INSIDE an existing project. A fresh project per package is the
+            # easiest world the product has: no named envs, no recorded session
+            # additions, no base that has moved, nothing a previous request
+            # left behind. Seeding a lived-in home while still minting a virgin
+            # project per package tested none of it — the fixture was
+            # decoration, which is precisely what its own armed guard exists to
+            # prevent, committed one layer up.
+            pid = project
+            r = c.post(f"/api/projects/{pid}/open")
+            if r.status_code >= 400:
+                # Never fall back to creating one. A silent fallback here turns
+                # "we tested accumulated state" into "we tested nothing" and
+                # reports it as a pass.
+                return {**entry, "verdict": "error",
+                        "detail": f"could not open project {pid!r} "
+                                  f"(HTTP {r.status_code}) — refusing to fall "
+                                  f"back to a fresh project, which would test "
+                                  f"the opposite of what was asked"}
+        else:
+            pid = c.post("/api/projects",
+                         json={"name": f"install-{slug}"}).json().get("id")
+            c.post(f"/api/projects/{pid}/open")
         tid = c.post("/api/threads",
                      json={"project_id": pid, "title": f"install-{slug}"}).json().get("id")
     except Exception as e:  # noqa: BLE001
@@ -485,6 +507,9 @@ def main() -> int:
     ap.add_argument("--timeout", type=float, default=900.0)
     ap.add_argument("--results", default=None,
                     help="JSON file; existing entries are SKIPPED (resumable)")
+    ap.add_argument("--project", default=None,
+                    help="run inside an EXISTING project (accumulated state) "
+                         "instead of minting a fresh one per package")
     ap.add_argument("--pack-provided-only", action="store_true",
                     help="only the names a shipped base pack proves it loads")
     ap.add_argument("--background", action="store_true",
@@ -556,13 +581,17 @@ def main() -> int:
         build = running_build(c)
         if build:
             print(f"[install-probe] server build: {build}", flush=True)
+        if a.project:
+            print(f"[install-probe] running inside EXISTING project "
+                  f"{a.project} (accumulated state)", flush=True)
         for i, e in enumerate(entries, 1):
             print(f"[install-probe] {i}/{len(entries)} {e['name']} "
                   f"({e.get('ecosystem')})…", flush=True)
             row = probe_one(c, e, timeout=a.timeout,
                             projects_dir=Path(a.projects_dir) if a.projects_dir else None,
                             pack_names=pack_names, background=a.background,
-                            job_timeout=a.job_timeout, build=build)
+                            job_timeout=a.job_timeout, build=build,
+                            project=a.project)
             print(f"    -> {row['verdict']}  {row.get('seconds')}s  "
                   f"envs={row.get('envs_created')}", flush=True)
             rows.append(row)
