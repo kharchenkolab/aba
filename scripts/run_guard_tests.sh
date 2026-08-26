@@ -111,6 +111,7 @@ FILES=(
   tests/test_release_provenance.py
   tests/test_running_build_visible.py
   tests/test_session_rebuild_on_new_base.py
+  tests/test_post_link_acknowledgment.py
   tests/test_verify_reproduces_the_launcher.py
   tests/test_llm_sdk_pin.py
   # install-sweep instruments (see misc/install_sweep.md): the cost vocabulary,

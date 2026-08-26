@@ -205,6 +205,41 @@ def resolve_env(project_id, language: str, explicit=None) -> Optional[str]:
 _ISO_CHANNELS = ["conda-forge", "bioconda"]
 
 
+# Conda POST-LINK acknowledgments, for R specs built HERE.
+#
+# Some bioconductor data packages ship as a few KB of scripts whose real payload
+# a post-link script downloads. pixi stages those scripts and never runs them,
+# so the package records as installed while its payload does not exist — and the
+# substrate now REFUSES such an env outright (`env.post_link_scripts`,
+# retryable=false) rather than hand back one that is silently broken.
+#
+# The base pack carries this acknowledgment in its own `post_install`. Envs
+# built by `make_isolated_env` carried NONE, while still pulling the same
+# dependency — so every isolated R env that reached GenomeInfoDb failed to
+# realize (live 2026-08-26: three of a project's five named envs). The fix that
+# made the PACK correct did not travel to the specs aba composes itself.
+#
+# GUARDED, not unconditional: the step exits 0 when the staged script is absent,
+# so an R env that never pulls the package pays nothing. Consuming the script IS
+# the acknowledgment — the substrate checks for its absence — so the `rm` is
+# load-bearing, not tidying.
+_GENOMEINFODBDATA_VERSION = "1.2.13"
+_GENOMEINFODBDATA_URL = (
+    "https://bioconductor.org/packages/3.20/data/annotation/src/contrib/"
+    f"GenomeInfoDbData_{_GENOMEINFODBDATA_VERSION}.tar.gz")
+_R_POST_INSTALL = [
+    "\n".join([
+        "set -eu",
+        's="$CONDA_PREFIX/bin/.bioconductor-genomeinfodbdata-post-link.sh"',
+        '[ -f "$s" ] || exit 0     # package not in this closure — nothing to ack',
+        f"Rscript -e 'install.packages(\"{_GENOMEINFODBDATA_URL}\", "
+        "repos = NULL, type = \"source\")'",
+        "Rscript -e 'library(GenomeInfoDbData)'",
+        'rm -f "$s"',
+    ]),
+]
+
+
 def _spec_for(project_id: str, name: str, language: str,
               packages: list[str], python_version: Optional[str] = None,
               conda_packages: Optional[list[str]] = None) -> dict:
@@ -241,7 +276,8 @@ def _spec_for(project_id: str, name: str, language: str,
         deps: dict = {"conda": [_rbase, *kern, *_all_conda]}
         if cran:
             deps["cran"] = cran
-        return {"name": label, "channels": list(_ISO_CHANNELS), "deps": deps}
+        return {"name": label, "channels": list(_ISO_CHANNELS), "deps": deps,
+                "post_install": list(_R_POST_INSTALL)}
     pyspec = f"python ={python_version}" if python_version else "python =3.12"
     return {"name": label, "channels": list(_ISO_CHANNELS),
             "deps": {"conda": [pyspec, "ipykernel", *(conda_packages or [])],
