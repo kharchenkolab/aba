@@ -607,14 +607,15 @@ export function useChat(
             if (ev.type === 'caught_up') {
               // End of the replayed backlog: render the rebuilt turn ONCE, in
               // whatever state it is actually in, then stream live.
+              // (No `continue` here: this block is not inside a loop — the
+              // event handler is a callback. `continue` PARSED under tsc and
+              // broke the production bundle at rolldown.)
               replaying = false
               if (ev.replayed) {
                 setStreamMsg({ id: assistantId, role: 'assistant',
                                blocks: [...streamingBlocks] })
               }
-              continue
-            }
-            if (ev.type === 'job_submitted') {
+            } else if (ev.type === 'job_submitted') {
               // Jobs tab: upsert by id.
               const j = ev.job
               setJobs(prev => {
