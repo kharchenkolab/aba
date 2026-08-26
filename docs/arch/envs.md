@@ -296,6 +296,24 @@ Two safety floors live in weft, not here, and are relied on rather than re-imple
 an env any live job/session/kernel is using. ABA classifies the read-only case first anyway,
 so a preview never promises bytes weft will refuse to give back.
 
+**Projects deleted before this lane existed** are reclaimable too, and nothing extra had to
+be recorded to make that true: the delete keeps the project directory and its
+`weft_envs.json`, so a deleted project still names, on disk, the envs it held. `reclaim.orphans`
+runs the same three-class plan over every id that has a directory and env records but no
+registry row, and it is deliberately **not automatic** — evicting envs for projects deleted
+months ago must not be a side effect of a server boot (`GET`/`POST /api/compute/orphans`,
+plan then confirm). Identification is the whole risk, so it fails closed: an unreadable or
+missing registry **refuses the entire sweep** rather than treating every directory as an
+orphan (`projects._load()` swallows a read error and returns `[]`, which would mean exactly
+that); a directory touched inside a grace window is skipped, because `_db_file` creates the
+project directory *before* the registry row is written and a project being created is
+indistinguishable from an orphan for a moment; the open project and the internal entries that
+share `PROJECTS_DIR` (`_workspace`, `single`, the registry files) are never candidates. An
+empty registry, by contrast, IS trusted — that is the legitimate state after deleting the last
+project. The one case beyond reach is a project directory removed outright: the name → EnvID
+mapping is gone with it, and those realizations are addressable only from weft's side by
+EnvID (`gc_orphans`, `site_footprint`).
+
 **What deleting does NOT do:** weft's own GC is a different mechanism and is not involved.
 `gc_plan`/`gc_sweep` list a realization only after `gc_idle_days` (default 14) of no use and
 never act without an explicit confirm — so before this lane existed, deleting a project
@@ -403,7 +421,7 @@ the install-time probe can't run.
 | `core/compute/seeding.py` | managed-cluster catalog: `publish_base_packs` / `adopt_env_id` (published `image.sqfs` keyed by EnvID) |
 | `core/exec/verify.py` | the honest runtime probes: `verify_python_imports`, `gpu_capability_ok`, `torch_cuda_build` |
 | `core/exec/env_integrity.py` | read-only diagnostics (`env_overview`/`env_layers`/`python_package_status`), `ensure_sys_executable`, the Slurm shared-FS self-checks (`check_envs_dir_shared`/`check_base_dir_shared`) |
-| `core/compute/reclaim.py` | project deletion & disk reclaim: `plan` (dry consequence card) / `reclaim(confirm=True)`; the rebuildable / shared / valued classification, sessions-before-envs order, unassessed-is-untouched |
+| `core/compute/reclaim.py` | project deletion & disk reclaim: `plan` (dry consequence card) / `reclaim(confirm=True)`; the rebuildable / shared / valued classification, sessions-before-envs order, unassessed-is-untouched; `orphan_ids` / `orphans` for projects already deleted (fails closed on an untrustworthy registry) |
 | `core/modules/reconciler.py` · `manager.py` | disk reclaim via `env_evict(env_id, site)` (rebuild-from-lock), stop-kernel-less-holders-and-retry |
 | `core/exec/run.py` (`:44-72`) · `core/exec/kernels/weft.py` | run-lane interpreter selection (named / snapshot / base+session); the remote kernel platform re-lock |
 | `content/bio/tools/discovery.py` | agent surface: `ensure_capability` → `project_env.install` / `named_envs`, `propose_capability`, `search_bioconda`/`search_pypi` |

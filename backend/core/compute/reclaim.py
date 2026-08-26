@@ -26,6 +26,8 @@ one env that refuses, never blocks the delete or the other evictions.
 """
 from __future__ import annotations
 
+import time
+from pathlib import Path
 from typing import Optional
 
 # A realization's `bytes` is apparent size (du): a prefix hardlinks most of its
@@ -227,3 +229,114 @@ def reclaim(pid: str, *, confirm: bool = False) -> dict:
         "valued_note": "retained outputs, dataset homes and the project "
                        "directory are untouched by design",
     }
+
+
+# ── orphans ──────────────────────────────────────────────────────────────────
+#
+# A project's directory and its `weft_envs.json` SURVIVE the delete (they are
+# the recovery archive), so a project deleted before this lane existed still
+# says, on disk, exactly which envs it held. Nothing extra had to be recorded:
+# the orphan sweep is the same three-class plan, run over the ids that have a
+# directory but no registry row.
+#
+# Not automatic. Evicting envs for projects someone deleted months ago must not
+# happen as a side effect of a server boot — plan, then confirm.
+
+ORPHAN_GRACE_S = 3600.0
+_RESERVED = {"single"}
+
+
+def _live_ids_strict() -> Optional[set]:
+    """Ids the registry lists, or None if the registry cannot be TRUSTED.
+
+    `projects._load()` swallows a read error and returns `[]`, which here would
+    mean "every project on disk is an orphan, sweep them all". So the registry
+    is read directly and any failure refuses the whole sweep. A registry that
+    parses to an empty list IS trustworthy — that is the state after deleting
+    the last project."""
+    try:
+        import json  # noqa: PLC0415
+        from core import projects  # noqa: PLC0415
+        reg = json.loads(Path(str(projects.REGISTRY)).read_text())
+    except Exception:  # noqa: BLE001 — missing, truncated, unparseable
+        return None
+    if not isinstance(reg, list):
+        return None
+    return {str(p.get("id")) for p in reg if isinstance(p, dict) and p.get("id")}
+
+
+def orphan_ids(*, grace_s: float = ORPHAN_GRACE_S) -> "list | None":
+    """Project ids with a directory and env records but no registry row.
+    None ⇒ the registry could not be trusted and no sweep may run.
+
+    A directory with no `weft_envs.json` never held an env, so there is nothing
+    to reclaim and it is not listed. A directory touched inside the grace
+    window is skipped: `_db_file` creates the project dir before the registry
+    row is written, so a project being created looks exactly like an orphan for
+    a moment."""
+    live = _live_ids_strict()
+    if live is None:
+        return None
+    from core.config import PROJECTS_DIR  # noqa: PLC0415
+    try:
+        from core import projects  # noqa: PLC0415
+        current = str(projects.current())
+    except Exception:  # noqa: BLE001
+        current = None
+    now = time.time()
+    out = []
+    try:
+        entries = sorted(Path(PROJECTS_DIR).iterdir())
+    except Exception:  # noqa: BLE001
+        return None
+    for d in entries:
+        pid = d.name
+        if not d.is_dir() or pid.startswith("_") or pid in _RESERVED:
+            continue
+        if pid in live or pid == current:
+            continue
+        reg_file = d / "weft_envs.json"
+        if not reg_file.exists():
+            continue                       # never held an env
+        try:
+            touched = max(d.stat().st_mtime, reg_file.stat().st_mtime)
+        except Exception:  # noqa: BLE001
+            touched = now
+        if now - touched < grace_s:
+            continue                       # mid-creation, or still in use
+        out.append(pid)
+    return out
+
+
+def orphans(*, confirm: bool = False,
+            grace_s: float = ORPHAN_GRACE_S) -> dict:
+    """Reclaim the substrate held by DELETED projects. `confirm=False` plans.
+
+    Per-orphan the classification is unchanged, so an env a LIVE project still
+    names is never evicted — `_project_ids` lists the survivors, and an orphan
+    is simply absent from that list. Two orphans sharing an env is harmless:
+    both are gone, and the second evict is weft's own no-op."""
+    ids = orphan_ids(grace_s=grace_s)
+    if ids is None:
+        return {"refused": "the project registry could not be read — refusing "
+                           "to treat every project directory as an orphan",
+                "orphans": [], "reclaimable_bytes": 0}
+    if not ids:
+        return {"orphans": [], "reclaimable_bytes": 0,
+                "note": "no deleted project is holding reclaimable substrate"}
+    rows, total = [], 0
+    for pid in ids:
+        if confirm:
+            r = reclaim(pid, confirm=True)
+            total += int(r.get("freed_bytes") or 0)
+        else:
+            r = plan(pid, valued=False)
+            total += int(r.get("reclaimable_bytes") or 0)
+        rows.append(r)
+    return {"orphans": rows,
+            ("freed_bytes" if confirm else "reclaimable_bytes"): total,
+            "bytes_note": BYTES_NOTE,
+            "note": ("swept" if confirm else
+                     "dry run; orphans(confirm=True) executes — the project "
+                     "directories and their recovery archives are never "
+                     "touched, only the substrate they still hold")}

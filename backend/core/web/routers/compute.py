@@ -584,6 +584,29 @@ def data_ledger_route(pid: str) -> dict:
     return data_ledger(pid)
 
 
+@router.get("/api/compute/orphans")
+def orphans_plan() -> dict:
+    """What DELETED projects are still holding (core.compute.reclaim.orphans).
+    Dry. A project's directory and `weft_envs.json` survive its delete — the
+    recovery archive — so a project deleted before the reclaim lane existed
+    still names, on disk, the envs it held. Refuses (never sweeps) when the
+    registry cannot be read."""
+    from core.compute import reclaim
+    return reclaim.orphans(confirm=False)
+
+
+@router.post("/api/compute/orphans")
+def orphans_sweep(req: GcRequest) -> dict:
+    """Execute the orphan plan. Deliberately NOT automatic: evicting envs for
+    projects deleted months ago must not be a side effect of a server boot.
+    Never touches a project directory or its recovery archive."""
+    from core.compute import reclaim
+    out = reclaim.orphans(confirm=bool(req.confirm))
+    if req.confirm:
+        _broadcast("local", "gc", note="orphan projects reclaimed")
+    return out
+
+
 @router.post("/api/compute/sites/{name}/gc")
 async def free_up(name: str, req: GcRequest) -> dict:
     _require_self_service()

@@ -17,6 +17,7 @@ GET /api/attachments/{thread_id}/{name}
 GET /api/bundle/state
 GET /api/compute/advanced
 GET /api/compute/hosts
+GET /api/compute/orphans
 GET /api/compute/sites
 GET /api/compute/sites/{name}
 GET /api/compute/sites/{name}/footprint
@@ -125,6 +126,7 @@ POST /api/claims/{cid}/notes
 POST /api/claims/{cid}/status
 POST /api/compute/hostkey
 POST /api/compute/keysetup
+POST /api/compute/orphans
 POST /api/compute/preflight
 POST /api/compute/probe
 POST /api/compute/sites

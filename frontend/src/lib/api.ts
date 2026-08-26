@@ -216,12 +216,27 @@ export const computeApi = {
   gc: (name: string, confirm: boolean) =>
     apiPost<{ reclaimable_bytes?: number; freed_bytes?: number }>(
       `/api/compute/sites/${cname(name)}/gc`, { confirm }),
+  // Substrate still held by DELETED projects (core.compute.reclaim.orphans).
+  // Plan is a GET and touches nothing; the sweep needs an explicit confirm.
+  orphans: (confirm?: boolean) => confirm
+    ? apiPost<OrphanPlan>('/api/compute/orphans', { confirm: true })
+    : apiGet<OrphanPlan>('/api/compute/orphans'),
   advanced: (site?: string) =>
     apiGet<{ available: boolean; url?: string | null }>(
       `/api/compute/advanced${site ? `?site=${cname(site)}` : ''}`),
   // §2 (more_weft_ui.md): what lives only on this machine — feeds every
   // consequence card (Disconnect / durable-uncheck / Free up previews).
   holdings: (name: string) => apiGet<SiteHoldings>(`/api/compute/sites/${cname(name)}/holdings`),
+}
+
+/** What DELETED projects still hold. `refused` means the project registry
+ *  could not be read, so nothing was assessed and nothing may be swept. */
+export interface OrphanPlan {
+  orphans: { project: string; rebuildable?: { name: string }[] }[]
+  reclaimable_bytes?: number
+  freed_bytes?: number
+  refused?: string
+  note?: string
 }
 
 export interface SiteHoldings {

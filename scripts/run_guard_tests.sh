@@ -144,6 +144,7 @@ FILES=(
   backend/tests/test_slurm_entry_activation.py
   backend/tests/test_project_delete_reclaims.py
   backend/tests/test_addition_records_its_repos.py
+  backend/tests/test_orphan_reclaim.py
   # runtime translation
   tests/test_openai_runtime_translation.py
   tests/test_openai_runtime_skeleton.py

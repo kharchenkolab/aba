@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import './ComputeTab.css'
 import { computeApi } from '../lib/api'
-import type { ComputeSite, SiteHoldings } from '../lib/api'
+import type { ComputeSite, OrphanPlan, SiteHoldings } from '../lib/api'
 import { withBasePath } from '../oodBase'
 import ConnectMachine from './ConnectMachine'
 
@@ -159,6 +159,8 @@ export default function ComputeTab() {
         ))}
       </ul>
 
+      <OrphanReclaim />
+
       {sites.length <= 1 && !connecting && (
         <p className="cmp-pitch">
           Big analyses currently run on this machine only. Connecting a cluster
@@ -166,6 +168,64 @@ export default function ComputeTab() {
         </p>
       )}
     </section>
+  )
+}
+
+// ── substrate held by DELETED projects ───────────────────────────────────────
+//
+// Deleting a project keeps its directory and weft_envs.json (the recovery
+// archive), so a project deleted before the reclaim lane existed still names
+// the envs it held. Reclaiming those is deliberately manual — see
+// core/compute/reclaim.py. Renders NOTHING when there is nothing to reclaim;
+// a registry that could not be read says so rather than showing a zero.
+
+function OrphanReclaim() {
+  const [plan, setPlan] = useState<OrphanPlan | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [done, setDone] = useState<string | null>(null)
+
+  useEffect(() => {
+    let stop = false
+    computeApi.orphans().then(p => { if (!stop) setPlan(p) }).catch(() => {})
+    return () => { stop = true }
+  }, [])
+
+  if (done) return <div className="cmp-note">{done}</div>
+  if (!plan) return null
+  // A refusal must SAY so. Rendering nothing here is indistinguishable from
+  // "checked, all clean" — and nothing was checked: the server would not treat
+  // an unreadable registry as "every project directory is an orphan".
+  if (plan.refused) {
+    return (
+      <div className="cmp-note">
+        <span className="cmp-dim">
+          Deleted projects could not be assessed — {plan.refused}
+        </span>
+      </div>
+    )
+  }
+  const n = plan.orphans?.length ?? 0
+  if (n === 0) return null
+
+  return (
+    <div className="cmp-note">
+      {n} deleted project{n === 1 ? '' : 's'} still hold
+      {n === 1 ? 's' : ''} {fmtGB(plan.reclaimable_bytes ?? 0)} of rebuildable
+      environments.{' '}
+      <span className="cmp-dim">
+        Environments other projects still use are never touched, and the
+        projects’ recovery archives are kept.
+      </span>{' '}
+      <button className="mod-linkbtn" disabled={busy}
+        onClick={() => {
+          setBusy(true)
+          computeApi.orphans(true)
+            .then(r => setDone(`Reclaimed ${fmtGB(r.freed_bytes ?? 0)} from `
+                               + `${r.orphans?.length ?? 0} deleted project`
+                               + `${(r.orphans?.length ?? 0) === 1 ? '' : 's'}.`))
+            .catch(() => setDone('Could not reclaim — see the server log.'))
+        }}>Reclaim now</button>
+    </div>
   )
 }
 
