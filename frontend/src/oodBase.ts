@@ -4,7 +4,7 @@
 // a per-session prefix (e.g. /rnode/<host>/<port>/). The Vite build bakes that
 // prefix into asset URLs + import.meta.env.BASE_URL, but the app also makes
 // many absolute API calls (`/api/...`, `/artifacts/...`). Rather than rewrite
-// every call site, we wrap fetch + EventSource here to prepend BASE_URL to
+// every call site, we wrap fetch + XHR + EventSource here to prepend BASE_URL
 // those absolute paths. In a normal install BASE_URL is "/" so this is a no-op.
 //
 // Imported FIRST in main.tsx so the wrappers are installed before any app code
@@ -42,6 +42,24 @@ if (BASE) {
     ;(Wrapped as { CLOSED: number }).CLOSED = _ES.CLOSED
     window.EventSource = Wrapped
   }
+
+  // XHR. The uploader is the only XHR caller in the app, and deliberately so —
+  // fetch cannot report upload progress, so the file dialog uses
+  // XMLHttpRequest to hook `upload.onprogress`. That made uploads the ONE
+  // request shape this shim did not cover: under OOD they posted to a bare
+  // `/api/upload-folder`, the proxy had no route for it, and the browser
+  // streamed the whole file before being answered 404 — with nothing in the
+  // server log, because the request never reached the app. Observed live
+  // 2026-08-26 on the production card.
+  const _open = XMLHttpRequest.prototype.open
+  XMLHttpRequest.prototype.open = function (
+    this: XMLHttpRequest, method: string, url: string | URL, ...rest: unknown[]
+  ) {
+    const u = typeof url === 'string' ? withBase(url) : url
+    // eslint-disable-next-line prefer-spread
+    return (_open as unknown as (...a: unknown[]) => unknown).apply(
+      this, [method, u, ...rest])
+  } as typeof XMLHttpRequest.prototype.open
 
   // Plots/figures render via <img src="/artifacts/...">, set by React through
   // the .src DOM property (not fetch). Patch the setter so those absolute paths

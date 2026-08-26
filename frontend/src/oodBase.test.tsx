@@ -17,6 +17,7 @@ import { describe, it, expect, beforeAll, vi } from 'vitest'
 import { render } from '@testing-library/react'
 
 const BASE = '/rnode/testhost/12345'
+const xhrSeen: string[] = []
 
 beforeAll(async () => {
   // The shim reads import.meta.env.BASE_URL at MODULE LOAD. Assigning to
@@ -24,6 +25,20 @@ beforeAll(async () => {
   // statically) — vi.stubEnv is the supported door, and it must run before
   // the dynamic import or the shim installs nothing at all.
   vi.stubEnv('BASE_URL', BASE + '/')
+  // Install a recorder UNDER the shim. The shim wraps whatever `open` is
+  // present at import time, so wrapping FIRST puts this between the shim and
+  // jsdom — which means `xhrSeen` holds the URL the browser would actually be
+  // handed. Asserting anywhere above the shim asserts the input, not the
+  // rewrite, and passes whether or not the shim does anything (it did: the
+  // first version of these guards was green with the fix removed).
+  const native = XMLHttpRequest.prototype.open
+  XMLHttpRequest.prototype.open = function (
+    this: XMLHttpRequest, m: string, u: string | URL, ...r: unknown[]
+  ) {
+    xhrSeen.push(String(u))
+    return (native as unknown as (...a: unknown[]) => unknown)
+      .apply(this, [m, u, ...r])
+  } as typeof XMLHttpRequest.prototype.open
   await import('./oodBase')
 })
 
@@ -75,6 +90,30 @@ describe('oodBase shim', () => {
       <img className="fig" src="/artifacts/prj_x/fig.png" alt="figure" />)
     const img = container.querySelector('img.fig') as HTMLImageElement
     expect(img.getAttribute('src')).toBe(`${BASE}/artifacts/prj_x/fig.png`)
+  })
+
+  it('prefixes an /api/ XHR — the upload path', () => {
+    // The uploader is the only XHR caller in the app, and deliberately so:
+    // fetch cannot report upload progress. That made uploads the ONE request
+    // shape this shim did not cover. Live 2026-08-26 on the production card:
+    // the file streamed to completion and the dialog then showed 404, with
+    // NOTHING in the server log — the request never reached the app.
+    xhrSeen.length = 0
+    new XMLHttpRequest().open('POST', '/api/upload-folder')
+    expect(xhrSeen).toEqual([BASE + '/api/upload-folder'])
+  })
+
+  it('leaves a non-api XHR alone', () => {
+    xhrSeen.length = 0
+    new XMLHttpRequest().open('GET', 'https://example.org/x')
+    new XMLHttpRequest().open('GET', '/not-api/x')
+    expect(xhrSeen).toEqual(['https://example.org/x', '/not-api/x'])
+  })
+
+  it('does not double-prefix an XHR that already carries the base', () => {
+    xhrSeen.length = 0
+    new XMLHttpRequest().open('POST', BASE + '/api/upload-folder')
+    expect(xhrSeen).toEqual([BASE + '/api/upload-folder'])
   })
 
   it('leaves unrelated attributes and paths alone', () => {
