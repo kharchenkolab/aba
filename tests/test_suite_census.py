@@ -122,3 +122,37 @@ def test_the_census_is_armed():
     assert len(_present()) > 100, "test enumeration returned implausibly few"
     assert len(_gated()) > 10, "gate-script parse returned implausibly few"
     assert len(_legacy()) > 0 or not (set(_present()) - _gated() - set(EXCLUDED))
+
+
+def test_no_test_is_both_baselined_and_ci_gated():
+    """A file cannot be excused locally AND required by CI.
+
+    `tests/KNOWN_FAILURES.txt` lets the per-file gate report "no regressions"
+    while a listed test fails; `scripts/run_guard_tests.sh` has no baseline and
+    fails outright. A file in BOTH is a blind spot: green locally, red in CI,
+    with nothing connecting the two.
+
+    That is not hypothetical. `test_suite_census::test_every_test_file_is_
+    accounted_for` sat in the baseline while CI failed on exactly it — for TEN
+    DAYS (2026-08-16 → 08-26). Every local gate run in that window truthfully
+    reported no regressions, and every CI run was red, and I kept reporting the
+    former. The overlap was one entry; one was enough.
+
+    Resolve either way — fix the test, or remove the file from the CI list with
+    a rationale — but never both at once.
+    """
+    import re
+    ci = set(re.findall(r"^\s+((?:tests|backend/tests)/test_\w+\.py)",
+                        (ROOT / "scripts" / "run_guard_tests.sh").read_text(), re.M))
+    baselined = set()
+    kf = ROOT / "tests" / "KNOWN_FAILURES.txt"
+    if kf.exists():
+        for line in kf.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                baselined.add(line.split("::")[0])
+    both = sorted(ci & baselined)
+    assert not both, (
+        "these files are excused by tests/KNOWN_FAILURES.txt AND required by "
+        "scripts/run_guard_tests.sh, so the local gate reads green while CI "
+        "fails: " + ", ".join(both))

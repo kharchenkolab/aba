@@ -113,6 +113,5 @@ tests/test_scribe_edge_msg_hooks.py::test_edge_seq_persists_across_scribe_restar
 tests/test_scribe_edge_msg_hooks.py::test_remove_edge_emits_only_when_it_removed
 tests/test_scribe_round_trip.py::test_backfill_rewrites_sidecars
 tests/test_scribe_round_trip.py::test_recover_rebuilds_db_from_sidecars
-tests/test_suite_census.py::test_every_test_file_is_accounted_for
 tests/test_thread_spec_selection.py::test_default_when_nothing_set
 tests/test_turn_context_golden.py::test_turn_context_matches_golden

@@ -198,6 +198,21 @@ def ensure(pid: str, language: str) -> dict:
               f"under the old base no longer match — re-run to record results "
               f"under the new env.")
     rt = res.get("runtime")
+    # RECONCILE before replaying. An addition the new base now supplies is not
+    # merely wasted work — see _base_supplies for the live incident where
+    # replaying one made the whole session unusable.
+    _supplied = _base_supplies(ad, base_eid) if base_changed else set()
+    _dropped, _kept = [], []
+    for add in additions:
+        if add.get("quarantined"):
+            continue          # a solve already known to fail — never re-run it
+        (_dropped if _addition_is_redundant(add, _supplied) else _kept).append(add)
+    if _dropped:
+        print(f"[project_env] {len(_dropped)} recorded addition(s) are now part "
+              f"of the base for {language!r} in project {pid} — not replaying "
+              f"them: {[a.get('specs') for a in _dropped]}")
+    additions = _kept
+    _quarantined = []
     for add in additions:                      # replay the recorded deltas
         if add.get("eco") == "out-of-band" or not (
                 add.get("eco") == "installer" or add.get("specs")):
@@ -207,33 +222,19 @@ def ensure(pid: str, language: str) -> dict:
             # honest replay too: whatever the in-code installer did cannot
             # be reproduced from here (that is exactly why it was flagged).
             continue
-        if add.get("eco") == "installer":      # captured arbitrary installer
-            _ikw = {k: add[k] for k in ("writes_to", "verify") if add.get(k)}
-            while True:
-                try:
-                    ires = named_envs._sync(ad.session_run_installer(
-                        sid, add.get("cmd") or "", note=add.get("note", ""),
-                        **_ikw))
-                    break
-                except TypeError:              # substrate predates a kw —
-                    if not _ikw:               # degrade newest-first
-                        raise
-                    _ikw.pop("verify", None) if "verify" in _ikw \
-                        else _ikw.pop("writes_to", None)
-        else:
-            _rkw = dict(add.get("opts") or {})
-            if add.get("verify"):
-                _rkw["verify"] = add["verify"]
-            # No local `except TypeError: # substrate predates verify=` here any
-            # more: the adapter drops a declared-optional kwarg an older weft
-            # cannot take (adapter.SUBSTRATE_OPTIONAL_KWARGS), for every caller.
-            # This site had the guard and the other one did not, which is how a
-            # named-env install died on a raw TypeError.
-            ires = named_envs._sync(ad.session_install(
-                sid, **{add["eco"]: add["specs"]}, **_rkw))
+        try:
+            _replay_one(ad, sid, add)
+        except Exception as _e:  # noqa: BLE001 — one bad addition must not doom the rest
+            code = getattr(_e, "code", type(_e).__name__)
+            _quarantined.append({**add, "quarantined": {
+                "code": str(code), "detail": str(_e)[:400], "at": time.time()}})
+            print(f"[project_env] replaying addition {add.get('specs')} onto the "
+                  f"new base FAILED ({code}); quarantining it so the session can "
+                  f"still be built. The package is NOT installed.")
+            continue
         # installs are the FLIP moment (base → own clone): the install result
         # carries the fresh runtime; the start-time block is stale after one
-        rt = (ires or {}).get("runtime") or rt
+        rt = _LAST_RT[0] or rt
     if rt is None:
         rt = _shim_runtime(sid)
         if rt is None:
@@ -241,15 +242,30 @@ def ensure(pid: str, language: str) -> dict:
             # prefix after session_start IS a realization failure
             raise ComputeError("env.realize_failed",
                                f"session {sid} has no local prefix", stage="realize")
+    # ALWAYS record the new base, even when some addition could not be
+    # replayed. Quarantined entries stay in the registry (the user asked for
+    # them; dropping them silently would be the worse lie) but are marked, so
+    # the next rebuild does not re-run a solve already known to fail.
     new_row = {"session_id": sid, "base_env_id": base_eid,
-               "additions": additions, "rev": (row or {}).get("rev", 0),
+               "additions": additions + _quarantined,
+               "rev": (row or {}).get("rev", 0),
                "snapshot": None,               # stale after a rebuild
                "created_at": time.time()}
     _save_row(pid, language, new_row)
     out = _ensure_out(sid, base_eid, rt)
     if base_changed:
         out["base_changed"] = {"from": old_base, "to": base_eid,
-                               "additions_replayed": len(additions)}
+                               "additions_replayed": len(additions),
+                               "additions_dropped_as_redundant":
+                                   [a.get("specs") for a in _dropped]}
+    if _quarantined:
+        # A package the user installed is NOT in this session. The rebuild
+        # succeeded around it, which is the right trade — but a working session
+        # that quietly lost a dependency is precisely the silent degrade this
+        # codebase keeps paying for, so it rides out on the result.
+        out["quarantined"] = [{"specs": a.get("specs"), "eco": a.get("eco"),
+                               "code": (a.get("quarantined") or {}).get("code")}
+                              for a in _quarantined]
     return out
 
 
@@ -365,6 +381,94 @@ def _check_envelope_soft(env: dict) -> list:
         if k not in env:
             out.append(f"missing {k!r}")
     return out
+
+
+_LAST_RT = [None]
+
+
+def _replay_one(ad, sid: str, add: dict) -> None:
+    """Replay ONE recorded addition onto a freshly started session.
+
+    Extracted so a single failure can be caught per-addition. Before this, the
+    replay loop and `_save_row` were one all-or-nothing block: an addition that
+    could no longer resolve raised, the row was never written, `base_env_id`
+    stayed pinned to the OLD base — and every subsequent call re-entered the
+    same rebuild and failed identically. Live 2026-08-26: five failures in one
+    session, each a full re-attempt of the same doomed solve. A rebuild that
+    cannot fully succeed must still record what it DID, or the failure becomes
+    permanent rather than merely present."""
+    rt = None
+    if add.get("eco") == "installer":
+        _ikw = {k: add[k] for k in ("writes_to", "verify") if add.get(k)}
+        while True:
+            try:
+                ires = named_envs._sync(ad.session_run_installer(
+                    sid, add.get("cmd") or "", note=add.get("note", ""), **_ikw))
+                break
+            except TypeError:
+                if not _ikw:
+                    raise
+                _ikw.pop("verify", None) if "verify" in _ikw \
+                    else _ikw.pop("writes_to", None)
+    else:
+        _rkw = dict(add.get("opts") or {})
+        if add.get("verify"):
+            _rkw["verify"] = add["verify"]
+        ires = named_envs._sync(ad.session_install(
+            sid, **{add["eco"]: add["specs"]}, **_rkw))
+    _LAST_RT[0] = (ires or {}).get("runtime")
+
+
+def _base_supplies(ad, base_eid: str) -> set:
+    """Lowercased package names the NEW base already provides ({} if unknown).
+
+    A recorded addition is a request the user made against an OLDER base. When
+    the base later absorbs that package, replaying the addition is at best
+    redundant work and at worst fatal: live 2026-08-26, a project had one
+    recorded `cran` addition for a package the new base had just absorbed as a
+    conda dep. The replay solved it against the base's cran layer, whose repo
+    set carries only the CRAN snapshot — the package is a Bioconductor one — so
+    it could not resolve, and EVERY r call in the session failed at realize.
+    The addition that broke the session was for something already installed.
+
+    Names are compared loosely (case-folded, `r-`/`bioconductor-`/`python-`
+    prefixes stripped) because the ecosystems spell the same library
+    differently: a `cran` addition names the library, the base names the conda
+    package."""
+    try:
+        rows = (ad.sync_call("env_packages", base_eid) or {}).get("packages") or []
+    except Exception:  # noqa: BLE001 — unknown contents means replay as before
+        return set()
+    out = set()
+    for r in rows:
+        n = str(r.get("name") or "").strip().lower()
+        if not n:
+            continue
+        out.add(n)
+        for pre in ("r-", "bioconductor-", "python-"):
+            if n.startswith(pre):
+                out.add(n[len(pre):])
+    return out
+
+
+def _addition_is_redundant(add: dict, supplied: set) -> bool:
+    """Does the new base already provide EVERY spec in this addition?
+
+    Conservative: an addition with any spec the base does not supply is still
+    replayed in full. Partially dropping a multi-package add would change what
+    the user asked for."""
+    specs = [str(x) for x in (add.get("specs") or [])]
+    if not specs or not supplied:
+        return False
+    for spec in specs:
+        # strip a version constraint — "pkg>=1.2" is supplied by "pkg"
+        bare = spec.strip().lower()
+        for sep in (">=", "<=", "==", ">", "<", "=", " "):
+            bare = bare.split(sep)[0]
+        bare = bare.strip()
+        if not bare or bare not in supplied:
+            return False
+    return True
 
 
 def install(pid: str, language: str, specs: list[str], *,
