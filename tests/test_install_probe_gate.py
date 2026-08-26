@@ -88,8 +88,9 @@ def test_missing_matrix_is_a_normal_exception():
         lip._load_matrix("/nonexistent/one.json,/nonexistent/two.json")
 
 
-def _cap(kinds=None, tools=None):
-    return {"kinds": kinds or {}, "tools": tools or []}
+def _cap(kinds=None, tools=None, errors=None):
+    return {"kinds": kinds or {}, "tools": tools or [],
+            "errors": list(errors or [])}
 
 
 def test_probe_reports_its_own_blindness_not_a_finding():
@@ -124,6 +125,46 @@ def test_a_normal_turn_is_not_a_fault():
     import live_install_probe as lip
     assert lip._instrument_fault(
         _cap(kinds={"text": 3, "tool_start": 1}, tools=["run_r"]), True) is None
+
+
+def test_a_failed_turn_is_a_finding_about_the_deployment_not_the_probe():
+    """The misdiagnosis that cost a whole verify run.
+
+    Forty-two packages reported "the probe is reading the wrong event names"
+    when every turn had errored in 0.3s and the parser was working perfectly —
+    there were no tool events because nothing ran. The instrument accused
+    ITSELF and the real cause was never printed. An error event present means
+    the turn failed; that is a finding about the deployment."""
+    import live_install_probe as lip
+    cap = _cap(kinds={"done": 1, "error": 1, "manifest": 1, "usage": 1},
+               errors=["{'type': 'error', 'error': 'rate_limit_error'}"])
+    assert lip._instrument_fault(cap, True) is None, (
+        "an errored turn is not the instrument going blind")
+    failed = lip._turn_failed(cap)
+    assert failed and "rate_limit_error" in failed, failed
+
+
+def test_a_failed_turn_names_its_cause_not_just_a_count():
+    """`turn_errors: 1` is not actionable. Forty-two identical failures with no
+    reason carry the same information as one."""
+    import live_install_probe as lip
+    cap = _cap(kinds={"error": 2}, errors=["first reason", "second reason"])
+    msg = lip._turn_failed(cap)
+    assert "first reason" in msg and "+1 more" in msg, msg
+
+
+def test_a_clean_turn_is_not_reported_as_failed():
+    import live_install_probe as lip
+    assert lip._turn_failed(_cap(kinds={"text": 1}, tools=["run_r"])) is None
+
+
+def test_turn_failed_gates_the_release():
+    """WIDE: a new verdict that is not in the failure set is a verdict that
+    lets a broken release through — the whole point of the gate."""
+    src = (REPO / "regtest" / "harness" / "live_install_probe.py").read_text()
+    tail = src[src.index("    bad = [r for r in rows"):]
+    assert '"turn_failed"' in tail[:400], (
+        "turn_failed must be in the set that fails the gate")
 
 
 def test_the_parser_accepts_the_event_names_the_server_actually_emits():

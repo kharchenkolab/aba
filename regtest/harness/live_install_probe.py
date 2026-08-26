@@ -273,11 +273,32 @@ def _instrument_fault(cap: dict, executed: bool) -> str | None:
     RAN something while the parser saw no tool events (the names are wrong)."""
     if not cap.get("kinds"):
         return "no SSE events parsed at all — wrong stream format or dead turn"
+    if cap.get("errors"):
+        # The turn FAILED. The parser is fine — there were no tool events
+        # because nothing ran. Blaming the instrument here is a misdiagnosis
+        # that costs a whole run: 42 packages once reported "the probe is
+        # reading the wrong event names" when every turn had errored in 0.3s
+        # and the real cause was never printed. A failed turn is a finding
+        # about the DEPLOYMENT, and it must carry its reason.
+        return None
     if executed and not cap.get("tools"):
         return (f"a turn produced exec records but the parser saw NO tool events; "
                 f"event types present: {sorted(cap['kinds'])} — the probe is reading "
                 f"the wrong event names and its tool/job counts are meaningless")
     return None
+
+
+def _turn_failed(cap: dict) -> str | None:
+    """The turn errored — say what the error WAS.
+
+    `turn_errors` was a count. A count cannot be acted on: 42 identical
+    failures with no reason is the same amount of information as one."""
+    errs = cap.get("errors") or []
+    if not errs:
+        return None
+    first = str(errs[0])[:300]
+    more = f" (+{len(errs) - 1} more)" if len(errs) > 1 else ""
+    return f"the turn errored and no tool ran: {first}{more}"
 
 
 def _exec_ok(c, pid: str, run_ids: list[str]) -> tuple[bool, str]:
@@ -391,13 +412,23 @@ def probe_one(c, entry: dict, *, timeout: float, projects_dir: Path | None,
            # count could not say whether the deployment failed or the probe
            # judged too early.
            "tool_names": sorted(set(cap["tools"]))[:12],
-           "turn_errors": len(cap["errors"]), "exec": exec_detail,
+           "turn_errors": len(cap["errors"]),
+           # the REASON, not just the count — see _turn_failed
+           **({"turn_error_detail": str(cap["errors"][0])[:300]}
+              if cap.get("errors") else {}),
+           "exec": exec_detail,
            "submitted_jobs": row_jobs,
            "event_kinds": sorted(cap.get("kinds") or {})}
     _fault = _instrument_fault(cap, ok)
     if _fault:
         row["verdict"] = "instrument_fault"
         row["detail"] = _fault
+        return row
+    _failed = _turn_failed(cap)
+    if _failed and not cap.get("tools"):
+        # errored before any tool ran — a deployment finding, with its cause
+        row["verdict"] = "turn_failed"
+        row["detail"] = _failed
         return row
 
     # SECOND question: does it work OFF the login node? A library present where
@@ -625,7 +656,8 @@ def main() -> int:
     print("\n== install probe summary ==")
     for v in ("ready_from_pack", "installed_session", "installed", "wasteful",
               "unverified", "unavailable",
-              "unmeasured", "background_failed", "instrument_fault", "error"):
+              "unmeasured", "background_failed", "turn_failed",
+              "instrument_fault", "error"):
         if by.get(v):
             print(f"  {v:16s} {len(by[v]):3d}   {', '.join(sorted(by[v])[:12])}"
                   + (" …" if len(by[v]) > 12 else ""))
@@ -633,7 +665,7 @@ def main() -> int:
             and (r.get("seconds") or 0) > a.strict_seconds]
     bad = [r for r in rows if r.get("verdict") in
            ("wasteful", "unavailable", "unverified", "unmeasured",
-            "background_failed", "instrument_fault", "error")]
+            "background_failed", "turn_failed", "instrument_fault", "error")]
     _proof = {}
     for r in rows:
         _proof[r.get("proof", "?")] = _proof.get(r.get("proof", "?"), 0) + 1
