@@ -63,10 +63,21 @@ def test_the_recorded_addition_reproduces_the_incident_shape(home):
     """cran lane, no captured repo set — the legacy record that could not be
     resolved on a new base. If this ever gains `opts.cran_repos` the fixture
     has stopped reproducing the case it exists for."""
-    add = _reg(home, "prj_lived_in")["default"]["r"]["additions"][0]
-    assert add["eco"] == "cran"
-    assert "cran_repos" not in (add.get("opts") or {})
-    assert add["specs"], "an addition with no specs replays as a no-op"
+    adds = _reg(home, "prj_lived_in")["default"]["r"]["additions"]
+    assert len(adds) >= 2, "both shapes must be present, not just one"
+    for add in adds:
+        assert add["eco"] == "cran"
+        assert "cran_repos" not in (add.get("opts") or {}), (
+            "these are LEGACY records — capturing a repo set would stop them "
+            "reproducing the case they exist for")
+        assert add["specs"], "an addition with no specs replays as a no-op"
+    # one must be reconcilable against the shipped pack, one must not
+    from lived_in_home import REDUNDANT_CRAN_ADDITION, UNRESOLVABLE_CRAN_ADDITION
+    packs = (REPO / "install" / "core" / "envs" / "r_bio.yaml").read_text()
+    assert REDUNDANT_CRAN_ADDITION["specs"][0] in packs, (
+        "the redundant addition must name something the pack REALLY provides, "
+        "or the reconcile path is never exercised")
+    assert UNRESOLVABLE_CRAN_ADDITION["specs"][0] not in packs
 
 
 def test_the_entity_graph_is_not_empty(home):
