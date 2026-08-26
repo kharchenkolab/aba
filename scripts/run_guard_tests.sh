@@ -149,6 +149,8 @@ FILES=(
   backend/tests/test_orphan_reclaim.py
   backend/tests/test_source_builds_have_a_toolchain.py
   backend/tests/test_failures_name_their_cause.py
+  backend/tests/test_lane_spellings.py
+  backend/tests/test_tool_dispatch_is_concurrent.py
   # runtime translation
   tests/test_openai_runtime_translation.py
   tests/test_openai_runtime_skeleton.py

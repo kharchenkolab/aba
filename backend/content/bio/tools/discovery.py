@@ -1042,6 +1042,40 @@ def _cran_repo() -> str:
     return (os.getenv("ABA_CRAN_REPO") or "https://cloud.r-project.org").strip()
 
 
+def _r_conda_spelling(pkg: str, source: str) -> str:
+    """The CONDA name for an R package. conda-forge and bioconda spell R
+    packages `r-<lowercase>` and `bioconductor-<lowercase>`; the R world spells
+    them by their library name. One rule, one owner — see `_r_lane_request`."""
+    if pkg.startswith(("r-", "bioconductor-")):
+        return pkg
+    return (f"bioconductor-{pkg.lower()}" if source == "bioconductor"
+            else f"r-{pkg.lower()}")
+
+
+def _r_lane_request(pkg: str, source: str):
+    """One ranked-request entry: a bare name, or per-lane spellings when we
+    know better than the substrate's derivation.
+
+    weft DOES derive dialects (`spec.lane_spelling`, gated on a verify
+    postcondition): an R name on the conda lane becomes `r-<lowercase>`. That
+    is right for CRAN and we leave it alone — a second implementation of a
+    derivation weft owns would be a split-brain, which its own docstring warns
+    against.
+
+    It is WRONG for Bioconductor, and weft cannot fix that: bioconda spells
+    those `bioconductor-<lowercase>`, and nothing in a bare name says which
+    repository it came from. Only the caller knows. So `ComplexHeatmap`
+    derived to `r-complexheatmap`, missed the conda lane, and fell through to
+    the cran lane — which builds from SOURCE. Live 2026-08-26: eleven source
+    builds, ten minutes, then a failure, for packages conda ships prebuilt.
+
+    weft's own refusal names this lever: `per-lane spellings: {"name": "X",
+    "conda": "r-x"}`."""
+    if source != "bioconductor":
+        return pkg                       # weft's derivation is correct here
+    return {"name": pkg, "conda": _r_conda_spelling(pkg, source), "cran": pkg}
+
+
 def _bioc_repos() -> list:
     """Bioconductor's repository URLs, in the order BiocManager itself uses.
     Handed to the cran lane as `cran_repos` so a Bioc package resolves as an
@@ -1243,7 +1277,10 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
                 # cran_repos (weft 13fd7aa) — attempts record them, and the
                 # cran probe answers unknown-not-false under extra repos
                 _reg_name = libname if _src == "conda" else _pkg
-                _rk = _erk(pid, "r", [_reg_name], lanes=["conda", "cran"],
+                # BOTH dialects — the conda lane cannot resolve an R library
+                # name, and a bare entry sends it one (see _r_lane_request).
+                _entry = _r_lane_request(_reg_name, _src)
+                _rk = _erk(pid, "r", [_entry], lanes=["conda", "cran"],
                            verify=_vblock,
                            **({"cran_repos": _bioc_repos()}
                               if _src == "bioconductor" else {}))
@@ -1252,8 +1289,7 @@ def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
                               ("attempts", "verified", "resolved")
                               if _rk.get(k)}
             else:
-              conda_name = _pkg if _pkg.startswith(("r-", "bioconductor-")) else (
-                f"bioconductor-{_pkg.lower()}" if _src == "bioconductor" else f"r-{_pkg.lower()}")
+              conda_name = _r_conda_spelling(_pkg, _src)
               try:
                 project_env.install(pid, "r", [conda_name], eco="conda",
                                     solve_at_add=True, verify=_vblock)

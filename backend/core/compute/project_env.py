@@ -612,7 +612,16 @@ def install(pid: str, language: str, specs: list[str], *,
             "prefix": str(p) if p else None, **out}
 
 
-def ensure_ranked(pid: str, language: str, names: list[str], *,
+def _entry_name(x) -> str:
+    """The package name of a ranked-request entry. weft accepts either a bare
+    string or `{"name": ..., "<lane>": "<spelling>"}` — the second shape is how
+    a caller supplies per-lane dialects (conda spells R packages
+    `r-*`/`bioconductor-*`), and every place that reads a name back out has to
+    accept both or it records a dict as a package spec."""
+    return str(x.get("name") if isinstance(x, dict) else x)
+
+
+def ensure_ranked(pid: str, language: str, names: list, *,
                   lanes: list[str], verify: Optional[dict] = None,
                   cran_repos: Optional[list] = None) -> "dict | None":
     """Ranked-mode ensure (F-V3a): the CALLER ranks the lanes; the substrate
@@ -666,7 +675,7 @@ def ensure_ranked(pid: str, language: str, names: list[str], *,
                 row["additions"].append(
                     {"eco": eco,
                      "specs": [a.get("spelling") or a.get("package")
-                               or (names[0] if names else "")],
+                               or (_entry_name(names[0]) if names else "")],
                      **({"opts": _opts} if _opts else {}),
                      **({"verify": dict(verify)} if verify else {}),
                      "at": time.time()})
