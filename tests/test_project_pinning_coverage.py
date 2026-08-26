@@ -94,6 +94,7 @@ EXEMPT_ENDPOINTS: dict[tuple[str, str], str] = {
     # Compute-site (remote cluster) management — a site is a deployment-wide
     # connection SHARED across every project, never owned by one, so there is
     # no project to pin. All mutate the global site registry / SSH trust.
+    ("/api/compute/orphans", "POST"): "reclaim substrate held by DELETED projects — there is no project to pin to; that IS the subject",
     ("/api/compute/preflight", "POST"): "site connectivity preflight — global cluster op",
     ("/api/compute/hostkey", "POST"): "accept a cluster SSH host key — global trust store",
     ("/api/compute/keysetup", "POST"): "install the cluster access key — global",
