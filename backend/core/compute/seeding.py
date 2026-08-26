@@ -79,6 +79,66 @@ def publish_base_packs(*, site: str, tree: str,
     return rows
 
 
+def mirror_base_packs(*, site: str, src_tree: str, dest_tree: str,
+                      packs: Optional[list[str]] = None,
+                      latest: bool = True,
+                      staging: Optional[str] = None) -> list[dict]:
+    """Move ALREADY-PUBLISHED packs from one catalog tree to another, by
+    IDENTITY — the promote-the-tested-artifact path.
+
+    `publish_base_packs` is spec-first: spec → env_ensure → SOLVE → env_id. It
+    mints a NEW environment every time, so it cannot move a tested one. The
+    EnvID it produces depends on the solving weft (an older one emits `env:v1`
+    where a newer emits `env:v2`) and on the day's resolution. Publishing a
+    staging pack to production that way ships something that merely shares a
+    NAME with what was tested — observed 2026-08-26, caught by comparing
+    EnvIDs before the catalog pointer moved.
+
+    This is artifact-first. `env_adopt` reads the source tree's lock sidecar
+    and registers that exact EnvID locally ("from the stored lock — NO
+    solving, no index access"); `env_publish` then builds it into the
+    destination FROM THAT LOCK. Same identity by construction. The source's
+    version string travels too, so both trees name the artifact identically.
+
+    Pass `latest=False` when the destination is serving users: consumers adopt
+    `latest`, so moving the pointer before the app that was tested with it is
+    a live change to a deployment nobody has re-tested.
+    """
+    ad = _adapter.get_compute()
+    staging = staging or config.settings.weft_publish_staging.get()
+    try:
+        cat = named_envs._sync(ad.env_published(site, src_tree))
+    except ComputeError as e:
+        return [{"error": f"source catalog unreadable: {e.to_payload()}"}]
+    # `env_published` returns {envs: {name: {latest, versions: {ver: {...}}}}}
+    # — the catalog shape, enriched per version (is_latest, state_here,
+    # runnable_here). The LATEST version per name is what the source
+    # deployment actually serves, and therefore what was tested against it.
+    src: dict = {}
+    for nm, entry in (cat.get("envs") or {}).items():
+        ver = (entry or {}).get("latest")
+        if nm and ver:
+            src[nm] = ver
+    names = packs if packs is not None else sorted(src)
+    rows: list[dict] = []
+    for name in names:
+        ver = src.get(name)
+        if not ver:
+            rows.append({"pack": name, "error": f"not published in {src_tree}"})
+            continue
+        try:
+            # identity first: adopt registers the SOURCE's env_id + lock
+            eid = named_envs._sync(ad.env_adopt(site, src_tree, name))["env_id"]
+            pub = named_envs._sync(ad.env_publish(eid, site, dest_tree, name,
+                                                  version=ver, staging=staging,
+                                                  latest=latest))
+            rows.append({"pack": name, "env_id": eid, "version": ver,
+                         "published": True, "detail": pub})
+        except ComputeError as e:
+            rows.append({"pack": name, "error": e.to_payload()})
+    return rows
+
+
 def published_catalog(*, site: Optional[str] = None,
                       tree: Optional[str] = None) -> dict:
     """Render-complete `published:v1` rows for the configured (or given)

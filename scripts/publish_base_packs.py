@@ -36,6 +36,14 @@ def main() -> int:
                     help="fast build-churn dir for netfs trees, e.g. /dev/shm/pubstage "
                          "(default: $ABA_WEFT_PUBLISH_STAGING)")
     ap.add_argument("--version", default=None, help="override the auto date+digest version")
+    ap.add_argument("--from-tree", default=None,
+                    help="MOVE already-published packs from this catalog tree "
+                         "instead of solving them. Identity is preserved: the "
+                         "source's EnvID + lock are adopted and republished "
+                         "verbatim, so production gets the artifact staging "
+                         "TESTED — not a fresh solve that merely shares its "
+                         "name. Use this to promote; --tree alone mints new "
+                         "environments.")
     ap.add_argument("--no-latest", action="store_true",
                     help="publish the IMAGE and its catalog version WITHOUT moving "
                          "the `latest` pointer. Consumers adopt `latest`, so a plain "
@@ -49,9 +57,19 @@ def main() -> int:
     cc.configure()
     from core.compute import seeding
 
-    rows = seeding.publish_base_packs(site=args.site, tree=args.tree, packs=args.packs,
-                                      version=args.version, staging=args.staging,
-                                      latest=not args.no_latest)
+    if args.from_tree:
+        if args.version:
+            print("--version cannot be combined with --from-tree: the source's "
+                  "version travels with the artifact", file=sys.stderr)
+            return 2
+        rows = seeding.mirror_base_packs(site=args.site, src_tree=args.from_tree,
+                                         dest_tree=args.tree, packs=args.packs,
+                                         staging=args.staging,
+                                         latest=not args.no_latest)
+    else:
+        rows = seeding.publish_base_packs(site=args.site, tree=args.tree, packs=args.packs,
+                                          version=args.version, staging=args.staging,
+                                          latest=not args.no_latest)
     ok = 0
     for r in rows:
         pub = r.get("published")
@@ -61,7 +79,8 @@ def main() -> int:
         print(f"  {'✓' if pub else '✗'} {r.get('pack'):16} {r.get('version','')}  "
               f"{mb:.0f} MB  staging={ (d.get('staging') or {}).get('used') }"
               + ("" if pub else f"  ERROR: {r.get('error') or r.get('detail')}"))
-    print(f"\n{ok}/{len(rows)} published to {args.tree}"
+    _verb = "mirrored" if args.from_tree else "published"
+    print(f"\n{ok}/{len(rows)} {_verb} to {args.tree}"
           + ("  (latest pointer NOT moved)" if args.no_latest else ""))
     return 0 if ok == len(rows) and rows else 1
 
