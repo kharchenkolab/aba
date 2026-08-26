@@ -379,17 +379,24 @@ def test_out_of_band_install_dirties_the_snapshot_cache(tmp_path, monkeypatch):
 
 def test_out_of_band_marker_is_skipped_by_the_session_replay():
     """The marker row carries no `specs` — the session-rebuild replay must
-    skip it BEFORE touching add['specs'] (a real rebuild would otherwise
-    KeyError far from any bench). Source pin on the ordering, since the
-    rebuild path needs a live substrate to exercise behaviorally."""
+    skip it BEFORE the replay touches the row's contents (a real rebuild
+    would otherwise KeyError on add['specs'] far from any bench; the specs
+    access lives in _replay_one since the quarantine refactor). Source pin
+    on the ordering, since the rebuild path needs a live substrate to
+    exercise behaviorally."""
     import re
     src = (Path(_BACKEND) / "core/compute/project_env.py").read_text()
-    loop = re.search(r"for add in additions:.*?# installs are the FLIP",
-                     src, re.S)
+    loop = re.search(r"for add in additions:\s*# replay the recorded deltas"
+                     r".*?# installs are the FLIP", src, re.S)
     assert loop, "replay loop not found"
     body = loop.group(0)
     assert '"out-of-band"' in body, "replay no longer skips the marker rows"
-    assert body.index('"out-of-band"') < body.index('add["specs"]')
+    assert "_replay_one(" in body, "replay no longer delegates to _replay_one"
+    assert body.index('"out-of-band"') < body.index("_replay_one(")
+    # the delegate is where the specs subscript lives — keep the pin honest
+    # about WHY the skip must come first
+    assert 'add["specs"]' in src[loop.end():], \
+        "specs access moved — re-point this pin at wherever it lives now"
 
 
 def test_tripwire_abstains_without_a_statable_prefix(tmp_path, monkeypatch):
