@@ -212,3 +212,23 @@ def test_the_fixture_lands_where_the_SERVER_looks(tmp_path, monkeypatch):
     assert Path(PROJECTS_DIR).resolve() == projects_dir(tmp_path).resolve(), (
         f"the fixture writes {projects_dir(tmp_path)} but the server reads "
         f"{PROJECTS_DIR} — a home the server cannot see is not a fixture")
+
+
+def test_the_project_db_uses_the_REAL_schema(home):
+    """A partial fake does not test an easier case — it tests an impossible one.
+
+    The first version created a db with two hand-written tables. It looked
+    plausible and made `POST /api/projects/{id}/open` return HTTP 500 for every
+    request, because the server expects the full schema and a bootstrapped
+    `workspace` row. Per the standing rule: a fake must CARRY what the real
+    thing always carries."""
+    import sqlite3
+    from lived_in_home import projects_dir
+    db = sqlite3.connect(projects_dir(home) / "prj_lived_in" / "project.db")
+    tables = {r[0] for r in db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    assert len(tables) >= 10, f"only {len(tables)} tables — not the real schema"
+    assert {"entities", "entity_edges", "messages"} <= tables, sorted(tables)
+    ws = db.execute("SELECT COUNT(*) FROM entities WHERE id='workspace'").fetchone()[0]
+    db.close()
+    assert ws == 1, "the bootstrapped workspace row is missing"

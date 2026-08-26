@@ -91,18 +91,48 @@ def _project(root: Path, pid: str, *, named_envs: int = 0,
     }
     (d / "weft_envs.json").write_text(json.dumps(reg, indent=1))
 
-    # A non-empty entity graph: several code paths branch on "does this project
-    # have anything in it", and an empty db takes the new-project branch.
-    db = sqlite3.connect(d / "project.db")
-    db.execute("CREATE TABLE IF NOT EXISTS entities "
-               "(id TEXT PRIMARY KEY, type TEXT, title TEXT, status TEXT)")
-    db.execute("CREATE TABLE IF NOT EXISTS entity_edges "
-               "(source_id TEXT, target_id TEXT, kind TEXT)")
-    for i in range(entities):
-        db.execute("INSERT OR REPLACE INTO entities VALUES (?,?,?,?)",
-                   (f"ana_{i:08d}", "analysis", f"run {i}", "active"))
-    db.commit()
-    db.close()
+    # A non-empty entity graph, built with the REAL schema. A hand-rolled db
+    # with just `entities` and `entity_edges` looked right and made
+    # `POST /projects/{id}/open` return HTTP 500 for every request: the server
+    # expects the full set of tables and the bootstrapped `workspace` row. A
+    # fixture must CARRY what the real thing always carries — a partial fake
+    # does not test an easier case, it tests an impossible one.
+    _init_project_db(d / "project.db")
+    if entities:
+        db = sqlite3.connect(d / "project.db")
+        cols = {r[1] for r in db.execute("PRAGMA table_info(entities)")}
+        for i in range(entities):
+            row = {"id": f"ana_{i:08d}", "type": "analysis",
+                   "title": f"run {i}", "status": "active",
+                   "created_at": "2026-08-20T00:00:00Z",
+                   "updated_at": "2026-08-20T00:00:00Z",
+                   "data": "{}", "metadata": "{}"}
+            use = {k: v for k, v in row.items() if k in cols}
+            db.execute(f"INSERT OR REPLACE INTO entities ({','.join(use)}) "
+                       f"VALUES ({','.join('?' * len(use))})", tuple(use.values()))
+        db.commit()
+        db.close()
+
+
+def _init_project_db(path: Path) -> None:
+    """Create a project db with the server's own schema, not an approximation."""
+    import os
+    import sys
+    root = Path(__file__).resolve().parents[2]
+    sys.path.insert(0, str(root / "backend"))
+    prev = os.environ.get("ABA_DB_PATH")
+    os.environ["ABA_DB_PATH"] = str(path)
+    try:
+        for mod in [m for m in list(sys.modules) if m.startswith("core.")]:
+            sys.modules.pop(mod, None)
+        from core.graph import _schema
+        _schema.DB_PATH = path
+        _schema.init_db()
+    finally:
+        if prev is None:
+            os.environ.pop("ABA_DB_PATH", None)
+        else:
+            os.environ["ABA_DB_PATH"] = prev
 
 
 # The server reads projects from RUNTIME_DIR/projects, and RUNTIME_DIR defaults
