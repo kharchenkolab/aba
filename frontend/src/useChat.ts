@@ -324,11 +324,34 @@ export function useChat(
   // its files when it flushes (the queue can outlive the composer's local
   // attachment state).
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([])
-  // Mirror of queuedMessages in a ref. The in-flight stream's done/cancelled
-  // handlers capture state from the closure at TURN START (when it was empty),
-  // so reading the state there is stale — that's why auto-flush dropped a
-  // message queued mid-turn. The ref always holds the latest queue.
+  // Queues are PER THREAD, keyed by thread id. One flat queue leaked across
+  // the rail: a message typed while thread A worked stayed on screen after
+  // switching to B, and — because the flush posts to whatever thread is
+  // current — would have been delivered to B. Thread-switch aborts A's
+  // stream, so A's `done` never arrives and its queue never flushes either;
+  // that is the same bug wearing its other face ("they didn't run after the
+  // turn finished").
+  const queuesRef = useRef<Record<string, QueuedMessage[]>>({})
+  // The CURRENT thread's queue, as a ref. The in-flight stream's
+  // done/cancelled handlers capture state from the closure at TURN START
+  // (when it was empty), so reading the state there is stale — that's why
+  // auto-flush dropped a message queued mid-turn. The ref always holds the
+  // latest queue.
   const queuedMessagesRef = useRef<QueuedMessage[]>([])
+  // `threadId` at the moment a queue op runs. Written by the layout effect
+  // below so every mutation lands in the right bucket even from a closure
+  // captured on an older render.
+  const queueTidRef = useRef<string>(threadId)
+
+  /** Write the current thread's queue to both the ref, the bucket and the
+   *  rendered state — the three must never disagree. */
+  const setQueueFor = useCallback((tid: string, next: QueuedMessage[]) => {
+    queuesRef.current = { ...queuesRef.current, [tid]: next }
+    if (tid === queueTidRef.current) {
+      queuedMessagesRef.current = next
+      setQueuedMessages(next)
+    }
+  }, [])
   // A flag distinguishing Steer (cancel → flush queue) from Stop
   // (cancel → drop queue). Set by steer(); read in the 'cancelled'
   // handler; cleared either way.
@@ -424,6 +447,24 @@ export function useChat(
       lastSeqRef.current = 0
       lastRunIdRef.current = active.run_id
       runStreamRef.current?.({ reattachRunId: active.run_id, since: 0 })
+    } else {
+      // The turn this thread's queue was waiting on has ENDED — send the next
+      // one now. Switching threads aborts the stream, so the `done` that
+      // normally triggers the flush never arrives for the thread you left;
+      // its queue just sat there ("they didn't quite run after the turn
+      // finished"). Coming back is the other moment we learn the turn is over.
+      // Bounded by construction: queues live in memory only, so this can fire
+      // only for a thread queued into during THIS session.
+      const pending = queuesRef.current[threadId] || []
+      if (pending.length) {
+        const [q, ...rest] = pending
+        setTimeout(() => {
+          const flush = flushSendRef.current
+          if (!flush || queueTidRef.current !== threadId) return
+          setQueueFor(threadId, rest)
+          flush(q)
+        }, 0)
+      }
     }
     // deps MUST include projectId — without it, the closure captures whatever
     // projectId was at first mount (often undefined briefly, or stale from a
@@ -432,7 +473,7 @@ export function useChat(
     // observed: opening test0 showed Sp9's chat). The useEffect that calls
     // loadMessages depends on loadMessages's identity, so re-deriving the
     // callback on projectId change also re-fires the fetch.
-  }, [threadId, projectId])
+  }, [threadId, projectId, setQueueFor])
   // Ref-shadow of runStream so loadMessages can call it without a TDZ
   // (runStream is declared after loadMessages and depends on it).
   const runStreamRef = useRef<((opts: { text?: string; retry?: boolean; annotation?: Annotation | null; attachments?: Attachment[]; resumeRunId?: string; approvalAction?: 'approve' | 'approve_session' | 'reject'; reattachRunId?: string; since?: number }) => Promise<void>) | null>(null)
@@ -455,6 +496,12 @@ export function useChat(
     const persisted = readPersistedSeq(threadId)
     lastSeqRef.current = persisted.seq
     lastRunIdRef.current = persisted.runId
+    // Swap the visible queue to THIS thread's. Not cleared — the user's typed
+    // text survives the switch and is waiting when they come back.
+    queueTidRef.current = threadId
+    const mine = queuesRef.current[threadId] || []
+    queuedMessagesRef.current = mine
+    setQueuedMessages(mine)
   }, [reloadKey, threadId])
 
   // Then fetch the new thread's conversation (after paint).
@@ -470,6 +517,10 @@ export function useChat(
   const runStream = useCallback(
     async (opts: { text?: string; retry?: boolean; annotation?: Annotation | null; attachments?: Attachment[]; resumeRunId?: string; approvalAction?: 'approve' | 'approve_session' | 'reject'; reattachRunId?: string; since?: number }) => {
       const myGen = genRef.current
+      // The thread this run belongs to. Captured at START, because the flush
+      // handlers fire from a setTimeout that can land after the user has moved
+      // to another thread — and the flush POSTS to whatever thread is current.
+      const ownerTid = threadId
       const ac = new AbortController()
       abortRef.current = ac
       setStreaming(true)
@@ -791,18 +842,24 @@ export function useChat(
                 // disappearing silently. See the matching `done` branch.
                 setTimeout(() => {
                   const flush = flushSendRef.current
-                  if (!flush) {
-                    console.warn('[useChat] steer auto-flush: flushSendRef null; queue preserved')
+                  if (!flush || queueTidRef.current !== ownerTid) {
+                    // Switched away mid-cancel: leave the queue with the
+                    // thread that owns it rather than firing it into
+                    // whatever thread is on screen now.
+                    console.warn('[useChat] steer auto-flush deferred; queue preserved')
                     return
                   }
-                  queuedMessagesRef.current = rest
-                  setQueuedMessages(rest)
+                  setQueueFor(ownerTid, rest)
                   flush(q)
                 }, 0)
               } else {
+                // Plain Stop KEEPS the queue. It used to drop it silently, so
+                // hitting Stop threw away text the user had typed with no
+                // warning and no undo ("stop cancels queued messages ...
+                // confusing"). Stop ends the TURN; it is not a command to
+                // discard what you wrote. The chips stay, each with its own ✕,
+                // and Send fires them when the user is ready.
                 steerFlushRef.current = false
-                queuedMessagesRef.current = []
-                setQueuedMessages([])
               }
               return 'terminal'
             } else if (ev.type === 'entity_registered') {
@@ -829,12 +886,13 @@ export function useChat(
                 const [q, ...rest] = queuedMessagesRef.current
                 setTimeout(() => {
                   const flush = flushSendRef.current
-                  if (!flush) {
-                    console.warn('[useChat] auto-flush: flushSendRef null; queue preserved')
+                  if (!flush || queueTidRef.current !== ownerTid) {
+                    // The flush POSTS to the current thread. If the user has
+                    // moved on, sending here would deliver A's message into B.
+                    console.warn('[useChat] auto-flush deferred; queue preserved')
                     return
                   }
-                  queuedMessagesRef.current = rest
-                  setQueuedMessages(rest)
+                  setQueueFor(ownerTid, rest)
                   flush(q)
                 }, 0)
               }
@@ -915,7 +973,7 @@ export function useChat(
     // observed: live thread in prj_4b07b6ef, but the "add a gene" turn landed
     // in prj_7b97dad2 because the closure was holding the prior pid. Same
     // bug shape as loadMessages had — fixed there in commit cb8658e.
-    [focusEntityId, threadId, projectId],
+    [focusEntityId, threadId, projectId, setQueueFor],
   )
   // Expose runStream via a ref so loadMessages (declared above) can call
   // it without a temporal dead zone. Updated on every render — refs are
@@ -925,6 +983,20 @@ export function useChat(
   const sendMessage = useCallback(
     async (text: string, annotation?: Annotation | null, attachments?: Attachment[]) => {
       if (streaming) return
+      // FIFO. A queue on this thread means earlier messages are still waiting;
+      // sending this one straight out would run it AHEAD of them. Live report:
+      // two messages queued, the thread went idle, and a third typed to "bump"
+      // the queue executed on its own while the first two stayed parked.
+      // Append, then drain from the front — so the new text is what the user
+      // sees happen last, not first.
+      const tid = queueTidRef.current
+      const pending = queuesRef.current[tid] || []
+      if (pending.length) {
+        const [head, ...rest] = [...pending, { text: text.trim(), attachments }]
+        setQueueFor(tid, rest)
+        flushSendRef.current?.(head)
+        return
+      }
       // Set streamingRef SYNCHRONOUSLY (the state-driven effect at line
       // 202 runs after React renders, leaving a window where an
       // in-flight loadMessages can resolve and `setMessages(server-
@@ -940,7 +1012,7 @@ export function useChat(
       }])
       await runStream({ text, annotation, attachments })
     },
-    [streaming, runStream],
+    [streaming, runStream, setQueueFor],
   )
   // Keep the ref pointing at the latest sendMessage so the auto-flush
   // code inside the SSE handler (set up via closure on an older render)
@@ -1035,18 +1107,19 @@ export function useChat(
   const enqueue = useCallback((text: string, attachments?: Attachment[]) => {
     const t = text.trim()
     if (!t && !attachments?.length) return  // empty Enter is a no-op, not a clear
-    const next = [...queuedMessagesRef.current, { text: t, attachments }]   // APPEND — don't bump the prior
-    queuedMessagesRef.current = next; setQueuedMessages(next)
-  }, [])
+    const tid = queueTidRef.current
+    const next = [...(queuesRef.current[tid] || []), { text: t, attachments }]  // APPEND — don't bump the prior
+    setQueueFor(tid, next)
+  }, [setQueueFor])
 
   // Drop ALL queued messages (e.g. on Stop).
-  const dropQueue = useCallback(() => { queuedMessagesRef.current = []; setQueuedMessages([]) }, [])
+  const dropQueue = useCallback(() => setQueueFor(queueTidRef.current, []), [setQueueFor])
 
   // Drop a single queued message by position (the per-chip ✕).
   const dropQueueAt = useCallback((index: number) => {
-    const next = queuedMessagesRef.current.filter((_, i) => i !== index)
-    queuedMessagesRef.current = next; setQueuedMessages(next)
-  }, [])
+    const tid = queueTidRef.current
+    setQueueFor(tid, (queuesRef.current[tid] || []).filter((_, i) => i !== index))
+  }, [setQueueFor])
 
   // Steer: cancel the current turn AND send `text` once cancelled
   // commits. Sets the flush flag so the cancelled-handler knows this
@@ -1064,8 +1137,8 @@ export function useChat(
     steerFlushRef.current = true
     // Prepend: steer sends `t` immediately (cancel → flush head), leaving any
     // already-queued messages to follow.
-    const next = [{ text: t, attachments }, ...queuedMessagesRef.current]
-    queuedMessagesRef.current = next; setQueuedMessages(next)
+    const tid = queueTidRef.current
+    setQueueFor(tid, [{ text: t, attachments }, ...(queuesRef.current[tid] || [])])
     try {
       await fetch(`/api/turns/${encodeURIComponent(rid)}/cancel`, {
         method: 'POST',
@@ -1073,7 +1146,7 @@ export function useChat(
         body: JSON.stringify({ user_text: 'steer' }),
       })
     } catch { /* if cancel fails, on-done flush still picks up the queue */ }
-  }, [sendMessage])
+  }, [sendMessage, setQueueFor])
 
   // P1 #3 — respond to a pending tool approval. The held tool runs (or
   // gets a rejection result) in the resume endpoint; the new turn then
