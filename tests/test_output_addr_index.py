@@ -647,3 +647,162 @@ def test_a_no_output_step_still_creates_NO_run(monkeypatch):
         tool_name="run_python", tool_input={"code": "print(1)"},
         result_obj={"exec_id": "exec_f2", "plots": [], "tables": [], "files": []},
         thread_id="thr_t", focused_entity_id=None, analysis_ctx={})
+
+
+# ── the row's TARGET guides the per-rel doors (same-rel collision, resume) ───
+#
+# A resumed Run spans two sandboxes; each numbers its files independently, so
+# two jobdirs can hold the SAME rel with different bytes. The doors walked
+# targets in a fixed order — first hit wins — while the listing advertised the
+# addr row's bytes (recorded from the kernel that kept it): listing said
+# 266 B, the door served the FIRST kernel's 0-byte same-rel copy (live
+# 2026-08). The row's `target` is the tie-breaker; without a row (or without
+# a usable target) the fixed-order walk is the unchanged, honest ceiling.
+
+CREL = "data.bin"
+
+
+def _collision_world(monkeypatch, tmp_path, row_target=..., *, record_row=True):
+    """Two local jobdirs colliding on CREL: first target's copy EMPTY, the
+    second's real. Optionally an addr row naming `row_target`."""
+    import content.bio.lifecycle.runs as R
+    ws = tmp_path / "ws"
+    ja = ws / "site-local" / "jA"
+    jb = ws / "site-local" / "jB"
+    ja.mkdir(parents=True); jb.mkdir(parents=True)
+    (ja / CREL).write_bytes(b"")
+    (jb / CREL).write_bytes(b"real-bytes")
+    monkeypatch.setattr(R, "get_entity", lambda rid: {
+        "id": rid, "metadata": {"weft_targets": ["krn_a", "krn_b"]}})
+    import core.compute.adapter as _ad
+    monkeypatch.setattr(_ad, "weft_workspace", lambda: ws)
+
+    class _Comp:
+        def sync_call(self, verb, *a, **k):
+            if verb == "list_kernels":
+                return {"kernels": [
+                    {"kernel_id": "krn_a", "site": "local", "jobdir": "jA"},
+                    {"kernel_id": "krn_b", "site": "local", "jobdir": "jB"}]}
+            return {}
+
+    import core.compute as _cc
+    monkeypatch.setattr(_cc, "get_compute", lambda: _Comp())
+    from core.compute import retention
+    monkeypatch.setattr(retention, "retained", lambda **k: [])
+    from core.graph import exec_records
+    monkeypatch.setattr(exec_records, "list_by_run", lambda rid: [])
+    if record_row:
+        from core.graph import output_addr as oa
+        oa.record([{"run_id": "ana_c", "rel": CREL,
+                    "target": (None if row_target is ... else row_target),
+                    "site": "local", "kind": "file", "bytes": 10,
+                    "state": "live", "source": "keep"}])
+    return ja, jb
+
+
+def test_the_rows_target_breaks_a_same_rel_collision(monkeypatch, tmp_path):
+    _ja, jb = _collision_world(monkeypatch, tmp_path, "krn_b")
+    from content.bio.lifecycle.runs import locate_run_output
+    loc = locate_run_output("ana_c", CREL, match="exact", remote=False)
+    assert loc, "collision file did not resolve at all"
+    assert Path(loc["local_path"]).read_bytes() == b"real-bytes", \
+        "door served a colliding sandbox's copy instead of the recorded one"
+    assert loc["size"] == len(b"real-bytes")
+
+
+def test_no_row_keeps_the_fixed_order_ceiling(monkeypatch, tmp_path):
+    # WIDE (absent): without a row the walk is unchanged — first target answers.
+    _ja, _jb = _collision_world(monkeypatch, tmp_path, record_row=False)
+    from content.bio.lifecycle.runs import locate_run_output
+    loc = locate_run_output("ana_c", CREL, match="exact", remote=False)
+    assert loc and loc["size"] == 0
+
+
+def test_a_target_less_row_keeps_the_fixed_order_ceiling(monkeypatch, tmp_path):
+    # WIDE (absent field): backfill rows may carry no target.
+    _ja, _jb = _collision_world(monkeypatch, tmp_path, None)
+    from content.bio.lifecycle.runs import locate_run_output
+    loc = locate_run_output("ana_c", CREL, match="exact", remote=False)
+    assert loc and loc["size"] == 0
+
+
+def test_an_unknown_target_falls_back_never_raises(monkeypatch, tmp_path):
+    # WIDE (stale): the recording kernel was pruned from the target list.
+    _ja, _jb = _collision_world(monkeypatch, tmp_path, "krn_gone")
+    from content.bio.lifecycle.runs import locate_run_output
+    loc = locate_run_output("ana_c", CREL, match="exact", remote=False)
+    assert loc and loc["size"] == 0
+
+
+def test_preview_read_prefers_the_rows_target(monkeypatch, tmp_path):
+    import base64
+    import content.bio.lifecycle.runs as R
+    monkeypatch.setattr(R, "get_entity", lambda rid: {
+        "id": rid, "metadata": {"weft_targets": ["krn_a", "krn_b"]}})
+    from core.compute import retention
+    served = {"krn_a": b"", "krn_b": b"real-bytes"}
+    calls: list = []
+
+    def _fr(t, rel, max_bytes=0):
+        calls.append(t)
+        return {"bytes_b64": base64.b64encode(served[t]).decode(),
+                "bytes_total": len(served[t])}
+
+    monkeypatch.setattr(retention, "file_read", _fr)
+    from core.graph import output_addr as oa
+    oa.record([{"run_id": "ana_c", "rel": CREL, "target": "krn_b",
+                "site": "local", "kind": "file", "bytes": 10,
+                "state": "live", "source": "keep"}])
+    data, _tr, _tot = R.read_run_file("ana_c", CREL)
+    assert data == b"real-bytes"
+    assert calls[0] == "krn_b", "preview did not consult the recorded target first"
+
+
+# ── the panel's fold outranks the addr join (machinery never advertised) ─────
+
+def _panel_world(monkeypatch, artifact_rows):
+    import content.bio.lifecycle.runs as R
+    monkeypatch.setattr(R, "get_entity", lambda rid: {"id": rid, "metadata": {}})
+    from core.exec import artifacts as _arts
+    monkeypatch.setattr(_arts, "artifacts_for_run", lambda rid: list(artifact_rows))
+    from core.compute import retention
+    monkeypatch.setattr(retention, "retained", lambda **k: [])
+    return R
+
+
+def test_the_join_does_not_readmit_folded_machinery(monkeypatch):
+    """Legacy machinery rows EXIST in the index (the harvest once recorded
+    them); the panel must decline to advertise them — while a real rel keeps
+    entering through the same join (its whole purpose)."""
+    from core.graph import output_addr as oa
+    oa.record([
+        {"run_id": "ana_p", "rel": "blocks/0001.err", "site": "local",
+         "target": "krn_b", "kind": "file", "bytes": 266,
+         "state": "live", "source": "keep"},
+        {"run_id": "ana_p", "rel": "result.csv", "site": "local",
+         "target": "krn_b", "kind": "file", "bytes": 12,
+         "state": "live", "source": "keep"},
+    ])
+    # ARMED: the join has something to re-admit — both rows really recorded.
+    assert {r["rel"] for r in oa.by_run("ana_p")} \
+        == {"blocks/0001.err", "result.csv"}
+    R = _panel_world(monkeypatch, [])
+    view = R.run_durable_view("ana_p")
+    rels = [f["rel"] for f in view["files"]]
+    assert "result.csv" in rels, "the join stopped admitting real files"
+    assert "blocks/0001.err" not in rels, \
+        "machinery re-admitted via the addr join (the empty-serve incident)"
+    assert view["summary"].get("runtime_files") == 1   # declared, never silent
+
+
+def test_machinery_counted_once_when_both_sources_carry_it(monkeypatch):
+    # WIDE: sidecar row AND index row for the same machinery rel → folded once.
+    from core.graph import output_addr as oa
+    oa.record([{"run_id": "ana_q", "rel": "blocks/0001.err", "site": "local",
+                "target": "krn_b", "kind": "file", "bytes": 266,
+                "state": "live", "source": "keep"}])
+    R = _panel_world(monkeypatch,
+                     [{"original_name": "blocks/0001.err", "bytes": 266}])
+    view = R.run_durable_view("ana_q")
+    assert [f["rel"] for f in view["files"]] == []
+    assert view["summary"].get("runtime_files") == 1

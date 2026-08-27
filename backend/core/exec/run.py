@@ -446,6 +446,36 @@ _HARVEST_SKIP_DIRS = frozenset((
     "node_modules", ".pytest_cache", ".mypy_cache",
 ))
 
+# The driver's own machinery, present in EVERY real jobdir: the per-block
+# transcript tree (blocks/NNNN.*), the runner/kernel scaffolding written at
+# the sandbox ROOT, and the kernel driver's dotless state files. Not analysis
+# products — excluded from output tracking BY RULE, because agent code and the
+# driver share a directory and a fixture without these once blessed a filter
+# that scooped `current_block` as a Run's only output. ONE owner: the harvest
+# scan here, the remote-kernel scrape, the durable panel's fold and the files
+# tree's disk top-up all consume this predicate (the panel previously kept its
+# own smaller copy while the skipped-shape harvest pass had none at all — the
+# 2026-08 `blocks/0001.err` empty-serve incident). Exact ROOT-level names +
+# root-level prefixes only, so a user's own `out/log` in a subdirectory is
+# untouched. The raw transcript stays reachable through the run log and exec
+# records — excluded from produced[], not from existence.
+KERNEL_MACHINERY = frozenset({
+    "current_block", "activate.sh", "cmd.sh", "runner.sh", "log",
+    "node", "pid", "pid.epoch", "pid.real", "rusage",
+    # the block DIRECTORY itself, not just its contents: an inventory lists the
+    # dir entry as bare `blocks`, which the `blocks/` prefix never matches
+    "blocks",
+})
+KERNEL_MACHINERY_PREFIXES = ("blocks/", "kernel.", "driver.")
+
+
+def is_kernel_machinery(rel: str) -> bool:
+    """Is this sandbox-relative entry the driver's own bookkeeping rather than
+    something the user's code produced? Coupled to weft's jobdir layout by
+    necessity — the two share a directory."""
+    return (rel in KERNEL_MACHINERY
+            or rel.startswith(KERNEL_MACHINERY_PREFIXES))
+
 
 def _window_floor(ts: float) -> float:
     """Round a wall-clock window start DOWN to whole-second resolution.
@@ -498,6 +528,16 @@ def _iter_kept(scratch: Path, suffixes: tuple[str, ...], since_ts: float,
         if not f.is_file():
             continue
         if f.name.startswith("."):
+            continue
+        # The driver's own files (blocks/ transcripts, root scaffolding) are
+        # not outputs — every pass skips them here, INCLUDING the any-suffix
+        # skipped-shape pass, which is how blocks/0001.err once entered
+        # produced[] as a link-only row and was then kept and advertised.
+        try:
+            _rel = f.relative_to(scratch).as_posix()
+        except ValueError:
+            _rel = f.name
+        if is_kernel_machinery(_rel):
             continue
         # Skip rasterized-preview sidecars (PDFs and any future
         # non-raster figure formats). Both the legacy .thumb.png name

@@ -78,7 +78,14 @@ inventory membership for a directory store), returning `{local_path?, locality:
 local|remote, site, durability, kind, size, digest, target}`. `match="exact"`
 joins the exact rel only (serve/archive/keep — a same-named file elsewhere must
 not answer); `match="name"` adds store-prefix and basename matching
-(viewer/lookup).
+(viewer/lookup). On an exact match the addr row's recorded `target` orders the
+jobdir/preview walk (`_addr_row` → `_prefer_target`): a resumed Run spans two
+sandboxes that number their files independently, so two jobdirs can hold the
+SAME rel with different bytes, and a fixed-order walk served the first
+kernel's 0-byte copy of a rel the listing advertised at 266 B (live 2026-08).
+The book's target is the tie-breaker — the door serves the bytes the book
+describes; a row-less rel, a target-less row, or a pruned target all keep the
+fixed-order walk unchanged.
 **Failure this prevents:** N surfaces × M reimplemented resolvers, each with its
 own local-fs assumption; lookups (menus, stats, renders) silently moving bytes.
 
@@ -111,6 +118,23 @@ as if current; half-written files observable mid-fetch; a concurrent open
 deleting a fresh copy out from under a viewer.
 
 ## Harvest honesty (what the tracking contract does when defeated)
+
+**Driver machinery is excluded from output tracking by rule.** Agent code and
+the block driver share a directory, so the harvest reads both real outputs and
+the driver's own files (the `blocks/` transcript tree, root-level runner
+scaffolding, `current_block`) out of the same tree. ONE predicate —
+`core.exec.run.is_kernel_machinery`, root-level names/prefixes only — is
+consumed by the harvest scan (every pass, including the any-suffix
+skipped-shape pass), the remote-kernel scrape, the durable panel's fold
+(legacy rows, declared in `summary.runtime_files` — and the addr join must not
+re-admit what the fold folds) and the files tree's disk top-up. Before the
+rule reached the skipped-shape pass, `blocks/0001.err` entered `produced[]` as
+a link-only row, was kept, advertised at its recorded size, and served empty
+from a colliding sandbox (live 2026-08). The transcript stays reachable
+through the run log and exec records — excluded from `produced[]`, not from
+existence. Guards: `tests/test_harvest_honesty.py` (harvest exclusion, root
+level only), `tests/test_output_addr_index.py` (fold-over-join, target
+tie-break) — all red-proven.
 
 The harvest scans the run's working tree within a time window — two things
 agent code can do defeat that silently, and both now SAY so instead:
@@ -158,7 +182,7 @@ holds on fine-grained filesystems too).
 | Serve (run file) | `web/routes/runs.py` `/api/runs/{id}/file` | `resolve_run_file` (exact, small gate) → preview read → honest site-naming 413 |
 | Serve (archive) | `/api/runs/{id}/archive` | per-file `resolve_run_file`; skipped files listed in-zip, never dropped |
 | Serve (entity / tree) | `main.py` `/api/entities/{id}/download`, `web/routes/files.py` content/raw/download | dangling `/artifacts` cache → run-backed nodes via `resolve_run_file` (`_run_backed_path`) → `resolve_entity_output` → materialize under the small gate, else site-naming 413 / 404 naming the site |
-| List | `run_durable_view` / `run_durable_tree` | recorded truth first; two-axis badges (protection × location); `retained` rows always link the live `/file` URL — remote in-place included. A chunked directory store folds to ONE `kind:"store"` row (weakest-live-member state, honest byte sum, member count in the badge — same line the manifest and surface probe hold); runtime bookkeeping (the `blocks/…` transcript + exact root-level runner scaffolding, `_RUNNER_SCAFFOLDING`) folds to a declared `summary.runtime_files` count |
+| List | `run_durable_view` / `run_durable_tree` | recorded truth first; two-axis badges (protection × location); `retained` rows always link the live `/file` URL — remote in-place included. A chunked directory store folds to ONE `kind:"store"` row (weakest-live-member state, honest byte sum, member count in the badge — same line the manifest and surface probe hold); runtime bookkeeping (the `blocks/…` transcript + root-level scaffolding, `core.exec.run.is_kernel_machinery`) folds to a declared `summary.runtime_files` count, on BOTH sources — sidecar rows and addr-join rows alike |
 | Tree (Files tab) | `files/tree.py` `build_files_tree` → `_graft_run_outputs` | each run's `output/` comes from the PRODUCED LEDGER (`run_durable_view`: states carried, sandbox-lifetime files marked ephemeral, `cleared` unlisted, cap declared) plus a disk top-up of `artifact_path` for legacy jobdir runs, deduped by rel. Never a bare disk walk: under the kernel substrate produced files live in the kernel workspace and a walk of `artifact_path` finds nothing. Disk grafts are ADDRESS-HONEST: every folder node `_graft_dir` creates carries its real on-disk path — a directory-shaped source (a store mirror fetched into `work/<run>-fetched/`) must resolve and serve locally, never shadow a launch as an address-less basename match; and the launch-route resolver (`web/routes/viewers.py` `_resolve_files_node`) treats a node with neither a run key nor any byte address as NON-TERMINAL, falling through to the run-output resolver instead of starving both launcher arms (found live: a stale fetched mirror 404'd an otherwise-streamable store) |
 | Export (zip / materialize) | `/api/files/download`, `materialize_tree(resolve=)` | run-backed nodes resolve through the caller-supplied run resolver; files the tree lists but this machine can't serve are NAMED (`SKIPPED-FILES.txt` / `missing`+warning), never silently omitted |
 | Register (`register_dataset`) | `curation._resolve_dataset_path` | `locate_run_output(active_run, name)` **first** (site- and stopped-kernel-aware); the ranked scratch scan is the fallback and the only tier for no-run registrations; the durable `run_key` is captured via the resolver (`_capture_run_key`), site-agnostically. Durable-home lanes (in-place outside aba's trees, and remote site paths) eagerly mint + record the data-plane content `ref` under the transfer-guardrail byte budget (best-effort — a mint failure leaves ref absent and the record stands; the viewer launch mints lazily): the recorded ref is what lets the range channel's ref arm stream the dataset with no resolvable run |
@@ -208,7 +232,9 @@ not be re-derived at a door (misc/paths.md owns the rationale).
 - Tests: `tests/test_remote_output_resolution.py` (the invariant guard:
   lookup-never-transfers, digest revalidation, atomic installs, presentation
   parity, the produce-remotely → open-here → settle lifecycle),
-  `tests/test_run_durable_view.py`, `tests/test_serving_spine.py`,
+  `tests/test_output_addr_index.py` (the index + the target tie-break + the
+  panel's fold-over-join), `tests/test_harvest_honesty.py` (machinery
+  exclusion), `tests/test_serving_spine.py`,
   `tests/test_output_door_census.py` (every lister/server of run outputs
   reads the ledger — the door census), `tests/test_range_channel.py` (the range
   channel, BOTH arms: cache miss back-hauls / hit short-circuits — armed; typed
@@ -225,18 +251,13 @@ not be re-derived at a door (misc/paths.md owns the rationale).
 
 ## Known gaps
 
-- **Driver machinery is advertised as a Run output, and it serves empty.** The
-  surface oracle fails `cheminformatics` deterministically (2/2, 2026-08-13) on
-  `surface:empty_bytes:<rid>/blocks/0001.err` — the durable view lists
-  `blocks/0001.err` with a truthy `bytes`, and `/api/runs/<rid>/file?rel=…`
-  returns 200 with no content. `blocks/NNNN.err` is the weft block driver's own
-  stderr, empty precisely because the step succeeded, so the row is wrong twice:
-  it is not the user's output, and its advertised size is not its served size.
-  This is the recurrence of the harvest-filter class already on record (a fake
-  sandbox that started EMPTY blessed a filter which scooped `current_block` as a
-  Run's only output) — a real jobdir always carries the driver's machinery, so
-  the filter must exclude it by rule rather than by what a fixture happens to
-  contain.
+- **Same-rel collisions outside the book's reach still pick by walk order.**
+  The addr-row target tie-break covers per-rel reads with a recorded row; a
+  collision with NO row (two live sandboxes, nothing kept yet) keeps
+  first-target-wins, and if BOTH kernels' keeps settle the same rel the
+  retained-tier walk can still pick either copy (both were deliberately kept).
+  The index PK `(run_id, rel)` can hold only one row per rel — last writer
+  wins is the book's semantics, and the doors now serve that writer's bytes.
 - **A working file is registered as a Dataset instead of kept.**
   `ephemeral_deliverable` fails 3/3 (2026-08-13) with
   `tool_not_used:keep_outputs` + `tool_called_too_often:register_dataset (1 > 0)`:

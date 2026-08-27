@@ -71,7 +71,7 @@ def test_resolve_output_retained_tier(tmp_path, monkeypatch):
     _mk_sidecar(loc, ["keep.csv"])
     monkeypatch.setattr(retmod, "retained", lambda **kw: [{"state": "done"}])
     monkeypatch.setattr(retmod, "location_path", lambda row: str(loc))
-    monkeypatch.setattr(runs, "_run_jobdirs", lambda rid: [])
+    monkeypatch.setattr(runs, "_run_jobdirs", lambda rid, prefer=None: [])
     monkeypatch.setattr(runs, "get_entity", lambda rid: {"artifact_path": None})
     info = runs.resolve_output("r", "keep.csv")
     assert info["durability"] == "retained" and info["locality"] == "local"
@@ -88,7 +88,7 @@ def test_resolve_output_live_tier_dir_store(tmp_path, monkeypatch):
     store.mkdir(parents=True)
     (store / "0.0").write_text("c")
     monkeypatch.setattr(retmod, "retained", lambda **kw: [])
-    monkeypatch.setattr(runs, "_run_jobdirs", lambda rid: [str(jd)])
+    monkeypatch.setattr(runs, "_run_jobdirs", lambda rid, prefer=None: [str(jd)])
     monkeypatch.setattr(runs, "get_entity", lambda rid: {"artifact_path": None})
     info = runs.resolve_output("r", "cube.zarr")
     assert info["durability"] == "live" and info["kind"] == "dir"
@@ -105,7 +105,7 @@ def test_resolve_output_retained_wins_over_live(tmp_path, monkeypatch):
     (jd / "dual.csv").write_text("live")
     monkeypatch.setattr(retmod, "retained", lambda **kw: [{"state": "done"}])
     monkeypatch.setattr(retmod, "location_path", lambda row: str(loc))
-    monkeypatch.setattr(runs, "_run_jobdirs", lambda rid: [str(jd)])
+    monkeypatch.setattr(runs, "_run_jobdirs", lambda rid, prefer=None: [str(jd)])
     monkeypatch.setattr(runs, "get_entity", lambda rid: {"artifact_path": None})
     info = runs.resolve_output("r", "dual.csv")
     assert info["durability"] == "retained"
@@ -118,7 +118,7 @@ def test_resolve_output_scratch_fallback_and_absent(tmp_path, monkeypatch):
     ap.mkdir()
     (ap / "note.txt").write_text("n")
     monkeypatch.setattr(retmod, "retained", lambda **kw: [])
-    monkeypatch.setattr(runs, "_run_jobdirs", lambda rid: [])
+    monkeypatch.setattr(runs, "_run_jobdirs", lambda rid, prefer=None: [])
     monkeypatch.setattr(runs, "get_entity", lambda rid: {"artifact_path": str(ap)})
     info = runs.resolve_output("r", "note.txt")
     assert info["durability"] == "scratch" and info["rel"] == "note.txt"
@@ -135,7 +135,7 @@ def test_resolve_entity_output_uses_exec_reference(tmp_path, monkeypatch):
     _mk_sidecar(loc, ["big.h5ad"])
     monkeypatch.setattr(retmod, "retained", lambda **kw: [{"state": "done"}])
     monkeypatch.setattr(retmod, "location_path", lambda row: str(loc))
-    monkeypatch.setattr(runs, "_run_jobdirs", lambda rid: [])
+    monkeypatch.setattr(runs, "_run_jobdirs", lambda rid, prefer=None: [])
     monkeypatch.setattr(runs, "get_entity", lambda eid: {
         "id": eid, "exec_id": "exec_1", "artifact_path": "/artifacts/p/gone.h5ad",
         "metadata": {"original_name": "big.h5ad"},

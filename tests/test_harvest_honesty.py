@@ -415,6 +415,50 @@ def test_tripwire_abstains_without_a_statable_prefix(tmp_path, monkeypatch):
     assert calls["n"] == 0
 
 
+# ── driver machinery is excluded from output tracking BY RULE ────────────────
+#
+# The class (docs/arch/run-outputs.md Known gaps → closed 2026-08-27): agent
+# code and the block driver share a directory, so the harvest reads both real
+# outputs and the driver's own files out of the same tree. The any-suffix
+# skipped-shape pass had no machinery rule at all — blocks/0001.err entered
+# produced[] as a link-only row, was kept, advertised at its recorded size,
+# and served EMPTY from a colliding sandbox. Exclusion must be by rule
+# (core.exec.run.is_kernel_machinery — ONE owner with the remote scrape, the
+# panel fold and the tree top-up), because every REAL jobdir carries the
+# machinery even when a test fixture forgets it.
+
+def _mk_real_jobdir(root: Path) -> Path:
+    """Fake-fidelity: a fixture jobdir CARRIES what every real jobdir carries."""
+    (root / "blocks").mkdir(parents=True)
+    (root / "blocks" / "0001.out").write_text("transcript\n")
+    (root / "blocks" / "0001.err").write_bytes(b"boom: exit 1\n")
+    (root / "current_block").write_text("2\n")
+    for n in ("pid", "log", "cmd.sh", "runner.sh"):
+        (root / n).write_text("x\n")
+    return root
+
+
+def test_harvest_excludes_driver_machinery_by_rule(tmp_path):
+    scratch = _mk_real_jobdir(tmp_path / "job")
+    (scratch / "result.csv").write_text("a,b\n1,2\n")
+    (scratch / "notes.rare").write_text("unknown suffix -> skipped-shape pass\n")
+    sub = scratch / "sub" / "blocks"        # WIDE: the rule is ROOT-level only
+    sub.mkdir(parents=True)
+    (sub / "nested.csv").write_text("k\n1\n")
+    plots, tables, files, _w = harvest_artifacts(scratch, since_ts=0)
+    names = [x.get("original_name") for x in plots + tables + files]
+    # ARMED three ways: the real outputs land through the same scan that must
+    # skip the machinery — including the any-suffix pass that caused the bug.
+    assert "result.csv" in names, names
+    assert "notes.rare" in names, names
+    assert "sub/blocks/nested.csv" in names, names
+    leaked = [n for n in names
+              if n.startswith("blocks/")
+              or n in ("blocks", "current_block", "pid", "log",
+                       "cmd.sh", "runner.sh")]
+    assert not leaked, f"driver machinery harvested as outputs: {leaked}"
+
+
 if __name__ == "__main__":
     import subprocess as _sp
     raise SystemExit(_sp.call([sys.executable, "-m", "pytest", __file__, "-v"]))

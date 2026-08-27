@@ -484,10 +484,10 @@ def _graft_run_outputs(parent: dict, run: dict, *, cap: int = 300) -> int:
             # — the run log has its own surfaces; one owner for the name set:
             # the durable view folds the same rels). blocks/ is the execution
             # transcript, folded at the ledger level for the same reason.
-            from content.bio.lifecycle.runs import _RUNNER_SCAFFOLDING
+            from core.exec.run import KERNEL_MACHINERY
             skip = frozenset(
                 [str((base / rel).resolve()) for rel in listed]
-                + [str((base / n).resolve()) for n in _RUNNER_SCAFFOLDING])
+                + [str((base / n).resolve()) for n in KERNEL_MACHINERY])
             skip_dirs = (str((base / "blocks").resolve()),)
         except Exception:  # noqa: BLE001
             skip, skip_dirs = frozenset(), ()

@@ -32,16 +32,10 @@ _log = logging.getLogger(__name__)
 # block starts, removed when it ends — so any block that dies mid-flight leaves
 # one behind with a fresh mtime. Live (thr_a1f7f687): an ssh timeout killed a
 # block and `current_block` (3 bytes) became the Run card's ONLY recorded
-# output. The previous filter covered `blocks/` and `kernel.*` only.
-_KERNEL_MACHINERY = frozenset({
-    "current_block", "activate.sh", "cmd.sh", "runner.sh", "log",
-    "node", "pid", "pid.epoch", "pid.real", "rusage",
-    # the block DIRECTORY itself, not just its contents: an inventory lists the
-    # dir entry as bare `blocks`, which the `blocks/` prefix below never matches
-    # (caught the moment the fake grew a realistic jobdir)
-    "blocks",
-})
-_KERNEL_MACHINERY_PREFIXES = ("blocks/", "kernel.", "driver.")
+# output. ONE owner now — core.exec.run (the harvest scan applies the same
+# rule); this module's local copy predated it and drifted from the panel's.
+from core.exec.run import (KERNEL_MACHINERY as _KERNEL_MACHINERY,          # noqa: F401
+                           KERNEL_MACHINERY_PREFIXES as _KERNEL_MACHINERY_PREFIXES)
 
 
 def _untracked_write_note(sess, lang: str) -> str:

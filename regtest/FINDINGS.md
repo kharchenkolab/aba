@@ -311,7 +311,7 @@ Full session log was in a scratch dir (`../qa-2026-07-04/`, now deleted); the ac
 Routine gate after the mac install smoke run (fresh isolated install: all 10 playbook steps green).
 `r_background_capability` correctly REFUSED up front (`requires: slurm`, no client on this host) —
 the armed preflight working; run with `--exclude` for a measured 11.
-- **[MEDIUM, product — OPEN] cross-kernel rel shadowing after a fresh-session resume** — a run that
+- **[MEDIUM, product — RESOLVED 2026-08-27] cross-kernel rel shadowing after a fresh-session resume** — a run that
   resumes onto a second kernel carries two `weft_targets`, and both kernels number transcripts
   `blocks/000N.*`, colliding on rel. The durable listing advertises the `output_addr` row's bytes
   (266 B, `source=keep`, from the kernel that actually errored) while every per-rel byte door is
@@ -321,9 +321,16 @@ the armed preflight working; run with `--exclude` for a measured 11.
   by the surfaces oracle (`empty_bytes`), which demands bytes only where the listing claims them.
   Aggravator: `blocks/*` is folded out of the durable panel as runtime bookkeeping
   (lifecycle/runs.py:2478) but the addr join runs AFTER the fold and re-admits those rels (:2500) —
-  without the bypass the row would never be advertised. Fix candidates: apply the runtime fold after
-  the addr join, and/or resolve per-rel reads by producing-exec attribution or newest-mtime rather
-  than target order.
+  without the bypass the row would never be advertised. FIXED (2026-08-27, three layers, root
+  first): the machinery rule is ONE owner (`core.exec.run.is_kernel_machinery`) applied at the
+  harvest scan itself — the any-suffix skipped-shape pass had no rule and is how `blocks/0001.err`
+  entered `produced[]`; the panel's addr join now respects the fold (declared in `runtime_files`);
+  and per-rel doors (`locate_run_output` exact, `read_run_file`) prefer the addr row's recorded
+  `target`, so the door serves the bytes the book advertises for ANY same-rel collision, not just
+  machinery. 8 guards (5 red-proven; WIDE: no row / target-less row / pruned target / nested user
+  `sub/blocks/` survives). Also closes the standing `cheminformatics` empty_bytes failure
+  (deterministic 2/2 since 2026-08-13, docs/arch/run-outputs.md Known gaps — entry now folded into
+  the narrative).
 - **[LOW, scenario spec] `reproduce_expr` s7 demands an artifact its prompt never asks for** — s7
   (revise step) asserts `produces: {figure: 1}` but only s2's prompt states the figure outcome; the
   agent satisfied the stated ask with tables (all three execs exit 0, zero plot-library tokens, no

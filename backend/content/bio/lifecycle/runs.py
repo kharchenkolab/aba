@@ -518,15 +518,12 @@ def _retained_so_far(run_id: str) -> tuple:
     return decided, placed
 
 
-# Job-runner scaffolding written at a job sandbox's ROOT — process
-# bookkeeping, never analysis products. Matched as EXACT root-level rels
-# (a user's own out/log or logs/x is untouched). One owner: the durable
-# view folds these from its listing (declared in summary.runtime_files),
-# and the files tree's disk top-up skips them on disk.
-_RUNNER_SCAFFOLDING = frozenset({
-    "pid", "pid.epoch", "pid.real", "log", "cmd.sh", "runner.sh",
-    "activate.sh", "rusage", "node",
-})
+# Driver machinery (blocks/ transcripts + root-level runner/kernel
+# scaffolding) is never an analysis product. ONE owner — core.exec.run
+# `is_kernel_machinery`: the harvest scan excludes it at collection, the
+# durable view folds any legacy row of it from its listing (declared in
+# summary.runtime_files), and the files tree's disk top-up skips it on disk.
+from core.exec.run import is_kernel_machinery as _is_runtime_rel
 
 # Directory-shaped stores (a chunked columnar/array store is a DIRECTORY, not a file).
 # Harvest lists single files by extension, so these never reach artifacts_for_run —
@@ -1286,7 +1283,10 @@ def read_run_file(run_id: str, rel: str, max_bytes: int = _PREVIEW_CAP):
     import base64
     from core.compute import retention
     ent = get_entity(run_id)
-    for t in ((ent or {}).get("metadata") or {}).get("weft_targets") or []:
+    _targets = _prefer_target(
+        ((ent or {}).get("metadata") or {}).get("weft_targets") or [],
+        (_addr_row(run_id, rel) or {}).get("target"))
+    for t in _targets:
         try:
             rd = retention.file_read(t, rel, max_bytes=max_bytes)
         except Exception:  # noqa: BLE001 — swept / gone on this target → try the next
@@ -1334,11 +1334,40 @@ def _search_root_for(root: Optional[str], name: str) -> Optional[str]:
     return max(hits, key=_key)
 
 
-def _run_jobdirs(run_id: str) -> list:
+def _addr_row(run_id: str, rel: str) -> Optional[dict]:
+    """The output-addr row for this exact `(run, rel)`, or None. Best-effort.
+
+    The row's `target` is the kernel that RECORDED the file — the tie-breaker
+    when a resumed Run's sandboxes collide on rel: each session numbers its
+    files independently, so two jobdirs can both hold `<rel>` with different
+    bytes, and a fixed-order walk serves whichever target came first (live
+    2026-08: the listing advertised 266 B from the recording kernel while the
+    door served the first kernel's 0-byte same-rel file). Per-rel readers
+    prefer the row's target so the door serves the bytes the book describes."""
+    try:
+        from core.graph import output_addr as _oa
+        for r in _oa.by_run(run_id):
+            if r.get("rel") == rel:
+                return r
+    except Exception:  # noqa: BLE001 — the book is an optimization, never a gate
+        return None
+    return None
+
+
+def _prefer_target(targets: list, prefer: Optional[str]) -> list:
+    """`targets` with `prefer` moved first when present — order is the ONLY
+    thing that changes; an unknown/absent preference leaves the walk as-is."""
+    if prefer and prefer in targets:
+        return [prefer] + [t for t in targets if t != prefer]
+    return targets
+
+
+def _run_jobdirs(run_id: str, prefer: Optional[str] = None) -> list:
     """Absolute LOCAL weft jobdirs for a Run's targets. A weft kernel can't chdir — its cwd IS
     its jobdir (`weft_workspace/site-local/<jobdir>`), so bare relative writes (a produced
     `.zarr` store, an .h5ad) land there, and aba harvests from there. This is where a
-    freshly-produced, not-yet-retained output physically lives for the local site."""
+    freshly-produced, not-yet-retained output physically lives for the local site.
+    `prefer` (an addr row's recording target) walks that kernel's jobdir first."""
     out: list = []
     ent = get_entity(run_id)
     targets = ((ent or {}).get("metadata") or {}).get("weft_targets") or []
@@ -1349,7 +1378,7 @@ def _run_jobdirs(run_id: str) -> list:
         ws = _ad.weft_workspace()
         kmap = {k.get("kernel_id"): k
                 for k in (get_compute().sync_call("list_kernels").get("kernels") or [])}
-        for t in targets:
+        for t in _prefer_target(targets, prefer):
             k = kmap.get(t)
             if k and k.get("site") == "local" and k.get("jobdir"):
                 out.append(str(ws / "site-local" / k["jobdir"]))
@@ -1421,6 +1450,11 @@ def locate_run_output(run_id: str, name: str, *, match: str = "name",
     from core.compute import retention
     ent = get_entity(run_id)
     md = (ent or {}).get("metadata") or {}
+    # The book's recorded target breaks same-rel ties across a resumed Run's
+    # sandboxes (see _addr_row) — an exact rel only; a basename/store query
+    # has no (run, rel) key to consult.
+    _pref = ((_addr_row(run_id, name) or {}).get("target")
+             if match == "exact" else None)
     tiers: list = []                                   # (root, durability, catalog_first)
     try:
         for row in (retention.retained(label=run_id) or []):
@@ -1430,7 +1464,7 @@ def locate_run_output(run_id: str, name: str, *, match: str = "name",
                     tiers.append((loc, "retained", True))
     except Exception as e:  # noqa: BLE001
         _log.debug("locate_run_output: retained() failed for %s: %s", run_id, e)
-    tiers.extend((d, "live", False) for d in _run_jobdirs(run_id))
+    tiers.extend((d, "live", False) for d in _run_jobdirs(run_id, prefer=_pref))
     ap = (ent or {}).get("artifact_path")
     if ap:
         tiers.append((ap, "scratch", False))           # legacy / non-weft fallback
@@ -1489,7 +1523,7 @@ def locate_run_output(run_id: str, name: str, *, match: str = "name",
     try:
         from core.compute.adapter import get_compute
         comp = get_compute()
-        for t2 in md.get("weft_targets") or []:
+        for t2 in _prefer_target(md.get("weft_targets") or [], _pref):
             st = comp.sync_call("run_file_stat", t2, name)
             pth = st.get("abs_path")
             if st.get("exists") and pth and _os.path.exists(pth):
@@ -2476,10 +2510,10 @@ def run_durable_view(run_id: str) -> dict:
     # producing_code, the run log through the run's own log surfaces, and
     # the raw transcript through its exec records.
     runtime_n = 0
-    for r in [r for r in by_rel
-              if r == "blocks" or r.startswith("blocks/")
-              or r in _RUNNER_SCAFFOLDING]:
+    _folded: set = set()
+    for r in [r for r in by_rel if _is_runtime_rel(r)]:
         del by_rel[r]
+        _folded.add(r)
         runtime_n += 1
 
     # Live on-disk check (weft run_file_stat) — authoritative for in-sandbox
@@ -2502,6 +2536,16 @@ def run_durable_view(run_id: str) -> dict:
         for _r in _oa.by_run(run_id):
             _rel = _r.get("rel")
             if not _rel or _rel in by_rel:
+                continue
+            # The join must not re-admit what the fold (above) folds: legacy
+            # index rows for driver machinery exist (the harvest once recorded
+            # blocks/*.err as link-only outputs, and keeps followed), and
+            # re-advertising one served empty bytes live (2026-08). The row
+            # stays as knowledge; only the panel declines to list it — and
+            # declares it in runtime_files rather than folding silently.
+            if _is_runtime_rel(_rel):
+                if _rel not in _folded:
+                    runtime_n += 1
                 continue
             by_rel[_rel] = {"original_name": _rel,
                             "size": _r.get("bytes") or 0,
