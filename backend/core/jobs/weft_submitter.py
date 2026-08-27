@@ -397,7 +397,15 @@ def _gpu_env_for(params: dict, lang: str) -> Optional[str]:
     pack = _cfg.settings.gpu_env_pack.get()
     if not pack:
         return None
+    # "Explicit" means the AGENT named it, not merely that `env` is populated.
+    # bg_submit_kwargs always fills `env` — from resolve_env, which returns the
+    # project's ACTIVE named env when nothing was asked for. Reading that as a
+    # deliberate choice disabled GPU-pack routing in every project that has an
+    # env, which is most of them: the job took a GPU node and ran a stack with
+    # no CUDA in it. A caller that predates the flag keeps the old reading.
     explicit = params.get("env")
+    if explicit and not params.get("env_explicit", True):
+        explicit = None                 # the project pointer, not a request
     if explicit:
         if explicit != pack:
             return None                 # a project env by name — not ours

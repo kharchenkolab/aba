@@ -560,6 +560,82 @@ def wf_slurm_batch(pid, tid, site):
     ]
 
 
+@scenario("wf_gpu_recognised")
+def wf_gpu_recognised(pid, tid, site):
+    """Does the agent work out that a job needs an accelerator BY ITSELF?
+
+    THE POINT, and why the wording matters. A user does not say "use the GPU
+    env" — they describe work. Recognising that the work wants an accelerator,
+    and submitting it so it gets one, is the agent's job, and it is the part
+    nothing here tested: the GPU path had unit coverage of the routing function
+    and a human being asked to try it by hand. So this scenario must NOT name
+    the mechanism. It states the OUTCOME (train a model, quickly) and asserts
+    that the ESTIMATE came back marked for an accelerator. Say "on a GPU" here
+    and the lane tests obedience, which is the failure this suite has hit
+    before (a multinode scenario that told the agent where to write, then
+    verified that it wrote there).
+
+    The load-bearing assertion is `estimate.gpu`, because that single flag is
+    what makes Slurm allocate a GPU node AND what selects the site's CUDA pack
+    (weft_submitter._gpu_env_for). If it is false the job silently becomes an
+    ordinary CPU job — which is exactly what a user sees as "the GPU doesn't
+    work"."""
+    cap = drive(pid, tid,
+        f"As a BACKGROUND job on '{site}': train a small neural network in "
+        f"PyTorch on synthetic data — a few dense layers, 100k samples, ~30 "
+        f"epochs — and write the final loss and the wall-clock training time to "
+        f"train_result.csv. I care about it finishing fast, so size it for the "
+        f"hardware this cluster has. Tell me when it's queued.")
+    _wait_jobs_settled(pid, timeout_s=1800)
+    jobs = api("GET", "/api/jobs")
+    jobs = jobs if isinstance(jobs, list) else jobs.get("jobs", [])
+    mine = [j for j in jobs if (j.get("params") or {}).get("project_id") == pid]
+    est = [(j.get("params") or {}).get("estimate") or {} for j in mine]
+    asked_gpu = [e for e in est if e.get("gpu")]
+    bad = [j for j in mine
+           if str(j.get("status")) in ("failed", "error", "rejected", "cancelled")]
+    why = "; ".join(str((j.get("error") or j.get("detail") or ""))[:90] for j in bad)
+    tracked = [n for n, _s, _k in tracked_outputs(pid)]
+
+    # ARMED. On a deployment with no GPU pack declared, or no GPU capacity, the
+    # agent is RIGHT not to ask for one — and every assertion below would then
+    # be satisfied by a question that was never posed. Fail instead of passing.
+    site_row = _site_row(site)
+    caps = (site_row or {}).get("capabilities") or {}
+    sched = caps.get("scheduler") or {}
+    gpu_capacity = sum(
+        sum(g.get("count", 0) for g in (p_.get("gres") or [])
+            if g.get("type") == "gpu") * (p_.get("nodes") or 0)
+        for p_ in (sched.get("partitions") or [])) + len(caps.get("gpus") or [])
+    # The precondition is GPU CAPACITY, not a declared pack: this lane asserts
+    # RECOGNITION, and asking for an accelerator is the right move wherever one
+    # exists — whether the deployment also declares a CUDA pack decides which
+    # ENV the job gets, which is a different question (tests/test_gpu_env_routing.py).
+    if not gpu_capacity:
+        return cap, [(f"PRECONDITION: '{site}' offers GPUs — none found in its "
+                      f"advertised capabilities, so declining to ask for one is "
+                      f"CORRECT and this run says NOTHING about recognition",
+                      False)]
+
+    return cap, [
+        ("turn completed", not cap["errors"]),
+        ("a background job was created", bool(mine)),
+        ("the agent asked for an accelerator WITHOUT being told to "
+         f"(estimate.gpu on {len(asked_gpu)}/{len(mine)} job(s))", bool(asked_gpu)),
+        (f"the job SUCCEEDED{': ' + why if why else ''}", bool(mine) and not bad),
+        ("the training output is TRACKED", any("train_result" in n for n in tracked)),
+    ]
+
+
+def _site_row(site: str) -> dict | None:
+    rows = api("GET", "/api/compute/sites")
+    rows = rows if isinstance(rows, list) else (rows.get("sites") or [])
+    for r in rows:
+        if r.get("name") == site:
+            return r
+    return None
+
+
 @scenario("wf_state_persists_then_recovers")
 def wf_state_persists_then_recovers(pid, tid, site):
     """Interactive multi-step is the dominant shape (run_r/run_python were 119

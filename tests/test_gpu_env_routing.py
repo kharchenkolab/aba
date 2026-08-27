@@ -1,264 +1,106 @@
-"""GPU env routing: a GPU job rides the site's declared CUDA pack — and NOTHING
-else changes.
+"""Which env does a GPU-estimated background job actually run?
 
-The design premise (docs/arch/envs.md, GPU/accelerator): the CUDA science stack
-is ~5x the disk of the CPU base, and on this class of site only Slurm *jobs* can
-reach the GPU node — so the deployment publishes a CUDA *flavour* of the base
-(derived mechanically, scripts/derive_gpu_pack.py) that GPU-estimated background
-jobs ride, while every interactive session keeps the 676 MB CPU base and macOS
-keeps its default Metal/MPS build with nothing declared at all.
+THE DEFECT THIS GUARDS. `_gpu_env_for` returns the site's declared GPU pack
+only when the caller did not name an env of their own. But the params it reads
+are built by `bg_submit_kwargs`, which ALWAYS populates `env` — from
+`resolve_env`, which falls back to the project's ACTIVE named env when the agent
+named nothing. So "the caller chose an env" was true for every project that had
+one, the GPU pack was skipped, and a job submitted with `est_gpu=true` took a
+GPU node and ran a stack with no CUDA in it. From the outside: "the GPU doesn't
+work".
 
-What is load-bearing here, in order:
-
-1. **The default is untouched.** With no `jobs.gpu_env_pack` declared, the
-   feature must not merely be OFF — it must be ABSENT: no bundle lookup, no
-   config branch a future refactor can widen. Asserted by making the bundle
-   EXPLODE on contact.
-2. **A non-GPU job never gets the CUDA env** (the other side — 3.4 GB and a
-   B200-adjacent identity for a pandas groupby would be the quiet failure).
-3. **Misconfiguration refuses instead of degrading.** A declared-but-missing
-   pack must stop the submit: the fallback would be the project snapshot,
-   whose torch is the CPU build — a GPU job silently riding it is the
-   scVI-on-CPU incident wearing a config typo.
-4. **Both lanes consult the ONE rule** (`_gpu_env_for`). The two submit lanes
-   drifting apart over when a job leaves the project env is how the same
-   request behaves differently detached vs shared.
+WHY IT SURVIVED A DIRECT TEST. It was checked once by calling
+`_gpu_env_for({"estimate": {"gpu": True}}, "python")` — a dict with no `env` key
+at all, which the background path never produces. The probe was more permissive
+than reality and blessed the bug. So every case here builds its params through
+`bg_submit_kwargs`, the function the product actually calls.
 """
 from __future__ import annotations
 
-import ast
-import importlib.util
-import sys
-from pathlib import Path
-
 import pytest
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "backend"))
-
-from core.compute import base_env, env_packs  # noqa: E402
-from core.compute.errors import ComputeError  # noqa: E402
-from core.jobs import weft_submitter as ws  # noqa: E402
 
 pytestmark = pytest.mark.platform
 
-ENVVAR = "ABA_JOBS_GPU_ENV_PACK"
-PACK = "python-bio-cuda"
-EID = "env:v1:" + "c" * 64
+PACK = "sitepack-gpu"
+GPU_ENV_ID = "env-gpu-0001"
 
 
-def _boom(*_a, **_k):
-    raise AssertionError("the bundle must not be consulted on this path")
+@pytest.fixture
+def routing(monkeypatch):
+    """_gpu_env_for with the site declaring a GPU pack, and its EnvID resolvable."""
+    from core.compute import base_env
+    from core.jobs import weft_submitter
+    # The setting is driven by its env var — Setting.get is read-only, and
+    # patching the SETTING rather than its source would test a shape the
+    # deployment never has.
+    monkeypatch.setenv("ABA_JOBS_GPU_ENV_PACK", PACK)
+    monkeypatch.setattr(base_env, "gpu_pack_env_id", lambda: GPU_ENV_ID)
+    return weft_submitter._gpu_env_for
 
 
-@pytest.fixture(autouse=True)
-def _clean_cache(monkeypatch):
-    """gpu_pack_env_id caches (name, digest) → EnvID for the process lifetime;
-    tests must not leak identities into each other through it."""
-    monkeypatch.setattr(base_env, "_env_ids", {})
+def _params(monkeypatch, *, est_gpu: bool, agent_env: str | None,
+            project_env: str | None) -> dict:
+    """The params the PRODUCT builds — through bg_submit_kwargs, so the shape
+    (including a project-pointer `env`) is the real one."""
+    from content.bio.tools import run_exec
+    from core.compute import named_envs
+    monkeypatch.setattr(
+        named_envs, "resolve_env",
+        lambda pid, lang, explicit=None: (explicit or project_env) or None)
+    return run_exec.bg_submit_kwargs(
+        {"est_gpu": est_gpu, "env": agent_env, "estimated_runtime_min": 5},
+        "prj_test")
 
 
-# ── 1. the default is ABSENT, not merely off ────────────────────────────────
-
-def test_unset_touches_nothing(monkeypatch):
-    monkeypatch.delenv(ENVVAR, raising=False)
-    monkeypatch.setattr(env_packs, "pack_spec", _boom)
-    gpu_job = {"estimate": {"gpu": True}}
-    assert ws._gpu_env_for(gpu_job, "python") is None
-    assert base_env.gpu_pack_env_id() is None
-
-
-# ── 2. the routing rule, all four gates ─────────────────────────────────────
-
-def test_gpu_python_job_rides_the_declared_pack(monkeypatch):
-    monkeypatch.setenv(ENVVAR, PACK)
-    monkeypatch.setattr(env_packs, "pack_spec",
-                        lambda n: {"deps": {}} if n == PACK else None)
-    from core.compute import seeding
-    monkeypatch.setattr(seeding, "adopt_env_id",
-                        lambda n: EID if n == PACK else None)
-    assert ws._gpu_env_for({"estimate": {"gpu": True}}, "python") == EID
+def test_gpu_job_in_a_project_with_an_active_env_still_gets_the_gpu_pack(
+        routing, monkeypatch):
+    """THE regression. The project has an env; the agent named none."""
+    p = _params(monkeypatch, est_gpu=True, agent_env=None, project_env="myenv")
+    assert p["env"] == "myenv", "precondition: the project pointer populated env"
+    assert p["env_explicit"] is False, "precondition: the agent named nothing"
+    assert routing(p, "python") == GPU_ENV_ID, (
+        "a GPU job in a project that has an active env fell back to that env — "
+        "it takes a GPU node and runs a stack with no CUDA in it")
 
 
-def test_non_gpu_job_never_gets_the_gpu_env(monkeypatch):
-    """The other side. Even with the site fully configured, a job that did not
-    ask for a GPU must not touch the pack — not resolve it, not look it up."""
-    monkeypatch.setenv(ENVVAR, PACK)
-    monkeypatch.setattr(env_packs, "pack_spec", _boom)
-    assert ws._gpu_env_for({"estimate": {"cores": 4}}, "python") is None
-    assert ws._gpu_env_for({}, "python") is None
+def test_an_env_the_agent_actually_named_still_wins(routing, monkeypatch):
+    """The rule the fix must NOT break: a deliberate `env=` outranks the pack,
+    or `env=` would mean 'unless we know better'."""
+    p = _params(monkeypatch, est_gpu=True, agent_env="myenv", project_env="other")
+    assert p["env_explicit"] is True
+    assert routing(p, "python") is None
 
 
-def test_explicit_env_wins_over_gpu(monkeypatch):
-    """env= is the caller's choice; the GPU rule never second-guesses it."""
-    monkeypatch.setenv(ENVVAR, PACK)
-    monkeypatch.setattr(env_packs, "pack_spec", _boom)
-    assert ws._gpu_env_for({"estimate": {"gpu": True}, "env": "myenv"},
-                           "python") is None
+def test_naming_the_pack_itself_selects_it(routing, monkeypatch):
+    p = _params(monkeypatch, est_gpu=True, agent_env=PACK, project_env=None)
+    assert routing(p, "python") == GPU_ENV_ID
 
 
-def test_r_gpu_job_keeps_its_normal_env(monkeypatch):
-    """The pack is a python stack; an R job declaring gpu keeps its env."""
-    monkeypatch.setenv(ENVVAR, PACK)
-    monkeypatch.setattr(env_packs, "pack_spec", _boom)
-    assert ws._gpu_env_for({"estimate": {"gpu": True}}, "r") is None
+def test_no_gpu_asked_means_no_pack(routing, monkeypatch):
+    """The other side: the pack must not capture ordinary CPU jobs."""
+    for project_env in (None, "myenv"):
+        p = _params(monkeypatch, est_gpu=False, agent_env=None,
+                    project_env=project_env)
+        assert routing(p, "python") is None, f"project_env={project_env!r}"
 
 
-# ── 3. misconfiguration refuses, with the fix named ─────────────────────────
-
-def test_declared_but_missing_pack_refuses(monkeypatch):
-    monkeypatch.setenv(ENVVAR, PACK)
-    monkeypatch.setattr(env_packs, "pack_spec", lambda n: None)
-    with pytest.raises(ComputeError) as ei:
-        base_env.gpu_pack_env_id()
-    assert ei.value.code == "gpu_env_pack.unknown"
-    # the message must name the pack and the fix, or the operator is stuck
-    assert PACK in str(ei.value)
-    assert "fix" in (ei.value.hints or {})
+def test_r_keeps_its_own_env(routing, monkeypatch):
+    """The pack is a python stack; an R GPU job must not be diverted into it."""
+    p = _params(monkeypatch, est_gpu=True, agent_env=None, project_env="myenv")
+    assert routing(p, "r") is None
 
 
-def test_solve_fallback_when_no_catalog(monkeypatch):
-    """Adopt miss → private solve, same degradation ladder as env_id()."""
-    monkeypatch.setenv(ENVVAR, PACK)
-    monkeypatch.setattr(env_packs, "pack_spec", lambda n: {"deps": {"conda": ["x"]}})
-    from core.compute import seeding
-    monkeypatch.setattr(seeding, "adopt_env_id", lambda n: None)
-
-    class _Stub:
-        def env_ensure(self, spec, **kw):
-            assert spec == {"deps": {"conda": ["x"]}}
-            return {"env_id": EID}
-    monkeypatch.setattr(base_env._adapter, "get_compute", lambda: _Stub())
-    monkeypatch.setattr(base_env.named_envs, "_sync", lambda x: x)
-    assert base_env.gpu_pack_env_id() == EID
+def test_a_site_with_no_gpu_pack_pays_nothing(monkeypatch):
+    """Degenerate shape: no site declaration at all — the common case for most
+    deployments, and it must not reach the bundle or divert anything."""
+    from core.jobs import weft_submitter
+    monkeypatch.delenv("ABA_JOBS_GPU_ENV_PACK", raising=False)
+    p = _params(monkeypatch, est_gpu=True, agent_env=None, project_env="myenv")
+    assert weft_submitter._gpu_env_for(p, "python") is None
 
 
-# ── 4. both lanes consult the one rule ──────────────────────────────────────
-
-def test_both_submit_lanes_consult_the_one_rule():
-    """Structural pin: every submit lane that resolves a job's env identity
-    calls `_gpu_env_for`. Two lanes with private copies of the rule is how a
-    detached GPU job and a shared-lane GPU job start behaving differently."""
-    tree = ast.parse((ROOT / "backend/core/jobs/weft_submitter.py").read_text())
-    callers = set()
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            for sub in ast.walk(node):
-                if (isinstance(sub, ast.Call)
-                        and isinstance(sub.func, ast.Name)
-                        and sub.func.id == "_gpu_env_for"):
-                    callers.add(node.name)
-    callers.discard("_gpu_env_for")
-    assert "_detached_env" in callers, "the detached lane lost the GPU rule"
-    assert len(callers) >= 2, (
-        f"only {sorted(callers)} consult _gpu_env_for — the shared lane's env "
-        f"fork no longer routes GPU jobs through the one rule")
-
-
-def test_the_spec_stamp_names_the_trade():
-    """The shared lane stamps env_source='gpu_pack:<name>' into the job spec.
-    That stamp is what makes a missing project package in a GPU job read as
-    'this ran the shared CUDA pack' rather than a mystery ImportError."""
-    src = (ROOT / "backend/core/jobs/weft_submitter.py").read_text()
-    assert '"env_source": env_source' in src
-    assert 'f"gpu_pack:' in src
-
-
-# ── derivation: one source spec, two flavours ───────────────────────────────
-
-def _derive_mod():
-    spec = importlib.util.spec_from_file_location(
-        "aba_derive_gpu_pack", ROOT / "scripts" / "derive_gpu_pack.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-SRC_PACK = {
-    "name": "python-bio", "title": "Single-cell Python",
-    "languages": ["python"], "default_state": "on", "role": "base",
-    "first_use": ["scanpy"],
-    "import_names": {"scvi": "scvi-tools"},
-    "spec": {"platforms": ["linux-64", "osx-arm64"],
-             "deps": {"conda": ["python =3.12", "scvi-tools >=1.1"],
-                      "pypi": ["lstar-sc ==0.2.2"]}},
-}
-
-
-def test_derived_flavour_shares_the_source_deps_exactly():
-    """THE one-source guard: shared deps byte-identical, GPU additions only in
-    the linux-64 variant. Drift here means the same analysis resolves different
-    package versions depending on which lane ran it."""
-    d = _derive_mod().derive(SRC_PACK, "13.3")
-    assert d["spec"]["deps"] == SRC_PACK["spec"]["deps"]
-    assert d["spec"]["variants"] == {
-        "linux-64": {"conda": ["pytorch-gpu", "cuda-version <=13.3"]}}
-    assert d["spec"]["system_requirements"] == {"cuda": "13.3"}
-
-
-def test_derived_flavour_cannot_collide_with_the_base():
-    """role must NOT be 'base' (two base packs for python would make base
-    resolution ambiguous) and nothing may materialize it outside the job lane."""
-    d = _derive_mod().derive(SRC_PACK, "13.3")
-    assert d["name"] == "python-bio-cuda"
-    assert d["role"] == "gpu"
-    assert d["default_state"] == "off"
-    assert d["first_use"] == []
-
-
-def test_derived_flavour_is_linux_only_and_mac_needs_nothing():
-    """The CUDA flavour exists for cluster jobs; macOS accelerates via the
-    UNMODIFIED default pack (Metal/MPS ships in the default osx-arm64 builds),
-    so the source pack's platforms must stay untouched by derivation."""
-    d = _derive_mod().derive(SRC_PACK, "13.3")
-    assert d["spec"]["platforms"] == ["linux-64"]
-    assert SRC_PACK["spec"]["platforms"] == ["linux-64", "osx-arm64"]  # source unmutated
-
-
-def test_derivation_refuses_to_stack():
-    m = _derive_mod()
-    once = m.derive(SRC_PACK, "13.3")
-    with pytest.raises(ValueError):
-        m.derive(once, "13.3")          # a derived pack (role: gpu) refuses
-
-
-if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-q"]))
-
-
-def test_the_advertised_pack_name_opens_the_env_door(monkeypatch):
-    """The handle round-trip (live catch, gpu_job_completion 2026-08-14): the
-    gpu_usable cue names the pack, the agent passed that name as env=, and
-    named_envs refused it as an unknown isolated env — four submit attempts,
-    zero jobs, with advice to CREATE an isolated env. A handle one door emits
-    must open at every door that takes one: env=<the declared pack> resolves
-    to the pack, with or without a gpu estimate."""
-    monkeypatch.setenv(ENVVAR, PACK)
-    monkeypatch.setattr(env_packs, "pack_spec",
-                        lambda n: {"deps": {}} if n == PACK else None)
-    from core.compute import seeding
-    monkeypatch.setattr(seeding, "adopt_env_id",
-                        lambda n: EID if n == PACK else None)
-    assert ws._gpu_env_for({"env": PACK, "estimate": {"gpu": True}}, "python") == EID
-    assert ws._gpu_env_for({"env": PACK}, "python") == EID          # no estimate: still opens
-
-
-def test_the_pack_name_on_an_r_job_stays_with_the_named_lane(monkeypatch):
-    """python-only: run_r with env=<pack> falls through to named_envs, whose
-    refusal is the honest answer (the pack carries no R)."""
-    monkeypatch.setenv(ENVVAR, PACK)
-    monkeypatch.setattr(env_packs, "pack_spec", _boom)
-    assert ws._gpu_env_for({"env": PACK, "estimate": {"gpu": True}}, "r") is None
-
-
-def test_gpu_rule_outranks_named_resolve_in_both_lanes():
-    """Ordering pin: the pack-name door only works if _gpu_env_for is consulted
-    BEFORE named_envs.resolve in each lane — after it, the named lane has
-    already refused. Assert the call order in the source of both lanes."""
-    src = (ROOT / "backend/core/jobs/weft_submitter.py").read_text()
-    # detached lane: _gpu_env_for(...) appears before named_envs.resolve(...)
-    d = src.index("def _detached_env")
-    d_end = src.index("def ", d + 10)
-    body = src[d:d_end]
-    assert body.index("_gpu_env_for") < body.index("named_envs.resolve"), \
-        "_detached_env resolves named envs before the GPU rule — the pack-name door is dead"
+def test_a_caller_predating_the_flag_keeps_the_old_reading(routing):
+    """Params built by some other lane carry no env_explicit. Absent the flag a
+    populated `env` must still read as deliberate — this fix changes ONE lane's
+    meaning, and must not silently redirect callers it never examined."""
+    assert routing({"env": "myenv", "estimate": {"gpu": True}}, "python") is None

@@ -986,9 +986,18 @@ def bg_submit_kwargs(input_: dict, project_id: str) -> dict:
            "mem_gb": input_.get("est_mem_gb"), "gpu": input_.get("est_gpu")}
     from core.compute.named_envs import resolve_env
     env_name = resolve_env(str(project_id), "python", explicit=input_.get("env"))
+    # env_explicit distinguishes "the AGENT named an env" from "resolve_env
+    # supplied the project's ACTIVE pointer". Both arrive as `env` below, and
+    # _gpu_env_for used to treat any `env` as a deliberate choice that outranks
+    # the GPU pack — so in any project with an active named env, a job with
+    # est_gpu=true silently ran the project env instead of the CUDA stack. It
+    # still landed on a GPU node, just with no CUDA, which reads as "the GPU
+    # doesn't work". The agent's own words are the only thing that should
+    # outrank the site's declared GPU pack.
     return {"estimate": est, "execution": input_.get("execution"),
             "site": input_.get("site") or None,   # detached lane (misc/detached_compute.md)
-            "env": env_name, "timeout_s": _background_timeout_s(input_, est_min)}
+            "env": env_name, "env_explicit": bool(str(input_.get("env") or "").strip()),
+            "timeout_s": _background_timeout_s(input_, est_min)}
 
 
 def _kernel_sandbox_inventory(kernel_id: str) -> dict:
