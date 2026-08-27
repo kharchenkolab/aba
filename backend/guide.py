@@ -1139,9 +1139,8 @@ async def stream_response(
                 # QUEUED — which is why a 2 ms `Skill` recording 349 s and a
                 # `run_python` recording 134 s for 0.587 s of work both read as
                 # "the tool took a long time" and neither could be diagnosed.
-                from core.runtime.tool_telemetry import (dispatch_pool_gauge,
+                from core.runtime.tool_telemetry import (dispatch_slot,
                                                           timed_body)
-                _pool_q, _pool_w = dispatch_pool_gauge()
                 _body_at: list = []
                 _exec_tool_timed = timed_body(_exec_tool, _body_at)
                 # projects.in_thread, NOT run_in_executor: the tool body writes
@@ -1150,8 +1149,9 @@ async def stream_response(
                 # land in whatever project is the process-global. See
                 # projects.in_thread for the live incident.
                 from core import projects as _projects_mod
-                result_str = await _projects_mod.in_thread(
-                    _exec_tool_timed, name, tool_input, tool_ctx)
+                with dispatch_slot() as _slot:
+                    result_str = await _projects_mod.in_thread(
+                        _exec_tool_timed, name, tool_input, tool_ctx)
                 _t_end = _dt.datetime.now(_dt.timezone.utc)
                 result_obj = json.loads(result_str)
                 # Telemetry record (best-effort; mirrors legacy path).
@@ -1181,7 +1181,8 @@ async def stream_response(
                         queue_wait_ms=(
                             int((_body_at[0] - _t_start).total_seconds() * 1000)
                             if _body_at else None),
-                        pool_queued=_pool_q, pool_workers=_pool_w,
+                        inflight=_slot.inflight,
+                        bg_backlog=_slot.bg_backlog,
                     )
                 except Exception:  # noqa: BLE001
                     pass

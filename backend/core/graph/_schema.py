@@ -413,13 +413,15 @@ def init_db():
         # production stalls went undiagnosed: a `Skill` call (a registry read,
         # 2 ms in every other turn of the same session) recorded 349 SECONDS,
         # and a `run_python` recorded 134 s for 0.587 s of execution. Both read
-        # as "the tool was slow". `pool_queued`/`pool_workers` are the
-        # executor's backlog and size at dispatch — the witness that says
-        # whether the wait was contention.
+        # as "the tool was slow". `inflight` (concurrent dispatches) and
+        # `bg_backlog` (background-pool depth) are the witness that says
+        # whether the wait was contention — counters we OWN, because the first
+        # version read the loop's private default-executor queue, which uvloop
+        # does not have: blind in production, and only in production.
         for _col, _ddl in (
             ("queue_wait_ms", "ALTER TABLE tool_invocations ADD COLUMN queue_wait_ms INTEGER"),
-            ("pool_queued",   "ALTER TABLE tool_invocations ADD COLUMN pool_queued INTEGER"),
-            ("pool_workers",  "ALTER TABLE tool_invocations ADD COLUMN pool_workers INTEGER"),
+            ("inflight",      "ALTER TABLE tool_invocations ADD COLUMN inflight INTEGER"),
+            ("bg_backlog",    "ALTER TABLE tool_invocations ADD COLUMN bg_backlog INTEGER"),
         ):
             try:
                 c.execute(_ddl)

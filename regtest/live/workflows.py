@@ -43,6 +43,12 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+# run directly (`python regtest/live/workflows.py`) puts THIS dir on sys.path,
+# not the repo root — so `regtest.harness.*` is unimportable without help.
+_ROOT = str(Path(__file__).resolve().parents[2])
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
 BASE = "http://127.0.0.1:8000"
 RUNTIME = Path.home() / ".aba" / "runtime" / "projects"
 RESULTS: list = []

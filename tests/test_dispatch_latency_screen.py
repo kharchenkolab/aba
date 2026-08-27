@@ -24,13 +24,13 @@ _COLS = ("run_id TEXT, tool_name TEXT, duration_ms INTEGER, started_at TEXT")
 def _db(tmp_path, rows, *, with_split=True):
     p = tmp_path / "project.db"
     con = sqlite3.connect(p)
-    extra = (", queue_wait_ms INTEGER, pool_queued INTEGER, pool_workers INTEGER"
+    extra = (", queue_wait_ms INTEGER, inflight INTEGER, bg_backlog INTEGER"
              if with_split else "")
     con.execute(f"CREATE TABLE tool_invocations (id INTEGER PRIMARY KEY, {_COLS}{extra})")
     for r in rows:
         if with_split:
             con.execute("INSERT INTO tool_invocations (run_id, tool_name, duration_ms,"
-                        " started_at, queue_wait_ms, pool_queued, pool_workers)"
+                        " started_at, queue_wait_ms, inflight, bg_backlog)"
                         " VALUES (?,?,?,?,?,?,?)", r)
         else:
             con.execute("INSERT INTO tool_invocations (run_id, tool_name, duration_ms,"
@@ -50,7 +50,7 @@ def test_it_names_the_stall_and_says_it_was_a_wait(tmp_path):
     assert a["measured"] is True and a["checked"] == 2
     (s,) = a["stalls"]
     assert s["tool"] == "Skill" and s["body_ms"] == 2
-    assert s["waited_ms"] == 348_998 and s["pool_queued"] == 41
+    assert s["waited_ms"] == 348_998 and s["inflight"] == 41
     assert not all(ok for _n, ok in checks(db))
 
 

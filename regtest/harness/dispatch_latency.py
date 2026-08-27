@@ -9,7 +9,7 @@ call (a registry read, 2 ms in every other turn of the same session) recorded
 349 SECONDS, and a `run_python` recorded 134 s for 0.587 s of execution. Both
 look identical to "the tool was slow", because `tool_invocations.duration_ms`
 was queue-wait PLUS body time with no way to separate them. The recorder now
-stamps `queue_wait_ms` and the dispatch executor's backlog; this reads them
+stamps `queue_wait_ms` and the contention it was dispatched into; this reads them
 back so the finding is automatic instead of anecdotal.
 
   python regtest/harness/dispatch_latency.py [PROJECT_DB ...]
@@ -33,8 +33,8 @@ def _rows(db: str) -> list[dict]:
         if "queue_wait_ms" not in cols:
             return [{"_blind": True}]          # pre-split DB: say so, never "clean"
         return [dict(r) for r in con.execute(
-            "SELECT run_id, tool_name, duration_ms, queue_wait_ms, pool_queued, "
-            "pool_workers, started_at FROM tool_invocations "
+            "SELECT run_id, tool_name, duration_ms, queue_wait_ms, inflight, "
+            "bg_backlog, started_at FROM tool_invocations "
             "WHERE queue_wait_ms IS NOT NULL ORDER BY queue_wait_ms DESC")]
     finally:
         con.close()
@@ -59,8 +59,8 @@ def audit(db: str) -> dict:
             "stalls": [{"tool": r["tool_name"], "run": r["run_id"],
                         "waited_ms": r["queue_wait_ms"],
                         "body_ms": (r["duration_ms"] or 0) - (r["queue_wait_ms"] or 0),
-                        "pool_queued": r["pool_queued"],
-                        "pool_workers": r["pool_workers"],
+                        "inflight": r["inflight"],
+                        "bg_backlog": r["bg_backlog"],
                         "at": r["started_at"]} for r in stalls],
             "worst_wait_ms": rows[0]["queue_wait_ms"]}
 
@@ -100,7 +100,8 @@ def main(argv: list[str]) -> int:
         for s in a["stalls"]:
             print(f"    {s['tool']:<22} waited {s['waited_ms']:>8} ms to do "
                   f"{s['body_ms']:>6} ms of work   "
-                  f"(pool {s['pool_queued']}/{s['pool_workers']} queued)  {s['at']}")
+                  f"({s['inflight']} dispatches in flight, "
+                  f"{s['bg_backlog']} background queued)  {s['at']}")
     return rc
 
 

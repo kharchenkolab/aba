@@ -165,13 +165,13 @@ def test_the_telemetry_row_can_hold_the_split(tmp_path):
                       "duration_ms INTEGER, error_summary TEXT, started_at "
                       "TEXT, ended_at TEXT)")
     for ddl in ("ALTER TABLE tool_invocations ADD COLUMN queue_wait_ms INTEGER",
-                "ALTER TABLE tool_invocations ADD COLUMN pool_queued INTEGER",
-                "ALTER TABLE tool_invocations ADD COLUMN pool_workers INTEGER"):
+                "ALTER TABLE tool_invocations ADD COLUMN inflight INTEGER",
+                "ALTER TABLE tool_invocations ADD COLUMN bg_backlog INTEGER"):
         con.execute(ddl)
     con.execute("INSERT INTO tool_invocations (tool_name, duration_ms, "
-                "queue_wait_ms, pool_queued, pool_workers) VALUES (?,?,?,?,?)",
+                "queue_wait_ms, inflight, bg_backlog) VALUES (?,?,?,?,?)",
                 ("Skill", 349_000, 348_998, 41, 32))
-    row = con.execute("SELECT duration_ms, queue_wait_ms, pool_queued FROM "
+    row = con.execute("SELECT duration_ms, queue_wait_ms, inflight FROM "
                       "tool_invocations").fetchone()
     con.close()
     # the shape the live incident would have had, had it been measurable
@@ -198,7 +198,9 @@ def _standalone() -> int:
               test_background_work_is_bounded_and_separate,
               test_spawn_still_runs_inline_without_a_loop,
               test_queue_wait_is_recorded_apart_from_body_time,
-              test_the_dispatch_site_actually_uses_the_wrapper):
+              test_the_dispatch_site_actually_uses_the_wrapper,
+              test_the_contention_witness_works_on_a_loop_without_private_internals,
+              test_the_background_backlog_is_read_without_creating_the_pool):
         mp = _MP()
         try:
             t(mp) if "monkeypatch" in t.__code__.co_varnames else t()
@@ -214,3 +216,42 @@ def _standalone() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(_standalone())
+
+
+def test_the_contention_witness_works_on_a_loop_without_private_internals():
+    """WIDE — the production loop. The first gauge read
+    `loop._default_executor._work_queue.qsize()`, which the stdlib selector
+    loop has and **uvloop** (what the server actually runs) does not — so the
+    witness recorded None in production and only in production, exactly where
+    a stall needed it. The counters must not depend on any loop attribute."""
+    from core.runtime import tool_telemetry as tt
+
+    class _NoInternalsLoop:
+        """uvloop's shape as far as this code is concerned: no executor attr."""
+
+    seen = []
+    with tt.dispatch_slot() as outer:
+        seen.append(outer.inflight)
+        with tt.dispatch_slot() as inner:
+            seen.append(inner.inflight)
+    assert seen == [1, 2], f"concurrent dispatches must be counted: {seen}"
+    # and the count unwinds, so a later quiet dispatch reads 1 again
+    with tt.dispatch_slot() as after:
+        assert after.inflight == 1
+    # nothing above touched an event loop at all
+    assert not hasattr(_NoInternalsLoop(), "_default_executor")
+
+
+def test_the_background_backlog_is_read_without_creating_the_pool():
+    """A gauge that CREATES the thing it measures changes the system it is
+    observing — and would spin up eight threads in any process that merely
+    recorded a tool call."""
+    from core.runtime import tool_telemetry as tt
+    from core import projects
+    saved = projects._BG_POOL
+    projects._BG_POOL = None
+    try:
+        assert tt._bg_backlog() == 0
+        assert projects._BG_POOL is None, "reading the gauge started the pool"
+    finally:
+        projects._BG_POOL = saved

@@ -7,6 +7,7 @@ first MCP server brings in 20+ external tools).
 """
 from __future__ import annotations
 import datetime as _dt
+import threading as _threading
 import json as _json
 from typing import Any, Optional
 
@@ -29,17 +30,18 @@ def record(
     status:        str,        # ok | error | rejected | deferred
     error_summary: Optional[str] = None,
     queue_wait_ms: Optional[int] = None,
-    pool_queued:   Optional[int] = None,
-    pool_workers:  Optional[int] = None,
+    inflight:      Optional[int] = None,
+    bg_backlog:    Optional[int] = None,
 ) -> None:
     """Write one row. Best-effort — never raises into the caller.
 
     `queue_wait_ms` is the part of `duration_ms` spent waiting to START, not
     working. Without it the two production stalls were indistinguishable from
     slow tools: a `Skill` registry read recorded 349 s and a `run_python`
-    recorded 134 s for 0.587 s of execution. `pool_queued`/`pool_workers` are
-    the dispatch executor's backlog and size at that moment — the witness that
-    says whether the wait was contention."""
+    recorded 134 s for 0.587 s of execution. `inflight` is how many tool
+    dispatches were outstanding at that moment and `bg_backlog` the background
+    pool's queue depth — the witness that says whether the wait was
+    contention."""
     try:
         from core.runtime.mcp import is_mcp_tool
         source = "mcp:" + tool_name.split(":", 1)[0] if is_mcp_tool(tool_name) else "bio"
@@ -53,11 +55,11 @@ def record(
                 "INSERT INTO tool_invocations "
                 "(run_id, agent_spec, tool_name, source, status, input_summary, "
                 " duration_ms, error_summary, started_at, ended_at, "
-                " queue_wait_ms, pool_queued, pool_workers) "
+                " queue_wait_ms, inflight, bg_backlog) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (run_id, agent_spec, tool_name, source, status, summary,
                  duration_ms, error_summary, started_at, ended_at,
-                 queue_wait_ms, pool_queued, pool_workers),
+                 queue_wait_ms, inflight, bg_backlog),
             )
             c.commit()
     except Exception:  # noqa: BLE001
@@ -214,24 +216,49 @@ def timed_body(fn, sink: list):
     return _wrapped
 
 
-def dispatch_pool_gauge() -> tuple[Optional[int], Optional[int]]:
-    """(queued, workers) for the executor tool dispatch runs on — asyncio's
-    DEFAULT ThreadPoolExecutor, which `projects.in_thread` uses for every tool
-    and `projects.spawn` uses for background advisor work (LLM calls). One
-    pool, min(32, cpu+4) slots, shared. Reading it is the only way a stalled
-    row can say WHY it stalled.
+_INFLIGHT = 0
+_INFLIGHT_LOCK = _threading.Lock()
 
-    Best-effort and private-attribute based on purpose: there is no public API
-    for a loop's default-executor backlog, and a gauge that raises is worse
-    than one that returns None."""
+
+class dispatch_slot:
+    """Count concurrent tool dispatches, and report the contention a row was
+    dispatched into.
+
+    Own counters, NOT the loop's private attributes. The first version read
+    `loop._default_executor._work_queue.qsize()`, which works on the stdlib
+    selector loop and returns None on **uvloop**, which has no such attribute —
+    so the witness was blind in production and only in production. Anything
+    that must be true where it runs has to be measured with something we own.
+
+    `inflight` includes this dispatch, so the loneliest possible call reads 1.
+    `bg_backlog` is the background pool's queue depth: background work no
+    longer shares the dispatch executor, and this is how we'd know if it did
+    again."""
+
+    def __enter__(self):
+        global _INFLIGHT
+        with _INFLIGHT_LOCK:
+            _INFLIGHT += 1
+            self.inflight = _INFLIGHT
+        self.bg_backlog = _bg_backlog()
+        return self
+
+    def __exit__(self, *_exc):
+        global _INFLIGHT
+        with _INFLIGHT_LOCK:
+            _INFLIGHT -= 1
+        return False
+
+
+def _bg_backlog() -> Optional[int]:
+    """Queued (not running) background tasks, or None if the pool never
+    started. Ours, so always readable."""
     try:
-        import asyncio
-        loop = asyncio.get_running_loop()
-        ex = getattr(loop, "_default_executor", None)
-        if ex is None:
-            return None, None
-        q = getattr(ex, "_work_queue", None)
-        return (q.qsize() if q is not None else None,
-                getattr(ex, "_max_workers", None))
+        from core import projects
+        pool = projects._BG_POOL          # not background_pool(): never CREATE
+        if pool is None:                  # one just to measure it
+            return 0
+        q = getattr(pool, "_work_queue", None)
+        return q.qsize() if q is not None else None
     except Exception:  # noqa: BLE001 — a gauge must never break a dispatch
-        return None, None
+        return None
