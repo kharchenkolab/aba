@@ -445,6 +445,21 @@ def _tool_calls(pid: str, tid: str) -> list:
 
 SCENARIOS: list = []
 
+# ── named groups ────────────────────────────────────────────────────────────
+# `critical` is the set a release must clear before anyone else runs it: the
+# execution substrates, one lane each, plus the census lane that catches the
+# errors no proposition was written for. Ordered cheapest-first so a broken
+# build fails in seconds rather than after the GPU queue.
+GROUPS: dict[str, list[str]] = {
+    "critical": [
+        "wf_session_smoke",          # ordinary work; asserts NOTHING went red
+        "wf_produce_view_track",     # foreground exec -> artifact -> tracked
+        "wf_cross_language_handoff",  # python <-> R in one project
+        "wf_slurm_batch",            # background job on the real scheduler
+        "wf_gpu_recognised",         # the agent asks for a GPU by itself
+    ],
+}
+
 
 def scenario(name):
     def deco(fn):
@@ -1227,9 +1242,21 @@ def main():
         globals()["BASE"] = a.base.rstrip("/")
     only = {s for s in a.only.split(",") if s}
     known = {n for n, _ in SCENARIOS}
+    # Named GROUPS. A deployment gate should not have to spell out the critical
+    # execution paths one at a time — and when it does, the set that actually
+    # runs drifts from the set that matters, silently, because nothing names the
+    # intended coverage. `critical` IS that name: the paths a user hits in the
+    # first ten minutes, each on a different substrate.
+    for g, members in GROUPS.items():
+        if g in only:
+            only.discard(g)
+            missing = [m for m in members if m not in known]
+            if missing:
+                sys.exit(f"group {g!r} names scenarios that do not exist: {missing}")
+            only |= set(members)
     if only - known:
-        sys.exit(f"--only names unknown scenarios: {sorted(only - known)}; "
-                 f"known: {sorted(known)}")
+        sys.exit(f"--only names unknown scenarios or groups: {sorted(only - known)}; "
+                 f"known: {sorted(known)}; groups: {sorted(GROUPS)}")
 
     health = api("GET", "/api/health")
     if not health.get("ok"):

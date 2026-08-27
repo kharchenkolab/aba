@@ -130,3 +130,27 @@ def test_env_explicit_reaches_the_consumer_through_params():
         checked += 1
     assert checked >= 1, ("PRECONDITION: no submit function declares "
                           "env_explicit — this test is guarding nothing")
+
+
+def test_the_critical_lane_group_names_real_scenarios():
+    """`--lanes critical` is the gate's coverage CONTRACT. A typo'd or renamed
+    member would silently shrink what the release is tested against — the same
+    empty-subject-set failure as a lane that measures nothing, one level up."""
+    import importlib.util
+    from pathlib import Path
+    wf = (Path(__file__).resolve().parents[1] / "regtest" / "live" / "workflows.py")
+    spec = importlib.util.spec_from_file_location("_wf", wf)
+    mod = importlib.util.module_from_spec(spec)
+    import sys as _s
+    _s.modules["_wf"] = mod
+    spec.loader.exec_module(mod)
+    known = {n for n, _ in mod.SCENARIOS}
+    assert mod.GROUPS.get("critical"), "the critical group is empty or missing"
+    for g, members in mod.GROUPS.items():
+        unknown = [m for m in members if m not in known]
+        assert not unknown, f"group {g!r} names non-existent scenarios: {unknown}"
+    crit = set(mod.GROUPS["critical"])
+    # The substrates that must be covered. Losing one of these is how a release
+    # ships with, say, GPU submission untested.
+    for must in ("wf_session_smoke", "wf_slurm_batch", "wf_gpu_recognised"):
+        assert must in crit, f"critical no longer covers {must}"
