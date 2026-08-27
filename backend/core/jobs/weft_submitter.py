@@ -788,6 +788,16 @@ class WeftSubmitter:
             # enforced BY THE HARNESS on the node — ssh sites have no
             # scheduler walltime, so this is the only wall enforcement there
             "timeout_s": timeout_s,
+            # THE SHARED HANDOFF PATH — and note WHICH spec this is. There are
+            # two spec.json shapes in this file: the shared-fs lane's (code /
+            # kind / project_id / …) and THIS one, which is what
+            # detached_entry.py actually opens on the node. The fields were
+            # first added to the other one, so the value was written where the
+            # consumer never looks and every job still saw data_dir=None —
+            # verified only because a live run inspected the spec on disk
+            # rather than trusting the unit test.
+            "data_dir": _project_dir_for(pid, "data"),
+            "artifacts_dir": _project_dir_for(pid, "artifacts"),
         }))
         ref = _adapter().sync_call("data_register", str(payload),
                                    ingest=True)["ref"]
