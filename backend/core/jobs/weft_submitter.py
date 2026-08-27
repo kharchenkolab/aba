@@ -408,6 +408,19 @@ def _sized_walltime(kind: str, est: Optional[dict], timeout_s: int) -> Optional[
     return None
 
 
+def _project_dir_for(pid, which: str) -> Optional[str]:
+    """The project's data/artifacts dir as an absolute path, or None if it
+    cannot be resolved. Best-effort: a job that lacks it simply runs without
+    the convention, exactly as every job did before."""
+    try:
+        from core.config import project_artifacts_dir, project_data_dir
+        d = (project_data_dir(str(pid)) if which == "data"
+             else project_artifacts_dir(str(pid)))
+        return str(d)
+    except Exception:  # noqa: BLE001 — never fail a submit over a convenience
+        return None
+
+
 def _gpu_env_for(params: dict, lang: str) -> Optional[str]:
     """EnvID of the site's GPU env pack IFF this job asked for a GPU and the
     site declares one (jobs.gpu_env_pack); None otherwise. The ONE rule both
@@ -598,6 +611,18 @@ class WeftSubmitter:
             # so a GPU job's record says it ran the shared CUDA pack rather
             # than the project env (project installs absent BY DESIGN there).
             "env_source": env_source,
+            # THE SHARED HANDOFF PATH. A foreground kernel cannot chdir (weft
+            # protocol), so its WORK_DIR is an ephemeral sandbox and a bare
+            # `open("data.csv")` in a later background job dies with
+            # FileNotFoundError — observed 2026-08-27, on the single most
+            # ordinary request there is ("make a file, then process it in a
+            # job"). DATA_DIR is the project directory BOTH sides can reach on
+            # a shared filesystem; the job never used to be told it exists, so
+            # even a careful agent had no convention to follow. Sent as data;
+            # the node exports it only if the path is actually there, because a
+            # genuinely detached site may not share the filesystem.
+            "data_dir": _project_dir_for(pid, "data"),
+            "artifacts_dir": _project_dir_for(pid, "artifacts"),
             "gpu": bool((params.get("estimate") or {}).get("gpu")),
             "modules": [],
             "pipeline": params.get("pipeline"), "revision": params.get("revision"),

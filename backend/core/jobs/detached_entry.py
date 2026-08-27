@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -88,6 +89,38 @@ _PY_EPI = ("\ntry:\n"
 _R_PRO = ".aba_start_dir <- getwd()\n"
 _R_EPI = ('\ntry(writeLines(c(.aba_start_dir, getwd()), '
           f'file.path(.aba_start_dir, "{_SENTINEL}")), silent = TRUE)\n')
+
+
+def _handoff_hint(tail: str, spec: dict) -> str:
+    """A FileNotFoundError on a BARE filename, in a job, is almost always the
+    session-sandbox handoff — say so.
+
+    2026-08-27: an agent wrote data.csv in a foreground turn and read it in a
+    background job. The kernel cannot chdir, so the file lives in an ephemeral
+    sandbox; the job runs in its own directory on another machine and dies with
+    a raw FileNotFoundError that explains nothing about WHY. The traceback is
+    correct and useless.
+
+    Narrow on purpose: only a FileNotFoundError, only a bare relative name (a
+    missing absolute path is a different problem and this hint would mislead),
+    and only when the job actually has a shared directory to recommend."""
+    if "FileNotFoundError" not in tail:
+        return ""
+    m = re.search(r"FileNotFoundError:.*?No such file or directory: '([^']+)'", tail)
+    if not m:
+        return ""
+    name = m.group(1)
+    if os.path.isabs(name) or "/" in name:
+        return ""
+    shared = spec.get("data_dir")
+    if not shared or not os.path.isdir(shared):
+        return ""
+    return (f"NOTE: {name!r} was not found here. This job ran in "
+            f"{os.getcwd()} on a compute node — files written by an earlier "
+            f"INTERACTIVE step live in that session's sandbox and are not "
+            f"visible to it. Use the shared project directory for data that "
+            f"crosses steps: write to os.environ['DATA_DIR'] ({shared}) in the "
+            f"interactive step, and read from it here.")
 
 
 def _wrap_script(script: str, interp: str) -> str:
@@ -167,6 +200,19 @@ def main() -> int:
     result = {"status": "ok", "returncode": 0, "stdout_tail": "",
               "outputs": [], "runtime": "", "seconds": 0.0,
               "job_id": spec.get("job_id")}
+    # THE SHARED HANDOFF. Export the project's DATA_DIR/ARTIFACTS_DIR so a job
+    # and the session that submitted it have a directory they can BOTH name. A
+    # foreground kernel cannot chdir, so its files land in an ephemeral sandbox;
+    # without this the job has no shared path to be pointed at, and the ordinary
+    # "make a file, then process it in a job" pattern dies on FileNotFoundError.
+    # Exported only when the path is really present on this node — a genuinely
+    # detached site does not share a filesystem, and inventing a variable that
+    # names a nonexistent directory would turn one confusing failure into two.
+    for _k in ("data_dir", "artifacts_dir"):
+        _v = spec.get(_k)
+        if _v and os.path.isdir(_v):
+            os.environ[_k.upper()] = _v
+
     exe = shutil.which(interp)
     if exe is None:
         result.update(status="error", returncode=127,
@@ -187,6 +233,10 @@ def main() -> int:
             tail += ("\n--- stderr ---\n" + p.stderr[-6000:])
         result["stdout_tail"] = tail
         result["returncode"] = p.returncode
+        _hand = _handoff_hint(tail, spec)
+        if _hand:
+            result["stdout_tail"] = tail + "\n\n" + _hand
+            result["handoff_hint"] = _hand
         if p.returncode != 0:
             result["status"] = "error"
             result["error"] = (p.stderr or p.stdout or "")[-2000:] \
