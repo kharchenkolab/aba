@@ -47,9 +47,9 @@ from pathlib import Path
 
 # install/mac/devtest/smoke.py → repo root is parents[3]
 REPO_ROOT = Path(__file__).resolve().parents[3]
-HELPER_SRC = REPO_ROOT / "install" / "mac" / "helper" / "src"
-ENV_YML = REPO_ROOT / "install" / "mac" / "environment.yml"
-R_ENV_YML = REPO_ROOT / "install" / "mac" / "r-environment.yml"
+HELPER_SRC = REPO_ROOT / "install" / "core" / "helper" / "src"
+ENV_YML = REPO_ROOT / "install" / "core" / "environment.yml"
+R_ENV_YML = REPO_ROOT / "install" / "core" / "r-environment.yml"
 PLAYBOOK = HELPER_SRC / "aba_installer" / "install.yml"
 
 ROOT = Path(os.environ.get("ABA_SMOKE_ROOT", Path.home() / "aba" / ".smoke"))
@@ -58,7 +58,10 @@ ABA_HOME = FAKE_HOME / ".aba"
 MAMBA_PKGS = ROOT / "mamba"
 EMPTY_RECIPES = ROOT / "empty-recipes"
 SEED_MICROMAMBA = ROOT / "bin" / "micromamba"
-BACKEND_PORT = 8000
+# Honor $ABA_PORT like the launcher render does: a dev Mac usually has a real
+# deployment answering on 8000, and polling that port would let the LIVE
+# server answer for the smoke tree.
+BACKEND_PORT = int(os.environ.get("ABA_PORT") or 8000)
 
 
 def _isolated_env() -> dict[str, str]:
