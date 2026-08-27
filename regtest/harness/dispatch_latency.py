@@ -32,10 +32,22 @@ def _rows(db: str) -> list[dict]:
         cols = {r[1] for r in con.execute("PRAGMA table_info(tool_invocations)")}
         if "queue_wait_ms" not in cols:
             return [{"_blind": True}]          # pre-split DB: say so, never "clean"
-        return [dict(r) for r in con.execute(
-            "SELECT run_id, tool_name, duration_ms, queue_wait_ms, inflight, "
-            "bg_backlog, started_at FROM tool_invocations "
+        # A schema can be PARTIAL: `queue_wait_ms` shipped before the contention
+        # columns were renamed to inflight/bg_backlog, so a DB written in
+        # between has the first and not the others. Selecting them unguarded
+        # raised OperationalError and took the whole screen down — a crash is a
+        # worse answer than a partial one, because the screen then reports on
+        # nothing at all.
+        want = ["run_id", "tool_name", "duration_ms", "queue_wait_ms",
+                "inflight", "bg_backlog", "started_at"]
+        have = [c for c in want if c in cols]
+        rows = [dict(r) for r in con.execute(
+            f"SELECT {', '.join(have)} FROM tool_invocations "
             "WHERE queue_wait_ms IS NOT NULL ORDER BY queue_wait_ms DESC")]
+        for r in rows:                       # absent columns read as unknown
+            for c in want:
+                r.setdefault(c, None)
+        return rows
     finally:
         con.close()
 

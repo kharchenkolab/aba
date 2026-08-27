@@ -104,7 +104,8 @@ def _standalone() -> int:
               test_a_genuinely_slow_tool_is_not_a_stall,
               test_a_db_that_never_recorded_the_split_reports_UNMEASURED,
               test_an_empty_but_capable_db_is_also_unmeasured,
-              test_a_short_wait_under_the_floor_is_ignored):
+              test_a_short_wait_under_the_floor_is_ignored,
+              test_a_partial_schema_still_screens_instead_of_crashing):
         try:
             t(Path(tempfile.mkdtemp()))
             print(f"  [PASS] {t.__name__}")
@@ -117,3 +118,26 @@ def _standalone() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(_standalone())
+
+
+def test_a_partial_schema_still_screens_instead_of_crashing(tmp_path):
+    """WIDE — the schema that shipped in between. `queue_wait_ms` landed before
+    the contention columns were renamed to inflight/bg_backlog, so a DB written
+    between the two commits has the first and not the others. Selecting them
+    unguarded raised OperationalError and took the whole screen down: it then
+    reported on NOTHING, which is worse than reporting partially."""
+    import sqlite3
+    p = tmp_path / "project.db"
+    con = sqlite3.connect(p)
+    con.execute("CREATE TABLE tool_invocations (id INTEGER PRIMARY KEY, run_id TEXT,"
+                " tool_name TEXT, duration_ms INTEGER, started_at TEXT,"
+                " queue_wait_ms INTEGER)")          # no inflight / bg_backlog
+    con.execute("INSERT INTO tool_invocations (run_id, tool_name, duration_ms,"
+                " started_at, queue_wait_ms) VALUES (?,?,?,?,?)",
+                ("r", "Skill", 349_000, "t", 348_998))
+    con.commit(); con.close()
+    a = audit(str(p))
+    assert a["measured"] is True and a["checked"] == 1
+    (s,) = a["stalls"]
+    assert s["waited_ms"] == 348_998 and s["body_ms"] == 2
+    assert s["inflight"] is None and s["bg_backlog"] is None   # unknown, not crash
