@@ -474,7 +474,13 @@ SCENARIOS: list = []
 # errors no proposition was written for. Ordered cheapest-first so a broken
 # build fails in seconds rather than after the GPU queue.
 GROUPS: dict[str, list[str]] = {
+    # `smoke` is the FIRST-MINUTES gate: one lane, no waiting on a scheduler,
+    # well under two minutes. It runs before anything else and before anyone is
+    # handed the build, because that is the window in which a person actually
+    # discovers the app is broken.
+    "smoke": ["wf_first_minutes"],
     "critical": [
+        "wf_first_minutes",
         "wf_session_smoke",          # ordinary work; asserts NOTHING went red
         "wf_produce_view_track",     # foreground exec -> artifact -> tracked
         "wf_cross_language_handoff",  # python <-> R in one project
@@ -600,6 +606,66 @@ def wf_slurm_batch(pid, tid, site):
          bool(mine) and not bad
          and all(str(j.get("status")) not in ("queued", "running") for j in mine)),
         ("the batch output is TRACKED", any("batch_result" in n for n in tracked)),
+    ]
+
+
+@scenario("wf_first_minutes")
+def wf_first_minutes(pid, tid, site):
+    """The first two minutes of a real session. FAST, and run FIRST.
+
+    THE LESSON THIS ENCODES. A human opened a fresh session and hit a hard
+    failure within minutes; the suite meant to prevent that took half an hour
+    and had not finished. The defect (a signature mismatch) failed at SUBMIT, in
+    under a second — nothing about catching it required waiting for a scheduler.
+    A gate that only reports after the GPU queue drains is not protecting the
+    person who is about to open the app.
+
+    So this lane deliberately does NOT wait for jobs to finish. It asks whether
+    the first few things anyone does are ACCEPTED without error: run some code,
+    keep an output, hand work to the background. Job completion is
+    wf_slurm_batch's question, and it is a slower one. Budget: well under two
+    minutes, so it can run immediately after every build and fail before anyone
+    is handed the thing.
+    """
+    caps = []
+    caps.append(drive(pid, tid,
+        "In Python, build a small table of 100 rows with two numeric columns, "
+        "save it as data.csv, and tell me the row count."))
+    caps.append(drive(pid, tid,
+        f"Now start that same summary as a BACKGROUND job on '{site}'. Don't "
+        f"wait for it — just tell me once it's queued."))
+
+    results = tool_results(pid, tid)
+    def _bad(r):
+        if not isinstance(r, dict):
+            return None
+        if str(r.get("status")) == "error":
+            return str(r.get("note") or r.get("error") or "")[:140]
+        if r.get("error"):
+            return str(r.get("error"))[:140]
+        if "Traceback (most recent call last)" in str(r.get("_raw") or ""):
+            return str(r.get("_raw"))[:140]
+        return None
+    errs = [(r.get("tool") or r.get("name") or "?", _bad(r))
+            for r in results if _bad(r)]
+    census = "; ".join(f"{n}: {m}" for n, m in errs[:3]) or "none"
+
+    jobs = api("GET", "/api/jobs")
+    jobs = jobs if isinstance(jobs, list) else jobs.get("jobs", [])
+    mine = [j for j in jobs if (j.get("params") or {}).get("project_id") == pid]
+    tracked = [n for n, _s, _k in tracked_outputs(pid)]
+
+    return caps, [
+        # ARMED FIRST: a session that ran nothing cannot be clean.
+        (f"the session actually did work ({len(results)} tool results)",
+         len(results) >= 2),
+        ("every turn completed", all(not c["errors"] for c in caps)),
+        (f"NO tool call returned an error ({len(errs)}/{len(results)} red) "
+         f"[{census}]", not errs),
+        # ACCEPTED, not finished. The signature mismatch died here, before a job
+        # row existed — so the existence of the row IS the assertion.
+        ("the background submit was ACCEPTED (a job row exists)", bool(mine)),
+        ("the ordinary output is tracked", any("data.csv" in n for n in tracked)),
     ]
 
 
