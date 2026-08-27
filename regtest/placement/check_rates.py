@@ -32,6 +32,20 @@ from pathlib import Path
 OK, BELOW, UNUSABLE = 0, 1, 2
 
 
+def acted(results: list, scenario: str) -> tuple[int, int]:
+    """-> (trials in which the agent EXECUTED anything, trials).
+
+    ARMING THE GATE ITSELF. A trial where the agent ran nothing did not decline
+    to ask for a GPU — it never reached the question. Counting those as misses
+    reports a placement failure when the real story is that the scenario failed
+    to get the agent moving: `cluster_gpu_unhinted_training` first measured
+    est_gpu=2/8 while acted was only 3/8, because the data file it described was
+    not visible to the discovery tools and the agent correctly stopped to ask.
+    A rate computed over trials that never posed the question is not a rate."""
+    rows = [r for r in results if r.get("name") == scenario]
+    return sum(1 for r in rows if (r.get("decisions") or [])), len(rows)
+
+
 def rate(results: list, scenario: str, field: str) -> tuple[int, int]:
     """-> (hits, trials) for `scenario`: a trial HITS if any of its exec
     decisions set `field` truthy. Per-trial, not per-decision: the agent makes
@@ -50,6 +64,9 @@ def main() -> int:
     ap.add_argument("--scenario", required=True)
     ap.add_argument("--field", default="est_gpu")
     ap.add_argument("--min-rate", type=float, default=0.9)
+    ap.add_argument("--min-acted", type=float, default=0.8,
+                    help="fraction of trials in which the agent must have "
+                         "executed something for the run to mean anything")
     ap.add_argument("--min-trials", type=int, default=5,
                     help="fewer than this cannot support a rate claim")
     a = ap.parse_args()
@@ -71,10 +88,18 @@ def main() -> int:
               f"Re-run the study with --repeat {a.min_trials}.", file=sys.stderr)
         return UNUSABLE
 
+    did, _ = acted(results, a.scenario)
+    if did / n < a.min_acted:
+        print(f"check_rates: the agent executed anything in only {did}/{n} "
+              f"trial(s) of {a.scenario!r} (floor {a.min_acted:.0%}). Those "
+              f"trials never reached the placement question, so this run cannot "
+              f"support a rate. Fix the scenario, not the prompt.", file=sys.stderr)
+        return UNUSABLE
+
     r = hits / n
     verdict = "OK" if r >= a.min_rate else "BELOW FLOOR"
     print(f"{a.scenario}  {a.field}={hits}/{n} = {r:.0%}  "
-          f"(floor {a.min_rate:.0%})  {verdict}")
+          f"(floor {a.min_rate:.0%})  acted={did}/{n}  {verdict}")
     return OK if r >= a.min_rate else BELOW
 
 

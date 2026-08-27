@@ -128,8 +128,33 @@ def _stub_ensure(input_, ctx=None):
             "message": f"{name} is available (placement-study stub)"}
 
 
+def _stub_discovery(*a, **kw):
+    """Data-DISCOVERY tools, stubbed to report the scenario's declared facts.
+
+    Only run_python/run_r were stubbed, so a scenario whose file the agent
+    inspects with a discovery tool instead of with code hit the REAL tool, found
+    nothing, and the agent correctly stopped to ask rather than inventing data —
+    5 of 8 trials of `cluster_gpu_unhinted_training` executed nothing at all.
+    The rate then conflated "did not ask for a GPU" with "did not do anything",
+    which is not a recognition rate.
+
+    Which tool the agent reaches for follows the FILENAME (.h5ad → code,
+    .parquet/.csv → a discovery tool), so stubbing only the code path silently
+    restricted every scenario to one kind of data. Cover the discovery tools
+    too, and a scenario is free to describe whatever data makes the placement
+    question sharpest."""
+    facts = _STUB["facts"]
+    if not _STUB["gave_facts"]:
+        _STUB["gave_facts"] = True
+    return {"ok": True, "status": "ok", "summary": facts, "stdout": facts,
+            "files": [], "note": "placement-study stub"}
+
+
 BT.run_python = _stub_run
 BT.run_r = _stub_run
+for _dn in ("list_data_files", "read_csv_info", "inspect_upload", "find_files"):
+    if hasattr(BT, _dn):
+        setattr(BT, _dn, _stub_discovery)
 BT.ensure_capability = _stub_ensure
 GUIDE.submit_python_job = _stub_submit_py
 RUNNER.submit_python_job = _stub_submit_py
