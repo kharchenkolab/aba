@@ -168,13 +168,41 @@ how-to for each target is owned by [`docs/install/README.md`](../install/README.
 four per-target guides. What matters here is the invariant they all uphold: an install writes
 *config*, never a code fork.
 
-The OOD launcher additionally **forwards** a set of backend env vars into the containerized
-server (`script.sh.erb`'s `--env` loop). That set is not a hand-maintained list: it is the
-registry's **`deploy_injected`** surface (`config.deploy_injected_keys()`, = `aba settings
---deploy-env`), mirrored into the template and drift-guarded by
+### The launch contract
+
+Turning a resolved environment into `apptainer run` argv happens in exactly one place —
+`install/ood/aba/template/aba_launch.sh` — which both consumers *source*:
+
+- the **OOD card** (`script.sh.erb`), the launch users get;
+- the **deployment gate** (`aba-vbc/verify.sh`), which decides a release may be promoted.
+
+It assembles the scope binds (`/groups`, `/dev/fuse`, `/dev/shm`, the share root, the
+deployment root, the published env store when it sits outside both), `site.yaml binds:` via
+`ABA_EXTRA_BINDS`, the slim base remaps (`ABA_BASE_DIR` → `/opt/aba-venv`, `ABA_TOOLS_DIR` →
+`/opt/aba-envs/tools`), the session `TMPDIR`, the forwarded env, the Slurm client + munge +
+synthesized NSS plumbing, and the host module system. Its input is the env block
+`aba_preflight.py` resolved from `site.yaml`; it reads no config of its own and invents no
+value. Neither consumer may build argv beside it — the card adds one bind (its per-session
+SPA dist), the gate adds none — and `tests/test_launch_contract.py` asserts that by count,
+so a hand-rolled bind fails there rather than in production.
+
+The reason it is one file is that two launchers meant to be identical are not, and their
+divergence reports success: before this, the gate ran without `ABA_BATCH_SUBMITTER`, so
+`submitter_name()` read an unset var under `--containall`, returned `local`, and the
+scheduler lane passed having never submitted to Slurm.
+
+The **forwarded** set is not a hand-maintained list: it is the registry's
+**`deploy_injected`** surface (`config.deploy_injected_keys()`, = `aba settings
+--deploy-env`), mirrored into the contract and drift-guarded by
 `tests/test_deploy_forward_loop.py` — add a forwarded var without declaring it `deploy_injected`
 (or vice-versa) and CI fails. This closes the "add a var, forget to forward it" desync the
 fat-SIF work kept hitting across `script.sh.erb`/`before.sh.erb`/`after.sh.erb`.
+
+`aba-env.sh` itself ends in an unconditional `true`. Its last real line is an optional
+`[ -f <group>/.env ] && …` chain, and a sourced file's exit status is its last command's —
+so without the terminator the file reports *"did the group carry a .env"* as though it were
+*"did the environment load"*, and any consumer running `set -e` dies silently at the moment
+it succeeded.
 
 ## Shared-artifact layout (`$ABA_SHARE`)
 

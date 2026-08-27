@@ -178,10 +178,20 @@ def test_session_tmpdir_prefers_node_local_and_cleans_fallback():
     Behavioral, not textual: a standalone ``trap 'rm -rf …' EXIT`` is unsafe
     because a LATER ``trap … EXIT`` silently replaces it (bash keeps one EXIT
     handler). So we resolve the last-installed EXIT handler and require the
-    fallback cleanup to live inside it."""
+    fallback cleanup to live inside it.
+
+    The contract is now split across two files and BOTH halves must hold: the
+    shared launch contract chooses and forwards TMPDIR (aba_launch.sh, sourced by
+    the card and by the deployment gate alike), and the card owns the EXIT
+    handler that removes the fallback. Checking only one file would let the other
+    half rot silently.
+    """
+    launch = (APP / "template" / "aba_launch.sh").read_text()
     text = (APP / "template" / "script.sh.erb").read_text()
-    assert "SLURM_TMPDIR" in text, "TMPDIR must prefer node-local job scratch"
-    assert re.search(r'--env "TMPDIR=', text), "TMPDIR must be forwarded into the container"
+    assert "SLURM_TMPDIR" in launch, "TMPDIR must prefer node-local job scratch"
+    assert re.search(r'--env "TMPDIR=', launch), "TMPDIR must be forwarded into the container"
+    assert "ABA_LAUNCH_TMP_CLEANUP" in text, (
+        "the card must take ownership of the fallback dir the contract created")
     # bash keeps a single EXIT handler — the LAST `trap … EXIT` wins.
     exit_traps = re.findall(r'^\s*trap\s+(.+?)\s+((?:\w+\s+)*EXIT)\b', text, re.M)
     assert exit_traps, "no EXIT trap found"
@@ -229,3 +239,47 @@ def test_every_reader_of_the_enrollment_marker_agrees():
         f"  aba_preflight.py : {sorted(preflight)}\n"
         f"  enroll_group.py  : {sorted(enroll)}\n"
         f"  form.yml.erb     : {sorted(form)}")
+
+
+def test_aba_env_block_is_safe_to_source_under_set_e():
+    """aba-env.sh must exit 0 whatever was optional in it.
+
+    A sourced file's exit status is its LAST command's, and the generator ends
+    with an optional ``[ -f <group>/.env ] && …`` chain. Where a group carries no
+    .env that status is 1, so any consumer running under ``set -e`` dies —
+    silently, with no message, at the instant it finished loading its environment
+    CORRECTLY. The OOD card never noticed because before.sh.erb does not set -e;
+    the deployment gate does, and it exited before printing a single line.
+
+    Behavioral, not textual: generate the block for a group with NO .env (the
+    failing shape) and actually source it under `set -euo pipefail`."""
+    import subprocess
+    import tempfile
+    src = (APP.parent / "aba_preflight.py").read_text()
+    assert 'lines.append("true' in src, (
+        "the generated env block no longer ends in an unconditional success")
+
+    # The degenerate shape: the optional chain present, its target ABSENT.
+    with tempfile.TemporaryDirectory() as d:
+        env_sh = Path(d) / "aba-env.sh"
+        env_sh.write_text(
+            "export ABA_RUNTIME_DIR=/somewhere\n"
+            f"[ -f {d}/nonexistent/.env ] && set -a && . {d}/nonexistent/.env && set +a\n"
+            "true   # aba-env.sh loaded\n")
+        r = subprocess.run(
+            ["/usr/bin/env", "bash", "-c", f'set -euo pipefail; . "{env_sh}"; echo LOADED'],
+            capture_output=True, text=True)
+        assert r.returncode == 0 and "LOADED" in r.stdout, (
+            "the env block kills a `set -e` consumer when the group .env is absent")
+
+        # ARMED: the same block WITHOUT the terminator must fail, or the check above
+        # would pass on any file at all.
+        env_sh.write_text(
+            "export ABA_RUNTIME_DIR=/somewhere\n"
+            f"[ -f {d}/nonexistent/.env ] && set -a && . {d}/nonexistent/.env && set +a\n")
+        r2 = subprocess.run(
+            ["/usr/bin/env", "bash", "-c", f'set -euo pipefail; . "{env_sh}"; echo LOADED'],
+            capture_output=True, text=True)
+        assert r2.returncode != 0, (
+            "PRECONDITION: the unterminated block did NOT fail, so this test "
+            "cannot tell whether the terminator is doing anything")

@@ -22,8 +22,14 @@ pytestmark = pytest.mark.platform
 
 import core.config as config  # noqa: E402
 
-ERB = (Path(__file__).resolve().parent.parent
-       / "install" / "ood" / "aba" / "template" / "script.sh.erb")
+_TPL = (Path(__file__).resolve().parent.parent
+        / "install" / "ood" / "aba" / "template")
+# The forward loop moved into the shared launch contract (aba_launch.sh), which
+# BOTH the card and the deployment gate source. Read every file that can carry a
+# `--env`, so this guard stays armed wherever the loop lives: pinning it to one
+# path is how a mirror check quietly starts reading a file that no longer holds
+# the thing it checks.
+LAUNCH_FILES = [_TPL / "aba_launch.sh", _TPL / "script.sh.erb"]
 
 # Vars the launcher forwards that are NOT backend settings (launcher runtime /
 # third-party scheduler contract). Not part of the registry surface.
@@ -43,8 +49,9 @@ def _forwarded_env_vars(text: str) -> set[str]:
 
 
 def test_forward_loop_mirrors_registry():
-    assert ERB.exists(), f"missing launcher template: {ERB}"
-    text = ERB.read_text()
+    for f in LAUNCH_FILES:
+        assert f.exists(), f"missing launcher file: {f}"
+    text = "\n".join(f.read_text() for f in LAUNCH_FILES)
     forwarded = _forwarded_env_vars(text) - LAUNCHER_ONLY
     declared = set(config.deploy_injected_keys())
 
@@ -52,9 +59,9 @@ def test_forward_loop_mirrors_registry():
     extra = forwarded - declared     # launcher forwards but not a deploy_injected setting
 
     assert not missing, (
-        "These deploy_injected settings are NOT forwarded by script.sh.erb "
+        "These deploy_injected settings are NOT forwarded by the launch contract "
         f"(add them to the forward-loop): {sorted(missing)}")
     assert not extra, (
-        "script.sh.erb forwards these env vars that are neither a deploy_injected "
+        "the launch contract forwards these env vars that are neither a deploy_injected "
         "setting nor a known launcher-only var (declare them deploy_injected in "
         f"config.py or add to LAUNCHER_ONLY): {sorted(extra)}")

@@ -196,6 +196,7 @@ FILES=(
   tests/test_dataset_exec_link.py
   tests/test_datasets_mechanism.py
   tests/test_deploy_forward_loop.py
+  tests/test_launch_contract.py
   tests/test_direct_api_runtime_skeleton.py
   tests/test_discovery_env_gate.py
   tests/test_empty_turn_defense.py

@@ -75,148 +75,32 @@ if [ -n "${ABA_SIF:-}" ]; then
   # --containall so the host $HOME doesn't shadow the baked /opt; forward ABA's
   # resolved runtime env + bind the cluster scope mounts. The image's runscript
   # starts uvicorn on $ABA_PORT inside the container.
-  # /groups + /cluster/aba also cover the reference-store tiers (refs.md): the
-  # group refs at /groups/<group>/aba/refs and the optional institution refs at
-  # /cluster/aba/refs are already inside these mounts, and ABA_SITE_CONFIG +
-  # ABA_GROUP are forwarded below — so the backend resolves + reads refs with no
-  # refs-specific bind or env. (If a site puts institution refs OUTSIDE
-  # /cluster/aba, add a --bind for it here.)
+  # THE LAUNCH CONTRACT lives in aba_launch.sh (staged from template/ beside this
+  # script) and is sourced by BOTH consumers: this card and the deployment gate
+  # (aba-vbc/verify.sh). Everything the backend needs to see — the scope binds,
+  # the env store, site.yaml `binds:`, the slim base, the session TMPDIR, the
+  # deploy_injected forward list, the Slurm client/munge/NSS plumbing and the
+  # host module system — is assembled there, once. Do NOT add a --bind or --env
+  # here: a bind only this card has is a bind the gate cannot certify, which is
+  # exactly how the two drifted apart. Card-specific below: the per-session SPA
+  # dist and the port, both of which the shared forward list picks up from the
+  # environment.
   binds=( --bind "${PWD}/dist" )
-  [ -d /groups ] && binds+=( --bind /groups )
-  # /dev/fuse: --containall does NOT expose it, but weft needs it to MOUNT published squashfs
-  # env packs read-only (its squashfs_mode probe checks `-e /dev/fuse`). Without it — even with
-  # squashfuse/mksquashfs baked in the image — weft falls back to realizing each pack from its
-  # lockfile PER USER (slow, unshared). Bind the host node's device in (it's world-rw).
-  [ -e /dev/fuse ] && binds+=( --bind /dev/fuse )
-  # The share root (site.yaml, image, skeleton, institution bundle + its refs tier).
-  # Derived, not hardcoded: a site may root the deployment anywhere its nodes can read.
-  _share="${ABA_SHARE:-$(dirname "${ABA_SITE_CONFIG:-/cluster/aba/site.yaml}")}"
-  [ -d "${_share}" ] && binds+=( --bind "${_share}" )
-  # Also bind the DEPLOYMENT root (the dir holding site.yaml). Under the versioned layout
-  # ABA_SHARE is the release_root (…/app), so this is what covers the siblings envs/ (the
-  # published weft images consumers adopt), installation/, refs/. Skip if it's the same
-  # dir or already under a bound tree like /groups.
-  _deploy_root="$(dirname "${ABA_SITE_CONFIG:-/cluster/aba/site.yaml}")"
-  case "${_deploy_root}/" in
-    "${_share}/"*|/groups/*) ;;                                  # already covered
-    *) [ -d "${_deploy_root}" ] && binds+=( --bind "${_deploy_root}" ) ;;
-  esac
-  # site.yaml `binds:` (→ ABA_EXTRA_BINDS): any further host paths the deployment needs
-  # visible under --containall — e.g. a group/user tree outside /groups.
-  for b in ${ABA_EXTRA_BINDS:-}; do [ -e "$b" ] && binds+=( --bind "$b" ); done
-  # slim image: mount the shared conda base (+ R base) the image expects at /opt.
-  [ -n "${ABA_BASE_DIR:-}" ] && binds+=( --bind "${ABA_BASE_DIR}:/opt/aba-venv" )
-  [ -n "${ABA_TOOLS_DIR:-}" ] && [ -d "${ABA_TOOLS_DIR}" ] && binds+=( --bind "${ABA_TOOLS_DIR}:/opt/aba-envs/tools" )
-  envs=( --env "ABA_FRONTEND_DIST=${PWD}/dist" --env "ABA_PORT=${port}" )
-  # In-session pip/uv (weft session_install) unpack wheels under $TMPDIR. Under
-  # --containall /tmp is a small (~64MB) in-memory tmpfs, so a scientific-scale add
-  # (pyarrow, polars, torch, scipy) ENOSPCs mid-unpack and surfaces as a confusing
-  # env.solve_conflict "No space left on device". Prefer NODE-LOCAL job scratch
-  # ($SLURM_TMPDIR: fast local disk, purged by Slurm at job end); fall back to a
-  # PER-SESSION dir under the user's runtime tree (real disk via the /groups bind —
-  # parallel-FS, so slower for many-small-file unpacks, and not auto-purged: it is
-  # removed by shutdown() below — the single EXIT handler — so debris can't accrue
-  # against quota across sessions. (A standalone `trap 'rm -rf' EXIT` here would be
-  # silently replaced by the later `trap shutdown … EXIT`, which is why cleanup lives
-  # in shutdown() instead.) The tmpfs /tmp stays for sockets/small files. weft's
-  # LocalAdapter inherits this env when it shells out.
-  if [ -n "${SLURM_TMPDIR:-}" ] && [ -d "${SLURM_TMPDIR}" ]; then
-    _sess_tmp="${SLURM_TMPDIR}"                       # node-local; Slurm purges it
-  else
-    _sess_tmp="${ABA_RUNTIME_DIR}/tmp/session-${SLURM_JOB_ID:-$$}"
-    mkdir -p "$_sess_tmp"
-    _sess_tmp_cleanup="$_sess_tmp"                    # only WE made it → shutdown() rm -rf's it
+  envs=()
+  export ABA_PORT="${port}"
+  export ABA_LAUNCH_WORKDIR="${PWD}"
+  # Refuse rather than launch a crippled session. This script does NOT set -e, so
+  # a missing file would make `.` print a warning and carry on: aba_launch_args
+  # would then be "command not found", and apptainer would start with the dist
+  # bind alone — no share, no env store, no scheduler. The session would come up
+  # and fail at everything, which is far harder to diagnose than not starting.
+  if [ ! -f "${PWD}/aba_launch.sh" ]; then
+    echo "ABA: the launch contract (aba_launch.sh) was not staged into ${PWD} — the card is incomplete. Not launching."
+    exit 1
   fi
-  envs+=( --env "TMPDIR=${_sess_tmp}" )
-  # ABA_SIF is forwarded so the backend knows which image it is running from.
-  # ABA_JOB_WRAP rides along for deployments that DECLARE image.job_wrap; it is no
-  # longer derived from the image shape, and no weft submit lane wraps. Under this
-  # (weft) profile the controller runtime exists only inside the image, which is why
-  # a cluster site here resolves to the DETACHED contract: offloaded jobs ship their
-  # code as data and run the node's own interpreter inside a weft-mounted science
-  # env. No re-entry, by design — see docs/arch/envs.md §Shared-FS reachability.
-  # ABA_BATCH_SUBMITTER is the SELECTOR that decides local-vs-slurm; it MUST be forwarded
-  # or submitter_name() reads an unset var inside --containall, returns "local", and every
-  # "background" job silently runs IN-PROCESS on the session node instead of on Slurm —
-  # which also makes the sbatch-binding block below dead code, and makes run_nextflow's
-  # env-blocker (keyed on submitter==slurm) wrongly refuse nf-core because no container
-  # engine is on PATH *inside* the image (the engine lives on the compute node). ABA_HPC_CONFIG
-  # rides along (partition/QOS catalog) for the same reason. ABA_MODULE_INIT is forwarded so an
-  # OFFLOADED bare job (e.g. the nf-core Nextflow head) can re-init the site's module system on
-  # its compute node — job.sh's first `module`-init candidate is "${ABA_MODULE_INIT:-}"; without
-  # it the head fails `module: command not found` → `nextflow: command not found` (exit 127).
-  #
-  # SOURCE OF TRUTH for this list = the backend settings registry's deploy_injected
-  # set (config.deploy_injected_keys(), = `aba settings --deploy-env`). ERB can't call
-  # Python at render, so this list is a MIRROR kept in sync by
-  # tests/test_deploy_forward_loop.py — add a var here AND mark it deploy_injected in
-  # core/config.py, or the guard fails. (ABA_FRONTEND_DIST is injected with a computed
-  # value above; it's in the registry set too.)
-  for v in ABA_RUNTIME_DIR ABA_ENVS_DIR ABA_SITE_CONFIG ABA_GROUP ABA_MODEL ABA_HOME \
-           ABA_SHARE ABA_RELEASE_ID ABA_SIF ABA_JOB_WRAP ABA_APPTAINER_TMPDIR \
-           ABA_BATCH_SUBMITTER ABA_HPC_CONFIG ABA_MODULE_INIT ABA_MODULE_BINDS ABA_SUBSCRIPTION_OAUTH \
-           ABA_NEXTFLOW_MODULE ABA_NEXTFLOW_PROFILES ABA_NEXTFLOW_CONFIG ABA_NEXTFLOW_CACHEDIR \
-           ABA_WEFT_PUBLISH_TREE ABA_COMPUTE_SELF_SERVICE ABA_JOBS_GPU_ENV_PACK \
-           ANTHROPIC_API_KEY ABA_LLM_CREDENTIAL CLAUDE_CODE_OAUTH_TOKEN; do
-    eval "_v=\${$v:-}"; [ -n "${_v}" ] && envs+=( --env "$v=${_v}" )
-  done
-
-  # --- Slurm offload plumbing: expose the host scheduler to the --containall
-  # backend so it can `sbatch` background jobs. Bind the client binaries + the
-  # libslurm plugin dir + SLURM_CONF + the munge socket/lib, plus a SYNTHESIZED
-  # passwd/group holding the runtime user + slurm/munge (via getent — LDAP users
-  # aren't in the image passwd and containall has no SSSD). Host RHEL binaries run
-  # on the image's newer glibc (backward-compatible). No-op off Slurm.
-  # NB `sacctmgr` is in the list, not just for symmetry: hpc_config.qos_account_live()
-  # shells out to it to discover the user's QOS + account + each QOS's MaxWall cap.
-  # Without it bound, discovery returns empty inside the SIF, jobs fall back to the
-  # cluster's DEFAULT QOS + uncapped walltime, and a long request (e.g. the 24h
-  # nextflow head) is rejected QOSMaxWallDurationPerJobLimit. Binding it lets the
-  # slim SIF self-configure QOS/account on any accounting cluster — no hpc.yaml.
-  if command -v sbatch >/dev/null 2>&1; then
-    for b in sbatch squeue scancel sacct sacctmgr sinfo scontrol salloc srun; do
-      p=$(command -v "$b" 2>/dev/null) && binds+=( --bind "$p" )
-    done
-    sld=$(ldd "$(command -v sbatch)" 2>/dev/null | awk '/libslurm/{print $3}' | head -1)
-    [ -n "$sld" ] && binds+=( --bind "$(dirname "$sld")" )
-    scf="${SLURM_CONF:-/etc/slurm/slurm.conf}"
-    [ -f "$scf" ] && { binds+=( --bind "$(dirname "$scf")" ); envs+=( --env "SLURM_CONF=$scf" ); }
-    for m in /run/munge /var/run/munge; do [ -S "$m/munge.socket.2" ] && binds+=( --bind "$m" ); done
-    ml=$(ldconfig -p 2>/dev/null | awk '$1=="libmunge.so.2"{print $NF; exit}')
-    [ -n "$ml" ] && binds+=( --bind "$ml" )
-    nss="${PWD}/nss"; mkdir -p "$nss"
-    getent passwd "$(id -un)" slurm munge root nobody > "$nss/passwd" 2>/dev/null
-    getent group  "$(id -gn)" slurm munge root nobody   > "$nss/group"  2>/dev/null
-    [ -s "$nss/passwd" ] && binds+=( --bind "$nss/passwd:/etc/passwd" )
-    [ -s "$nss/group" ]  && binds+=( --bind "$nss/group:/etc/group" )
-  fi
-
-  # (Removed W3.4: the "Option B offload" block that staged a backend copy and
-  # forwarded ABA_OFFLOAD_PYTHON/ABA_OFFLOAD_BACKEND_DIR for BARE sbatch jobs —
-  # the sbatch offload lane is gone (#35). Cluster background jobs now run via the
-  # weft slurm site, not a bare re-exec on the compute node.)
-
-  # --- Host environment-modules plumbing (site.yaml `modules:` → ABA_MODULE_* in
-  # aba-env.sh): bind the cluster's Lmod + modulefiles + tool trees so IN-SESSION
-  # `module load` works inside the SIF. Only sound when the base image's glibc matches
-  # the nodes' (build.sh enforces) — then these host EL libs are ABI-compatible; the
-  # backend's core/exec/modules.py then finds LMOD_PKG/init/bash (bound) and activates.
-  # Resolve on THIS node: source the init for MODULEPATH/LMOD_*, ldconfig the libs.
-  # No-op when unset. (Offloaded Slurm jobs load modules natively on the bare node.)
-  if [ -n "${ABA_MODULE_INIT:-}" ] && [ -f "${ABA_MODULE_INIT}" ]; then
-    ( . "${ABA_MODULE_INIT}" >/dev/null 2>&1
-      for v in MODULEPATH MODULESHOME LMOD_CMD LMOD_DIR LMOD_PKG LMOD_ROOT LMOD_SYSTEM_DEFAULT_MODULES \
-               LMOD_RC LMOD_PACKAGE_PATH LMOD_SYSHOST; do
-        eval "_x=\${$v:-}"; [ -n "$_x" ] && echo "$v=$_x"; done ) > "${PWD}/.modenv"
-    while IFS='=' read -r _k _v; do [ -n "$_v" ] && envs+=( --env "${_k}=${_v}" ); done < "${PWD}/.modenv"
-    for b in ${ABA_MODULE_BINDS:-}; do [ -e "$b" ] && binds+=( --bind "$b" ); done
-    _hostlib=0
-    for l in ${ABA_MODULE_LIBS:-}; do
-      f=$(ldconfig -p 2>/dev/null | awk -v L="$l" '$1==L{print $NF; exit}')
-      [ -n "$f" ] && { binds+=( --bind "$f:/opt/hostlibs/$l" ); _hostlib=1; }
-    done
-    [ "$_hostlib" = 1 ] && envs+=( --env "LD_LIBRARY_PATH=/opt/hostlibs" )
-  fi
+  . "${PWD}/aba_launch.sh"
+  aba_launch_args
+  _sess_tmp_cleanup="${ABA_LAUNCH_TMP_CLEANUP:-}"     # shutdown() below rm -rf's it
 
   apptainer run --containall "${binds[@]}" "${envs[@]}" "${ABA_SIF}" &
   UV=$!

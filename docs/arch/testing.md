@@ -74,7 +74,12 @@ becomes the one people trust, because it is the one that is green.
   breaks) — and each failure was read as a product defect before it was recognised as
   the harness's. The corollary is that the card and the gate are two consumers of ONE
   launch contract: where they diverge, the gate tests a configuration production never
-  runs. They diverge today (see Known gaps).
+  runs. That contract is now a FILE, not an intention —
+  `install/ood/aba/template/aba_launch.sh`, sourced by both, and by nothing else. When
+  they were merely *supposed* to match, the gate ran without `ABA_BATCH_SUBMITTER`, so
+  `submitter_name()` read an unset var inside `--containall`, returned `local`, and
+  `--lanes wf_slurm_batch` passed having never submitted anything to Slurm. Divergence
+  between two launchers does not announce itself; it reports success.
 - **Don't push a question to a cheaper layer than can answer it.** A hermetic test of a
   remote code path proves only that the fake agreed with you.
 - **Mechanism truth and surface truth are separate claims.** The sweep once verified
@@ -166,6 +171,20 @@ boots the staged SIF headlessly on a random port and drives it over HTTP:
     ./deploy.sh verify --lanes wf_slurm_batch,wf_cross_language_handoff
                                            + workflow lanes against THAT server
 
+It reaches that fidelity by using the card's own two steps, unmodified:
+
+| step | file | produces |
+|---|---|---|
+| resolve | `install/ood/aba/template/preflight.sh` → `aba_preflight.py` | `aba-env.sh` — the env block `site.yaml` implies (~19 exports: `ABA_BATCH_SUBMITTER`, `ABA_JOBS_GPU_ENV_PACK`, `ABA_MODULE_*`, `ABA_NEXTFLOW_*`, the credential chain) |
+| launch | `install/ood/aba/template/aba_launch.sh` | the `apptainer run` argv — scope binds, the env store, `site.yaml binds:`, the slim base, the session `TMPDIR`, the deploy-injected forward list, the Slurm client/munge/NSS plumbing, the host module system |
+
+Neither consumer builds argv of its own: the card adds one bind (its per-session SPA
+dist) and the gate adds none, which `tests/test_launch_contract.py` asserts by COUNT so a
+hand-rolled bind fails there rather than in production. The gate then overrides only what
+must be throwaway — `ABA_HOME`, `ABA_RUNTIME_DIR`, `ABA_ENVS_DIR` — and points
+`ABA_WEFT_PUBLISH_TREE` at the store under test. A bind the card gains is a bind the gate
+exercises, with nobody remembering to add it.
+
 `--lanes` passes `--base <the gate's URL>` to `regtest/live/workflows.py`, so the
 workflow scenarios run against the deployment rather than a personal install. Use it for
 anything that needs the real substrate wiring — scheduler offload, GPU routing, reference
@@ -223,13 +242,6 @@ OUTCOME the user wants, and let the platform's guidance be what is under test.
   additional — assertions that read *substrate* state (weft kernel-death events) or
   *tool-result prose* (the untracked-write warning) — belongs as new `expect:` vocabulary
   in SCHEMA.md, not as a parallel runner. Prefer the scenario mechanism for anything new.
-- **The gate's launch is not the card's launch.** `script.sh.erb` forwards the module
-  environment from `site.yaml` (`ABA_MODULE_INIT`, `ABA_MODULE_BINDS`, `ABA_MODULE_LIBS`)
-  and `jobs.submitter`; `verify.sh` forwards none of it. So the gate's container cannot
-  reach the scheduler client, and `--lanes wf_slurm_batch` fails with
-  `sbatch: command not found` against a deployment where the same job succeeds. Until the
-  two share one launch contract, the gate cannot test scheduler offload, GPU submission,
-  or anything else that depends on site-provided tooling.
 - **No CI tier runs the scenario sweep**, by design (cost). Behavioural regressions are
   caught on a schedule, not per-PR.
 - **The concurrency lanes are opt-in and unscheduled.** `--concurrent` /

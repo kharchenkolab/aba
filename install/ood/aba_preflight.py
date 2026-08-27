@@ -514,6 +514,14 @@ def main():
         if group_root:
             genv = group_root / ".env"
             lines.append(f'[ -f {shq(genv)} ] && set -a && . {shq(genv)} && set +a')
+        # Terminate with an unconditional success. The optional group-.env line
+        # above is a `[ -f … ] && …` chain, so WITHOUT this the file's exit
+        # status reports "did the group .env exist" — and a sourced file's status
+        # is the status of its last command. Any consumer running under `set -e`
+        # (the deployment gate does) is then killed, silently, at the exact
+        # moment it finished loading its environment correctly. The card never
+        # noticed because before.sh.erb does not set -e.
+        lines.append("true   # aba-env.sh loaded; see above for what, if anything, was optional")
         (staged / "aba-env.sh").write_text("\n".join(lines) + "\n")
 
     # ---- status.yaml ----
