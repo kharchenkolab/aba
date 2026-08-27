@@ -85,6 +85,108 @@ def retained(*, label: Optional[str] = None, site: Optional[str] = None) -> list
     return _call("retained_runs", label=label, site=site)
 
 
+# The one size gate for a user-initiated ship-home, shared with the automatic
+# one at run close (`_no_durable_keep_policy`): never a silent multi-GB
+# transfer, never a silent loss. A refusal here names the size and the lever.
+SHIP_HOME_MAX_BYTES = 2 * 1024**3
+
+
+def ship_home(target: str) -> dict:
+    """Copy an at-risk keep's bytes into the controller workspace.
+
+    The repair for the one state the ledger can flag and could not fix: a run
+    whose outputs were kept IN PLACE on a machine that has since stopped
+    declaring durable storage. Re-retains the SAME selection with
+    `dest="@workspace"`, which is `put_retained`'s INSERT-OR-REPLACE path, so
+    the index row moves with the bytes rather than doubling.
+
+    Synchronous and size-gated on purpose. A background retain flips the index
+    row to `in_place=0` BEFORE the copy runs, and the ledger reads that row —
+    so a queued transfer would report the result safe while its bytes were
+    still on the machine about to lose them. Blocking under a 2 GB cap keeps
+    the answer true; a larger set gets an honest refusal naming its size.
+
+    Never raises for an expected outcome: an already-home keep, a missing row
+    and a swept sandbox are RESULTS, not exceptions — this is called from a
+    button."""
+    rows = [r for r in (retained() or []) if r.get("target") == target]
+    if not rows:
+        return {"target": target, "ok": False, "error": "unknown_keep",
+                "note": "no retained record for this run output"}
+    row = rows[0]
+    if not row.get("in_place"):
+        return {"target": target, "ok": True, "already_home": True,
+                "note": "these bytes already live in the workspace"}
+    size = int(row.get("bytes") or 0)
+    if size > SHIP_HOME_MAX_BYTES:
+        return {"target": target, "ok": False, "error": "too_large",
+                "bytes": size,
+                "note": (f"{size / 1e9:.1f} GB is over the {SHIP_HOME_MAX_BYTES / 1e9:.0f} GB "
+                         f"copy-here cap — declare durable storage on the machine "
+                         f"(Settings → Compute), or ask to ship it explicitly")}
+    sel = row.get("selection") or {}
+    if isinstance(sel, str):
+        import json
+        try:
+            sel = json.loads(sel) or {}
+        except Exception:  # noqa: BLE001 — an unreadable selection is not a reason
+            sel = {}       # to refuse; a bare re-retain keeps everything
+    label = row.get("label") or None
+    try:
+        out = retain(target, include=sel.get("include"),
+                     exclude=sel.get("exclude"), dest="@workspace",
+                     label=label, background=False,
+                     layout=sel.get("layout") or ("label" if label else "target"))
+    except Exception as e:  # noqa: BLE001 — surfaced, not raised: a swept
+        # sandbox ("selection matched no files") is the very loss this button
+        # existed to prevent, and the user needs to be told that plainly
+        return {"target": target, "ok": False, "error": "ship_failed",
+                "note": str(e)}
+    return {"target": target, "ok": True, "moved": True,
+            "files": out.get("files"), "bytes": out.get("bytes"),
+            "state": out.get("state"), "location": out.get("location")}
+
+
+def secure_run_keeps(label: str) -> dict:
+    """Ship every AT-RISK keep of one run into the workspace — the Guide's
+    repair for the ledger's one actionable state.
+
+    Scoped to the run (`label` is the aba Run / analysis id) and to the rows
+    that are genuinely at risk: still in place, on a site that no longer
+    declares durable storage. Rows already home, or in place on durable
+    storage, are reported and left alone — a repair that touches more than
+    the thing it was asked to repair is its own incident.
+
+    Returns a per-target receipt. Never raises: the caller is a chat turn."""
+    from core.data.ledger import _durable_map  # noqa: PLC0415 — lazy: ledger reads us
+    try:
+        durable = _durable_map()
+    except Exception as e:  # noqa: BLE001
+        return {"label": label, "ok": False, "error": "durability_unknown",
+                "note": f"cannot tell which machines are durable right now: {e}"}
+    try:
+        rows = retained(label=label) or []
+    except Exception as e:  # noqa: BLE001
+        return {"label": label, "ok": False, "error": "index_unavailable",
+                "note": str(e)}
+    if not rows:
+        return {"label": label, "ok": False, "error": "no_keeps",
+                "note": "this run has no retained outputs"}
+    at_risk = [r for r in rows
+               if r.get("in_place") and not durable.get(r.get("site") or "local")]
+    if not at_risk:
+        return {"label": label, "ok": True, "secured": [], "already_safe": len(rows),
+                "note": "nothing at risk here — every kept file is either on "
+                        "durable storage or already in the workspace"}
+    results = [ship_home(r["target"]) for r in at_risk]
+    done = [r for r in results if r.get("ok")]
+    return {"label": label, "ok": len(done) == len(results),
+            "secured": results, "moved": len(done), "attempted": len(results),
+            "note": ("copied into the workspace; the ledger clears on its next read"
+                     if len(done) == len(results)
+                     else "some copies did not complete — see each entry")}
+
+
 def file_stat(target: str, rel: str) -> dict:
     """Existence + live size/mtime of a file in a target's sandbox (weft `run_file_stat`,
     5d1c5dc): `{target, path, exists, bytes?, mtime?}`. The in-sandbox-vs-swept distinction

@@ -36,26 +36,44 @@ _log = logging.getLogger("aba.ledger")
 
 def _durable_map() -> dict:
     """site name → durable declaration (True | '/path' | None). The local site
-    is durable by construction (the adapter registers it with durable: True)."""
+    is durable by construction (the adapter registers it with durable: True).
+
+    Two sources, and the merge rule is about POSITIONS, not precedence: the
+    deployment yaml wins only where it actually CARRIES a `durable` key. It
+    used to win merely by naming the site, so a deployment that declares a
+    cluster and says nothing about its storage — the normal case, since
+    durability is a separate assertion — voted "not durable" and shadowed
+    weft's own registration. Silence is not a declaration."""
     out: dict = {"local": True}
+    stated: set = set()          # names the yaml took an actual position on
     try:
         from core.compute.sites_config import list_declared_sites
         for e in list_declared_sites():
             cfg = e.get("config") or e
-            out[e.get("name") or cfg.get("name")] = cfg.get("durable")
+            name = e.get("name") or cfg.get("name")
+            if not name:
+                continue
+            if "durable" in cfg:
+                out[name] = cfg.get("durable")
+                stated.add(name)
+            else:
+                out.setdefault(name, None)
     except Exception as e:  # noqa: BLE001 — no sites file → local-only deployment
         _log.debug("ledger: no sites config (%s)", e)
     # Runtime-REGISTERED sites (weft's own store) carry the authoritative
     # durable declaration — the deployment yaml is only the installer's copy,
     # and a machine connected at runtime is invisible to it: its keeps and
     # dataset homes rendered at_risk despite a durable:True registration
-    # (browser-study finding). Yaml wins where both name a site.
+    # (browser-study finding).
     try:
         from core.compute import adapter as _ad
         comp = _ad.get_compute()
         for s in comp.sync_call("sites_list"):
             name = s.get("name")
-            if not name or name in out:
+            # "local" is durable BY CONSTRUCTION (the adapter registers it so).
+            # Never let a describe hiccup downgrade it: that single answer
+            # would render every kept result in the workspace at risk.
+            if not name or name == "local" or name in stated:
                 continue
             try:
                 desc = comp.sync_call("sites_describe", name)
@@ -144,8 +162,24 @@ def _dataset_items(durable: dict) -> list[dict]:
 
 def _keep_items(durable: dict, site: Optional[str] = None) -> tuple[list[dict], bool]:
     """Retained runs (grouped by label = run id): kept-in-place on a durable
-    site OR shipped to the workspace → safe; kept on a site whose durable
-    declaration was revoked → at risk (the promise is broken).
+    site OR shipped to the workspace → safe; kept in place on a site whose
+    durable declaration was revoked → at risk (the promise is broken).
+
+    `in_place` is a PER-ROW fact and the verdict must stay per-row. One run
+    routinely has several keeps on several sites — an interactive kernel on
+    the workspace site, a Slurm job on the cluster — and this folded them
+    with `in_place = any(rows)`, then asked which of the group's sites lacked
+    a durable promise. So a kernel keep sitting safely on durable storage
+    lent its in-place-ness to a cluster keep that had been COPIED off scratch
+    into the workspace precisely because scratch is not durable, and the
+    ledger flagged the copy-to-safety as the thing at risk (live 2026-08-27:
+    two such runs, both false, on a workspace where nothing was at risk).
+    A row that moved home cannot be at risk: its bytes are no longer there.
+
+    Note the inverse never happens: weft REFUSES an in-place keep on a site
+    with no durable declaration (retain.no_durable), so `in_place` implies
+    the promise existed when the keep was made — which is why "no longer
+    declares" is the honest phrasing for the risky case.
 
     Returns (items, ok). ok=False means the retention index was EXPECTED
     (substrate configured) but unreachable — the caller must surface a
@@ -170,31 +204,100 @@ def _keep_items(durable: dict, site: Optional[str] = None) -> tuple[list[dict], 
         if r.get("state") not in ("done", "pinned-pending", "queued", "inflight"):
             continue
         lbl = r.get("label") or r.get("target")
-        g = by_label.setdefault(lbl, {"bytes": 0, "sites": set(), "in_place": False})
+        g = by_label.setdefault(lbl, {"bytes": 0, "sites": set(),
+                                      "in_place": set(), "risky": set(),
+                                      "targets": []})
+        s = r.get("site") or "local"
         g["bytes"] += r.get("bytes") or 0
-        g["sites"].add(r.get("site") or "local")
-        g["in_place"] = g["in_place"] or bool(r.get("in_place"))
+        g["sites"].add(s)
+        if not r.get("in_place"):
+            continue                       # shipped home — its bytes left
+        g["in_place"].add(s)
+        if not durable.get(s):
+            g["risky"].add(s)
+            if r.get("target"):
+                g["targets"].append(r["target"])
     items = []
     for lbl, g in by_label.items():
-        risky = [s for s in g["sites"] if g["in_place"] and not durable.get(s)]
+        risky = sorted(g["risky"])
         state = "at_risk" if risky else "safe"
-        why = (f"kept in place on {'/'.join(sorted(risky))}, which no longer declares durable storage"
+        why = (f"kept in place on {'/'.join(risky)}, which no longer declares durable storage"
                if risky else "kept on durable storage")
-        items.append({"entity_id": lbl, "kind": "run_keeps", "title": None,
-                      "state": state, "site": "/".join(sorted(g["sites"])),
-                      "bytes": g["bytes"], "why": why})
+        item = {"entity_id": lbl, "kind": "run_keeps", "title": None,
+                "state": state, "site": "/".join(sorted(g["sites"])),
+                "bytes": g["bytes"], "why": why,
+                # which sites still hold these bytes IN PLACE — the set a
+                # durable-off preview must reason about, whatever today's
+                # declaration says
+                "kept_in_place": sorted(g["in_place"])}
+        if risky:
+            item["remedy"] = {
+                "action": "ship_home",
+                "label": "Copy to the workspace",
+                "targets": g["targets"],
+                "note": (f"copies these files off {'/'.join(risky)} into the "
+                         f"workspace, which is durable storage"),
+            }
+        items.append(item)
     return items, True
+
+
+_UNATTRIBUTED = object()
+
+
+def _project_run_titles() -> Optional[dict]:
+    """run id → title for every run (analysis) in the ACTIVE project's graph,
+    or None when the graph cannot be read.
+
+    Keeps come from weft's store, which is one per WORKSPACE, not one per
+    project — `retained()` has no project filter and never did. So the
+    project rollup listed every kept run the user had ever made, in every
+    project: a project holding one dataset reported 33 items, 32 of them
+    other projects' runs, and flagged two of those for attention (live
+    2026-08-27). The label a keep carries IS the run's entity id, so the
+    active graph is the authority on which ones are ours."""
+    try:
+        from core.graph.entities import list_entities
+        from core.graph.kinds import ANALYSIS
+        return {e["id"]: e.get("title")
+                for e in list_entities(type_filter=ANALYSIS,
+                                       include_archived=True)}
+    except Exception as e:  # noqa: BLE001 — unreadable graph → no attribution
+        _log.debug("ledger: run titles unavailable (%s)", e)
+        return None
 
 
 def data_ledger(project_id: Optional[str] = None) -> dict:
     """The §1 rollup: every valued item in exactly one state, plus totals.
     `project_id` is accepted for the route shape; the graph is already scoped
-    to the active project's DB. `degraded: true` means the retention index
-    was unreachable — kept-result rows may be MISSING from `items`, so the
-    strip must not go quiet ("quiet means safe" is the UI contract)."""
+    to the active project's DB — and now the KEEPS are too (see
+    `_project_run_titles`; weft's retention index is workspace-wide).
+    Keeps we cannot attribute to this project are not dropped in silence:
+    `elsewhere` counts them, so a genuinely at-risk result in a project the
+    user is not looking at still has somewhere to show up.
+    `degraded: true` means the retention index was unreachable — kept-result
+    rows may be MISSING from `items`, so the strip must not go quiet ("quiet
+    means safe" is the UI contract)."""
     durable = _durable_map()
     keeps, keeps_ok = _keep_items(durable)
-    items = _dataset_items(durable) + keeps
+    mine = _project_run_titles()
+    elsewhere = None
+    if mine is None:
+        # no attribution possible: show everything rather than an empty,
+        # confidently-quiet list
+        scoped = keeps
+    else:
+        scoped, foreign = [], []
+        for k in keeps:
+            title = mine.get(k["entity_id"], _UNATTRIBUTED)
+            if title is _UNATTRIBUTED:
+                foreign.append(k)
+            else:
+                scoped.append({**k, "title": title, "linkable": True})
+        elsewhere = {"items": len(foreign),
+                     "at_risk": sum(1 for k in foreign
+                                    if k["state"] == "at_risk")}
+    items = [{**d, "linkable": True} for d in _dataset_items(durable)] + scoped
     totals = {"items": len(items),
               "safe": sum(1 for i in items if i["state"] == "safe"),
               "at_risk": sum(1 for i in items if i["state"] == "at_risk"),
@@ -210,6 +313,8 @@ def data_ledger(project_id: Optional[str] = None) -> dict:
                     if part and part != "local"})
     out = {"items": items, "totals": totals, "remote_sites": sites,
            "multi_site": bool(sites), "degraded": not keeps_ok}
+    if elsewhere is not None:
+        out["elsewhere"] = elsewhere
     if not keeps_ok:
         out["degraded_note"] = ("the retention index is unreachable — the "
                                 "safety of kept results cannot be assessed "
@@ -232,8 +337,16 @@ def site_holdings(site: str) -> dict:
             homes.append({"entity_id": e["id"], "title": e.get("title"),
                           "path": home.get("path")})
     kept_bytes = sum(k["bytes"] or 0 for k in keeps)
+    # Un-declaring durable storage only endangers keeps whose bytes are STILL
+    # HERE. A keep that was shipped to the workspace still carries this site
+    # as its origin, so counting every row told the user that N results
+    # "would become at risk" when some of them had already left the machine.
+    in_place = [k for k in keeps if site in (k.get("kept_in_place") or [])]
     out = {"site": site,
            "kept_runs": len(keeps), "kept_bytes": kept_bytes,
+           "kept_in_place": {
+               "runs": len(in_place),
+               "bytes": sum(k["bytes"] or 0 for k in in_place)},
            "dataset_homes": homes,
            "at_risk_if_gone": len(keeps) + len(homes)}
     if not keeps_ok:

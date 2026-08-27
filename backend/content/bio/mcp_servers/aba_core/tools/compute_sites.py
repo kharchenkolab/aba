@@ -171,3 +171,14 @@ def register_compute_sites_tools(mcp: FastMCP) -> None:
         disconnecting a machine, or when triaging what to protect."""
         from core.data.ledger import data_ledger
         return data_ledger()
+
+    @mcp.tool()
+    def secure_kept_results(run_id: str) -> dict:
+        """Copy an at-risk run's kept outputs to durable storage.
+
+        The repair for the one actionable state in `data_safety_summary`: a
+        run whose kept files sit only on a machine that no longer promises to
+        preserve them. `run_id` is the analysis the ledger flagged. Reports
+        per-file outcomes, including a machine that already swept them."""
+        from core.compute.retention import secure_run_keeps
+        return secure_run_keeps(run_id)

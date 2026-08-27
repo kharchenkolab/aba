@@ -26,3 +26,10 @@
 }
 .ledger__item:disabled { text-decoration: none; cursor: default; }
 .ledger__why { color: var(--text-4); }
+/* The repair affordance hands the ask to the Guide (prefilled, unsent) rather
+   than moving bytes from here — one way to do a thing, and the agent can
+   explain what it found. */
+.ledger__fix {
+  margin-left: 6px; border: none; background: none; padding: 0;
+  font-size: 12px; color: var(--accent); cursor: pointer;
+}

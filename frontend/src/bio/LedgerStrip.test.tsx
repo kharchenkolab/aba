@@ -26,8 +26,10 @@ const quietLedger: Ledger = {
 const noisyLedger: Ledger = {
   items: [
     { entity_id: 'ds1', kind: 'dataset', title: 'shared table', state: 'at_risk', site: 'siteC',
+      linkable: true,
       why: 'referenced in place on siteC, which declares no durable storage' },
-    { entity_id: 'ds2', kind: 'dataset', title: 'reference set', state: 'safe', site: 'siteB', why: 'durable home' },
+    { entity_id: 'ds2', kind: 'dataset', title: 'reference set', state: 'safe', site: 'siteB',
+      linkable: true, why: 'durable home' },
   ],
   totals: { items: 2, safe: 1, at_risk: 1, changed: 0, unknown: 0 },
   remote_sites: ['siteB', 'siteC'], multi_site: true,
@@ -100,5 +102,94 @@ describe('LedgerStrip', () => {
     expect(container!.innerHTML).toBe('')
     expect(screen.queryByText(/safe/)).toBeNull()
     expect(screen.queryByText(/siteB|siteC/)).toBeNull()
+  })
+})
+
+describe('LedgerStrip — naming, linking, repair', () => {
+  let origFetch: typeof globalThis.fetch
+  beforeEach(() => { origFetch = globalThis.fetch })
+  afterEach(() => { globalThis.fetch = origFetch; vi.restoreAllMocks() })
+
+  /** a kept RUN flagged at risk — the live shape (2026-08-27) that rendered
+   *  as a bare id with a dead button and no way to act on it */
+  const keepLedger: Ledger = {
+    items: [
+      { entity_id: 'ana_1', kind: 'run_keeps', title: 'clustering pass', state: 'at_risk',
+        site: 'local/siteA', linkable: true,
+        why: 'kept in place on siteA, which no longer declares durable storage',
+        remedy: { action: 'ship_home', label: 'Copy to the workspace',
+                  targets: ['jb_1'], note: 'copies these files off siteA' } },
+    ],
+    totals: { items: 1, safe: 0, at_risk: 1, changed: 0, unknown: 0 },
+    remote_sites: ['siteA'], multi_site: true,
+  }
+
+  it('a flagged RUN is named and focusable, not a dead id', async () => {
+    // it rendered `ana_a89bd4a1 — at risk: …` with the button hard-disabled
+    // for every kind but `dataset`, so the one thing needing attention was
+    // the one thing you could not open
+    mockLedger(keepLedger)
+    const onFocus = vi.fn()
+    await act(async () => { render(<LedgerStrip projectId="p1" onFocus={onFocus} />) })
+    fireEvent.click(screen.getByText('Review'))
+    fireEvent.click(screen.getByText('clustering pass'))
+    expect(onFocus).toHaveBeenCalledWith('ana_1')
+  })
+
+  it('an unattributable item stays unclickable (the button must not lie)', async () => {
+    mockLedger({ ...keepLedger,
+      items: [{ ...keepLedger.items[0], linkable: false, title: null }] })
+    const onFocus = vi.fn()
+    await act(async () => { render(<LedgerStrip projectId="p1" onFocus={onFocus} />) })
+    fireEvent.click(screen.getByText('Review'))
+    fireEvent.click(screen.getByText('ana_1'))
+    expect(onFocus).not.toHaveBeenCalled()
+  })
+
+  it('the repair hands the Guide a prefilled ask — it moves no bytes itself', async () => {
+    mockLedger(keepLedger)
+    const onPrefill = vi.fn()
+    await act(async () => { render(<LedgerStrip projectId="p1" onPrefill={onPrefill} />) })
+    fireEvent.click(screen.getByText('Review'))
+    fireEvent.click(screen.getByText('Ask the Guide to fix this'))
+    expect(onPrefill).toHaveBeenCalledTimes(1)
+    const msg = onPrefill.mock.calls[0][0] as string
+    // everything the agent needs to act without asking a follow-up question
+    expect(msg).toContain('ana_1')
+    expect(msg).toContain('clustering pass')
+    expect(msg).toContain('no longer declares durable storage')
+    // and no request was made from the strip itself
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1)   // the ledger read only
+  })
+
+  it('offers no repair where none exists (a safe item has no button)', async () => {
+    mockLedger({ ...keepLedger,
+      items: [{ ...keepLedger.items[0], state: 'changed', remedy: undefined,
+                why: 'the data at its source changed since registration' }],
+      totals: { items: 1, safe: 0, at_risk: 0, changed: 1, unknown: 0 } })
+    await act(async () => { render(<LedgerStrip projectId="p1" onPrefill={vi.fn()} />) })
+    fireEvent.click(screen.getByText('Review'))
+    expect(screen.queryByText('Ask the Guide to fix this')).toBeNull()
+  })
+
+  it('an at-risk keep in ANOTHER project is counted, never silently dropped', async () => {
+    // scoping the list to the project is right; going quiet about a result
+    // at risk somewhere else is the outage bug wearing a different hat
+    mockLedger({ items: [], totals: { items: 0, safe: 0, at_risk: 0, changed: 0, unknown: 0 },
+                 remote_sites: [], multi_site: false,
+                 elsewhere: { items: 12, at_risk: 2 } })
+    await act(async () => { render(<LedgerStrip projectId="p1" />) })
+    expect(screen.getByText(/2 kept results outside this project need attention/)).toBeTruthy()
+  })
+
+  it('QUIESCENCE HOLDS: elsewhere items that are all SAFE keep the strip silent', async () => {
+    // the live case — 32 workspace keeps, none at risk. Counting them in the
+    // strip would be the census chrome the quiet contract exists to prevent.
+    mockLedger({ items: [], totals: { items: 0, safe: 0, at_risk: 0, changed: 0, unknown: 0 },
+                 remote_sites: [], multi_site: false,
+                 elsewhere: { items: 32, at_risk: 0 } })
+    let container: HTMLElement
+    await act(async () => { ({ container } = render(<LedgerStrip projectId="p1" />)) })
+    expect(container!.innerHTML).toBe('')
   })
 })

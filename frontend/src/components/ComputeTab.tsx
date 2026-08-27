@@ -24,6 +24,15 @@ async function openAdvanced(site?: string) {
 
 const fmtGB = (b?: number) => b == null ? '?' : `${(b / 1e9).toFixed(b >= 1e10 ? 0 : 1)} GB`
 
+/** What un-declaring durable storage would actually endanger: the keeps whose
+ *  bytes are STILL on this machine. A keep that was shipped to the workspace
+ *  still names this site as its origin, so counting every retained row told
+ *  the user that N results "would become at risk" when some had already left.
+ *  Falls back to the total when an older backend omits the breakdown — an
+ *  overstated warning is the safe side of this particular error. */
+const endangered = (h: SiteHoldings) => h.kept_in_place?.runs ?? h.kept_runs
+const endangeredBytes = (h: SiteHoldings) => h.kept_in_place?.bytes ?? h.kept_bytes
+
 /** Cluster totals when partitions exist — never the login node's own cpus. */
 export function capsLine(s: ComputeSite): string {
   const caps = s.capabilities
@@ -370,7 +379,7 @@ function SiteDetail({ site, advanced, selfService, onChanged, onGone }: {
                             computeApi.holdings(s.name)
                               .then(h => { setHoldings(h)
                                            // unknown = outage: can't assess what the promise covers — confirm, never silently revoke
-                                           if (h.kept_runs > 0 || h.unknown) setConfirmDurableOff(true)
+                                           if (endangered(h) > 0 || h.unknown) setConfirmDurableOff(true)
                                            else act('durable', () => computeApi.edit(s.name, { durable: false })) })
                               .catch(() => act('durable', () => computeApi.edit(s.name, { durable: false })))
                           }} />
@@ -382,8 +391,8 @@ function SiteDetail({ site, advanced, selfService, onChanged, onGone }: {
                       <div className="cmp-confirm">
                         {holdings.unknown
                           ? (holdings.note || 'compute substrate unreachable — what this machine holds cannot be assessed right now')
-                          : <>{holdings.kept_runs} kept result{holdings.kept_runs === 1 ? '' : 's'}
-                            {holdings.kept_bytes > 0 ? ` (${fmtGB(holdings.kept_bytes)})` : ''} on this machine
+                          : <>{endangered(holdings)} kept result{endangered(holdings) === 1 ? '' : 's'}
+                            {endangeredBytes(holdings) > 0 ? ` (${fmtGB(endangeredBytes(holdings))})` : ''} on this machine
                             would become at risk — the files stay put, but nothing promises they survive.</>}
                         <div className="cmp-actions">
                           <button className="cmp-btn cmp-btn--danger" disabled={busy !== null}

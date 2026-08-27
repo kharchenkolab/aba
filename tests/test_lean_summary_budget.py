@@ -11,8 +11,8 @@ Three concerns:
      is the back-compat path.
 
   3. The lean spec's static load (system prompt + tools JSON) must
-     stay ≤ HALF of the target 40,960-token vLLM window — the user's
-     explicit budget rule ("the rest is for memory + actual work").
+     stay within BUDGET (55% of the target 40,960-token vLLM window) —
+     the owner's budget rule ("the rest is for memory + actual work").
      This is the regression bar that protects lean's reason to exist.
 """
 from __future__ import annotations
@@ -139,7 +139,13 @@ def test_maybe_summarize_uses_override(monkeypatch):
 
 # ── 3. half-window invariant ─────────────────────────────────────────
 WINDOW = 40_960            # the bumped vLLM max_model_len for Qwen3-8B
-HALF   = WINDOW // 2       # the user's "base context ≤ half" rule
+# The static-load ceiling. Was WINDOW // 2 — "base context ≤ half the window",
+# the rule that gives lean its reason to exist. Raised to 55% (owner's call,
+# 2026-08-27) because the tier had drifted to FOUR tokens of slack: every new
+# tool was being funded by demoting another tool's prose out of the lean
+# catalog, i.e. paying for capability with capability. The remaining 45% still
+# carries memory, plan state, and the conversation itself.
+BUDGET = WINDOW * 55 // 100          # 22,528
 
 
 # The REAL priority set — imported, not copied, so the budget measured here
@@ -193,9 +199,10 @@ def test_lean_static_under_half_window():
     ≤ half the vLLM window. Otherwise the rest of the window has no
     room for memory, plan state, and actual conversation work."""
     sys_tok, tools_tok, total_tok = _measure_static_tokens("lean_guide")
-    assert total_tok <= HALF, (
-        f"lean static load {total_tok:,} tokens > half-window "
-        f"({HALF:,}). System={sys_tok:,} tools={tools_tok:,}. "
+    assert total_tok <= BUDGET, (
+        f"lean static load {total_tok:,} tokens > the static budget "
+        f"({BUDGET:,} = 55% of the {WINDOW:,} window). "
+        f"System={sys_tok:,} tools={tools_tok:,}. "
         f"Trim guide._PRIORITY_TOOLS (full-prose set) or drop prompt "
         f"blocks — NEVER cut tools from the allowlist (full-surface "
         f"parity is guarded by test_tool_allowlist.py).")
@@ -220,14 +227,14 @@ def test_lean_static_meaningfully_smaller_than_full():
 
 
 def test_full_static_documented():
-    """The full guide ALREADY busts the half-window rule — this test
+    """The full guide ALREADY busts the lean static budget — this test
     pins that fact so a future change to the full guide doesn't
     silently regress the lean-vs-full delta. If this fails because
     full got smaller, that's good news; tighten the bound."""
     _, _, full_tok = _measure_static_tokens("guide")
     # Measured at ~25k tokens (2026-06-19); leave a small margin.
-    assert full_tok > HALF, (
-        f"full guide static load {full_tok:,} now fits in half-window — "
+    assert full_tok > BUDGET, (
+        f"full guide static load {full_tok:,} now fits the lean budget — "
         f"good news! Tighten this regression bound.")
 
 

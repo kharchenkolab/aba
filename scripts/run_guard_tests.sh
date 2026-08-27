@@ -154,6 +154,7 @@ FILES=(
   backend/tests/test_lane_spellings.py
   backend/tests/test_tool_dispatch_is_concurrent.py
   backend/tests/test_reattach_boundary.py
+  backend/tests/test_keep_repair.py
   # runtime translation
   tests/test_openai_runtime_translation.py
   tests/test_openai_runtime_skeleton.py

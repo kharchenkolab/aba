@@ -243,6 +243,10 @@ export interface SiteHoldings {
   site: string
   kept_runs: number
   kept_bytes: number
+  /** the subset whose bytes are STILL on this machine — what un-declaring
+   *  durable storage would actually endanger (a keep already shipped to the
+   *  workspace still names this site as its origin) */
+  kept_in_place?: { runs: number; bytes: number }
   dataset_homes: { entity_id: string; title?: string | null; path?: string | null }[]
   at_risk_if_gone: number
   /** retention index unreachable — kept counts are NOT assessable (zeros lie) */

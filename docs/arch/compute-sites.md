@@ -145,8 +145,35 @@ safe while its entity stayed active pointing at nothing. A remote home is never
 stat'ed (it would read as missing for every by-reference dataset), a recorded
 `source_missing`/`source_changed` stamp keeps precedence, and a stat ERROR
 resolves to present — the failure being closed is a false *safe*, and a false
-alarm is its own dishonesty. Tests: `tests/test_data_ledger.py`
-(incl. the local-only quiescence contract), `frontend .../LedgerStrip.test.tsx`
+alarm is its own dishonesty.
+
+Two scoping rules make the rollup answer the question it is asked. **Risk is a
+per-ROW verdict**: one run routinely keeps in several places (a kernel on the
+workspace site, a job on a scratch-rooted machine), and only rows still sitting
+`in_place` on a site that declares nothing durable are at risk — a row that was
+shipped to `@workspace` has no bytes left there to lose. Since weft REFUSES an
+in-place keep on a site with no durable declaration, `in_place` implies the
+promise existed when the keep was made, which is why the at-risk wording says
+the site *no longer* declares durable storage. **Keeps are attributed to the
+project**: weft's retention index is one per WORKSPACE with no project filter,
+so `data_ledger` resolves each keep's `label` (the aba Run id) in the active
+graph — resolving keeps carry the run's title and `linkable: true`; the rest
+are counted in `elsewhere` (never listed, never silently dropped). An at-risk
+keep also carries a `remedy` naming the targets a repair would move; the strip
+turns that into a prefilled ask to the Guide rather than a second way to move
+bytes, and the Guide acts through `secure_kept_results` →
+`retention.secure_run_keeps` → `ship_home` (re-retain with `dest="@workspace"`,
+replaying the row's recorded selection, synchronous and size-gated: a queued
+retain flips the index row to `in_place=0` before the bytes move, which would
+read as safe while they were not).
+
+`_durable_map` unions the deployment yaml with weft's runtime registrations,
+and the yaml wins only where it actually CARRIES a `durable` key — naming a
+site without saying anything about its storage is silence, not a declaration.
+The local site stays durable by construction; no substrate answer downgrades it.
+
+Tests: `tests/test_data_ledger.py` (incl. the local-only quiescence contract),
+`backend/tests/test_keep_repair.py`, `frontend .../LedgerStrip.test.tsx`
 (the UI snapshot half).
 
 ## Detached compute lane

@@ -28,6 +28,10 @@ interface Props {
   /** Pin per-request so FilesView's /api/files/tree isn't subject to the
    *  backend's in-process current-project state. */
   projectId?: string
+  /** Set the chat composer's text without sending — the ledger's repair
+   *  affordance hands the ask to the Guide rather than growing a second,
+   *  parallel way to move files around. */
+  onPrefill?: (text: string) => void
 }
 
 const SECTION_CONFIG: Record<Exclude<ProjectSection, 'threads'>, {
@@ -125,7 +129,7 @@ function OverviewIcon({ className = 'tree__overview-icon', size = 17 }: { classN
   )
 }
 
-export default function ProjectTree({ entities, focusedId, activeSection, onFocus, onViewFile, onChange, currentThread, onSelectThread, onOpenOverview, onOpenThreadOverview, filesTarget, projectId }: Props) {
+export default function ProjectTree({ entities, focusedId, activeSection, onFocus, onViewFile, onChange, currentThread, onSelectThread, onOpenOverview, onOpenThreadOverview, filesTarget, projectId, onPrefill }: Props) {
   const [query, setQuery] = useState('')
   // The filter box is per-tab: reset its text when the active section changes so
   // a filter typed on one list never silently carries into another. Done during
@@ -552,7 +556,7 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
               {/* §1 safety ledger — self-quieting: renders nothing when every
                   item is safe and local (the local-only snapshot contract). */}
               {(activeSection === 'data' || activeSection === 'results') && (
-                <LedgerStrip projectId={projectId} onFocus={onFocus}
+                <LedgerStrip projectId={projectId} onFocus={onFocus} onPrefill={onPrefill}
                   fingerprint={`${entities.length}:${entities.reduce(
                     (m, e) => (e.updated_at > m ? e.updated_at : m), '')}`} />
               )}

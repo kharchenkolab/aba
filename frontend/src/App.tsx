@@ -920,6 +920,7 @@ export default function App() {
           onOpenThreadOverview={openThreadOverview}
           filesTarget={filesTarget}
           projectId={url.pid ?? undefined}
+          onPrefill={prefillGuide}
         />
       )}
       <HResizer
