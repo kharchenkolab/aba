@@ -36,5 +36,5 @@ def main(data_dir: Path) -> int:
 
 
 if __name__ == "__main__":
-    d = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).parent / "_data"
+    d = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).parent / "data"
     raise SystemExit(main(d))

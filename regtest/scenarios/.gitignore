@@ -17,6 +17,7 @@ cheminformatics/data/
 colocalization/data/
 crispr_guides/data/
 foci_count/data/
+folder_name_not_contents/data/
 gwas_popstruct/data/
 image_registration/data/
 methylation_dmr/data/
