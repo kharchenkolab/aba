@@ -154,3 +154,43 @@ def test_the_critical_lane_group_names_real_scenarios():
     # ships with, say, GPU submission untested.
     for must in ("wf_session_smoke", "wf_slurm_batch", "wf_gpu_recognised"):
         assert must in crit, f"critical no longer covers {must}"
+
+
+def test_error_census_forgives_only_what_was_actually_recovered():
+    """The census must not become a way to wave errors through.
+
+    Forgiving a red because its TEXT looks advisory is how blindness returns.
+    The rule is outcome-based: forgiven only if the SAME tool later succeeds."""
+    import importlib.util
+    import sys as _s
+    from pathlib import Path
+    wf = Path(__file__).resolve().parents[1] / "regtest" / "live" / "workflows.py"
+    spec = importlib.util.spec_from_file_location("_wf2", wf)
+    mod = importlib.util.module_from_spec(spec)
+    _s.modules["_wf2"] = mod
+    spec.loader.exec_module(mod)
+    census = mod._error_census
+
+    red = {"tool": "run_python", "status": "error", "note": "ambiguous name"}
+    ok = {"tool": "run_python", "status": "ok"}
+    other_ok = {"tool": "view_file", "status": "ok"}
+
+    # recovered: same tool succeeds afterwards
+    unrec, all_red = census([red, ok])
+    assert unrec == [] and len(all_red) == 1, "a recovered red must still be REPORTED"
+
+    # NOT recovered: nothing after it
+    unrec, _ = census([ok, red])
+    assert len(unrec) == 1, "a red with no later success must fail the lane"
+
+    # NOT recovered: a DIFFERENT tool succeeding is not recovery
+    unrec, _ = census([red, other_ok])
+    assert len(unrec) == 1, "another tool's success must not forgive this one"
+
+    # a success BEFORE the red does not forgive it
+    unrec, _ = census([ok, red, other_ok])
+    assert len(unrec) == 1, "recovery must come AFTER the failure"
+
+    # a traceback in a raw result counts as red
+    unrec, all_red = census([{"tool": "t", "_raw": "Traceback (most recent call last): ..."}])
+    assert len(all_red) == 1 and len(unrec) == 1

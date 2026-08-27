@@ -609,6 +609,43 @@ def wf_slurm_batch(pid, tid, site):
     ]
 
 
+def _error_census(results: list) -> tuple[list, list]:
+    """-> (unrecovered, all_red). Which reds actually BROKE the session?
+
+    Not every red is a failure. Some are the platform declining to guess and
+    telling the agent exactly what to do instead — "ambiguous name 'x' — 3
+    matches … pass the full path". The agent complies and the work completes.
+    Counting those as failures makes this gate cry wolf, and a gate that cries
+    wolf gets ignored, which is worse than one that is silent.
+
+    But "ignore reds that look advisory" is how blindness returns, so the test
+    is not the WORDING — it is the OUTCOME: a red is forgiven only when the same
+    tool later succeeds in the same session. Unrecovered reds fail the lane; all
+    reds are reported either way, so friction stays visible even when it is
+    survivable."""
+    def _bad(r):
+        if not isinstance(r, dict):
+            return None
+        if str(r.get("status")) == "error":
+            return str(r.get("note") or r.get("error") or "")[:140]
+        if r.get("error"):
+            return str(r.get("error"))[:140]
+        if "Traceback (most recent call last)" in str(r.get("_raw") or ""):
+            return str(r.get("_raw"))[:140]
+        return None
+
+    red, ok_after = [], {}
+    for i, r in enumerate(results):
+        name = (r.get("tool") or r.get("name") or "?") if isinstance(r, dict) else "?"
+        if _bad(r):
+            red.append((i, name, _bad(r)))
+        else:
+            ok_after.setdefault(name, []).append(i)
+    unrecovered = [(n, m) for i, n, m in red
+                   if not any(j > i for j in ok_after.get(n, []))]
+    return unrecovered, [(n, m) for _i, n, m in red]
+
+
 @scenario("wf_first_minutes")
 def wf_first_minutes(pid, tid, site):
     """The first two minutes of a real session. FAST, and run FIRST.
@@ -636,19 +673,9 @@ def wf_first_minutes(pid, tid, site):
         f"wait for it — just tell me once it's queued."))
 
     results = tool_results(pid, tid)
-    def _bad(r):
-        if not isinstance(r, dict):
-            return None
-        if str(r.get("status")) == "error":
-            return str(r.get("note") or r.get("error") or "")[:140]
-        if r.get("error"):
-            return str(r.get("error"))[:140]
-        if "Traceback (most recent call last)" in str(r.get("_raw") or ""):
-            return str(r.get("_raw"))[:140]
-        return None
-    errs = [(r.get("tool") or r.get("name") or "?", _bad(r))
-            for r in results if _bad(r)]
-    census = "; ".join(f"{n}: {m}" for n, m in errs[:3]) or "none"
+    errs, all_red = _error_census(results)
+    census = ("; ".join(f"{n}: {m}" for n, m in (errs or all_red)[:3])
+              or "none")
 
     jobs = api("GET", "/api/jobs")
     jobs = jobs if isinstance(jobs, list) else jobs.get("jobs", [])
@@ -660,8 +687,8 @@ def wf_first_minutes(pid, tid, site):
         (f"the session actually did work ({len(results)} tool results)",
          len(results) >= 2),
         ("every turn completed", all(not c["errors"] for c in caps)),
-        (f"NO tool call returned an error ({len(errs)}/{len(results)} red) "
-         f"[{census}]", not errs),
+        (f"no UNRECOVERED tool error ({len(errs)} unrecovered, "
+         f"{len(all_red)} red of {len(results)}) [{census}]", not errs),
         # ACCEPTED, not finished. The signature mismatch died here, before a job
         # row existed — so the existence of the row IS the assertion.
         ("the background submit was ACCEPTED (a job row exists)", bool(mine)),
@@ -708,20 +735,9 @@ def wf_session_smoke(pid, tid, site):
     # in this codebase, and a raw (unparseable) result is a failure too — that
     # is what a traceback looks like once it reaches a tool result.
     results = tool_results(pid, tid)
-    def _bad(r):
-        if not isinstance(r, dict):
-            return None
-        if str(r.get("status")) == "error":
-            return str(r.get("note") or r.get("error") or "")[:120]
-        if r.get("error"):
-            return str(r.get("error"))[:120]
-        raw = str(r.get("_raw") or "")
-        if "Traceback (most recent call last)" in raw:
-            return raw[:120]
-        return None
-    errs = [(r.get("tool") or r.get("name") or "?", _bad(r))
-            for r in results if _bad(r)]
-    census = "; ".join(f"{n}: {m}" for n, m in errs[:4]) or "none"
+    errs, all_red = _error_census(results)
+    census = ("; ".join(f"{n}: {m}" for n, m in (errs or all_red)[:3])
+              or "none")
 
     jobs = api("GET", "/api/jobs")
     jobs = jobs if isinstance(jobs, list) else jobs.get("jobs", [])
@@ -734,8 +750,8 @@ def wf_session_smoke(pid, tid, site):
         (f"the session actually did work ({len(results)} tool results)",
          len(results) >= 4),
         ("every turn completed", all(not c["errors"] for c in caps)),
-        (f"NO tool call returned an error ({len(errs)}/{len(results)} red) "
-         f"[{census}]", not errs),
+        (f"no UNRECOVERED tool error ({len(errs)} unrecovered, "
+         f"{len(all_red)} red of {len(results)}) [{census}]", not errs),
         ("the background job reached the scheduler and settled",
          bool(mine) and all(str(j.get("status")) not in ("queued", "running")
                             for j in mine)),
