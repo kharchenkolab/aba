@@ -306,3 +306,38 @@ Full session log was in a scratch dir (`../qa-2026-07-04/`, now deleted); the ac
 - **[LOW → RESOLVED 2026-07-05] `scripts/check_invariants.sh` defaulted to a stale interpreter** — it used `PY="${PYTHON:-python3}"`; on CLIP `python3` = 3.6.8 can't parse the modern checkers, so a bare run reported spurious `✗ FAIL`s. FIXED in 2A.0: the script now resolves a Python >=3.9 ($PYTHON → .venv → python3.12/11/10 → python3, each version-validated) and, if none is found, exits with a clear "set PYTHON=…" message instead of misleading SyntaxErrors. CI's modern python3 auto-resolves.
 - **Coverage gaps not run** — D4 OOM-then-resize, D5 timeout-then-resize, D6 reactive error-recovery (agent reads a *failed* job → fixes → reruns). Worth dedicated scenarios.
 - **Shipped this pass (on main, live):** deployment-conditional CUDA base (live instance rebuilt cuda118, scVI-on-GPU fixed) + install docs (aba + aba-vbc); regtest scenarios gpu_job_completion + slurm_missing_pkg; runner ENVS_DIR→shared; `aba doctor` oauth_cc-cred + node-local-ENVS_DIR checks; Jobs-card: live output (queued/running placeholder + live run.log tail + PYTHONUNBUFFERED), deferred-submit note points at the panel, R bg jobs stream live, job archive/dismiss + auto-retention(keep=30), and the Dismiss-hang fix (reconcileJobs prunes archived jobs from the poll).
+
+## 2026-08-27 smoke sweep (mac host, post fresh-install verification): 10/11 full-pass, 68/70 checks
+Routine gate after the mac install smoke run (fresh isolated install: all 10 playbook steps green).
+`r_background_capability` correctly REFUSED up front (`requires: slurm`, no client on this host) —
+the armed preflight working; run with `--exclude` for a measured 11.
+- **[MEDIUM, product — OPEN] cross-kernel rel shadowing after a fresh-session resume** — a run that
+  resumes onto a second kernel carries two `weft_targets`, and both kernels number transcripts
+  `blocks/000N.*`, colliding on rel. The durable listing advertises the `output_addr` row's bytes
+  (266 B, `source=keep`, from the kernel that actually errored) while every per-rel byte door is
+  first-target-wins (`locate_run_output` walks jobdirs in `weft_targets` order, lifecycle/runs.py:1433;
+  `read_run_file` iterates targets in order, :1289; `/api/runs/{rid}/file` serves the first exact-rel
+  hit, web/routes/runs.py:151) — so the door answers 200 with the FIRST kernel's 0-byte copy. Caught
+  by the surfaces oracle (`empty_bytes`), which demands bytes only where the listing claims them.
+  Aggravator: `blocks/*` is folded out of the durable panel as runtime bookkeeping
+  (lifecycle/runs.py:2478) but the addr join runs AFTER the fold and re-admits those rels (:2500) —
+  without the bypass the row would never be advertised. Fix candidates: apply the runtime fold after
+  the addr join, and/or resolve per-rel reads by producing-exec attribution or newest-mtime rather
+  than target order.
+- **[LOW, scenario spec] `reproduce_expr` s7 demands an artifact its prompt never asks for** — s7
+  (revise step) asserts `produces: {figure: 1}` but only s2's prompt states the figure outcome; the
+  agent satisfied the stated ask with tables (all three execs exit 0, zero plot-library tokens, no
+  image anywhere in the s7 kernel jobdir — nothing attempted, nothing failed, nothing missed). State
+  the outcome in the s7 prompt or drop the check there.
+- **[NOTE, cost] the routine tier now runs at the deployment default = opus-5** — by design the
+  non-`--opus` sweep doesn't pin a model and records what served off the wire (this run:
+  `claude-opus-5`); since the default-model bump (068c7d19) the "haiku" label on scorecards/baselines
+  names the tier, not the model that served it. Mech tolerance stays truth-keyed, but budget the
+  routine gate accordingly (or pin `ABA_SCENARIO_MODEL` for a genuinely-cheap tier).
+- **Harness fixes this cycle:** mac devtest smoke.py followed the helper into `install/core/` +
+  honors `$ABA_PORT` so a dev box's live server can't answer for the smoke tree (a7615d68);
+  `folder_name_not_contents` generator wrote to `_data/` no consumer reads — now `data/` + its
+  gitignore row (41a94fe1; the scenario full-passed live after the fix). `structure_superpose`
+  regen "FAIL" is a wrapper misread: its generator only verifies remote availability (empty `data/`
+  is its design — declared inputs are fetched at run time), so `_regen_all.sh`'s completeness check
+  misclassifies it every cycle.
