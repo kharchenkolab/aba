@@ -57,7 +57,18 @@ if _ROOT not in sys.path:
 # the launch badly. Every bespoke container invocation written for this in one
 # session got the binds wrong and reported its own breakage as a finding.
 BASE = os.environ.get("ABA_BASE_URL", "http://127.0.0.1:8000")
-RUNTIME = Path.home() / ".aba" / "runtime" / "projects"
+# The project DBs of the deployment UNDER TEST — not of whoever runs the probe.
+#
+# This was `Path.home() / ".aba" / …`, i.e. the operator's personal install. Under
+# `verify.sh` the server runs with ABA_HOME set to a throwaway workspace, so every
+# read through this path found nothing and `tool_results()` returned []. An empty
+# list SATISFIES any assertion phrased as an absence ("no tool call returned an
+# error", "no door refused a handle"), so the lanes that look at what the platform
+# actually recorded were blind exactly where it matters most — in the gate that
+# decides a release ships. They passed against a personal install, which is why it
+# went unnoticed.
+_ABA_HOME = Path(os.environ.get("ABA_HOME") or (Path.home() / ".aba"))
+RUNTIME = _ABA_HOME / "runtime" / "projects"
 RESULTS: list = []
 # (pid, tid) -> captures from each drive(), so friction_sweep can report
 # transport-level findings (a stream that never closed) alongside the rest.
@@ -168,7 +179,13 @@ def tool_results(pid: str, tid: str) -> list[dict]:
     reported to the user."""
     db = RUNTIME / pid / "project.db"
     if not db.exists():
-        return []
+        # Every caller creates the project first, so absence means this probe is
+        # reading the wrong tree — the failure that made these lanes blind. Say
+        # so; do not return an empty list that reads as "nothing went wrong".
+        raise RuntimeError(
+            f"harness is looking in the wrong place: no project.db at {db}. "
+            f"RUNTIME={RUNTIME} (from ABA_HOME={_ABA_HOME}). Point ABA_HOME at "
+            f"the ABA_HOME of the server under test.")
     out: list[dict] = []
     c = sqlite3.connect(str(db))
     try:
@@ -408,7 +425,13 @@ def _tool_calls(pid: str, tid: str) -> list:
     tool_use_id), which arrives in a LATER message than the call."""
     db = RUNTIME / pid / "project.db"
     if not db.exists():
-        return []
+        # Every caller creates the project first, so absence means this probe is
+        # reading the wrong tree — the failure that made these lanes blind. Say
+        # so; do not return an empty list that reads as "nothing went wrong".
+        raise RuntimeError(
+            f"harness is looking in the wrong place: no project.db at {db}. "
+            f"RUNTIME={RUNTIME} (from ABA_HOME={_ABA_HOME}). Point ABA_HOME at "
+            f"the ABA_HOME of the server under test.")
     c = sqlite3.connect(str(db))
     try:
         rows = c.execute("select content from messages where thread_id=? order by id",
@@ -1185,7 +1208,11 @@ def _artifact_projects_referenced(pid: str) -> set:
     out: set = set()
     db = RUNTIME / pid / "project.db"
     if not db.exists():
-        return out
+        # An empty set here reads as "no cross-project reference found", i.e. a
+        # clean isolation audit. A missing DB must not be able to certify that.
+        raise RuntimeError(
+            f"isolation audit cannot read {db} — RUNTIME={RUNTIME}. An empty "
+            f"result would pass as 'no leakage'.")
     try:
         c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
         rows = c.execute("select content from messages").fetchall()
