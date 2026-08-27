@@ -23,6 +23,7 @@ FILES=(
   tests/test_gates_are_armed.py
   tests/test_promote_moves_the_tested_pair.py
   tests/test_concurrency_metric.py
+  tests/test_dispatch_latency_screen.py
   tests/test_frontend_bundle_builds.py
   # shared-agent-input guards (tool catalog / prompts / cache placement)
   tests/test_tool_conventions.py
@@ -156,6 +157,7 @@ FILES=(
   backend/tests/test_tool_dispatch_is_concurrent.py
   backend/tests/test_reattach_boundary.py
   backend/tests/test_keep_repair.py
+  backend/tests/test_background_never_starves_dispatch.py
   # runtime translation
   tests/test_openai_runtime_translation.py
   tests/test_openai_runtime_skeleton.py

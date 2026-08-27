@@ -201,6 +201,36 @@ project picks a model (`current_model_for_project`), and `spec_for_model` derive
 the spec — re-resolved at the turn boundary so a Settings change takes effect on
 the next turn with no restart.
 
+## Where a tool call waits
+
+Every tool body runs through `projects.in_thread` → **asyncio's default
+executor**, one per process, `min(32, cpu+4)` slots, shared by every thread of
+every project. Background work — advisor reviews, proposal evaluation,
+skeptic/stylist/explorer passes, all of which make LLM calls and hold a slot
+for tens of seconds — goes through `projects.spawn`, which owns a **separate
+bounded pool** (`background_pool()`, 8 workers, `aba-bg` threads). They must
+not share: a saturated dispatch executor makes every tool call wait, and
+best-effort background work is exactly what should never be able to cause that.
+
+Because a queued dispatch and a slow tool are indistinguishable from outside,
+`tool_invocations` records the split: `duration_ms` is the whole thing,
+`queue_wait_ms` is the part spent waiting to start (stamped by
+`tool_telemetry.timed_body`), and `pool_queued`/`pool_workers` are the
+executor's backlog and size at dispatch. Without that split two production
+stalls could not be diagnosed after the fact — a `Skill` call (a registry read,
+2 ms in every other turn of the same session) recorded 349 s, and a
+`run_python` recorded 134 s for 0.587 s of execution; both read as "the tool was
+slow". `regtest/harness/dispatch_latency.py` screens any project DB for rows
+where the wait dominates, so a stall reports itself instead of needing someone
+to notice a slow session. Guards:
+`backend/tests/test_background_never_starves_dispatch.py`,
+`tests/test_dispatch_latency_screen.py`.
+
+Note what is NOT serialized, each established by measurement rather than
+inspection: the MCP gateway's shared background loop, FastMCP's handling of
+sync tools, weft kernel block execution (two kernels in two threads run
+concurrently), and weft session installs against concurrent session reads.
+
 ## Key implementation references
 
 | Where | What |

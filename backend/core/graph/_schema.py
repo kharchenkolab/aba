@@ -406,6 +406,25 @@ def init_db():
                 ended_at      TEXT
             )
         """)
+        # Queue wait, split out from duration_ms. Every tool dispatch goes
+        # through ONE process-wide executor (asyncio's default, min(32, cpu+4)),
+        # so a tool's recorded duration is queue-wait PLUS body time — and the
+        # two are indistinguishable in the row. That blindness is why two
+        # production stalls went undiagnosed: a `Skill` call (a registry read,
+        # 2 ms in every other turn of the same session) recorded 349 SECONDS,
+        # and a `run_python` recorded 134 s for 0.587 s of execution. Both read
+        # as "the tool was slow". `pool_queued`/`pool_workers` are the
+        # executor's backlog and size at dispatch — the witness that says
+        # whether the wait was contention.
+        for _col, _ddl in (
+            ("queue_wait_ms", "ALTER TABLE tool_invocations ADD COLUMN queue_wait_ms INTEGER"),
+            ("pool_queued",   "ALTER TABLE tool_invocations ADD COLUMN pool_queued INTEGER"),
+            ("pool_workers",  "ALTER TABLE tool_invocations ADD COLUMN pool_workers INTEGER"),
+        ):
+            try:
+                c.execute(_ddl)
+            except Exception:      # noqa: BLE001 — column already present
+                pass
         c.execute("CREATE INDEX IF NOT EXISTS idx_tool_inv_run ON tool_invocations(run_id)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_tool_inv_name ON tool_invocations(tool_name)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_tool_inv_when ON tool_invocations(started_at)")

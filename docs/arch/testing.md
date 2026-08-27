@@ -137,6 +137,8 @@ Each is a live-agent study in the same style, differing in what it stresses:
 | `harness/live_audit.py` | the same surface oracle over *every project* on a running server — the "first click after coming back" check |
 | `harness/env_check.py` | the env-promotion chain against a deployed backend, no LLM, no HTTP |
 | `harness/replay.py` | in-process replay of the real turn flow for output-serving/durability work |
+| `harness/concurrency.py` | did concurrent lanes actually OVERLAP (parallelism, max-in-flight)? The axis `--concurrent` was missing: it only checked that lanes don't corrupt each other, which strictly-serialized lanes also satisfy |
+| `harness/dispatch_latency.py` | **dispatch-stall screen**: which tool calls WAITED rather than worked (`queue_wait_ms` vs body time, plus the executor backlog). Read-only, no LLM — run after any session, live or manual |
 | `harness/project_isolation.py` | **cross-project** audit: every recorded row belongs to a thread of the project holding it. Read-only, no LLM — run after any concurrent or multi-project live run |
 | `live/workflows.py --concurrent N` | N threads in ONE project against one node at once |
 | `live/workflows.py --cross-project N` | N projects at once, project creation staggered to land mid-flight, then the isolation audit |

@@ -28,8 +28,18 @@ def record(
     duration_ms:   int,
     status:        str,        # ok | error | rejected | deferred
     error_summary: Optional[str] = None,
+    queue_wait_ms: Optional[int] = None,
+    pool_queued:   Optional[int] = None,
+    pool_workers:  Optional[int] = None,
 ) -> None:
-    """Write one row. Best-effort — never raises into the caller."""
+    """Write one row. Best-effort — never raises into the caller.
+
+    `queue_wait_ms` is the part of `duration_ms` spent waiting to START, not
+    working. Without it the two production stalls were indistinguishable from
+    slow tools: a `Skill` registry read recorded 349 s and a `run_python`
+    recorded 134 s for 0.587 s of execution. `pool_queued`/`pool_workers` are
+    the dispatch executor's backlog and size at that moment — the witness that
+    says whether the wait was contention."""
     try:
         from core.runtime.mcp import is_mcp_tool
         source = "mcp:" + tool_name.split(":", 1)[0] if is_mcp_tool(tool_name) else "bio"
@@ -42,10 +52,12 @@ def record(
             c.execute(
                 "INSERT INTO tool_invocations "
                 "(run_id, agent_spec, tool_name, source, status, input_summary, "
-                " duration_ms, error_summary, started_at, ended_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " duration_ms, error_summary, started_at, ended_at, "
+                " queue_wait_ms, pool_queued, pool_workers) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (run_id, agent_spec, tool_name, source, status, summary,
-                 duration_ms, error_summary, started_at, ended_at),
+                 duration_ms, error_summary, started_at, ended_at,
+                 queue_wait_ms, pool_queued, pool_workers),
             )
             c.commit()
     except Exception:  # noqa: BLE001
@@ -186,3 +198,40 @@ def recent_invocations(limit: int = 50, tool_name: Optional[str] = None) -> list
     with _conn() as c:
         rows = c.execute(q, args).fetchall()
     return [dict(r) for r in rows]
+
+
+def timed_body(fn, sink: list):
+    """Wrap a tool body so the instant it BEGINS lands in `sink`.
+
+    The gap between dispatch and this stamp is queue wait — the part of a
+    tool's recorded duration that is not the tool. Extracted from the dispatch
+    site so it is testable as behaviour: a guard that only greps guide.py for
+    a variable name stays green when the wrapper is wired out.
+    Appends BEFORE calling, and appends even when the body raises."""
+    def _wrapped(*a, **kw):
+        sink.append(_dt.datetime.now(_dt.timezone.utc))
+        return fn(*a, **kw)
+    return _wrapped
+
+
+def dispatch_pool_gauge() -> tuple[Optional[int], Optional[int]]:
+    """(queued, workers) for the executor tool dispatch runs on — asyncio's
+    DEFAULT ThreadPoolExecutor, which `projects.in_thread` uses for every tool
+    and `projects.spawn` uses for background advisor work (LLM calls). One
+    pool, min(32, cpu+4) slots, shared. Reading it is the only way a stalled
+    row can say WHY it stalled.
+
+    Best-effort and private-attribute based on purpose: there is no public API
+    for a loop's default-executor backlog, and a gauge that raises is worse
+    than one that returns None."""
+    try:
+        import asyncio
+        loop = asyncio.get_running_loop()
+        ex = getattr(loop, "_default_executor", None)
+        if ex is None:
+            return None, None
+        q = getattr(ex, "_work_queue", None)
+        return (q.qsize() if q is not None else None,
+                getattr(ex, "_max_workers", None))
+    except Exception:  # noqa: BLE001 — a gauge must never break a dispatch
+        return None, None

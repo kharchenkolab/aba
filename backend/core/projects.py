@@ -361,6 +361,9 @@ def _bound(fn, args, kwargs):
     return _functools.partial(ctx.run, _functools.partial(fn, *args, **kwargs))
 
 
+import threading as _threading
+
+
 async def in_thread(fn, /, *args, **kwargs):
     """Await a blocking `fn` in a worker thread, project binding intact.
     (`asyncio.to_thread` copies the context; that is the whole difference.)"""
@@ -375,8 +378,42 @@ def in_pool(pool, fn, /, *args, **kwargs):
     return _asyncio.get_running_loop().run_in_executor(pool, _bound(fn, args, kwargs))
 
 
+# Background work runs on its OWN executor, never asyncio's default one.
+#
+# `in_thread` (every tool dispatch) uses the default executor, which is
+# min(32, cpu+4) slots and process-wide. `spawn` used it too — for advisor
+# reviews, proposal evaluation and skeptic/stylist/explorer passes, all of
+# which make LLM calls and hold a slot for tens of seconds to minutes. So
+# best-effort background work competed for the same slots as the user's next
+# tool call, and could starve it outright: a saturated default executor makes
+# EVERY dispatch wait, and the tool's recorded duration attributes that wait to
+# the tool. Two production stalls have this shape (a 2 ms `Skill` recorded at
+# 349 s; a `run_python` recorded at 134 s for 0.587 s of execution).
+#
+# Bounded on purpose: background work that falls behind should queue against
+# ITSELF, which is a backlog, rather than against the foreground, which is a
+# stall the user feels.
+_BG_MAX_WORKERS = 8
+_BG_POOL = None
+_BG_POOL_LOCK = _threading.Lock()
+
+
+def background_pool():
+    """The background executor (lazy, process-wide). Exposed so a probe can
+    measure its backlog — the gauge is what turns a stall into a diagnosis."""
+    global _BG_POOL
+    if _BG_POOL is None:
+        with _BG_POOL_LOCK:
+            if _BG_POOL is None:
+                from concurrent.futures import ThreadPoolExecutor
+                _BG_POOL = ThreadPoolExecutor(max_workers=_BG_MAX_WORKERS,
+                                              thread_name_prefix="aba-bg")
+    return _BG_POOL
+
+
 def spawn(fn, /, *args, **kwargs):
-    """Fire-and-forget `fn` in a worker thread, project binding intact.
+    """Fire-and-forget `fn` in a BACKGROUND worker thread, project binding
+    intact.
 
     With no running loop (a *sync* FastAPI route, which anyio already runs in a
     context-propagating threadpool) it runs INLINE — correct, and bound, which
@@ -389,7 +426,7 @@ def spawn(fn, /, *args, **kwargs):
     except RuntimeError:
         call()
         return None
-    return loop.run_in_executor(None, call)
+    return loop.run_in_executor(background_pool(), call)
 
 
 def _touch(pid: str) -> None:

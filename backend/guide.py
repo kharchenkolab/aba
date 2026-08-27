@@ -1132,6 +1132,18 @@ async def stream_response(
                             "cancel_token": cancel_token}
                 import datetime as _dt
                 _t_start = _dt.datetime.now(_dt.timezone.utc)
+                # Split the clock. Everything below waits for a slot in ONE
+                # process-wide executor (asyncio's default, min(32, cpu+4)),
+                # shared with projects.spawn's background advisor work. Without
+                # this split a row cannot say whether a tool was slow or merely
+                # QUEUED — which is why a 2 ms `Skill` recording 349 s and a
+                # `run_python` recording 134 s for 0.587 s of work both read as
+                # "the tool took a long time" and neither could be diagnosed.
+                from core.runtime.tool_telemetry import (dispatch_pool_gauge,
+                                                          timed_body)
+                _pool_q, _pool_w = dispatch_pool_gauge()
+                _body_at: list = []
+                _exec_tool_timed = timed_body(_exec_tool, _body_at)
                 # projects.in_thread, NOT run_in_executor: the tool body writes
                 # exec records, harvests outputs and registers entities, and the
                 # bare executor hop drops the project binding — those writes then
@@ -1139,7 +1151,7 @@ async def stream_response(
                 # projects.in_thread for the live incident.
                 from core import projects as _projects_mod
                 result_str = await _projects_mod.in_thread(
-                    _exec_tool, name, tool_input, tool_ctx)
+                    _exec_tool_timed, name, tool_input, tool_ctx)
                 _t_end = _dt.datetime.now(_dt.timezone.utc)
                 result_obj = json.loads(result_str)
                 # Telemetry record (best-effort; mirrors legacy path).
@@ -1166,6 +1178,10 @@ async def stream_response(
                         ended_at=_t_end.isoformat(),
                         duration_ms=int((_t_end - _t_start).total_seconds() * 1000),
                         status=_telem_status, error_summary=_telem_err,
+                        queue_wait_ms=(
+                            int((_body_at[0] - _t_start).total_seconds() * 1000)
+                            if _body_at else None),
+                        pool_queued=_pool_q, pool_workers=_pool_w,
                     )
                 except Exception:  # noqa: BLE001
                     pass
