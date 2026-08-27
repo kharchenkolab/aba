@@ -362,7 +362,7 @@ def test_retain_includes_directory_stores_from_jobdir(monkeypatch):
     (jd / "dataset_cube.zarr" / "c").mkdir(parents=True)
     (jd / "dataset_cube.zarr" / "c" / "0.0").write_bytes(b"\0" * 8)
     (jd / "tmp" / "scratch.zarr").mkdir(parents=True)          # transient dir → skipped
-    monkeypatch.setattr(runsmod, "_run_jobdirs", lambda rid: [str(jd)])
+    monkeypatch.setattr(runsmod, "_run_jobdirs", lambda rid, prefer=None: [str(jd)])
     monkeypatch.setattr(artmod, "artifacts_for_run",
                         lambda rid: [{"original_name": "umap.png"}])
     monkeypatch.setattr(retmod, "retained", lambda **kw: [])

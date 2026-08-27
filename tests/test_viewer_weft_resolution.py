@@ -69,7 +69,7 @@ def test_resolve_run_output_path_retained_tier(tmp_path, monkeypatch):
     (ret_loc / "out" / "keep.h5ad").write_text("data")
     monkeypatch.setattr(retmod, "retained", lambda **kw: [{"state": "done"}])
     monkeypatch.setattr(retmod, "location_path", lambda row: str(ret_loc))
-    monkeypatch.setattr(runs, "_run_jobdirs", lambda rid: [])
+    monkeypatch.setattr(runs, "_run_jobdirs", lambda rid, prefer=None: [])
     monkeypatch.setattr(runs, "get_entity", lambda rid: {"artifact_path": None})
     assert runs.resolve_run_output_path("r", "keep.h5ad") == \
         os.path.realpath(str(ret_loc / "out" / "keep.h5ad"))
@@ -81,7 +81,7 @@ def test_resolve_run_output_path_jobdir_tier_zarr(tmp_path, monkeypatch):
     jd = tmp_path / "jobdir"; store = jd / "processed.lstar.zarr"; store.mkdir(parents=True)
     (store / "0").write_text("c")
     monkeypatch.setattr(retmod, "retained", lambda **kw: [])
-    monkeypatch.setattr(runs, "_run_jobdirs", lambda rid: [str(jd)])
+    monkeypatch.setattr(runs, "_run_jobdirs", lambda rid, prefer=None: [str(jd)])
     monkeypatch.setattr(runs, "get_entity", lambda rid: {"artifact_path": None})
     hit = runs.resolve_run_output_path("r", "processed.lstar.zarr")
     assert hit == os.path.realpath(str(store)) and os.path.isdir(hit)
@@ -90,7 +90,7 @@ def test_resolve_run_output_path_jobdir_tier_zarr(tmp_path, monkeypatch):
 def test_resolve_run_output_path_none_when_absent(tmp_path, monkeypatch):
     import core.compute.retention as retmod
     monkeypatch.setattr(retmod, "retained", lambda **kw: [])
-    monkeypatch.setattr(runs, "_run_jobdirs", lambda rid: [])
+    monkeypatch.setattr(runs, "_run_jobdirs", lambda rid, prefer=None: [])
     monkeypatch.setattr(runs, "get_entity", lambda rid: {"artifact_path": str(tmp_path)})
     assert runs.resolve_run_output_path("r", "ghost.zarr") is None
 

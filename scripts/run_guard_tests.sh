@@ -26,6 +26,7 @@ FILES=(
   tests/test_dispatch_latency_screen.py
   tests/test_pack_pin.py
   tests/test_promote_pin_gate.py
+  tests/test_set_pack_latest.py
   tests/test_installation_bundle.py
   tests/test_frontend_bundle_builds.py
   # shared-agent-input guards (tool catalog / prompts / cache placement)
@@ -70,6 +71,7 @@ FILES=(
   tests/test_substrate_error_surfacing.py
   tests/test_substrate_identity.py
   tests/test_substrate_kwarg_compat.py
+  tests/test_submit_kwargs_conformance.py
   tests/test_syslib_env_routing.py
   tests/test_r_install_lanes.py
   tests/test_live_session_smallfixes.py

@@ -79,11 +79,14 @@ steps:
     kind: revise
     actor: agent
     prompt: >
-      Now redo it as CPM (counts per million, no length normalization) instead, and tell me
-      which genes move into or out of the top 10 compared with TPM.
+      Now redo it as CPM (counts per million, no length normalization) instead, and show me
+      how the top 10 shifts compared with TPM — a figure I can glance at, plus which genes
+      move in or out.
     expect:
       must_mention: ["CPM"]
       must_not: ["identical to TPM", "no genes change", "length makes no difference"]
+      # the prompt STATES the figure outcome (as s2 does) — it asserts what was
+      # asked for, not an artifact the ask never named (2026-08-27 sweep finding)
       produces: {figure: 1}
       checks: >
         CPM = per-sample library-size scaling WITHOUT dividing by length, so the top-10
