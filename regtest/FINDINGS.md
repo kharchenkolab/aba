@@ -364,3 +364,45 @@ Post-fix live confirmation of the rel-shadowing / machinery-advertising class:
   by-reference dataset (`ref_path` recorded, `artifact_path` present in the bundle post-hoc).
   Distinct door (entity download), untouched by the shadowing fix; needs its own look at how the
   download route resolves by-reference datasets before falling back to the artifacts cache.
+
+## 2026-08-27 thread-interference investigation (the "everything froze during an install" class)
+User-reported: a long capability install in one thread freezes a sibling thread's trivial turn.
+REPRODUCED 4/4 on current main against an isolated fresh deployment (real agent turns, two
+threads, one project): a one-line `run_python` in thread B blocks for essentially the DURATION of
+thread A's install body (observed 93 s beside a 92 s install; 21 s beside 25 s; 11.5 s; 7 s —
+each ending within ~1-2 s of the install's end), then returns normally; post-install turns are
+1-4 s. Matches the recorded cluster incident (128.9 s wall / 0.587 s execution, 2026-08-27).
+- **The dispatch layer is exonerated**: the stalled rows carry `queue_wait_ms=0, inflight=2,
+  bg_backlog=0` — both tool bodies ran concurrently; the wait is INSIDE the run_python body.
+  (The queue-wait split from a0610469 did its job.)
+- **Mid-stall stacks** (SIGUSR1 faulthandler on the live server) place thread B in weft-verb
+  waits while `ensure_available`/`session_install` is in flight: (a)
+  `run_exec.run_python:1564 → named_envs.ensure_ready → _run_realize_task → _realize_via_verb →
+  adapter.run_sync` (isolated-env lane: realize vs install), and (b)
+  `run_exec._kernel_namespace_preview → kernels/weft.py:670 execute` (default lane: a block
+  execute vs install).
+- **The bare compute layer is NOT globally serialized**: the looped in-process phase probe
+  (install_stall.py) ran `project_env.ensure`, cold `kernel_start`, cold FIRST BLOCK, and warm
+  execute repeatedly INSIDE install windows — all sub-second, verdict independent. The
+  serialization is verb-specific (realize, and block-execute at some install phases), i.e. env-
+  store/session locking on the substrate side, reached only through paths the probe did not walk.
+- **Instrument gaps found and fixed** (this cycle, install_stall.py): the single phase-walk could
+  complete before the weft verb's window opened and read "independent" — a false exoneration; it
+  now LOOPS phase walks until the install ends and requires in-window walks (armed), walks the
+  two-step propose→ensure path a catalog-less deployment needs, and times the cold kernel's
+  FIRST BLOCK as its own phase. Remaining gap: it still does not walk `named_envs.ensure_ready`
+  or an agent-shaped run_python body — the two paths the stacks implicate.
+- **Adjacent hazard, known but unguarded**: `kernels/pool.py get_or_start` holds the ONE global
+  pool lock across `_new_session` (kernel startup, a substrate call); the env-realize was hoisted
+  out from under it precisely for this (run_exec.py:1555 comment), but a slow kernel START (remote
+  site, busy substrate) would still wedge every kernel acquisition process-wide. A per-key lock
+  would retire the class.
+Recommendations (not yet implemented): (1) surface an in-flight install to sibling threads
+instead of a silent hang — ABA knows the install is running (it dispatched it); run_python's
+prologue can emit a progress/busy note or heartbeat while it waits, which converts "frozen" into
+"waiting on the project environment build (~Ns)"; (2) upstream weft ask — a typed busy state
+(fast-fail or progress) for verbs that must wait on an in-flight `session_install`, and ideally
+allow read-side execute on the current realization during installs; (3) extend install_stall.py
+to walk `ensure_ready` + an agent-shaped run_python; (4) per-key kernel-pool locks; (5) stamp
+run_python body PHASES into tool telemetry so the dispatch-latency screen can name
+prologue/realize/execute/harvest instead of one opaque body time.

@@ -86,11 +86,21 @@ def run(pid: str | None = None) -> dict:
         # of it.
         t = time.time()
         try:
-            from content.bio.tools.discovery import ensure_capability
+            from content.bio.tools.discovery import (ensure_capability,
+                                                     propose_capability_tool)
             _proj.set_current(pid)      # the worker thread needs the binding
-            out = ensure_capability({"name": n},
-                                    {"thread_id": "thr_installer",
-                                     "project_id": pid})
+            _ctx = {"thread_id": "thr_installer", "project_id": pid}
+            out = ensure_capability({"name": n}, _ctx)
+            if out.get("status") == "candidates":
+                # The tool's own two-step path (its note says so): on a
+                # deployment whose catalog lacks the name, an agent proposes
+                # the library and re-ensures. Walking it here keeps the probe
+                # equal to the request a user's agent makes — without it, a
+                # catalog-less bench measures NOTHING and the armed
+                # precondition (below) correctly refuses the run.
+                res["proposed"] = (propose_capability_tool({"name": n})
+                                   or {}).get("status")
+                out = ensure_capability({"name": n}, _ctx)
             res["install_result"] = {k: out.get(k) for k in
                                      ("status", "ready", "error", "note")
                                      if k in out}
@@ -100,32 +110,79 @@ def run(pid: str | None = None) -> dict:
             res["install_error"] = f"{type(e).__name__}: {str(e)[:160]}"
         marks["install_s"] = round(time.time() - t, 2)
 
+    install_done = threading.Event()
+
+    def installer_wrapped():
+        try:
+            installer()
+        finally:
+            install_done.set()
+
     def trivial():
+        # Walk the phases in a LOOP until the install finishes. A single walk
+        # at a fixed delay measured NOTHING twice over: the install tool's
+        # preamble (classify → propose → catalog) runs for seconds before the
+        # weft verb opens its window, so one early walk completes before there
+        # is anything to contend with and reads as "independent" — exactly the
+        # false exoneration this probe exists to prevent (live 2026-08-27: the
+        # single walk said independent while the same trivial call through the
+        # server blocked 93 s body-time beside a 92 s install). Per-iteration
+        # timings are kept, so the answer is WHICH phase blocked and WHEN.
         _proj.set_current(pid)
         time.sleep(B_DELAY_S)
-        b: dict = {}
-        t0 = time.time()
-        _phase(b, "base_env.require", lambda: base_env.require("python"))
-        _phase(b, "project_env.ensure", lambda: project_env.ensure(pid, "python"))
-        _phase(b, "get_or_start(cold)",
-               lambda: get_pool().get_or_start("cold", "python",
-                                               cwd=str(scratch_dir(pid, "cold"))))
-        _phase(b, "execute(warm kernel)",
-               lambda: warm.execute("print(1+1)", timeout_s=600))
-        b["total_s"] = round(time.time() - t0, 2)
-        res["thread_b"] = b
+        iters: list = []
+        i = 0
+        while not install_done.is_set() and i < 60:
+            i += 1
+            b: dict = {"at_s": round(time.time() - t_start, 1)}
+            t0 = time.time()
+            _phase(b, "base_env.require", lambda: base_env.require("python"))
+            _phase(b, "project_env.ensure",
+                   lambda: project_env.ensure(pid, "python"))
+            cold_box: list = []
+            _phase(b, f"get_or_start(cold{i})",
+                   lambda: cold_box.append(
+                       get_pool().get_or_start(f"cold{i}", "python",
+                                               cwd=str(scratch_dir(pid, f"cold{i}")))))
+            # The FIRST BLOCK on a kernel born mid-install is its own phase:
+            # the start call can return promptly while the kernel waits on the
+            # session's realization to run anything — which is exactly where
+            # the live server path blocked (93 s beside a 92 s install) while
+            # a start-only walk read independent.
+            if cold_box:
+                _phase(b, f"execute(cold{i} first block)",
+                       lambda: cold_box[0].execute("print(1+1)", timeout_s=600))
+            _phase(b, "execute(warm kernel)",
+                   lambda: warm.execute("print(1+1)", timeout_s=600))
+            b["total_s"] = round(time.time() - t0, 2)
+            iters.append(b)
+            install_done.wait(2.0)
+        res["thread_b_iters"] = iters
 
-    ts = [threading.Thread(target=installer), threading.Thread(target=trivial)]
+    t_start = time.time()
+    ts = [threading.Thread(target=installer_wrapped),
+          threading.Thread(target=trivial)]
     for t in ts:
         t.start()
     for t in ts:
         t.join()
     res.update(marks)
 
-    b = res.get("thread_b") or {}
-    blocked = {k: v for k, v in b.items()
-               if k not in ("total_s", "errors") and isinstance(v, (int, float))
-               and v >= STALL_S}
+    blocked: dict = {}
+    overlapped = 0
+    for b in res.get("thread_b_iters") or []:
+        started_during = b.get("at_s", 1e9) <= (marks.get("install_s") or 0)
+        if started_during:
+            overlapped += 1
+        for k, v in b.items():
+            if k in ("total_s", "errors", "at_s") or not isinstance(v, (int, float)):
+                continue
+            if v >= STALL_S:
+                key = ("get_or_start(cold)" if k.startswith("get_or_start")
+                       else "execute(cold first block)"
+                       if k.startswith("execute(cold") else k)
+                blocked[key] = max(blocked.get(key, 0), v)
+    res["iters_during_install"] = overlapped
     res["stalled_phases"] = blocked
     res["verdict"] = ("STALLED: " + ", ".join(f"{k}={v}s" for k, v in blocked.items())
                       if blocked else "independent")
@@ -133,20 +190,21 @@ def run(pid: str | None = None) -> dict:
 
 
 def checks(res: dict) -> list[tuple[str, bool]]:
-    """ARMED FIRST: an install that never ran, or one that finished before
-    thread B even started, proves nothing about contention."""
+    """ARMED FIRST: an install that never ran, or phase walks that never
+    overlapped the install window, prove nothing about contention."""
     inst = res.get("install_s") or 0
     if not res.get("install_ok"):
         return [(f"PRECONDITION: the install ran "
                  f"({res.get('install_error', 'no result')})", False)]
-    if inst < B_DELAY_S + STALL_S:
-        return [(f"PRECONDITION: the install ({inst}s) outlasted thread B's "
-                 f"start ({B_DELAY_S}s) by enough to contend — this run says "
-                 f"NOTHING about stalling", False)]
-    b = res.get("thread_b") or {}
+    if not res.get("iters_during_install"):
+        return [(f"PRECONDITION: no phase walk started inside the install "
+                 f"window ({inst}s) — this run says NOTHING about stalling",
+                 False)]
+    n = len(res.get("thread_b_iters") or [])
     return [(f"a trivial call is not blocked by a concurrent install "
-             f"(install={inst}s, b_total={b.get('total_s')}s, "
-             f"{res['verdict']})", not res["stalled_phases"])]
+             f"(install={inst}s, {n} walks, "
+             f"{res['iters_during_install']} in-window, {res['verdict']})",
+             not res["stalled_phases"])]
 
 
 if __name__ == "__main__":
