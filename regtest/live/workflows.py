@@ -34,6 +34,7 @@ Run:  python regtest/live/workflows.py [--site NAME] [--only a,b] [--keep]
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import re
 import sqlite3
@@ -49,7 +50,13 @@ _ROOT = str(Path(__file__).resolve().parents[2])
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-BASE = "http://127.0.0.1:8000"
+# The deployment under test. Defaults to a personal install, but the DEPLOYMENT
+# gate (aba-vbc verify.sh) launches the staged image on a random port the same
+# way the OOD card does and passes --base, so these lanes run against the real
+# deployment shape instead of a hand-rolled `apptainer exec` that re-implements
+# the launch badly. Every bespoke container invocation written for this in one
+# session got the binds wrong and reported its own breakage as a finding.
+BASE = os.environ.get("ABA_BASE_URL", "http://127.0.0.1:8000")
 RUNTIME = Path.home() / ".aba" / "runtime" / "projects"
 RESULTS: list = []
 # (pid, tid) -> captures from each drive(), so friction_sweep can report
@@ -1035,6 +1042,8 @@ def run_one(name, fn, site, keep=False):
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--base", default=None,
+                    help="server to drive (default $ABA_BASE_URL or :8000)")
     ap.add_argument("--site", default="orbtest")
     ap.add_argument("--only", default="")
     ap.add_argument("--keep", action="store_true")
@@ -1059,6 +1068,8 @@ def main():
     if a.site not in names:
         sys.exit(f"site {a.site!r} is not registered")
 
+    if a.base:
+        globals()["BASE"] = a.base.rstrip("/")
     if a.concurrent or a.cross_project:
         # Concurrency lanes are opt-in and run ALONE: mixing them with the
         # sequential scenarios would make any misfiled record ambiguous about
