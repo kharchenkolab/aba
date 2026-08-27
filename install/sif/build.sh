@@ -340,7 +340,17 @@ DEF="$STAGE/aba-$PROFILE.def"
   [ -d "$STAGE/pixi/bin" ] && echo "    export ABA_PIXI_BIN=\${ABA_PIXI_BIN:-/opt/aba/tools/pixi/bin/pixi}"
   # (weft workspace needs no export: it derives as $ABA_HOME/weft, and with
   #  HOME redirected into ABA_RUNTIME_DIR below, that lands writable.)
-  [ -d "$STAGE/installation/envs" ] && echo "    export ABA_INSTITUTION_BUNDLE=\${ABA_INSTITUTION_BUNDLE:-/opt/aba/installation}"
+  # NO ABA_INSTITUTION_BUNDLE here. The image ships CONTENT; it must not name
+  # the path the app reads a bundle from. Baked into %environment it is set
+  # before site.yaml is ever read, and an env var outranks site.yaml — so
+  # `scopes.institution.bundle_path` could never take effect and everything
+  # deploy.sh staged to the share (the derived GPU pack, the site's
+  # reference-source catalogues) was written and never read. The comment above
+  # always said site.yaml should override it; nothing exported it, so the
+  # default WAS the override. /opt/aba/installation stays as the SOURCE that
+  # deploy.sh assembles the deployment's bundle from
+  # (scripts/assemble_installation.py); the env var remains available as a
+  # genuine operator override, which is what its precedence implies.
   # EAGER plugin state: the heavy modules (r-bio, viewer-pagoda3) are BAKED into this fat
   # image, so they should read as `on` (permanently present) rather than their `first_use`
   # registry default. manager._eager_override honors this; combined with the probe paths
