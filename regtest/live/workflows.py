@@ -781,12 +781,22 @@ def wf_gpu_recognised(pid, tid, site):
     (weft_submitter._gpu_env_for). If it is false the job silently becomes an
     ordinary CPU job — which is exactly what a user sees as "the GPU doesn't
     work"."""
+    # SMALL ON PURPOSE, and still decisive. The first version asked for 30
+    # epochs over 100k samples — minutes of cluster time to learn one bit. The
+    # work only has to be GPU-SHAPED (neural-network training), not long: 3
+    # epochs finish in seconds on a GPU and still exercise the whole chain —
+    # recognition, partition, CUDA pack, execution.
+    #
+    # Asking what device it used is a REPORT, not an instruction: the agent
+    # still has to decide for itself to request an accelerator, which is the
+    # thing under test. It makes the result checkable from the job's own output
+    # instead of only from a scheduler record.
     cap = drive(pid, tid,
         f"As a BACKGROUND job on '{site}': train a small neural network in "
-        f"PyTorch on synthetic data — a few dense layers, 100k samples, ~30 "
-        f"epochs — and write the final loss and the wall-clock training time to "
-        f"train_result.csv. I care about it finishing fast, so size it for the "
-        f"hardware this cluster has. Tell me when it's queued.")
+        f"PyTorch on synthetic data — a few dense layers, 200k rows x 128 "
+        f"features, 3 epochs. Write the final loss, the training time, and the "
+        f"compute device it actually ran on to train_result.csv. It should "
+        f"finish in well under a minute; tell me when it's queued.")
     _wait_jobs_settled(pid, timeout_s=1800)
     jobs = api("GET", "/api/jobs")
     jobs = jobs if isinstance(jobs, list) else jobs.get("jobs", [])
@@ -825,6 +835,14 @@ def wf_gpu_recognised(pid, tid, site):
          f"(estimate.gpu on {len(asked_gpu)}/{len(mine)} job(s))", bool(asked_gpu)),
         (f"the job SUCCEEDED{': ' + why if why else ''}", bool(mine) and not bad),
         ("the training output is TRACKED", any("train_result" in n for n in tracked)),
+        # END TO END. estimate.gpu proves the agent ASKED; this proves the ask
+        # was honoured all the way to hardware. Both were broken independently
+        # on 2026-08-27 (placement sent GPU jobs to a CPU partition; a project
+        # env pointer silently displaced the CUDA pack), and either failure
+        # alone leaves the other assertion green.
+        (f"the job actually RAN on a GPU (device in its output)",
+         any("cuda" in str(r).lower() or "nvidia" in str(r).lower()
+             for r in tool_results(pid, tid))),
     ]
 
 

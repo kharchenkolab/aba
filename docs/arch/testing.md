@@ -82,6 +82,16 @@ becomes the one people trust, because it is the one that is green.
   between two launchers does not announce itself; it reports success.
 - **Don't push a question to a cheaper layer than can answer it.** A hermetic test of a
   remote code path proves only that the fake agreed with you.
+- **A judgement measured once is not measured.** `est_gpu` came back true on three
+  consecutive runs of the same request and false on the fourth, and the CPU run reported
+  plain success — three greens hid it completely. Anything the model DECIDES (placement,
+  sizing, whether to background) needs `--repeat` and a rate; a single green is a sample,
+  and changing a prompt on the strength of one is tuning against noise.
+- **Check that the scenario does not contain its own answer.** `cluster_idle_gpu_big_job`
+  asks for work "~45 minutes on a GPU" — so a pass measures obedience, and the recognition
+  it appears to test is never exercised. Its sibling `cluster_gpu_unhinted_training` states
+  only the outcome. When a scenario is green and the live system is not, suspect the prompt
+  first.
 - **Mechanism truth and surface truth are separate claims.** The sweep once verified
   correct substrate execution while every user-facing URL 404'd; both oracles now run by
   default at scenario end precisely because green-and-broken was self-consistent.
@@ -147,7 +157,7 @@ Each is a live-agent study in the same style, differing in what it stresses:
 | `datasets/multiproject_study.py` | concurrent projects at the real deployment shape |
 | `datasets/kernel_repro.py` | persistent remote kernel stdout across many blocks |
 | `datasets/ui_study.py` | browser-driven UI/UX evaluation |
-| `placement/study.py` | tool-argument correctness for placement decisions (`standard` catalog tier) |
+| `placement/study.py` | tool-argument correctness for placement decisions (`standard` catalog tier). `--repeat N` runs each scenario N times and reports a RATE per field — placement is a model JUDGEMENT, so a single run samples a distribution and cannot describe it |
 | `harness/live_surface_probe.py` | a DEPLOYED server over real HTTP + SSE: outputs manifest, artifact uniqueness, store collapse, every URL serves, transport truth, surface parity — across `mixed`/`table`/`figure`/`store` prompt shapes |
 | `harness/live_install_probe.py` | **the science gate** (design + how to run: `misc/install_sweep.md`): asks a DEPLOYED server for a library, one real turn per package, and judges what the request COST — named envs created, wall seconds, and (with `--background`) which site the offloaded job landed on. Package set is data (`regtest/data/install_matrix*.json`); the `--pack-provided-only` scope is self-sufficient from the shipped packs' own `spec.verify`, so a missing data file cannot switch the gate off. Wired as `deploy.sh verify --install`, gating promote |
 | `harness/live_audit.py` | the same surface oracle over *every project* on a running server — the "first click after coming back" check |
