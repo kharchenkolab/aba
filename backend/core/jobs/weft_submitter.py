@@ -212,6 +212,49 @@ def _site_platform_for(site: str) -> Optional[str]:
         return None
 
 
+def _gpu_partition_for(site: str) -> Optional[str]:
+    """A partition on `site` that actually HAS GPUs, or None if we can't tell.
+
+    THE BUG THIS CLOSES. Asking for a GPU never influenced WHERE the job went.
+    weft's `allowed_partition()` returns `partitions_allowed[0]` when the site
+    configures no partition, and it never looks at `resources["gpus"]` — so a
+    GPU job on a site allowing [c, g] was submitted as
+
+        #SBATCH --gres=gpu:1
+        #SBATCH --partition=c
+
+    and Slurm refused it: "Requested node configuration is not available".
+    Everything upstream was right — the agent recognised the work needed an
+    accelerator and set estimate.gpu — and the job still could not run. Pinning
+    the partition in site.yaml is not the answer either: that would send EVERY
+    job to one partition. Placement is ABA's decision to make, because ABA is
+    what knows the ask; weft's job is to honour and validate it.
+
+    Chooses the GPU partition with the most capacity, restricted to the site's
+    own `partitions_allowed` when it declares one — never widening what the
+    user permitted. Returns None when the site advertises no GPU partition, so
+    the caller leaves placement exactly as it was.
+    """
+    try:
+        desc = _adapter().sync_call("sites_describe", site) or {}
+    except Exception:  # noqa: BLE001 — placement is best-effort, never fatal
+        return None
+    caps = desc.get("capabilities") or {}
+    parts = ((caps.get("scheduler") or {}).get("partitions")) or []
+    allowed = (((desc.get("config") or {}).get("policy") or {})
+               .get("partitions_allowed")) or None
+    best, best_n = None, 0
+    for pt in parts:
+        name = pt.get("name")
+        if not name or (allowed and name not in allowed):
+            continue
+        n = sum(g.get("count", 0) for g in (pt.get("gres") or [])
+                if g.get("type") == "gpu") * (pt.get("nodes") or 1)
+        if n > best_n:
+            best, best_n = name, n
+    return best
+
+
 def _relock_platform(code: str, env_name: Optional[str], site: str) -> Optional[str]:
     """The platform to re-lock a NAMED env for, or None. Two triggers, unified
     across every submit lane (kernel: weft.py; detached-submit + poll: here):
@@ -568,6 +611,9 @@ class WeftSubmitter:
             resources["mem_gb"] = int(est["mem_gb"])
         if est.get("gpu"):
             resources["gpus"] = 1
+            _p = _gpu_partition_for(self.site)
+            if _p:
+                resources["partition"] = _p
         if self.site != "local":
             wt = _sized_walltime(kind, est, timeout_s)
             if wt:
@@ -729,9 +775,12 @@ class WeftSubmitter:
         resources = {"cpus": int(est.get("cores") or 1)}
         if est.get("mem_gb"):
             resources["mem_gb"] = int(est["mem_gb"])
+        site = site or self.site
         if est.get("gpu"):
             resources["gpus"] = 1
-        site = site or self.site
+            _p = _gpu_partition_for(site)
+            if _p:
+                resources["partition"] = _p
         if self._site_kind(site) == "slurm":
             wt = _sized_walltime(kind, est, timeout_s)
             if wt:

@@ -104,3 +104,114 @@ def test_a_caller_predating_the_flag_keeps_the_old_reading(routing):
     populated `env` must still read as deliberate — this fix changes ONE lane's
     meaning, and must not silently redirect callers it never examined."""
     assert routing({"env": "myenv", "estimate": {"gpu": True}}, "python") is None
+
+
+# ── placement: a GPU ask must reach a partition that HAS GPUs ───────────────
+#
+# The live lane (regtest/live/workflows.py wf_gpu_recognised) proved the agent
+# recognises a GPU workload on its own and sets estimate.gpu. The job was still
+# refused, because nothing turned that ask into a PLACEMENT: weft's
+# allowed_partition() returns partitions_allowed[0] when the site configures no
+# partition, and never reads resources["gpus"]. The submitted script was
+#     #SBATCH --gres=gpu:1
+#     #SBATCH --partition=c        <- no GPUs on c
+# and Slurm answered "Requested node configuration is not available".
+
+CAPS = {
+    "capabilities": {"scheduler": {"partitions": [
+        {"name": "c", "nodes": 18, "gres": []},
+        {"name": "g", "nodes": 1, "gres": [{"type": "gpu", "model": "b200", "count": 4}]},
+    ]}},
+    "config": {"policy": {"partitions_allowed": ["c", "g"]}},
+}
+
+
+@pytest.fixture
+def describe(monkeypatch):
+    """Patch the SITE DESCRIPTION, which is where the inventory really comes
+    from — not the chooser, or the test would prove only that it agrees with
+    itself."""
+    from core.jobs import weft_submitter
+
+    def _mk(desc):
+        class _A:
+            def sync_call(self, verb, *a, **k):
+                assert verb == "sites_describe"
+                return desc
+        monkeypatch.setattr(weft_submitter, "_adapter", lambda: _A())
+        return weft_submitter._gpu_partition_for
+    return _mk
+
+
+def test_gpu_ask_lands_on_a_partition_that_has_gpus(describe):
+    assert describe(CAPS)("cluster") == "g"
+
+
+def test_a_cpu_only_cluster_yields_no_partition(describe):
+    """Absent: the common shape. No GPU partition means placement must be left
+    exactly as it was, NOT forced to some arbitrary partition."""
+    caps = {"capabilities": {"scheduler": {"partitions": [
+        {"name": "c", "nodes": 18, "gres": []}]}}, "config": {}}
+    assert describe(caps)("cluster") is None
+
+
+def test_the_allowlist_is_never_widened(describe):
+    """A GPU partition the user did not permit must not be chosen for them."""
+    caps = {**CAPS, "config": {"policy": {"partitions_allowed": ["c"]}}}
+    assert describe(caps)("cluster") is None
+
+
+def test_the_roomiest_gpu_partition_wins(describe):
+    caps = {"capabilities": {"scheduler": {"partitions": [
+        {"name": "g-small", "nodes": 1, "gres": [{"type": "gpu", "count": 1}]},
+        {"name": "g-big", "nodes": 4, "gres": [{"type": "gpu", "count": 8}]},
+    ]}}, "config": {}}
+    assert describe(caps)("cluster") == "g-big"
+
+
+def test_a_site_that_cannot_describe_itself_is_not_fatal(monkeypatch):
+    """Placement is best-effort: an unreachable site must leave the job alone,
+    not raise on the submit path."""
+    from core.jobs import weft_submitter
+
+    class _A:
+        def sync_call(self, *a, **k):
+            raise RuntimeError("host down")
+    monkeypatch.setattr(weft_submitter, "_adapter", lambda: _A())
+    assert weft_submitter._gpu_partition_for("cluster") is None
+
+
+def test_non_gpu_gres_is_not_mistaken_for_a_gpu(describe):
+    """WIDE: a partition advertising some other gres (mps, fpga, licences) is
+    not a GPU partition."""
+    caps = {"capabilities": {"scheduler": {"partitions": [
+        {"name": "x", "nodes": 2, "gres": [{"type": "fpga", "count": 4}]},
+    ]}}, "config": {}}
+    assert describe(caps)("cluster") is None
+
+
+def test_every_gpu_resource_ask_also_sets_a_partition():
+    """A PROPERTY guard over the submit path, not an instance check.
+
+    The tests above exercise the chooser. Deleting the two lines that CALL it
+    left every one of them green while the live bug returned — the classic
+    "verified the output, not the forbidden action". Asking for a GPU without
+    naming a partition is the defect, wherever it is written, so assert it over
+    the file: each `resources["gpus"] = …` must be accompanied by a partition
+    assignment in the same block. A third submit lane added later is covered
+    without anyone remembering this test exists."""
+    import re
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "backend" / "core" / "jobs"
+           / "weft_submitter.py").read_text().splitlines()
+    asks = [i for i, ln in enumerate(src) if re.match(r'\s*resources\["gpus"\]\s*=', ln)]
+    assert asks, ("PRECONDITION: no `resources[\"gpus\"] =` found at all — this "
+                  "test is reading the wrong file and proves nothing")
+    for i in asks:
+        window = "\n".join(src[i:i + 6])
+        assert 'resources["partition"]' in window, (
+            f"{'weft_submitter.py'}:{i + 1} asks Slurm for a GPU but never names a "
+            f"partition. weft then defaults to partitions_allowed[0], which on a "
+            f"mixed cluster is the CPU partition, and the job is refused with "
+            f"'Requested node configuration is not available'.\n"
+            + window)
