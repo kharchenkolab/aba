@@ -541,11 +541,21 @@ def wf_slurm_batch(pid, tid, site):
     jobs = jobs if isinstance(jobs, list) else jobs.get("jobs", [])
     mine = [j for j in jobs if (j.get("params") or {}).get("project_id") == pid]
     tracked = [n for n, _s, _k in tracked_outputs(pid)]
+    # "terminal" is not "worked". A job the scheduler REFUSED
+    # (sched.rejected — e.g. no sbatch on PATH in the container) is terminal,
+    # so this lane reported two green checks over a job that never reached the
+    # scheduler at all; only the output check dissented. Assert the outcome,
+    # and name the failure so the next reader does not have to open a log.
+    bad = [j for j in mine
+           if str(j.get("status")) in ("failed", "error", "rejected", "cancelled")]
+    why = "; ".join(str((j.get("error") or j.get("detail") or ""))[:90] for j in bad)
     return cap, [
         ("turn completed", not cap["errors"]),
         ("a background job was created", bool(mine)),
         ("the job reached a terminal state (not stuck queued)",
          all(str(j.get("status")) not in ("queued", "running") for j in mine) if mine else False),
+        (f"the job SUCCEEDED on the scheduler (not merely terminal){': ' + why if why else ''}",
+         bool(mine) and not bad),
         ("the batch output is TRACKED", any("batch_result" in n for n in tracked)),
     ]
 
@@ -1053,6 +1063,11 @@ def main():
                     help="N projects at once against --site, then audit for "
                          "misfiled records")
     a = ap.parse_args()
+    # BEFORE the first request: the health check below is the first call, and
+    # applying --base after it meant every run targeted the default port and
+    # died "Connection refused" against a server that was up on another one.
+    if a.base:
+        globals()["BASE"] = a.base.rstrip("/")
     only = {s for s in a.only.split(",") if s}
     known = {n for n, _ in SCENARIOS}
     if only - known:
@@ -1068,8 +1083,6 @@ def main():
     if a.site not in names:
         sys.exit(f"site {a.site!r} is not registered")
 
-    if a.base:
-        globals()["BASE"] = a.base.rstrip("/")
     if a.concurrent or a.cross_project:
         # Concurrency lanes are opt-in and run ALONE: mixing them with the
         # sequential scenarios would make any misfiled record ambiguous about
