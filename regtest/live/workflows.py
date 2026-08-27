@@ -840,10 +840,35 @@ def wf_gpu_recognised(pid, tid, site):
         # on 2026-08-27 (placement sent GPU jobs to a CPU partition; a project
         # env pointer silently displaced the CUDA pack), and either failure
         # alone leaves the other assertion green.
-        (f"the job actually RAN on a GPU (device in its output)",
-         any("cuda" in str(r).lower() or "nvidia" in str(r).lower()
-             for r in tool_results(pid, tid))),
+        # Substring-matching "cuda"/"nvidia" over the tool results PASSED on a
+        # job that ran on the CPU partition with no --gres at all (production,
+        # 2026-08-27): the words appear when the job REPORTS it found no GPU,
+        # and in any code the agent wrote. A check that a GPU was used cannot be
+        # satisfied by prose saying the opposite. Two conditions now, and the
+        # first is the ask itself — this assertion can no longer be green while
+        # the one above it is red, which is the contradiction that exposed it.
+        ("the job actually RAN on a GPU (asked, and a device reports back)",
+         bool(asked_gpu) and any(
+             _gpu_device_seen(str(r)) for r in tool_results(pid, tid))),
     ]
+
+
+def _gpu_device_seen(text: str) -> bool:
+    """Did a GPU actually report for duty in this output?
+
+    NOT a substring test for "cuda". That matched `torch.cuda.is_available() ->
+    False`, and any source line the agent happened to write, so it certified a
+    CPU run. Require a POSITIVE device signature, and explicitly reject the
+    phrases a job emits when it looked for a GPU and found none."""
+    low = text.lower()
+    denies = ("is_available() -> false", "is_available(): false",
+              "available: false", "available=false", "no gpu", "no cuda",
+              "cpu only", "cuda not available", "falling back to cpu")
+    if any(d in low for d in denies):
+        return False
+    import re as _re
+    # a real device names itself: "NVIDIA B200", "cuda:0", "device: cuda"
+    return bool(_re.search(r"nvidia\s+[a-z]?\d{2,}|cuda:\d|device[:=]\s*cuda\b", low))
 
 
 def _site_row(site: str) -> dict | None:

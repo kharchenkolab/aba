@@ -215,3 +215,35 @@ def test_every_gpu_resource_ask_also_sets_a_partition():
             f"mixed cluster is the CPU partition, and the job is refused with "
             f"'Requested node configuration is not available'.\n"
             + window)
+
+
+def test_gpu_device_detector_rejects_a_cpu_run_that_mentions_cuda():
+    """The false green this replaces: substring-matching "cuda" certified a job
+    that ran on the CPU partition with no --gres, because the job's own output
+    said it could not find a GPU — using the word "cuda" to say so."""
+    import importlib.util
+    import sys as _s
+    from pathlib import Path
+    wf = Path(__file__).resolve().parents[1] / "regtest" / "live" / "workflows.py"
+    spec = importlib.util.spec_from_file_location("_wf3", wf)
+    mod = importlib.util.module_from_spec(spec)
+    _s.modules["_wf3"] = mod
+    spec.loader.exec_module(mod)
+    seen = mod._gpu_device_seen
+
+    # the exact shapes that used to pass
+    for cpu_text in (
+        "torch.cuda.is_available() -> False",
+        "cuda available: false, running on cpu",
+        "No CUDA devices found; falling back to CPU",
+        "import torch; torch.cuda.set_device(0)",      # source code, not a result
+    ):
+        assert not seen(cpu_text), f"CPU run certified as GPU: {cpu_text!r}"
+
+    # and what a real GPU run looks like
+    for gpu_text in (
+        "device: NVIDIA B200",
+        "running on cuda:0",
+        "device=cuda, matmul finished in 0.4s",
+    ):
+        assert seen(gpu_text), f"real GPU run not recognised: {gpu_text!r}"
