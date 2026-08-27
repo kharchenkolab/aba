@@ -554,8 +554,13 @@ def wf_slurm_batch(pid, tid, site):
         ("a background job was created", bool(mine)),
         ("the job reached a terminal state (not stuck queued)",
          all(str(j.get("status")) not in ("queued", "running") for j in mine) if mine else False),
+        # `not bad` alone is TRUE of a job still sitting in the queue — which is
+        # how this line reported a green "SUCCEEDED on the scheduler" over a job
+        # that had not run at all (2026-08-27, a backed-up partition). A success
+        # claim must require the job to have REACHED a terminal state first.
         (f"the job SUCCEEDED on the scheduler (not merely terminal){': ' + why if why else ''}",
-         bool(mine) and not bad),
+         bool(mine) and not bad
+         and all(str(j.get("status")) not in ("queued", "running") for j in mine)),
         ("the batch output is TRACKED", any("batch_result" in n for n in tracked)),
     ]
 
