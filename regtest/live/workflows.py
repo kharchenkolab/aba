@@ -481,6 +481,8 @@ GROUPS: dict[str, list[str]] = {
     "smoke": ["wf_first_minutes"],
     "critical": [
         "wf_first_minutes",
+        "wf_cpu_on_gpu_cluster_says_so",   # the silent-CPU class
+        "wf_bare_filename_explains_itself",  # the lost-handoff class
         "wf_session_smoke",          # ordinary work; asserts NOTHING went red
         "wf_produce_view_track",     # foreground exec -> artifact -> tracked
         "wf_cross_language_handoff",  # python <-> R in one project
@@ -878,6 +880,117 @@ def _site_row(site: str) -> dict | None:
         if r.get("name") == site:
             return r
     return None
+
+
+@scenario("wf_cpu_on_gpu_cluster_says_so")
+def wf_cpu_on_gpu_cluster_says_so(pid, tid, site):
+    """A job that used CPU where GPUs exist must SAY so.
+
+    THE SILENCE THIS GUARDS (2026-08-27). Asked for a training job, the agent did
+    not set est_gpu, the job landed on a CPU partition, trained slowly, and
+    reported plain success. Nothing was wrong from the platform's point of view —
+    asked matched got — so no placement check could see it, and the user was left
+    to wonder why "the GPU didn't work". `runner._accelerator_note` now says it
+    out loud, into log_tail (what the Jobs card shows and the agent reads back).
+    That note had unit coverage and no lane: nothing ever drove a real job into
+    the condition.
+
+    The prompt asks for CPU deliberately. That is the PRECONDITION, not the thing
+    under test — the assertion is that the platform VOLUNTEERS the explanation.
+    Naming a GPU here would test obedience instead."""
+    # "import torch" spelled out: the note keys on torch being in sys.modules,
+    # and an agent asked for a matrix multiply will reasonably reach for numpy —
+    # in which case the note is CORRECTLY silent and the run proves nothing. The
+    # library is the precondition; the volunteered explanation is the subject.
+    cap = drive(pid, tid,
+        f"As a BACKGROUND job on '{site}': using PyTorch (import torch), "
+        f"multiply two 2000x2000 tensors and print how long it took. Run it on "
+        f"the CPU — no accelerator needed for this one.")
+    _wait_jobs_settled(pid, timeout_s=900)
+    jobs = api("GET", "/api/jobs")
+    jobs = jobs if isinstance(jobs, list) else jobs.get("jobs", [])
+    mine = [j for j in jobs if (j.get("params") or {}).get("project_id") == pid]
+    asked_gpu = [j for j in mine
+                 if ((j.get("params") or {}).get("estimate") or {}).get("gpu")]
+    tails = " ".join(str(j.get("log_tail") or "") for j in mine)
+
+    # ARMED, three ways. The note fires only when GPUs exist, the job did NOT
+    # ask for one, and torch actually ran. Any of those missing makes the run
+    # unable to observe the note at all — which must read as "measured nothing",
+    # never as "the note is fine".
+    caps = (_site_row(site) or {}).get("capabilities") or {}
+    gpu_parts = [p_ for p_ in ((caps.get("scheduler") or {}).get("partitions") or [])
+                 if any(g.get("type") == "gpu" for g in (p_.get("gres") or []))]
+    if not gpu_parts:
+        return cap, [(f"PRECONDITION: '{site}' has GPU partitions — none found, so "
+                      f"there is nothing for the note to point at", False)]
+    if not mine:
+        return cap, [("PRECONDITION: a background job was created", False)]
+    if asked_gpu:
+        return cap, [(f"PRECONDITION: the job did NOT ask for a GPU — it asked, so "
+                      f"the note is correctly silent and this run measured nothing",
+                      False)]
+    # …and torch must actually have been imported. The sentinel reads
+    # sys.modules['torch']; a numpy solution leaves it empty and the note is
+    # right to stay quiet. Without this the lane blames the platform for the
+    # agent's library choice — which is what it did on its first run.
+    used_torch = "torch" in tails.lower() or any(
+        "torch" in str(r).lower() for r in tool_results(pid, tid))
+    if not used_torch:
+        return cap, [("PRECONDITION: the job actually used torch — no sign of it, "
+                      "so the CPU-accelerator note cannot fire and this run "
+                      "measured nothing", False)]
+    return cap, [
+        ("turn completed", not cap["errors"]),
+        ("the job SUCCEEDED", not [j for j in mine if str(j.get("status"))
+                                   in ("failed", "error", "rejected", "cancelled")]),
+        ("the platform VOLUNTEERED that it ran on CPU where GPUs exist",
+         "used PyTorch on CPU" in tails or "did not request an accelerator" in tails),
+        ("...and said how to get a GPU next time", "est_gpu" in tails),
+    ]
+
+
+@scenario("wf_bare_filename_explains_itself")
+def wf_bare_filename_explains_itself(pid, tid, site):
+    """A file made in an interactive step, then used by name in a background job.
+
+    THE TRAP. The interactive kernel's sandbox is not visible to a compute node,
+    so a bare `data.csv` that worked a moment ago is simply absent — and the job
+    fails with a naked FileNotFoundError that explains nothing. `_handoff_hint`
+    now names the cause and points at DATA_DIR.
+
+    Either outcome is acceptable and the lane accepts both: the job WORKS
+    (because the shared directory carried the file), or it fails with an
+    explanation. Silence is the only failure. The prompt never mentions DATA_DIR
+    — being told the mechanism is exactly what a real user does not get."""
+    c1 = drive(pid, tid,
+        "In Python, write a small CSV called handoff.csv with 50 rows of two "
+        "numeric columns. Tell me the row count.")
+    c2 = drive(pid, tid,
+        f"Now, as a BACKGROUND job on '{site}', read handoff.csv and write the "
+        f"column means to handoff_means.csv.")
+    _wait_jobs_settled(pid, timeout_s=900)
+    jobs = api("GET", "/api/jobs")
+    jobs = jobs if isinstance(jobs, list) else jobs.get("jobs", [])
+    mine = [j for j in jobs if (j.get("params") or {}).get("project_id") == pid]
+    tails = " ".join(str(j.get("log_tail") or "") for j in mine)
+    failed = [j for j in mine if str(j.get("status")) in ("failed", "error")]
+    tracked = [n for n, _s, _k in tracked_outputs(pid)]
+    explained = ("was not found here" in tails
+                 or "DATA_DIR" in tails
+                 or "session's sandbox" in tails)
+
+    if not mine:
+        return [c1, c2], [("PRECONDITION: a background job was created", False)]
+    return [c1, c2], [
+        ("both turns completed", not c1["errors"] and not c2["errors"]),
+        # The contract: it worked, or it explained. Never a bare traceback.
+        ("the handoff either WORKED or EXPLAINED ITSELF"
+         + (f" (failed, explained={explained})" if failed else " (worked)"),
+         (not failed and any("handoff_means" in n for n in tracked)) or explained),
+        ("no naked FileNotFoundError with no explanation",
+         not ("FileNotFoundError" in tails and not explained)),
+    ]
 
 
 @scenario("wf_state_persists_then_recovers")

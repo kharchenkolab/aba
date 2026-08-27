@@ -89,3 +89,34 @@ def test_an_unreachable_site_does_not_break_the_job(monkeypatch):
     monkeypatch.setattr(weft_submitter, "_gpu_partition_for", boom)
     assert _accelerator_note({"site": "cluster", "estimate": {}},
                              {"accelerator": "torch:cuda=0"}) is None
+
+
+# ── the gap between the two sides ───────────────────────────────────────────
+#
+# The note's logic was tested. The node's measurement was tested. Nothing tested
+# that the measurement REACHES the note, and it did not: WeftSubmitter.poll
+# builds its result from a whitelist of keys, `accelerator` was not among them,
+# and every detached job arrived at the finaliser with the field missing. The
+# note could not fire for any cluster job — the only jobs it exists for.
+
+def test_poll_carries_the_node_s_accelerator_reading_to_the_finaliser():
+    """A PROPERTY over the whitelist, not a call: whatever the node measures and
+    the finaliser consumes must appear in the dict that connects them."""
+    import re
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1] / "backend" / "core" / "jobs"
+
+    node_writes = "accelerator" in (root / "detached_entry.py").read_text()
+    note_reads = 'result_obj.get("accelerator")' in (root / "runner.py").read_text()
+    assert node_writes and note_reads, (
+        "PRECONDITION: this test connects detached_entry (writer) to "
+        "runner._accelerator_note (reader); one of them no longer uses the field")
+
+    src = (root / "weft_submitter.py").read_text()
+    m = re.search(r'res = \{"status": node\.get.*?\n\n', src, re.S)
+    assert m, "could not locate poll()'s result assembly"
+    assert 'node.get("accelerator")' in m.group(0) or \
+           'node["accelerator"]' in m.group(0), (
+        "poll() drops the node's `accelerator` reading. The note keys on it, so "
+        "the CPU-on-a-GPU-cluster warning cannot fire for ANY detached job — "
+        "which is every cluster job.")

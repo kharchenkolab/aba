@@ -1143,6 +1143,16 @@ class WeftSubmitter:
                "returncode": node.get("returncode", 0),
                "stdout": node.get("stdout_tail") or "",
                "stderr": ""}
+        # The node MEASURED whether the payload used torch and found no CUDA
+        # (detached_entry writes `accelerator` into result.json). This dict is a
+        # whitelist, so anything not named here is dropped on the floor between
+        # the node and the finaliser — which is what happened to `accelerator`:
+        # runner._accelerator_note keys on it, never saw it, and the
+        # "you got a CPU where GPUs exist" note could not fire for ANY detached
+        # job. Unit tests covered the note's logic and the node's measurement,
+        # one on each side of the gap; only a live lane could see it.
+        if node.get("accelerator"):
+            res["accelerator"] = node["accelerator"]
         if node.get("status") == "error":
             res["error"] = node.get("error") or "job failed on the node"
         elif fetched:
