@@ -322,6 +322,14 @@ are sized by design (their timeout IS the chosen head walltime). Tests:
 
 ## Known gaps
 
+- **A remote kernel outlives the instance that asked for it.** A `kernel_start` on a
+  scheduler site submits a job that may queue for hours; nothing cancels it when the
+  owning server exits, so it starts against a session that no longer exists and holds its
+  allocation to the walltime. Observed: two kernel jobs queued ~4.5 h, started ~4 h after
+  the last instance had gone, and burned their full 8 h limit idle. Neither the controller
+  (which is gone) nor the job (which cannot see it) is positioned to reap this; the
+  natural owner is a submit-time dead-man check or a reaper keyed on controller liveness.
+
 - **weft-side local-orphan liveness (misc/bug3_weft_local_orphan.md).** A local-lane task
   whose controller dies stays RUNNING in weft's own `state.db` forever (disk truth —
   `exit_code`, log — is never re-checked). aba's stamp+finalize mitigation keeps aba's rows

@@ -64,6 +64,17 @@ becomes the one people trust, because it is the one that is green.
   deployment's tool catalog was empty and no lane had executed anything at all. A run in
   which nothing happened must say *that*, not answer the question it was asked. The
   concurrency lane now fails on the precondition and reports nothing else.
+- **A deployment harness must LAUNCH the deployment, never re-implement its launch.**
+  `verify.sh` boots the staged image with the same `apptainer run --containall` the OOD
+  card uses, and drives it over HTTP — that is the only faithful way to ask "what does
+  real ABA do?". Hand-rolled `apptainer exec` invocations written to "just test one
+  thing" got the binds wrong every time (`/dev/fuse` absent so squashfs envs would not
+  mount; `HOME` on the container's 64 MB tmpfs so the solver died "No space left on
+  device"; `PIXI_CACHE_DIR` on a parallel filesystem where rattler's cache locking
+  breaks) — and each failure was read as a product defect before it was recognised as
+  the harness's. The corollary is that the card and the gate are two consumers of ONE
+  launch contract: where they diverge, the gate tests a configuration production never
+  runs. They diverge today (see Known gaps).
 - **Don't push a question to a cheaper layer than can answer it.** A hermetic test of a
   remote code path proves only that the fake agreed with you.
 - **Mechanism truth and surface truth are separate claims.** The sweep once verified
@@ -138,10 +149,30 @@ Each is a live-agent study in the same style, differing in what it stresses:
 | `harness/env_check.py` | the env-promotion chain against a deployed backend, no LLM, no HTTP |
 | `harness/replay.py` | in-process replay of the real turn flow for output-serving/durability work |
 | `harness/concurrency.py` | did concurrent lanes actually OVERLAP (parallelism, max-in-flight)? The axis `--concurrent` was missing: it only checked that lanes don't corrupt each other, which strictly-serialized lanes also satisfy |
+| `harness/install_stall.py` | **asymmetric** contention: one thread installing for minutes vs another wanting three lines of Python. Runs INSIDE the release image, because the install verb ABA uses exists only in the pinned weft — a developer checkout silently takes a different code path and reports "not reproduced". Times the `run_python` prologue phase by phase, so the answer is WHICH phase blocked |
 | `harness/dispatch_latency.py` | **dispatch-stall screen**: which tool calls WAITED rather than worked (`queue_wait_ms` vs body time, plus the executor backlog). Read-only, no LLM — run after any session, live or manual |
 | `harness/project_isolation.py` | **cross-project** audit: every recorded row belongs to a thread of the project holding it. Read-only, no LLM — run after any concurrent or multi-project live run |
 | `live/workflows.py --concurrent N` | N threads in ONE project against one node at once |
 | `live/workflows.py --cross-project N` | N projects at once, project creation staggered to land mid-flight, then the isolation audit |
+
+### the deployment gate — the staged image, launched as the card launches it
+
+`aba-vbc/verify.sh` is the only harness that runs the artifact production will run. It
+boots the staged SIF headlessly on a random port and drives it over HTTP:
+
+    ./deploy.sh verify                     boot tier — the image starts against this config
+    ./deploy.sh verify --full              + live_surface_probe (real agent turns) + live_audit
+    ./deploy.sh verify --install           + live_install_probe (the science gate)
+    ./deploy.sh verify --lanes wf_slurm_batch,wf_cross_language_handoff
+                                           + workflow lanes against THAT server
+
+`--lanes` passes `--base <the gate's URL>` to `regtest/live/workflows.py`, so the
+workflow scenarios run against the deployment rather than a personal install. Use it for
+anything that needs the real substrate wiring — scheduler offload, GPU routing, reference
+acquisition. A lane that needs a site takes `LANE_SITE=<name>` (default `cluster`).
+
+Promote is gated on this: `deploy.sh promote` refuses without a `.verified` stamp, and
+records which tier wrote it, because a boot-tier stamp asserts nothing about surfaces.
 
 ### diagnosis
 `harness/forensic.py` reads a failed run's preserved bundle (intent, actions, exact API
@@ -192,6 +223,13 @@ OUTCOME the user wants, and let the platform's guidance be what is under test.
   additional — assertions that read *substrate* state (weft kernel-death events) or
   *tool-result prose* (the untracked-write warning) — belongs as new `expect:` vocabulary
   in SCHEMA.md, not as a parallel runner. Prefer the scenario mechanism for anything new.
+- **The gate's launch is not the card's launch.** `script.sh.erb` forwards the module
+  environment from `site.yaml` (`ABA_MODULE_INIT`, `ABA_MODULE_BINDS`, `ABA_MODULE_LIBS`)
+  and `jobs.submitter`; `verify.sh` forwards none of it. So the gate's container cannot
+  reach the scheduler client, and `--lanes wf_slurm_batch` fails with
+  `sbatch: command not found` against a deployment where the same job succeeds. Until the
+  two share one launch contract, the gate cannot test scheduler offload, GPU submission,
+  or anything else that depends on site-provided tooling.
 - **No CI tier runs the scenario sweep**, by design (cost). Behavioural regressions are
   caught on a schedule, not per-PR.
 - **The concurrency lanes are opt-in and unscheduled.** `--concurrent` /

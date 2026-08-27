@@ -295,6 +295,26 @@ credential/access scope.
 | `install/linux/setup.sh` · `install/…/templates/aba.template` | installer `write_cfg` → `config.env`; the launcher sources it into the backend env |
 | `install/` (`core`,`mac`,`linux`,`ood`,`sif`) | the install-type shells — **procedures owned by `docs/install/`** |
 
+## Publishing packs and promoting
+
+`deploy.sh` owns three operations on a target (`--target stage|prod`, `$SHARE` is the
+only difference between them):
+
+- `publish-packs --packs <names>` — builds env packs **into that target's store** and
+  re-renders the card's version line. The invocation is code, not a comment: it needs
+  `--bind /dev/fuse` (weft mounts squashfs), a bound `HOME` (apptainer refuses
+  `--env HOME`, so the solver would write to a 64 MB tmpfs), and `PIXI_CACHE_DIR` on
+  node-local storage (rattler's cache locking breaks on parallel filesystems).
+- `verify [--full] [--install] [--lanes …]` — boots the staged image as the OOD card does
+  and drives it; writes the `.verified` stamp promote requires, recording its tier.
+- `promote` — moves the app, then flips pack pointers, gated by
+  `scripts/check_pack_pins.py` (every DECLARED pack resolves to a published version;
+  rc=2 is not overridable, rc=1 is an operator judgement call).
+
+The card's version line is a **snapshot** taken when the card is written, so publishing a
+pack after a promote leaves it advertising versions that no longer exist; `publish-packs`
+re-renders it for that reason.
+
 ## Known gaps
 
 - **Real identity / multi-user enforcement is deferred.** `human_actor` hardcodes `"local"`;

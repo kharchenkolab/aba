@@ -170,6 +170,32 @@ python; else the default → `base_env.require("python")` + the session **runtim
 (`project_env.runtime()` → `argv_for_runtime`, topology-blind). The best-effort env
 fingerprint is skipped (never faked) when no direct interpreter path exists.
 
+## The published pack store
+
+One store per installation, shared by every deployment that reads it
+(`envs.publish_tree` in `site.yaml`). It holds content-addressed `image.sqfs` packs
+keyed by EnvID, plus `catalog.json` mapping `name → {latest, versions}` and `locks/`.
+Consumers **adopt** by name (`seeding.adopt_env_id` → `env_adopt`), never solve.
+
+**A published pack must be BUILT in the tree it will serve from.** A squashfs pack bakes
+its own absolute prefix, so a copy carries the source tree's paths and activates only
+there — `CONDA_PREFIX` points into a directory that does not exist, activation
+half-fails, and every kernel dies with exit 127. EnvID equality does **not** certify a
+copy: identity comes from the solved lock, the prefix from the build location.
+`deploy.sh publish-packs --target <t> --packs <names>` builds in place; nothing copies.
+The blast radius is wider than one deployment, because a site's `ro_roots` may list more
+than one tree and adoption resolves an EnvID across **all** of them — a bad copy in one
+tree is found first by consumers of the other.
+
+**Which version a deployment runs is a pin, not a race.** `site.yaml`'s `envs.pin`
+(`{pack: version}`, read by `seeding.pack_pin`) is passed to `env_adopt(version=…)`;
+absent, a pack takes `latest`. One store plus per-deployment pins is what lets staging
+ride `latest` while production names the version staging proved — promotion is then a
+config diff, and publishing a pack cannot move a deployment that did not ask for it.
+`scripts/check_pack_pins.py` gates promote on it: every pack the deployment DECLARES
+(`scripts/required_packs.py` — base per language plus `jobs.gpu_env_pack`) must resolve
+to a published version, and an empty declared set fails rather than passing vacuously.
+
 ## Platform membership (multi-site envs)
 
 An env lock's **platform set is part of its identity**: adding a platform yields a **new**

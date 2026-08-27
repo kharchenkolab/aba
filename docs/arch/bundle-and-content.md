@@ -50,6 +50,20 @@ resolve_scopes()          load_bundle()                 content/bio projects it
   lands) → `lab` (group-shared) → `user` (`~/.aba/bundle`). The module is
   **scope-count-agnostic** (`scope_resolver.py:9`): new scopes are appended, no other code
   changes shape.
+- **The installation bundle is ASSEMBLED by whatever installs the deployment, and it is
+  complete.** A personal install's `~/.aba/installation` carries the base env specs, the
+  derived GPU spec, catalog and knowhow together, written by the installer. A share-based
+  deployment gets the same shape from `deploy.sh` (`scripts/assemble_installation.py`):
+  the image's `/opt/aba/installation` content first, the site's own `config/installation`
+  overlaid on top, rebuilt from scratch each stage/promote so a removed file upstream
+  disappears here too. Staging and production run that same path; only `$SHARE` differs.
+  **The image ships content, never the path** — it must not export
+  `ABA_INSTITUTION_BUNDLE`, because an env var set inside `%environment` outranks
+  `site.yaml` and is read before it, which silently pins the institution scope to the
+  image and makes everything staged to the share inert. `deploy.sh selfcheck` asserts
+  the resolved scope IS `$SHARE/installation`, that the image bakes no override, and that
+  the share's copies of the image's specs match it by hash (a rebuilt image without a
+  re-stage would otherwise serve specs older than the code reading them).
 - **`EffectiveBundle`** (`core/bundle/loader.py:94`) — the composed result: `policy_text`,
   `required_rules` + `overrideable_rules`, `skills`, `catalog` + `r_base_specs` +
   `collection_dirs`, `refsources`, `settings`, and a `Provenance` recording *which scope
