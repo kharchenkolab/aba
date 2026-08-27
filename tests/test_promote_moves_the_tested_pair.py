@@ -26,43 +26,71 @@ def _deploy() -> str:
     return (VBC / "deploy.sh").read_text()
 
 
-def test_promote_checks_pack_parity_before_moving_bytes():
+def test_promote_runs_the_pack_gate_before_moving_bytes():
+    """The gate must run before the app is copied, whatever the gate IS.
+
+    Anchored on the CALL SITE, not on a function name or a byte window: the
+    gate has already been rewritten once (two published trees -> one store
+    with per-deployment pins) and the three assertions here that named
+    `check_pack_parity` all broke, hiding whether promote still checked
+    anything at all."""
     s = _deploy()
-    assert "check_pack_parity" in s
     body = s[s.index("do_promote() {"):]
     body = body[:body.index("\n}\n")]
-    assert "check_pack_parity" in body, "promote does not run the check"
-    # and it must run BEFORE any bytes move
-    assert body.index("check_pack_parity") < body.index('install -d "$APP_ROOT"'), (
-        "the parity check runs after the promote has already copied")
+    gates = [g for g in ("check_pack_pins", "check_pack_parity") if g in body]
+    assert gates, "promote runs NO pack gate at all"
+    first = min(body.index(g) for g in gates)
+    assert first < body.index('install -d "$APP_ROOT"'), (
+        "the pack gate runs after the promote has already copied bytes")
 
 
-def test_the_refusal_is_fail_closed():
-    """A warning that scrolls past is how this shipped for a day.
-
-    TWO refusal tiers, and the distinction is load-bearing:
-      rc=2  the promote CANNOT complete (the pointer flip has no tool). Never
-            overridable — forcing past it lands the half-applied state.
-      rc=1  the packs differ. A judgement call an operator may override.
+def test_both_refusal_tiers_survive_in_promote():
+    """TWO tiers, and the distinction is load-bearing:
+         rc=2  the promote CANNOT complete — never overridable, because
+               forcing past it lands the half-applied state.
+         rc=1  a judgement call an operator may override with --yes.
     """
     s = _deploy()
-    blk = s[s.index("check_pack_parity \"$STAGE_SHARE/envs\""):]
-    blk = blk[:blk.index("local vstamp")]
+    body = s[s.index("do_promote() {"):]
+    body = body[:body.index("\n}\n")]
+    blk = body[body.index("_pp=$?"):body.index("local vstamp")]
     assert '"$_pp" = 2' in blk and "die " in blk, (
         f"pre-flight failure must die unconditionally: {blk}")
-    # and the overridable tier still dies without --yes
     assert "ASSUME_YES" in blk and blk.count("die ") >= 2, blk
 
 
 def test_the_unoverridable_tier_is_not_gated_on_yes():
     """`--yes` skips CONFIRMATIONS. It must not skip a pre-flight that says the
-    next step cannot run — it did, and walked into the broken state."""
+    next step cannot run — it did once, and walked into the broken state."""
     s = _deploy()
-    blk = s[s.index("check_pack_parity \"$STAGE_SHARE/envs\""):]
-    blk = blk[:blk.index("local vstamp")]
+    body = s[s.index("do_promote() {"):]
+    blk = body[body.index("_pp=$?"):body.index("local vstamp")]
     hard = blk[blk.index('"$_pp" = 2'):]
     hard = hard[:hard.index("\n")]
     assert "ASSUME_YES" not in hard, hard
+
+
+def test_the_gate_logic_itself_is_tested_behaviourally():
+    """The bash is a doorway; the decisions live in python so they can be
+    driven directly. Every gate that mattered on 2026-08-27 was a source-grep
+    over deploy.sh, which is why none of them fired."""
+    assert (REPO / "scripts" / "check_pack_pins.py").exists()
+    assert (REPO / "tests" / "test_promote_pin_gate.py").exists()
+
+
+def test_a_pack_is_never_copied_between_trees():
+    """A squashfs pack bakes its own absolute prefix, so a copy activates only
+    at the path it was built for. Copies carrying staging paths killed every
+    session in production AND — via the shared ro_roots, where adoption
+    resolves an EnvID across all roots — in staging too. The publish verb must
+    BUILD in the destination."""
+    s = _deploy()
+    body = s[s.index("do_publish_packs() {"):]
+    body = body[:body.index("\n}\n")]
+    assert "--from-tree" not in body, (
+        "publish-packs mirrors from another tree — that is the copy that "
+        "produced an image which only activates at the source path")
+    assert '--tree "$ENVS"' in body
 
 
 def test_the_refusal_names_the_fix_and_the_ORDERING():
