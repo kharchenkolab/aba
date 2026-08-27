@@ -348,3 +348,19 @@ the armed preflight working; run with `--exclude` for a measured 11.
   regen "FAIL" is a wrapper misread: its generator only verifies remote availability (empty `data/`
   is its design — declared inputs are fetched at run time), so `_regen_all.sh`'s completeness check
   misclassifies it every cycle.
+
+## 2026-08-27 fix-verification rerun (reproduce_expr + cheminformatics, live agent)
+Post-fix live confirmation of the rel-shadowing / machinery-advertising class:
+- **`cheminformatics` no longer fails `empty_bytes:blocks/0001.err`** — deterministic 2/2 since
+  2026-08-13, gone on the fixed checkout (13/14; its one miss is a step-4 phrasing-mention check,
+  agent variance). **`reproduce_expr` passes s7 + run-file surfaces** (8/9) — the s7 prompt now
+  states the figure outcome it asserts (this cycle's spec fix), and the panel/door agree on run
+  files. Verified three ways: red-proven guards; a live turn on a fresh isolated install whose
+  REAL jobdir carried `blocks/` + scaffolding while the panel listed only the two real outputs;
+  and the scenario rerun above.
+- **[LOW, product — OPEN] by-reference dataset download can 404 while its artifact copy exists** —
+  new, surfaced by this rerun's agent choosing to register a dataset (baseline runs didn't):
+  `/api/entities/<dat>/download → 404 "artifact file is missing on disk"` for an active
+  by-reference dataset (`ref_path` recorded, `artifact_path` present in the bundle post-hoc).
+  Distinct door (entity download), untouched by the shadowing fix; needs its own look at how the
+  download route resolves by-reference datasets before falling back to the artifacts cache.
