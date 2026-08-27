@@ -439,6 +439,44 @@ def _write_exec_record_for_job(job: dict, result_obj: dict,
         _record_worker_failure("exec_record", job.get("id"), e)
 
 
+def _accelerator_note(params: dict, result_obj: dict) -> str | None:
+    """"You got a CPU" — said out loud, when it plausibly wasn't wanted.
+
+    THE SILENCE THIS BREAKS. 2026-08-27: asked for a training job, the agent did
+    not set est_gpu, the job landed on a CPU partition, trained slowly, and
+    reported plain success. Nothing was wrong from the platform's point of view
+    — asked matched got — so no placement check could see it, and the user had
+    no way to learn why the answer took so long. A wrong answer that announces
+    itself is recoverable; a slow one that doesn't is not.
+
+    Deliberately narrow, because a note that cries wolf gets ignored:
+      * only when the payload ACTUALLY used torch and found no CUDA (measured by
+        the job wrapper, not guessed from the code text);
+      * only when the job did not ask for a GPU — if it asked and did not get
+        one, that is a placement failure and sbatch already refuses it loudly;
+      * only when the site really has GPU nodes. On a CPU-only cluster, running
+        on CPU is not a finding.
+    """
+    if str(result_obj.get("accelerator") or "") != "torch:cuda=0":
+        return None
+    if ((params.get("estimate") or {}).get("gpu")):
+        return None
+    site = params.get("site")
+    if not site or site == "local":
+        return None
+    try:
+        from core.jobs.weft_submitter import _gpu_partition_for
+        part = _gpu_partition_for(str(site))
+    except Exception:  # noqa: BLE001 — a note is never worth failing a job over
+        return None
+    if not part:
+        return None
+    return (f"NOTE: this job used PyTorch on CPU. Site '{site}' has GPU nodes "
+            f"(partition '{part}'), but the job did not request an accelerator, "
+            f"so it was placed on a CPU partition. To use a GPU, re-submit with "
+            f"est_gpu=true.")
+
+
 async def _finalize_job(job: dict, result_obj: dict, lookup_pid: str | None,
                         effective_pid: str) -> None:
     """Shared completion path for a finished background job — used by BOTH the
@@ -503,6 +541,12 @@ async def _finalize_job(job: dict, result_obj: dict, lookup_pid: str | None,
     stdout = result_obj.get("stdout", "")
     stderr = result_obj.get("stderr", "")
     log_tail = (stdout[-1500:] + ("\n" + stderr[-500:] if stderr else "")).strip()
+    _accel = _accelerator_note(params, result_obj)
+    if _accel:
+        # Into log_tail, which is what the Jobs card shows and what the agent
+        # reads back — not a side channel nobody opens.
+        log_tail = (log_tail + "\n\n" + _accel).strip()
+        print(f"[jobs] {job_id}: {_accel}", flush=True)
     try:
         _write_job_run_log(result_obj, stdout, stderr, job_id, effective_pid)
     except Exception:  # noqa: BLE001

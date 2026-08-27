@@ -58,10 +58,31 @@ def _snapshot() -> set:
 # controller's core.exec.run helpers; keep the sentinel NAME in sync).
 _SENTINEL = ".aba-final-cwd"
 _PY_PRO = "import os as _aba_os; _ABA_START_DIR = _aba_os.getcwd()\n"
+# Third sentinel line: ACCELERATOR AWARENESS.
+#
+# The silent failure this exists for: on 2026-08-27 an agent was asked for a
+# training job, did not set est_gpu, and the job ran on a CPU partition and
+# reported plain success. The user gets a slow answer and never learns why —
+# worse than a crash, because nothing prompts anyone to look. Asked matched
+# got, so no placement check could have caught it; the only thing that knew
+# better was the PAYLOAD, which imported torch and found no CUDA.
+#
+# So ask the payload, after the fact. `sys.modules.get` never imports anything,
+# so a job that does not use torch pays one dict lookup. Reporting only —
+# nothing here changes what the job did.
 _PY_EPI = ("\ntry:\n"
-           "    import os as _aba_os\n"
+           "    import os as _aba_os, sys as _aba_sys\n"
+           "    _aba_accel = ''\n"
+           "    _aba_t = _aba_sys.modules.get('torch')\n"
+           "    if _aba_t is not None:\n"
+           "        try:\n"
+           "            _aba_accel = ('torch:cuda=1' if _aba_t.cuda.is_available()\n"
+           "                          else 'torch:cuda=0')\n"
+           "        except Exception:\n"
+           "            _aba_accel = 'torch:cuda=?'\n"
            f"    with open(_aba_os.path.join(_ABA_START_DIR, {_SENTINEL!r}), 'w') as _aba_f:\n"
-           "        _aba_f.write(_ABA_START_DIR + '\\n' + _aba_os.getcwd())\n"
+           "        _aba_f.write(_ABA_START_DIR + '\\n' + _aba_os.getcwd()\n"
+           "                     + '\\n' + _aba_accel)\n"
            "except Exception:\n"
            "    pass\n")
 _R_PRO = ".aba_start_dir <- getwd()\n"
@@ -111,15 +132,20 @@ def _py_insert_after_future(body: str, pro: str) -> str:
 
 
 def _read_sentinel() -> tuple:
+    """-> (start_cwd, final_cwd, accel). `accel` is '' for the overwhelming
+    majority of jobs (no torch); a 2-line sentinel from an older wrapper still
+    reads correctly, which matters because a job submitted before an upgrade
+    finishes after it."""
     try:
         with open(_SENTINEL) as fh:
             lines = fh.read().splitlines()
         os.unlink(_SENTINEL)
         if len(lines) >= 2:
-            return lines[0].strip() or None, lines[1].strip() or None
+            accel = lines[2].strip() if len(lines) >= 3 else ""
+            return lines[0].strip() or None, lines[1].strip() or None, accel
     except OSError:
         pass
-    return None, None
+    return None, None, ""
 
 
 def _runtime_version(interp: str) -> str:
@@ -176,10 +202,15 @@ def main() -> int:
                             f"or use a sized background job)")
     except Exception as e:  # noqa: BLE001 — report, never swallow
         result.update(status="error", returncode=1, error=str(e)[:2000])
-    start_cwd, final_cwd = _read_sentinel()
+    start_cwd, final_cwd, accel = _read_sentinel()
     if final_cwd:
         result["start_cwd"] = start_cwd
         result["final_cwd"] = final_cwd
+    if accel:
+        # Recorded unconditionally; whether it is WORTH SAYING depends on facts
+        # this node does not have (does the site offer GPUs, did the job ask for
+        # one). The finaliser decides — see core/jobs/verdict.
+        result["accelerator"] = accel
     result["outputs"] = sorted(_snapshot() - before - {"result.json"}
                                - {"._aba_wrapped.py", "._aba_wrapped.R"})
     _write(result, t0)
