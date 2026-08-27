@@ -778,10 +778,23 @@ def wf_concurrent_threads_one_site(pid, tid, site, n=3):
     tids = [tid] + [api("POST", "/api/threads",
                         {"project_id": pid, "title": f"concurrent-{t}"}).get("id")
                     for t in tags[1:]]
-    results = _concurrent([
-        (lambda p=pid, t=tids[i], g=tags[i], v=(1000 + i):
-         _thread_body(p, t, site, g, v))
-        for i in range(n)])
+    # SPANS: when each lane actually started and finished. Every assertion
+    # below this point is about interference, and all of them are satisfied by
+    # lanes that ran strictly one after another — which is the complaint users
+    # keep making ("three threads, not progressing in parallel") and the one
+    # thing this lane could not see. Timing is the missing axis.
+    spans: dict = {}
+
+    def _timed(i):
+        def go(p=pid, t=tids[i], g=tags[i], v=(1000 + i)):
+            t0 = time.time()
+            try:
+                return _thread_body(p, t, site, g, v)
+            finally:
+                spans[i] = (t0, time.time())
+        return go
+
+    results = _concurrent([_timed(i) for i in range(n)])
 
     checks = []
     live = [r for r in results if not isinstance(r, Exception)]
@@ -824,6 +837,18 @@ def wf_concurrent_threads_one_site(pid, tid, site, n=3):
     # precondition above already established that each lane made some).
     checks.append(("each thread recorded its own tool calls",
                    all(per_thread.values())))
+
+    # DID THEY OVERLAP? Correctness under concurrency and concurrency itself
+    # are separate claims; this lane only ever made the first one.
+    from regtest.harness.concurrency import (overlap_report,
+                                             serialization_checks)
+    ordered = [spans[i] for i in sorted(spans)]
+    rep = overlap_report(ordered)
+    print(f"    concurrency: {rep}")
+    for i in sorted(spans):
+        a, b = spans[i]
+        print(f"      {tags[i]}: {b - a:7.1f}s  [{a:.1f} → {b:.1f}]")
+    checks.extend(serialization_checks(ordered))
     return {"text": "", "errors": []}, checks
 
 

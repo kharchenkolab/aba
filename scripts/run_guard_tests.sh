@@ -22,6 +22,7 @@ FILES=(
   # the PROPERTY guard for the dominant instrument defect
   tests/test_gates_are_armed.py
   tests/test_promote_moves_the_tested_pair.py
+  tests/test_concurrency_metric.py
   tests/test_frontend_bundle_builds.py
   # shared-agent-input guards (tool catalog / prompts / cache placement)
   tests/test_tool_conventions.py
