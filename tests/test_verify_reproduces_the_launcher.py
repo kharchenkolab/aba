@@ -27,12 +27,23 @@ pytestmark = pytest.mark.platform
 
 REPO = Path(__file__).resolve().parents[1]
 LAUNCHER = REPO / "install" / "ood" / "aba" / "template" / "script.sh.erb"
+# The forwarding itself moved into the contract both launchers source.
+CONTRACT = REPO / "install" / "ood" / "aba" / "template" / "aba_launch.sh"
 VERIFY = REPO.parent / "aba-vbc" / "verify.sh"
 
 
 def _env_assignments(text: str, var: str) -> "list[str]":
-    """Every `--env VAR=<value>` the script passes into the container."""
-    return re.findall(rf'--env\s+{var}="?([^"\s\\]+)"?', text)
+    """Every value the script gives VAR on its way into the container.
+
+    Two forms now, and both must be seen. verify.sh used to pass ABA_SHARE with
+    an explicit `--env`; it now `export`s it and lets the shared launch contract
+    (install/ood/aba/template/aba_launch.sh) forward it. A guard that still
+    matched only `--env` would find nothing, and "nothing" reads as a pass in a
+    loop over matches — the empty-subject-set failure, in the instrument that
+    exists to catch this exact regression. So: match both, and require at least
+    one, which the caller already asserts."""
+    return (re.findall(rf'--env\s+{var}="?([^"\s\\]+)"?', text)
+            + re.findall(rf'^\s*export\s+{var}="?([^"\s\\]+)"?', text, re.M))
 
 
 def test_verify_passes_the_release_root_as_share():
@@ -56,7 +67,7 @@ def test_the_launcher_is_the_reference_and_still_says_app():
     than let verify quietly diverge again."""
     if not LAUNCHER.exists():
         pytest.skip("launcher template not present")
-    text = LAUNCHER.read_text()
+    text = LAUNCHER.read_text() + "\n" + CONTRACT.read_text()
     assert "ABA_SHARE" in text, "the launcher must forward ABA_SHARE"
     # the launcher derives the release root; assert the concept is still there
     assert "release" in text.lower()

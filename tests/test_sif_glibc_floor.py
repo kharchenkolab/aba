@@ -104,13 +104,24 @@ def test_preflight_emits_module_config():
         assert "ABA_MODULE_" not in (tdp / "aba-env.sh").read_text()
 
 
+def _launch_text() -> str:
+    """The launch contract as one text, however it is split across files.
+
+    These assertions used to read script.sh.erb alone. The bind/env assembly now
+    lives in aba_launch.sh, which the card and the deployment gate both source —
+    so a guard pinned to the card would have gone on passing while reading a file
+    that no longer contained the thing it checks. Read both; assert on the union."""
+    tpl = ROOT / "install" / "ood" / "aba" / "template"
+    return "\n".join((tpl / f).read_text() for f in ("aba_launch.sh", "script.sh.erb"))
+
+
 def test_launch_forwards_nextflow_env():
     """script.sh.erb must FORWARD ABA_NEXTFLOW_* into the containall run. aba_preflight
     only EMITS them to aba-env.sh; without the forward the backend never sees
     ABA_NEXTFLOW_MODULE, so run_nextflow silently stays False (the live regression this
     guards — nf-core showed ✗ despite the config being present)."""
-    erb = (ROOT / "install" / "ood" / "aba" / "template" / "script.sh.erb").read_text()
-    assert "ABA_NEXTFLOW_MODULE" in erb, "script.sh.erb must forward ABA_NEXTFLOW_MODULE into apptainer run"
+    erb = _launch_text()
+    assert "ABA_NEXTFLOW_MODULE" in erb, "the launch contract must forward ABA_NEXTFLOW_MODULE into apptainer run"
 
 
 def _run_preflight_envsh(subscription_signin: str | None = None) -> str:
@@ -155,8 +166,8 @@ def test_launch_forwards_subscription_oauth():
     """script.sh.erb must FORWARD ABA_SUBSCRIPTION_OAUTH into the containall run — aba_preflight
     only EMITS it to aba-env.sh. Without the forward the backend never sees it → oauth.enabled()
     is False → the Subscription tab stays hidden despite the deployment enabling it."""
-    erb = (ROOT / "install" / "ood" / "aba" / "template" / "script.sh.erb").read_text()
-    assert "ABA_SUBSCRIPTION_OAUTH" in erb, "script.sh.erb must forward ABA_SUBSCRIPTION_OAUTH into apptainer run"
+    erb = _launch_text()
+    assert "ABA_SUBSCRIPTION_OAUTH" in erb, "the launch contract must forward ABA_SUBSCRIPTION_OAUTH into apptainer run"
 
 
 def test_preflight_default_yields_anthropic_subscription_gating():
@@ -185,11 +196,15 @@ def test_launch_binds_sacctmgr():
     SIF and jobs fall back to the cluster DEFAULT QOS + uncapped walltime — a 24h
     request (the nf-core head) is then rejected QOSMaxWallDurationPerJobLimit (the live
     regression this guards). It belongs in the same bind loop as sbatch/squeue/sacct."""
-    erb = (ROOT / "install" / "ood" / "aba" / "template" / "script.sh.erb").read_text()
+    erb = _launch_text()
     import re
-    m = re.search(r"for b in ((?:sbatch|squeue|sacct|sacctmgr|scancel|sinfo|scontrol|salloc|srun|\s)+);", erb)
+    # The loop VARIABLE is not part of the contract: aba_launch.sh is sourced into
+    # the caller's scope, so it prefixes its locals with `_` to avoid clobbering a
+    # variable the card or the gate is using. Pin the guard to the bind LIST, not
+    # to the spelling of the iterator.
+    m = re.search(r"for \w+ in ((?:sbatch|squeue|sacct|sacctmgr|scancel|sinfo|scontrol|salloc|srun|\s)+);", erb)
     assert m and "sacctmgr" in m.group(1).split(), (
-        "script.sh.erb Slurm-client bind loop must include sacctmgr (QOS/account discovery)")
+        "the launch contract's Slurm-client bind loop must include sacctmgr (QOS/account discovery)")
 
 
 def test_launch_forwards_job_wrap_env():
@@ -198,9 +213,9 @@ def test_launch_forwards_job_wrap_env():
     DECLARES image.job_wrap must have it reach the backend. (No shipped lane wraps any
     more — see test_preflight_does_not_derive_job_wrap below — but the forward is what
     makes the setting mean anything if one ever does.)"""
-    erb = (ROOT / "install" / "ood" / "aba" / "template" / "script.sh.erb").read_text()
+    erb = _launch_text()
     for v in ("ABA_SIF", "ABA_JOB_WRAP", "ABA_MODULE_BINDS"):
-        assert v in erb, f"script.sh.erb must forward {v} into the container env"
+        assert v in erb, f"the launch contract must forward {v} into the container env"
 
 
 def test_preflight_does_not_derive_job_wrap():
