@@ -71,7 +71,8 @@ def submit_python_job(code: str, title: str, focus_entity_id: str | None,
                       thread_id: str | None = None, run_id: str | None = None,
                       estimate: dict | None = None, env: str | None = None,
                       execution: str | None = None,
-                      site: str | None = None, sync: bool = False) -> dict:
+                      site: str | None = None, sync: bool = False,
+                      env_explicit: bool = True) -> dict:
     """Create a queued job and enqueue it. Returns the job record. `project_id`
     is captured at submit time so the job runs in the right project's scratch
     workspace even if the active project changes before the worker picks it up.
@@ -97,6 +98,13 @@ def submit_python_job(code: str, title: str, focus_entity_id: str | None,
         params={"code": code, "timeout_s": timeout_s, "project_id": project_id,
                 "thread_id": thread_id, "run_id": run_id, "estimate": estimate or {},
                 "env": env, "execution": execution, "site": site,
+                # Did the AGENT name `env`, or did resolve_env supply the
+                # project's active pointer? weft_submitter._gpu_env_for reads
+                # this to decide whether `env` outranks the site's GPU pack.
+                # It must travel in params: the flag is produced by
+                # bg_submit_kwargs and consumed two layers down, and this
+                # literal is the only thing connecting them.
+                "env_explicit": env_explicit,
                 "submission": submission, "submission_reason": submission_reason,
                 **({"sync": True} if sync else {})},
         project_id=project_id,
@@ -123,7 +131,8 @@ def submit_r_job(code: str, title: str, focus_entity_id: str | None,
                  thread_id: str | None = None, run_id: str | None = None,
                  estimate: dict | None = None, env: str | None = None,
                  execution: str | None = None,
-                 site: str | None = None, sync: bool = False) -> dict:
+                 site: str | None = None, sync: bool = False,
+                 env_explicit: bool = True) -> dict:
     """Create a queued R job. Mirrors submit_python_job but with kind='run_r';
     the worker dispatches to run_r_code in core.exec.run, which invokes Rscript
     against the project's tools-env R + project library, captures stdout/stderr,
@@ -145,6 +154,13 @@ def submit_r_job(code: str, title: str, focus_entity_id: str | None,
         params={"code": code, "timeout_s": timeout_s, "project_id": project_id,
                 "thread_id": thread_id, "run_id": run_id, "estimate": estimate or {},
                 "env": env, "execution": execution, "site": site,
+                # Did the AGENT name `env`, or did resolve_env supply the
+                # project's active pointer? weft_submitter._gpu_env_for reads
+                # this to decide whether `env` outranks the site's GPU pack.
+                # It must travel in params: the flag is produced by
+                # bg_submit_kwargs and consumed two layers down, and this
+                # literal is the only thing connecting them.
+                "env_explicit": env_explicit,
                 "submission": submission, "submission_reason": submission_reason,
                 **({"sync": True} if sync else {})},
         project_id=project_id,

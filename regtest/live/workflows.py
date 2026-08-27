@@ -565,6 +565,82 @@ def wf_slurm_batch(pid, tid, site):
     ]
 
 
+@scenario("wf_session_smoke")
+def wf_session_smoke(pid, tid, site):
+    """A HUMAN-SHAPED session, judged by whether anything went red.
+
+    WHY THIS EXISTS. Every other scenario here asserts a chosen proposition —
+    "was a job created", "is the output tracked". A thread can satisfy all of
+    them and still be full of errors nobody looked at, which is what users
+    actually report ("a bunch of errors", "it fails immediately"). On
+    2026-08-27 a signature mismatch failed 4 of 4 background submits in a live
+    session; `tool_invocations` recorded 8/8 ok, the events table was empty,
+    and the backend log had nothing, because the intercept returned before
+    telemetry. Every instrument was green.
+
+    So this lane asserts the COMPLEMENT: over an ordinary multi-turn session,
+    NO tool call came back an error. It names the offenders when it fails, so
+    the census is the diagnosis. It is deliberately unremarkable work — the
+    first things anyone does — because "fails immediately" is the shape being
+    guarded, and the cheapest place to catch it is the first five minutes.
+    """
+    caps = []
+    caps.append(drive(pid, tid,
+        "In Python, make a small table of 200 rows with a few numeric columns "
+        "and save it as data.csv. Tell me the column names and the row count."))
+    caps.append(drive(pid, tid,
+        "Now plot one column against another from that table and save the "
+        "figure as figs/scatter.png."))
+    caps.append(drive(pid, tid,
+        f"Run something in the BACKGROUND on '{site}': compute column means "
+        f"from data.csv, wait a few seconds, and write means.csv. Tell me when "
+        f"it is queued."))
+    _wait_jobs_settled(pid, timeout_s=900)
+    caps.append(drive(pid, tid,
+        "Did the background work finish, and what did it produce?"))
+
+    # THE CENSUS. Everything the platform recorded, not what the agent said
+    # about it. `status: error` and a bare `error` key are both failure shapes
+    # in this codebase, and a raw (unparseable) result is a failure too — that
+    # is what a traceback looks like once it reaches a tool result.
+    results = tool_results(pid, tid)
+    def _bad(r):
+        if not isinstance(r, dict):
+            return None
+        if str(r.get("status")) == "error":
+            return str(r.get("note") or r.get("error") or "")[:120]
+        if r.get("error"):
+            return str(r.get("error"))[:120]
+        raw = str(r.get("_raw") or "")
+        if "Traceback (most recent call last)" in raw:
+            return raw[:120]
+        return None
+    errs = [(r.get("tool") or r.get("name") or "?", _bad(r))
+            for r in results if _bad(r)]
+    census = "; ".join(f"{n}: {m}" for n, m in errs[:4]) or "none"
+
+    jobs = api("GET", "/api/jobs")
+    jobs = jobs if isinstance(jobs, list) else jobs.get("jobs", [])
+    mine = [j for j in jobs if (j.get("params") or {}).get("project_id") == pid]
+    tracked = [n for n, _s, _k in tracked_outputs(pid)]
+
+    return caps, [
+        # ARMED FIRST. A session in which nothing ran cannot be clean; without
+        # this, a server that answers but executes nothing scores five passes.
+        (f"the session actually did work ({len(results)} tool results)",
+         len(results) >= 4),
+        ("every turn completed", all(not c["errors"] for c in caps)),
+        (f"NO tool call returned an error ({len(errs)}/{len(results)} red) "
+         f"[{census}]", not errs),
+        ("the background job reached the scheduler and settled",
+         bool(mine) and all(str(j.get("status")) not in ("queued", "running")
+                            for j in mine)),
+        ("the ordinary outputs are tracked",
+         any("data.csv" in n for n in tracked)
+         and any("scatter" in n for n in tracked)),
+    ]
+
+
 @scenario("wf_gpu_recognised")
 def wf_gpu_recognised(pid, tid, site):
     """Does the agent work out that a job needs an accelerator BY ITSELF?

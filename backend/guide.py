@@ -1102,6 +1102,22 @@ async def stream_response(
                         # a TOOL result the agent can act on, not crash the
                         # turn (the row, if created, is marked failed by
                         # submit.py's _mark_submit_failed)
+                        #
+                        # LOG IT. This intercept returns BEFORE the telemetry at
+                        # the bottom of dispatch, so a failure here writes no
+                        # tool_invocations row, no event, and — until this line
+                        # — no log line either. On 2026-08-27 a signature
+                        # mismatch failed 4 of 4 background submits in a live
+                        # session while `tool_invocations` showed 8/8 ok and
+                        # `read_aba_logs` matched ZERO backend lines. A
+                        # 100%-failure defect with every instrument green is
+                        # worse than a crash: nobody can find it, including the
+                        # agent, which is asked to diagnose its own failures.
+                        import traceback as _tb
+                        print(f"[guide] background submit FAILED "
+                              f"({type(e).__name__}): "
+                              f"{getattr(e, 'detail', None) or e}\n"
+                              f"{_tb.format_exc()}", flush=True)
                         return {"status": "error",
                                 "note": f"background submit failed: "
                                         f"{getattr(e, 'detail', None) or e}"}
