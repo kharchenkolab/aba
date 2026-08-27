@@ -186,6 +186,45 @@ def published_catalog(*, site: Optional[str] = None,
     return named_envs._sync(ad.env_published(site, tree))
 
 
+def pack_pin(pack_name: str) -> str:
+    """The pack VERSION this deployment adopts, or "latest".
+
+    Read from the deployment's own site.yaml (`envs.pin.<pack>`), not from a
+    setting: a pin is a property of the DEPLOYMENT, and reading the file works
+    whatever launched the process — the OOD preflight, a deploy-time gate, or
+    a probe. (`jobs.gpu_env_pack` is only exported as an env var by the OOD
+    preflight, which is exactly how a deploy-time reader concluded the site
+    declared no GPU pack at all.)
+
+    Why pins exist: staging and production share ONE env store. A mutable
+    shared `latest` cannot serve both — publishing a pack to test it in
+    staging would move production at the same instant. With a pin, the store
+    is append-only and promotion is a CONFIG change (move production's pin to
+    the version staging proved), which is reviewable and revertible in git.
+    It also removes the second copy entirely: copying a squashfs pack between
+    trees produces an image that only activates at the path it was built for,
+    and on 2026-08-27 such a copy broke every session in production AND — via
+    the shared `ro_roots` — in staging too.
+
+    Absent pin → "latest", the pre-pin behaviour."""
+    try:
+        raw = (config.settings.site_config.get() or "").strip()
+        if not raw:
+            return "latest"
+        from pathlib import Path as _P
+
+        import yaml
+        sp = _P(raw).expanduser()
+        if not sp.is_file():
+            return "latest"
+        doc = yaml.safe_load(sp.read_text()) or {}
+        pins = ((doc.get("envs") or {}).get("pin") or {})
+        return str(pins.get(pack_name) or "latest").strip() or "latest"
+    except Exception as e:  # noqa: BLE001 — an unreadable pin is not a pin
+        print(f"[seeding] pack pin for {pack_name!r} unreadable ({e}) — using latest")
+        return "latest"
+
+
 def adopt_env_id(pack_name: str) -> Optional[str]:
     """Adopt `pack_name` from the deployment's published catalog → EnvID (no
     solve). None when no catalog is configured (→ caller solves locally).
@@ -196,11 +235,13 @@ def adopt_env_id(pack_name: str) -> Optional[str]:
     if not tree:
         return None
     site = config.settings.weft_publish_site.get()
+    ver = pack_pin(pack_name)
     ad = _adapter.get_compute()
     try:
-        res = named_envs._sync(ad.env_adopt(site, tree, pack_name))
+        res = named_envs._sync(ad.env_adopt(site, tree, pack_name, version=ver))
         return res["env_id"]
     except ComputeError as e:
-        print(f"[seeding] adopt of base pack {pack_name!r} from {tree} MISSED "
-              f"({e.code}: {e.detail}) — falling back to a private solve")
+        print(f"[seeding] adopt of base pack {pack_name!r} (version {ver}) from "
+              f"{tree} MISSED ({e.code}: {e.detail}) — falling back to a "
+              f"private solve")
         return None

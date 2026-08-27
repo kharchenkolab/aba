@@ -24,6 +24,7 @@ FILES=(
   tests/test_promote_moves_the_tested_pair.py
   tests/test_concurrency_metric.py
   tests/test_dispatch_latency_screen.py
+  tests/test_pack_pin.py
   tests/test_frontend_bundle_builds.py
   # shared-agent-input guards (tool catalog / prompts / cache placement)
   tests/test_tool_conventions.py
