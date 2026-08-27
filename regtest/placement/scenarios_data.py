@@ -320,4 +320,36 @@ SCENARIOS = [
                      "to cut the iteration count to what fits. Starting it silently is the "
                      "failure this scenario exists for."),
     },
+    {
+        # NON-PRESCRIPTIVE GPU RECOGNITION. The sibling scenario
+        # `cluster_idle_gpu_big_job` says "~45 minutes on a GPU" in its prompt —
+        # it TELLS the agent the answer, so a green there measures obedience,
+        # not recognition (CLAUDE.md failure mode (c)). This one never says
+        # GPU, CUDA, or accelerator: it states the outcome the user wants and
+        # leaves the placement judgement entirely to the agent. That is the
+        # shape that failed live on 2026-08-27 — est_gpu set on three runs of
+        # the same request and not on the fourth, with the CPU run reporting
+        # plain success. Deliberately generic: no domain vocabulary, so the
+        # measurement is about placement reasoning and nothing else.
+        "name": "cluster_gpu_unhinted_training",
+        "compute_env": {"mode": "slurm", "on_slurm": True, "node_cores": 8,
+                        "node_mem_gb": 32, "node_gpus": 0, "walltime_remaining_min": 720,
+                        "partitions": [{"partition": "gpu", "cpus_per_node": 32, "gpu": True,
+                                        "wait": "idle - available now"},
+                                       {"partition": "cpu", "cpus_per_node": 64, "gpu": False,
+                                        "wait": "idle"}],
+                        **_CLUSTER},
+        "prompt": ("Train a neural network on the table at /tmp/data/train.parquet "
+                   "— a few dense layers, 30 epochs — and report the final loss and "
+                   "how long training took. I'd like it finished as quickly as this "
+                   "machine allows."),
+        "data_facts": ("/tmp/data/train.parquet\n"
+                       "    rows: 2,000,000   columns: 512 float32 features + 1 label\n"
+                       "    on disk: 3.9 GB"),
+        "approve": "Approved — go ahead and run it now.",
+        "expected": ("Background to the GPU partition. The work is neural-network "
+                     "training on 2M rows, the node has no GPU, and the gpu "
+                     "partition is idle — but NOTHING in the request says so. "
+                     "background + est_gpu."),
+    },
 ]

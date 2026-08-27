@@ -187,62 +187,98 @@ def run():
     only = None
     if "--only" in sys.argv:
         only = set(sys.argv[sys.argv.index("--only") + 1].split(","))
+    # --repeat N: run each scenario N times.
+    #
+    # WHY THIS EXISTS. A single run of a scenario answers "did the agent do the
+    # right thing that time", which is not the question. On 2026-08-27 the same
+    # GPU request produced est_gpu=true on three consecutive runs and false on
+    # the fourth; three greens had hidden it completely. Placement is a model
+    # JUDGEMENT, so its output is a distribution, and one sample cannot describe
+    # a distribution. Anything read off a single run — including a decision to
+    # change the prompt — is being read off noise.
+    repeat = 1
+    if "--repeat" in sys.argv:
+        repeat = max(1, int(sys.argv[sys.argv.index("--repeat") + 1]))
     client = TestClient(app).__enter__()
     results = []
     for sc in SCENARIOS:
         if only and sc["name"] not in only:
             continue
-        set_compute_env(sc["compute_env"])
-        _STUB["facts"] = sc.get("data_facts", "")
-        _STUB["gave_facts"] = False
-        ctx_line = CE.context_line()
-        pid = client.post("/api/projects", json={"name": f"plc-{sc['name']}"}).json()["id"]
-        client.post(f"/api/projects/{pid}/open")
-        tid = client.post("/api/threads", json={"project_id": pid, "title": sc["name"]}).json()["id"]
-        t0 = time.time()
-        # Turn 1: the request — the agent plans (heavy work is plan-first).
-        cap1 = drive_turn(client, pid, tid, sc["prompt"])
-        # Turn 2: approve + answer the usual blockers — the agent executes here.
-        cap2 = drive_turn(client, pid, tid, sc.get("approve", "Approved — go ahead and run it now."))
-        dt = time.time() - t0
-        decisions = _exec_decisions(cap1) + _exec_decisions(cap2)
-        routed = [{"turn": ti + 1, "code_head": (d["input"].get("code") or "")[:80],
-                   "input": {k: d["input"].get(k) for k in
-                             ("background", "est_gpu", "est_cores", "est_mem_gb",
-                              "estimated_runtime_min", "execution", "site", "env",
-                              # timeout_s is the agent's DECLARED expected duration.
-                              # The interactive path silently clamps it to 1800s, so a
-                              # value above that is a prediction of its own death —
-                              # capture it to see whether that hook is ever reachable.
-                              "timeout_s")},
-                   "router": router_for(sc["compute_env"], d["input"])}
-                  for ti, cap in ((0, cap1), (1, cap2)) for d in _exec_decisions(cap)]
-        rec = {"name": sc["name"], "expected": sc["expected"], "context_line": ctx_line,
-               "n_exec_calls": len(decisions), "decisions": routed,
-               "turn1_tools": [t["name"] for t in cap1["tools"]],
-               "turn2_tools": [t["name"] for t in cap2["tools"]],
-               "plan": cap1.get("plan") or cap2.get("plan"),
-               "turn1_reply": cap1["text"], "turn2_reply": cap2["text"],
-               "secs": round(dt, 1)}
-        results.append(rec)
-        print(f"\n{'='*90}\n[{sc['name']}]  ({dt:.0f}s)  expected: {sc['expected']}")
-        print(f"  compute cue: {ctx_line[:300]}")
-        print(f"  turn1 tools: {rec['turn1_tools']}   turn2 tools: {rec['turn2_tools']}")
-        for r in routed:
-            print(f"  DECISION (t{r['turn']}): {r['input']}  ->  router={r['router']['location']} "
-                  f"({r['router']['rationale']})  code[{r['code_head']}]")
-        if not decisions:
-            print("  NO run_python/run_r in either turn — agent stayed in text/plan")
-        print(f"  turn1 reply: {cap1['text'][:400]}")
-        print(f"  turn2 reply: {cap2['text'][:400]}")
-        try:
-            client.request("DELETE", f"/api/projects/{pid}")
-        except Exception:
-            pass
+        for _trial in range(repeat):
+            set_compute_env(sc["compute_env"])
+            _STUB["facts"] = sc.get("data_facts", "")
+            _STUB["gave_facts"] = False
+            ctx_line = CE.context_line()
+            pid = client.post("/api/projects", json={"name": f"plc-{sc['name']}"}).json()["id"]
+            client.post(f"/api/projects/{pid}/open")
+            tid = client.post("/api/threads", json={"project_id": pid, "title": sc["name"]}).json()["id"]
+            t0 = time.time()
+            # Turn 1: the request — the agent plans (heavy work is plan-first).
+            cap1 = drive_turn(client, pid, tid, sc["prompt"])
+            # Turn 2: approve + answer the usual blockers — the agent executes here.
+            cap2 = drive_turn(client, pid, tid, sc.get("approve", "Approved — go ahead and run it now."))
+            dt = time.time() - t0
+            decisions = _exec_decisions(cap1) + _exec_decisions(cap2)
+            routed = [{"turn": ti + 1, "code_head": (d["input"].get("code") or "")[:80],
+                       "input": {k: d["input"].get(k) for k in
+                                 ("background", "est_gpu", "est_cores", "est_mem_gb",
+                                  "estimated_runtime_min", "execution", "site", "env",
+                                  # timeout_s is the agent's DECLARED expected duration.
+                                  # The interactive path silently clamps it to 1800s, so a
+                                  # value above that is a prediction of its own death —
+                                  # capture it to see whether that hook is ever reachable.
+                                  "timeout_s")},
+                       "router": router_for(sc["compute_env"], d["input"])}
+                      for ti, cap in ((0, cap1), (1, cap2)) for d in _exec_decisions(cap)]
+            rec = {"name": sc["name"], "trial": _trial, "repeat": repeat,
+                   "expected": sc["expected"], "context_line": ctx_line,
+                   "n_exec_calls": len(decisions), "decisions": routed,
+                   "turn1_tools": [t["name"] for t in cap1["tools"]],
+                   "turn2_tools": [t["name"] for t in cap2["tools"]],
+                   "plan": cap1.get("plan") or cap2.get("plan"),
+                   "turn1_reply": cap1["text"], "turn2_reply": cap2["text"],
+                   "secs": round(dt, 1)}
+            results.append(rec)
+            print(f"\n{'='*90}\n[{sc['name']}]  ({dt:.0f}s)  expected: {sc['expected']}")
+            print(f"  compute cue: {ctx_line[:300]}")
+            print(f"  turn1 tools: {rec['turn1_tools']}   turn2 tools: {rec['turn2_tools']}")
+            for r in routed:
+                print(f"  DECISION (t{r['turn']}): {r['input']}  ->  router={r['router']['location']} "
+                      f"({r['router']['rationale']})  code[{r['code_head']}]")
+            if not decisions:
+                print("  NO run_python/run_r in either turn — agent stayed in text/plan")
+            print(f"  turn1 reply: {cap1['text'][:400]}")
+            print(f"  turn2 reply: {cap2['text'][:400]}")
+            try:
+                client.request("DELETE", f"/api/projects/{pid}")
+            except Exception:
+                pass
     out = RUN / "results.json"
     out.write_text(json.dumps(results, indent=2))
     print(f"\n\nwrote {out}")
+    _print_rates(results)
     return results
+
+
+def _print_rates(results: list) -> None:
+    """Per scenario, how OFTEN the agent made each placement call — not what it
+    did once. A rate is the only honest summary of a judgement, and the only
+    thing a prompt change can be measured against."""
+    from collections import defaultdict
+    by = defaultdict(list)
+    for r in results:
+        by[r["name"]].append(r)
+    print("\n================ placement RATES ================")
+    for name, rows in sorted(by.items()):
+        n = len(rows)
+        gpu = sum(1 for r in rows
+                  if any(d["input"].get("est_gpu") for d in r.get("decisions") or []))
+        bg = sum(1 for r in rows
+                 if any(d["input"].get("background") for d in r.get("decisions") or []))
+        acted = sum(1 for r in rows if (r.get("decisions") or []))
+        print(f"  {name:<38} n={n:<3} acted={acted}/{n}  "
+              f"est_gpu={gpu}/{n}  background={bg}/{n}")
+    print("  (est_gpu is the 2026-08-27 finding: 3/4 on the same request)")
 
 
 if __name__ == "__main__":
