@@ -94,13 +94,58 @@ describe('useChat — the follow-up queue', () => {
   })
 
   it('a new message goes BEHIND the queue, never ahead of it', async () => {
+    // Hold the FIRST turn's stream OPEN. The drain chains on `done` — with the
+    // default instantly-closing mock, 'second' could legitimately fire before
+    // the assertions ran, so this test was flaky by construction (observed:
+    // queue ['third'] because two drains completed). Mid-drain state is only
+    // assertable while the first turn is provably in flight.
+    let release!: () => void
+    let held = false
+    ;(globalThis.fetch as unknown as ReturnType<typeof vi.fn>)
+      .mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : (input as Request).url
+        const json = (b: string) => new Response(b, { status: 200,
+          headers: { 'Content-Type': 'application/json' } })
+        if (url.includes('/api/messages')) return json('[]')
+        if (url.includes('/active-turn')) return json('null')
+        if (url.includes('/api/jobs')) return json('[]')
+        if (url.endsWith('/api/chat') && init?.method === 'POST') {
+          sent.push({ text: JSON.parse(String(init.body)).text,
+                      thread: JSON.parse(String(init.body)).thread_id })
+          const enc = new TextEncoder()
+          if (!held) {
+            held = true
+            const body = new ReadableStream({
+              start(c) {
+                c.enqueue(enc.encode(
+                  `data: ${JSON.stringify({ type: 'manifest', run_id: 'run_f', manifest: {} })}\n\n`))
+                release = () => {
+                  c.enqueue(enc.encode('data: {"type":"done"}\n\n'))
+                  c.close()
+                }
+              },
+            })
+            return new Response(body, { status: 200,
+              headers: { 'Content-Type': 'text/event-stream' } })
+          }
+          return new Response(sse([{ type: 'manifest', run_id: 'run_q', manifest: {} },
+                                   { type: 'done' }]),
+                              { status: 200, headers: { 'Content-Type': 'text/event-stream' } })
+        }
+        return json('{}')
+      })
     const { result } = render('thr_fifo')
     await waitFor(() => expect(result.current.loading).toBe(false))
     act(() => { result.current.enqueue('first'); result.current.enqueue('second') })
     await act(async () => { await result.current.sendMessage('third') })
-    // the oldest goes out first; 'third' must not overtake it
-    expect(sent[0].text).toBe('first')
+    // the oldest went out first and is STILL in flight (held) — 'third' must
+    // not overtake anything
+    await waitFor(() => expect(sent.map(s => s.text)).toEqual(['first']))
     expect(result.current.queuedMessages.map(q => q.text)).toEqual(['second', 'third'])
+    // release the held turn: the rest drains in strict FIFO
+    act(() => release())
+    await waitFor(() => expect(sent.map(s => s.text)).toEqual(['first', 'second', 'third']))
+    await waitFor(() => expect(result.current.queuedMessages).toEqual([]))
   })
 
   it('Stop ends the turn and KEEPS what you typed', async () => {
