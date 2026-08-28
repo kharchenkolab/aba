@@ -182,19 +182,15 @@ def propose(caps: dict, *, dest: str = "",
 
     ver = sched.get("version") or ""
     if sched_type == "slurm":
-        # NOT mentioning GPU capacity here is DELIBERATE, and measured. The
-        # obvious hypothesis — the agent under-requests accelerators because the
-        # headline never says the cluster has any — was tested on 2026-08-28 with
-        # regtest/placement `cluster_gpu_unhinted_training`, n=10 either side:
-        #
-        #     headline without GPUs:  est_gpu 6/10, background 7/10
-        #     headline with ", N GPUs": est_gpu 5/10, background 5/10
-        #
-        # No improvement. At n=10 the drop is noise, but there is no evidence for
-        # the change, and this is a SHARED AGENT INPUT — it reaches every decision
-        # the agent makes, so it ships on a measured gain or not at all. Re-test
-        # with the study before trying this again; do not re-derive the hypothesis
-        # from first principles and assume it works.
+        # This headline does NOT name GPU capacity, and that is an open question,
+        # not a settled one. A 2026-08-28 A/B appeared to show adding ", N GPUs"
+        # did not help — it was invalid: propose() feeds the machine-REGISTRATION
+        # surface (compute_sites, the web route, the connect wizard), NOT the
+        # per-turn agent context, which core/exec/compute_env.py builds without
+        # ever calling this. The two arms' context_line was byte-identical, so
+        # the experiment had no treatment. If you want to test this, change
+        # compute_env.py — the surface the agent actually reads — and measure
+        # there. See regtest/FINDINGS.md.
         headline = (f"This is a Slurm cluster{f' (v{ver})' if ver else ''} — "
                     f"{totals['nodes']} nodes in {totals['partitions']} "
                     f"partition{'s' if totals['partitions'] != 1 else ''}")

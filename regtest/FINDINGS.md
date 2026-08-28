@@ -449,30 +449,66 @@ in 3–11 s (bodies 0.6–6 s); pre-fix the same shape stalled 21–96 s, unbloc
 body end. Max recorded gw_lag_ms across the run: 0. The wider class (long ANALYSIS bodies, not
 just installs) is closed by the same change. agent-loop.md corrected (the "not serialized,
 established by measurement" claim was defeated by loop-riding clocks + a yielding fake).
-## GPU recognition rate — baseline, and one hypothesis that failed (2026-08-28)
+## GPU recognition — RETRACTED numbers, and what the audit found (2026-08-28)
 
-`regtest/placement/study.py --only cluster_gpu_unhinted_training --repeat 10`,
-model claude-opus-5. The request describes training work on a cluster with idle
-GPUs and never mentions accelerators.
+**Retraction.** An earlier version of this section reported `est_gpu 6/10` as a
+baseline recognition rate and `5/10` as a failed A/B. Both readings were wrong.
 
-| variant | est_gpu | background |
-|---|---|---|
-| as shipped | **6/10** | 7/10 |
-| `+ ", N GPUs"` in the Slurm headline | 5/10 | 5/10 |
+**The A/B had no treatment.** The change under test added GPU capacity to the
+headline built by `core/compute/inference.py propose()`. That function feeds the
+machine-REGISTRATION surface only (`compute_sites`, the web route, the connect
+wizard). The per-turn agent context is built by `core/exec/compute_env.py:101-190`,
+which never calls it. The `context_line` recorded in both arms is byte-identical
+(693 chars). 6/10 vs 5/10 is one condition sampled twice.
 
-**Baseline: the agent asks for a GPU on 6 of 10 identical requests.** A job that
-does not ask lands on a CPU partition and trains slowly; before 2026-08-28 it
-also said nothing about it (see the accelerator note, now fixed and covered by
-`wf_cpu_on_gpu_cluster_says_so`).
+**The rate is attrition, not recognition.** In the second arm, 5 of the 10
+"misses" never emitted the sizable-work call: they detected that the study's
+execution stub returns success with no output, identified it as a fake execution
+layer, and stopped — correctly, per the integrity rules. Their `present_plan`
+text states the accelerator decision. Recognition is visible in 20/20 trials;
+the tool ARGUMENT is set in 11/20; and conditional on reaching the submission it
+is ~10/11.
 
-**The failed hypothesis, recorded so it is not re-tried blind.** On a Slurm
-cluster the summary headline said "N nodes in M partitions" and never mentioned
-GPUs — `totals['gpus']` was computed and dropped, because the accelerator text
-sits in an `elif has_gpu` branch a Slurm cluster cannot reach. Making the
-headline say ", 32 GPUs" did **not** raise the rate. Reverted.
+`check_rates.py` did not catch this: its "acted" predicate counts any execution
+decision, and the aborted trials each made diagnostic probe calls, so `acted`
+read 10/10 in both arms while half the trials never posed the question. That is
+the empty-subject-set failure the file's own docstring describes.
 
-`background=7/10` is a second finding in the same data and has had no attention:
-three in ten of these requests did not become background jobs at all.
+### What to fix, in order
+1. **The instrument.** Arming must require that the trial reached the sizable-work
+   submission. And `study.py:96-113`'s stub — success with empty output — is
+   defeated by `system_bundle/rules/behavior.md:26,28` and
+   `rules/required/nonnegotiables.md:6`, which the agent is right to follow.
+2. **Re-baseline** once the instrument is honest.
+3. Only then the prompt surface. Ranked candidates from the audit:
+   - `system_bundle/rules/behavior.md:14` is the only always-on rule naming the
+     sizing arguments, and it enumerates runtime/cores/memory but NOT the
+     accelerator flag. Accelerator vocabulary appears ZERO times in the prompt
+     bundle.
+   - The accelerator parameter is `bool = False` while its three sizing siblings
+     are `X | None = None` — the schema advertises a concrete default, so it
+     reads as already answered rather than open.
+   - `rules/required/plan_first.md:10` argues for step-at-a-time work *because
+     the interactive session persists* — an argument against the deferred lane,
+     which is the only lane where the flag does anything. In both arms the flag
+     is NEVER set without deferral, so anything suppressing deferral suppresses
+     it one-for-one.
+   - `present_plan` has no field for placement or resources, so the decision
+     cannot cross the turn boundary except as prose.
+   - The decision rules that state the accelerator trigger live on a tool that is
+     not in `_PRIORITY_TOOLS`, so `standard` truncates them to one line. The
+     agent called that tool in 10/10 trials and never saw the guidance.
+   - The placement knowhow doc is retrieval-gated on scheduler vocabulary the
+     request does not contain: 0 of 20 trials loaded it.
+   - `compute_env.py:108` renders the node's accelerator clause only when the
+     count is non-zero, so "this node has none" — the scenario's premise — is
+     never stated.
 
-Method note: n=10 per side is enough to see a large effect and not enough to
-resolve a small one. Nothing here should be read as "the change made it worse".
+### Negative results worth keeping
+- No cost/budget/quota/conservatism guidance exists anywhere in the bundle, tool
+  descriptions or compute surfaces. There is no economising rule to blame.
+- No presentation-tier masking in production: `standard` keeps full parameter
+  prose, and the executing tools are in `_PRIORITY_TOOLS`, so their full
+  docstring and schema reach the model.
+- The parameter description itself is adequate. If it is being ignored it is
+  being out-voted, not under-informed.
