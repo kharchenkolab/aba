@@ -731,6 +731,13 @@ def wf_session_smoke(pid, tid, site):
     _wait_jobs_settled(pid, timeout_s=900)
     caps.append(drive(pid, tid,
         "Did the background work finish, and what did it produce?"))
+    # SETTLE AGAIN. That last turn can legitimately submit another job — asking
+    # "did it finish and what did it produce" invites the agent to check or
+    # re-run — and the job query below would then see a freshly queued row and
+    # report "the background job never settled". The assertion claims the work
+    # settled; evaluating it over jobs created AFTER the wait measured something
+    # else. Flaky twice before this was traced (2026-08-28).
+    _wait_jobs_settled(pid, timeout_s=900)
 
     # THE CENSUS. Everything the platform recorded, not what the agent said
     # about it. `status: error` and a bare `error` key are both failure shapes

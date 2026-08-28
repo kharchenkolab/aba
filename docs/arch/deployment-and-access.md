@@ -328,16 +328,36 @@ credential/access scope.
 `deploy.sh` owns three operations on a target (`--target stage|prod`, `$SHARE` is the
 only difference between them):
 
-- `publish-packs --packs <names>` — builds env packs **into that target's store** and
-  re-renders the card's version line. The invocation is code, not a comment: it needs
-  `--bind /dev/fuse` (weft mounts squashfs), a bound `HOME` (apptainer refuses
-  `--env HOME`, so the solver would write to a 64 MB tmpfs), and `PIXI_CACHE_DIR` on
-  node-local storage (rattler's cache locking breaks on parallel filesystems).
-- `verify [--full] [--install] [--lanes …]` — boots the staged image as the OOD card does
-  and drives it; writes the `.verified` stamp promote requires, recording its tier.
-- `promote` — moves the app, then flips pack pointers, gated by
-  `scripts/check_pack_pins.py` (every DECLARED pack resolves to a published version;
-  rc=2 is not overridable, rc=1 is an operator judgement call).
+- `publish-packs --packs <names>` — builds env packs into the **one shared store**
+  (`ENV_STORE`; both targets resolve the same `publish_tree`) and re-renders the card's
+  version line. The invocation is code, not a comment: it needs `--bind /dev/fuse`
+  (weft mounts squashfs), a bound `HOME` (apptainer refuses `--env HOME`, so the solver
+  would write to a 64 MB tmpfs), and `PIXI_CACHE_DIR` on node-local storage (rattler's
+  cache locking breaks on parallel filesystems). It never copies a built pack between
+  trees: a squashfs bakes its own absolute prefix, so a copy activates only where it
+  was built.
+- `stage [--build]` — builds and stages a release, then **drives it**: the `smoke` lane
+  group first (one short session, no scheduler wait), and only if that passes, the
+  `critical` group. A build that fails is reported as *STAGED BUT NOT USABLE* rather
+  than "staged", because those were two different states with the same announcement,
+  and a human was repeatedly the first thing to send a build a prompt.
+- `verify [--full] [--verify-installs] [--lanes …]` — boots the staged image as the OOD
+  card does and drives it; writes the `.verified` stamp promote reads, recording the
+  tier that actually ran. `--verify-installs` (formerly `--install`, renamed because on
+  a deployment script that read as "install something") asks the agent for real
+  libraries — the path where a missing compiler or header only ever shows up.
+- `promote` — copies the tested bytes, flips `current`, writes the target's site config,
+  then **drives the target at its own paths** and publishes the card only if it answers.
+  On failure it rolls back, restores the previous release's config, and republishes the
+  old card. Gated by `scripts/check_pack_pins.py` (every DECLARED pack resolves to a
+  published version; rc=2 is not overridable, rc=1 is an operator judgement call).
+  It does **not** touch the shared store — promotion is a config diff, and the run
+  asserts the store's catalog fingerprint is unchanged.
+
+Why promote drives rather than trusting staging: production is not staging with a
+different name — its own share root, card, pins and pack resolution. `do_selfcheck` is
+structural and can be entirely green while every session is broken, which is what
+happened on 2026-08-27.
 
 The card's version line is a **snapshot** taken when the card is written, so publishing a
 pack after a promote leaves it advertising versions that no longer exist; `publish-packs`
