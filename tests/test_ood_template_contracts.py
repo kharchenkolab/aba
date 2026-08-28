@@ -203,6 +203,45 @@ def test_node_side_scripts_take_the_share_root_from_the_environment():
         + "\n".join(offenders))
 
 
+def test_a_user_with_no_enrolled_group_CANNOT_launch():
+    """The form already knows, at render time, whether any of the user's unix
+    groups is enrolled — it lists exactly the enrolled ones. When none are, it
+    must not merely SAY so, it must refuse.
+
+    WHAT THIS GUARDS. The no-groups case rendered a single option carrying an
+    explanatory label and an empty value, and nothing stopped the user pressing
+    Launch. OOD submitted it, Slurm ran a job, and the session died inside the
+    container with "ABA_RUNTIME_DIR is unset — preflight did not produce
+    aba-env.sh" — a refusal the form had the information to make, spent one
+    allocation later and phrased as a missing environment variable. An admin hit
+    exactly this on 2026-08-28.
+
+    Two halves, and the property only holds with both: the fallback option's
+    VALUE is empty, and the field is `required`. An HTML5 select marked required
+    whose selected option has an empty value is invalid, so the browser blocks
+    submission. Either half alone lets the launch through."""
+    form = (APP / "form.yml.erb").read_text()
+
+    # the empty-list fallback exists and yields an EMPTY value
+    assert "lab_opts.empty?" in form, (
+        "the form no longer handles the case where no group is enrolled")
+    fallback = form[form.index("lab_opts.empty?"):]
+    fallback = fallback[:fallback.index("end")]
+    assert '""]]' in fallback.replace(" ", "") or '", \"\"]' in fallback or ', ""]]' in fallback, (
+        "the no-enrolled-groups option does not carry an EMPTY value, so "
+        "`required` cannot block it and the launch proceeds to a job that "
+        "preflight will refuse:\n" + fallback)
+
+    # …and the field is required, which is what turns the empty value into a refusal
+    block = form[form.index("  aba_lab:"):]
+    block = block[:block.index("  has_gpu:")]
+    code = "\n".join(ln for ln in block.splitlines()
+                     if not ln.lstrip().startswith("#"))
+    assert "required: true" in code, (
+        "aba_lab is not `required`, so the empty no-enrolled-groups value "
+        "submits happily and the refusal is deferred into a Slurm job")
+
+
 def test_the_site_rewrite_list_is_complete_and_exact():
     """install/ood/site-rewrite.list names every card file whose default share
     root a deploy script must rewrite, and the deploy script reads that list

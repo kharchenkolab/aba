@@ -65,9 +65,20 @@
   enrolled = gcfg['enabled'] ? user_groups.select { |g|
     markers.any? { |m| (File.exist?(File.join(grp_root.call(g), m)) rescue false) } } : []
   lab_opts = enrolled.map { |g| ["#{g}  ✓", g] }            # VALUE stays the unix group name
+  # NO ENROLLED GROUP. The value is deliberately EMPTY so the `required:` on the
+  # field below makes the browser refuse to submit: we already know here that a
+  # launch cannot succeed, and letting it through spends a Slurm allocation to
+  # reach a preflight refusal the form could have prevented. Reported by an admin
+  # on 2026-08-28, whose launch ran a job on a compute node and died with
+  # "ABA_RUNTIME_DIR is unset".
+  #
+  # NAME THE GROUPS. The admin needs to know WHICH group to enrol, and the person
+  # in front of the form usually does not know their own unix groups.
   if lab_opts.empty?
     contact = ui['enroll_contact'] || 'your ABA admin'
-    lab_opts = [["— no enrolled groups (contact #{contact} to join the ABA pilot)", ""]]
+    mine = (user_groups - [me]).first(6).join(', ')
+    msg = mine.empty? ? "— none of your groups are enrolled in ABA — ask #{contact}" : "— not enrolled: ask #{contact} to enrol one of #{mine}"
+    lab_opts = [[msg, ""]]
   end
   # Show the "reset to the group credential" checkbox ONLY when a personal override exists
   # (for some enrolled group). Fail-safe: any probe error → hidden (never breaks the form).
@@ -110,6 +121,10 @@ attributes:
   aba_lab:
     widget: "select"
     label: "Lab"
+    # required: with no enrolled group the only option carries an EMPTY value, so
+    # the browser blocks Launch instead of starting a job that preflight will
+    # refuse. Harmless when groups exist — every real option has a value.
+    required: true
     help: "<%= ui['form_intro'] || 'Your enrolled ABA groups (✓). Group not listed? Ask your admin to enroll it.' %>"
     options:
 <%- lab_opts.each do |label, val| -%>

@@ -34,7 +34,20 @@ fi
 # set one, say so and stop — exporting HOME="/.home" would crash the backend
 # at import (unwritable root path) with a far less legible traceback.
 if [ -z "${ABA_RUNTIME_DIR:-}" ]; then
-  echo "ABA: ABA_RUNTIME_DIR is unset — preflight did not produce aba-env.sh (see preflight.log). Not launching."
+  echo "ABA: not launching — preflight did not produce aba-env.sh."
+  # SAY WHY. preflight already knows: when it refuses it records the reason in
+  # status.yaml as `blocked_on` (and prints it), then exits without writing
+  # aba-env.sh. This used to say only "see preflight.log", so the commonest
+  # cause by far — a unix group that is not enrolled in ABA — reached the user
+  # as a missing environment variable. Reported by an admin on 2026-08-28, whose
+  # launch failed with exactly that and no indication of what to do about it.
+  _aba_why="$(sed -n 's/^blocked_on:[[:space:]]*//p' "${PWD}/status.yaml" 2>/dev/null | head -1)"
+  _aba_why="${_aba_why%\"}"; _aba_why="${_aba_why#\"}"
+  _aba_why="${_aba_why%\'}"; _aba_why="${_aba_why#\'}"
+  case "$_aba_why" in
+    ""|null|~) echo "ABA: no reason was recorded — see preflight.log beside this file." ;;
+    *)         echo "ABA: $_aba_why" ;;
+  esac
   exit 1
 fi
 export HOME="${ABA_RUNTIME_DIR}/.home"; mkdir -p "$HOME"

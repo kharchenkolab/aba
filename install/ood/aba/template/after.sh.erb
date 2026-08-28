@@ -16,6 +16,18 @@
 # create_yml run and OOD show "Connect". Generous timeout for a cold fat image; on
 # timeout the helper returns non-zero and the framework writes connection.yml anyway
 # (fail-open — never worse than today, just no longer premature).
+#
+# AND REPORT WHICH HAPPENED. The success line used to print unconditionally,
+# after a `wait_until_port_used` whose status was discarded — so a session whose
+# app never started at all still ended with "is accepting connections — OK to
+# advertise Connect". An admin saw exactly that on 2026-08-28 on a launch that
+# had already refused to start. Failing open is deliberate; announcing success
+# while doing it is not.
 echo "after.sh: waiting for ABA to bind ${host}:${port} (a cold fat SIF can take ~1 min)..."
-wait_until_port_used "${host}:${port}" 600
-echo "after.sh: ${host}:${port} is accepting connections — OK to advertise Connect."
+if wait_until_port_used "${host}:${port}" 600; then
+  echo "after.sh: ${host}:${port} is accepting connections — OK to advertise Connect."
+else
+  echo "after.sh: ${host}:${port} NEVER accepted a connection — ABA did not start."
+  echo "after.sh: OOD still shows Connect (the framework writes connection.yml either"
+  echo "          way); clicking it will fail. The reason is above, or in preflight.log."
+fi
