@@ -335,7 +335,11 @@ def drive_prompt(feed):
         raise AssertionError("the prompt never returned — it discarded its input")
 
     old_alarm = signal.signal(signal.SIGALRM, too_slow)
-    signal.alarm(5)
+    # Generous on purpose: the alarm guards against an INFINITE block (input
+    # discarded → the read never completes), so any finite bound serves the
+    # guard — and 5 s turned one loaded-CI-runner hiccup into a red
+    # (2026-08-28, run 33131850410). A genuine swallow still fails identically.
+    signal.alarm(30)
     try:
         sys.stdin, sys.stdout = tin, tout
         value = eg._read_masked("paste: ")
@@ -346,7 +350,21 @@ def drive_prompt(feed):
         tin.close()
         tout.close()
         os.close(slave)
-    shown = os.read(master, 1 << 16).decode(errors="replace")
+    # DRAIN the master, don't sample it: the star echoes were written through
+    # a buffered file flushed at close, and a pty may deliver that flush in
+    # chunks — a single read returned 26 of 33 stars on CI (2026-08-28, run
+    # 33128474407). Every slave fd is closed by now, so reading until EOF/EIO
+    # is deterministic and complete.
+    chunks: list = []
+    while True:
+        try:
+            b = os.read(master, 4096)
+        except OSError:            # EIO — slave gone and buffer drained (linux)
+            break
+        if not b:                  # EOF (macOS spelling of the same)
+            break
+        chunks.append(b)
+    shown = b"".join(chunks).decode(errors="replace")
     os.close(master)
     return value, shown
 
