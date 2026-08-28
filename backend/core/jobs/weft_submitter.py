@@ -768,6 +768,7 @@ class WeftSubmitter:
         self.site — the POLL LOOP's generic WeftSubmitter() is site='local',
         so a resubmit must use the JOB's recorded site, never self's (a
         re-locked job once bounced to 'local' this way — found live)."""
+        _pid_for = params.get("project_id") or "default"
         import shutil as _shutil
         kind = job.get("kind") or "run_python"
         lang = "r" if kind == "run_r" else "python"
@@ -796,8 +797,13 @@ class WeftSubmitter:
             # consumer never looks and every job still saw data_dir=None —
             # verified only because a live run inspected the spec on disk
             # rather than trusting the unit test.
-            "data_dir": _project_dir_for(pid, "data"),
-            "artifacts_dir": _project_dir_for(pid, "artifacts"),
+            # `pid` is NOT a local here — this method takes (job, params,
+            # env_id, site). Reading it raised NameError at submit time, which
+            # the guide intercept turned into "background submit failed: name
+            # 'pid' is not defined" for EVERY detached job. Derive it from
+            # params, exactly as submit() does.
+            "data_dir": _project_dir_for(_pid_for, "data"),
+            "artifacts_dir": _project_dir_for(_pid_for, "artifacts"),
         }))
         ref = _adapter().sync_call("data_register", str(payload),
                                    ingest=True)["ref"]
