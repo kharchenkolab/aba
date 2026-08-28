@@ -199,8 +199,30 @@ aba_launch_scheduler() {
   # skipping a bind that was never required.
   _sld=$(ldd "$(command -v sbatch)" 2>/dev/null | awk '/libslurm/{print $3}' | head -1 || true)
   [ -n "$_sld" ] && binds+=( --bind "$(dirname "$_sld")" )
-  _scf="${SLURM_CONF:-/etc/slurm/slurm.conf}"
-  [ -f "$_scf" ] && { binds+=( --bind "$(dirname "$_scf")" ); envs+=( --env "SLURM_CONF=$_scf" ); }
+  # WHERE THE SCHEDULER CONFIG IS, including on a CONFIGLESS cluster.
+  #
+  # A classic cluster ships /etc/slurm/slurm.conf. A configless one ships none:
+  # clients find the controller by DNS SRV, and slurmd caches what it fetched at
+  # /run/slurm/conf on each node. Inside `--containall` there is no resolver, so
+  # the DNS path cannot work and every Slurm client dies with
+  #
+  #     sinfo: fatal: Could not establish a configuration source
+  #
+  # This used to test ONLY the classic path, so on a configless cluster the
+  # guard was simply false and nothing was bound — a silent no-op that left the
+  # container with no config source at all. Observed 2026-08-28, the day this
+  # cluster went configless: weft's capability probe failed, weft correctly
+  # refused to record an empty partition list as fact, and every GPU lane then
+  # reported that declining to ask for a GPU was CORRECT — a true statement
+  # about a question that could not be asked. Background sbatch fails the same
+  # way.
+  #
+  # Binding /etc/resolv.conf does NOT fix it (tested); binding the cache does.
+  # Order: an explicit SLURM_CONF, then the classic file, then the cache.
+  for _scf in "${SLURM_CONF:-}" /etc/slurm/slurm.conf /run/slurm/conf/slurm.conf; do
+    [ -n "$_scf" ] && [ -f "$_scf" ] || continue
+    binds+=( --bind "$(dirname "$_scf")" ); envs+=( --env "SLURM_CONF=$_scf" ); break
+  done
   for _m in /run/munge /var/run/munge; do [ -S "$_m/munge.socket.2" ] && binds+=( --bind "$_m" ); done
   _ml=$(ldconfig -p 2>/dev/null | awk '$1=="libmunge.so.2"{print $NF; exit}' || true)
   [ -n "$_ml" ] && binds+=( --bind "$_ml" )

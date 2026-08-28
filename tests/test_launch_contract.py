@@ -93,7 +93,7 @@ DRIVER = textwrap.dedent("""
 
 def _run(tmp_path, *, slurm: bool = True, modules: bool = True, extra: str = "",
          slurm_tmpdir: str = "", publish_tree: str | None = None,
-         base_dir: str = "", tools_dir: str = "") -> tuple[set, set, str]:
+         base_dir: str = "", tools_dir: str = "", slurm_conf=True) -> tuple[set, set, str]:
     """Source the contract in a controlled environment; return (binds, envs, tmpclean)."""
     run = tmp_path / "run"; run.mkdir(exist_ok=True)
     # A CLOSED PATH: only the utilities the contract calls, symlinked in. The
@@ -133,9 +133,15 @@ def _run(tmp_path, *, slurm: bool = True, modules: bool = True, extra: str = "",
         "ABA_BATCH_SUBMITTER": "slurm", "ABA_JOBS_GPU_ENV_PACK": "sitepack-gpu",
         "ABA_HPC_CONFIG": str(tmp_path / "hpc.yaml"),
         "ABA_NEXTFLOW_MODULE": "Nextflow/1.2.3",
-        "ABA_EXTRA_BINDS": extra, "SLURM_CONF": str(conf),
+        "ABA_EXTRA_BINDS": extra,
         "ABA_BASE_DIR": base_dir, "ABA_TOOLS_DIR": tools_dir,
     }
+    # SLURM_CONF is handed in by DEFAULT, which is exactly what hid the
+    # configless defect: with it set, the contract's first candidate always
+    # matched and no test ever exercised the fallbacks. `slurm_conf=False`
+    # withholds it, the way a configless cluster does.
+    if slurm_conf:
+        env["SLURM_CONF"] = str(conf)
     if slurm_tmpdir:
         env["SLURM_TMPDIR"] = slurm_tmpdir
     if modules:
@@ -178,6 +184,51 @@ def test_contract_binds_the_scheduler(tmp_path):
         "no synthesized NSS passwd — LDAP users are absent from the image and "
         "--containall has no SSSD, so sbatch cannot resolve the submitter")
     assert any(b.endswith("/group:/etc/group") for b in binds)
+
+
+def test_the_contract_finds_a_config_source_on_a_CONFIGLESS_cluster():
+    """A configless cluster ships no /etc/slurm/slurm.conf: clients find the
+    controller by DNS SRV, and slurmd caches what it fetched at /run/slurm/conf.
+    Inside `--containall` there is no resolver, so the DNS path cannot work and
+    every Slurm client dies with "Could not establish a configuration source".
+
+    WHAT THIS GUARDS. The contract used to test ONLY the classic path, so on a
+    configless cluster the guard was false and it bound nothing — a silent
+    no-op leaving the container with no scheduler at all. Observed 2026-08-28,
+    the day this cluster went configless: weft's capability probe failed, weft
+    correctly refused to record an empty partition list as fact, and every GPU
+    lane then reported that declining to ask for a GPU was CORRECT. Background
+    sbatch fails the same way.
+
+    The test above could not have caught it: it hands SLURM_CONF in, so the
+    first candidate always matches. Here the candidate list itself is the
+    subject."""
+    src = LAUNCHER.read_text()
+    block = src[src.index("aba_launch_scheduler()"):]
+    block = block[:block.index("\naba_launch_modules")]
+    # CODE ONLY. The first version of this matched the path in the comment that
+    # explains the fix, so reverting the code left it green — a guard satisfied
+    # by its own documentation.
+    block = "\n".join(ln for ln in block.splitlines()
+                      if not ln.lstrip().startswith("#"))
+    assert "/run/slurm/conf" in block, (
+        "the contract knows only /etc/slurm/slurm.conf, so on a configless "
+        "cluster it binds no config source and every Slurm client inside the "
+        "container fails to find one")
+    # …and the classic path is still tried, so this is a widening, not a swap.
+    assert "/etc/slurm/slurm.conf" in block
+
+
+@pytest.mark.skipif(not Path("/run/slurm/conf/slurm.conf").exists(),
+                    reason="this host is not a configless Slurm node")
+def test_on_a_configless_host_the_contract_actually_picks_the_cache_up(tmp_path):
+    """The real thing, where the host can show it: with SLURM_CONF withheld and
+    no /etc/slurm, the contract must still hand the container a config source."""
+    _b, envs, _ = _run(tmp_path, slurm=True, slurm_conf=False)
+    picked = [e for e in envs if e.startswith("SLURM_CONF=")]
+    assert picked, ("no SLURM_CONF was forwarded, so a client inside the "
+                    "container has no configuration source at all")
+    assert picked[0].endswith("/slurm.conf")
 
 
 def test_contract_binds_the_module_system(tmp_path):
