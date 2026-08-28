@@ -406,3 +406,28 @@ allow read-side execute on the current realization during installs; (3) extend i
 to walk `ensure_ready` + an agent-shaped run_python; (4) per-key kernel-pool locks; (5) stamp
 run_python body PHASES into tool telemetry so the dispatch-latency screen can name
 prologue/realize/execute/harvest instead of one opaque body time.
+
+## 2026-08-28 thread-interference ROOT CAUSE: sync tool bodies run inline on the one MCP gateway loop
+The full proof chain, from the stall-1-shaped capture (fresh thread's first turn fired mid-install,
+SIGUSR1 dumps every 3 s): (1) the installing tool's body executes ON the gateway loop thread —
+`ensure_capability` frames sit directly above `asyncio run_forever` above `gateway.py:38 run`;
+(2) fastmcp runs a sync `def` tool inline (`func_metadata.py:115`), and EVERY aba_core wrapper is a
+plain `def`; (3) mid-install dumps show the sibling's dispatcher parked at `gateway.py:64 _submit →
+fut.result()` with its tool body ABSENT; (4) the body appears only in the first dump after the
+install tool's body returns. So: ONE shared gateway loop serves every in-process tool call, and any
+long sync tool body blocks dispatch of every other tool process-wide until it RETURNS — not until
+the install finishes (hence the sibling unblocking ~9 s after weft's ensure_done, at body end).
+Weft is fully exonerated: no weft lock, no kernel gate; their reply's "body-scoped resource in your
+layer" was exactly right. Corrections to earlier entries: the stall-3 "scan crawls during install"
+hypothesis was WRONG — the fingerprint frames came from post-release dumps; the "31 s run_python"
+was ~30 s parked at _submit + a sub-second body (weft's answer stands: mid-install reads are torn,
+never slowed). The bare-loop probe stayed green because it calls the layers directly, bypassing the
+gateway — the one gate no instrument probed. `queue_wait_ms` is stamped before the gateway hop, so
+the dispatch-latency screen is blind to this class by construction. The arch doc's claim that
+"FastMCP's handling of sync tools" is not serialized (docs/arch/agent-loop.md) is false on the
+current bench and must be corrected. Blast radius is wider than installs: ANY long tool body — a
+minutes-long run_python block included — freezes every sibling thread's tool dispatch, which is the
+generalized "everything seemed frozen" report. Fix direction: run sync tool bodies off-loop
+(anyio.to_thread at the wrapper/registration seam) so the loop only orchestrates; add a
+gateway-wait stamp to tool telemetry; ship a red-proven overlap guard on the GATEWAY path (the
+existing concurrency guards measure other layers — that is how this survived them).
