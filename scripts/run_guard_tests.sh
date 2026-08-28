@@ -200,6 +200,7 @@ FILES=(
   tests/test_datasets_mechanism.py
   tests/test_deploy_forward_loop.py
   tests/test_launch_contract.py
+  tests/test_promote_drives_the_target.py
   tests/test_no_undefined_names_in_jobs.py
   tests/test_job_handoff.py
   tests/test_accelerator_note.py
