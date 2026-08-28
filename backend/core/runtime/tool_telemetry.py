@@ -32,6 +32,7 @@ def record(
     queue_wait_ms: Optional[int] = None,
     inflight:      Optional[int] = None,
     bg_backlog:    Optional[int] = None,
+    gw_lag_ms:     Optional[int] = None,
 ) -> None:
     """Write one row. Best-effort — never raises into the caller.
 
@@ -55,11 +56,11 @@ def record(
                 "INSERT INTO tool_invocations "
                 "(run_id, agent_spec, tool_name, source, status, input_summary, "
                 " duration_ms, error_summary, started_at, ended_at, "
-                " queue_wait_ms, inflight, bg_backlog) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " queue_wait_ms, inflight, bg_backlog, gw_lag_ms) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (run_id, agent_spec, tool_name, source, status, summary,
                  duration_ms, error_summary, started_at, ended_at,
-                 queue_wait_ms, inflight, bg_backlog),
+                 queue_wait_ms, inflight, bg_backlog, gw_lag_ms),
             )
             c.commit()
     except Exception:  # noqa: BLE001

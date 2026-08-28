@@ -1187,6 +1187,7 @@ async def stream_response(
                         pass
                 try:
                     from core.runtime.tool_telemetry import record as _record_invocation
+                    from core.runtime.mcp import gateway as _gw
                     _record_invocation(
                         run_id=turn.run_id, agent_spec=turn.agent_spec_name,
                         tool_name=name, input_=tool_input,
@@ -1199,6 +1200,8 @@ async def stream_response(
                             if _body_at else None),
                         inflight=_slot.inflight,
                         bg_backlog=_slot.bg_backlog,
+                        # same thread as the gateway hop → this call's own lag
+                        gw_lag_ms=_gw.last_dispatch_lag_ms(),
                     )
                 except Exception:  # noqa: BLE001
                     pass

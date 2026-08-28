@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import threading
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -44,6 +45,21 @@ def _ensure_loop() -> asyncio.AbstractEventLoop:
     return loop
 
 
+# Loop-entry lag of the CALLER's most recent _submit, per dispatcher thread:
+# how long the submitted coroutine waited before the loop first ran it. The
+# starvation class this measures (a sync tool body holding the loop) hid
+# inside tool "body time" for weeks because queue_wait_ms is stamped BEFORE
+# the gateway hop — this is the stamp for the other side of that hop. Read by
+# tool_telemetry after the call returns (same thread).
+_dispatch_lag = threading.local()
+
+
+def last_dispatch_lag_ms() -> "int | None":
+    """Loop-entry lag (ms) of this thread's most recent gateway call, or None
+    when no gateway call has happened on this thread."""
+    return getattr(_dispatch_lag, "ms", None)
+
+
 def _submit(coro, cancel_token=None):
     """Run a coroutine on the background loop and wait for its result.
     When a cancel_token is supplied, register fut.cancel as an
@@ -56,7 +72,14 @@ def _submit(coro, cancel_token=None):
     add `session.send_notification('cancelled', ...)` inside the
     interrupter; the call signature here doesn't change."""
     loop = _ensure_loop()
-    fut = asyncio.run_coroutine_threadsafe(coro, loop)
+    t0 = time.monotonic()
+    entered: dict = {}
+
+    async def _timed():
+        entered["at"] = time.monotonic()
+        return await coro
+
+    fut = asyncio.run_coroutine_threadsafe(_timed(), loop)
     unregister = None
     if cancel_token is not None:
         unregister = cancel_token.register(lambda: fut.cancel())
@@ -67,6 +90,8 @@ def _submit(coro, cancel_token=None):
                 "note": f"MCP call cancelled by user "
                         f"({cancel_token.reason if cancel_token else 'cancelled'})."}
     finally:
+        _dispatch_lag.ms = (int((entered["at"] - t0) * 1000)
+                            if "at" in entered else None)
         if unregister is not None:
             unregister()
 

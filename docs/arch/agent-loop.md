@@ -212,24 +212,46 @@ bounded pool** (`background_pool()`, 8 workers, `aba-bg` threads). They must
 not share: a saturated dispatch executor makes every tool call wait, and
 best-effort background work is exactly what should never be able to cause that.
 
+**The gateway loop is an orchestrator, never a workroom.** Every MCP-served
+tool call crosses ONE shared background event loop (`mcp/gateway.py`,
+`run_coroutine_threadsafe`), and fastmcp dispatches a sync `def` tool INLINE
+on the loop serving it — so before 2026-08-28, one long sync body (a 90 s
+package install, a minutes-long analysis block: every aba_core tool is sync)
+froze dispatch of every other tool in the process. The sibling waited not for
+the install but for the installing FUNCTION to return; the freeze survived a
+concurrency guard whose clocks themselves rode the blocked loop and whose fake
+yielded where the real path did not (both defeat-modes by name; the stack-dump
+proof chain is in regtest/FINDINGS.md 2026-08-28). The policy that retires the
+class: `core/runtime/mcp/offload.py` rewrites every sync tool at the
+in-process connect seam (`in_process.py`) to execute on a worker thread
+(`anyio.to_thread`, dedicated 64-slot limiter, `abandon_on_cancel=True` so
+Stop stays prompt while the body drains) — schema untouched by construction,
+because fastmcp freezes the contract at registration and dispatch reads only
+`fn`/`is_async`.
+
 Because a queued dispatch and a slow tool are indistinguishable from outside,
 `tool_invocations` records the split: `duration_ms` is the whole thing,
 `queue_wait_ms` is the part spent waiting to start (stamped by
-`tool_telemetry.timed_body`), and `pool_queued`/`pool_workers` are the
-executor's backlog and size at dispatch. Without that split two production
+`tool_telemetry.timed_body`), `pool_queued`/`pool_workers` are the
+executor's backlog and size at dispatch, and `gw_lag_ms` is the OTHER side of
+the gateway hop — how long the submitted call waited for the shared loop to
+first run it (`gateway.last_dispatch_lag_ms`), which is precisely where the
+sync-body starvation hid inside "body time". Without the split two production
 stalls could not be diagnosed after the fact — a `Skill` call (a registry read,
 2 ms in every other turn of the same session) recorded 349 s, and a
 `run_python` recorded 134 s for 0.587 s of execution; both read as "the tool was
 slow". `regtest/harness/dispatch_latency.py` screens any project DB for rows
-where the wait dominates, so a stall reports itself instead of needing someone
-to notice a slow session. Guards:
-`backend/tests/test_background_never_starves_dispatch.py`,
+where either wait dominates, so a stall reports itself instead of needing
+someone to notice a slow session. Guards:
+`backend/tests/test_tool_dispatch_is_concurrent.py` (the starvation class on
+the production path — event-ordered, clocks on OS threads the loop cannot
+touch, bodies asserted OFF-loop, contract preserved, red-proven against a
+disabled offload), `backend/tests/test_background_never_starves_dispatch.py`,
 `tests/test_dispatch_latency_screen.py`.
 
-Note what is NOT serialized, each established by measurement rather than
-inspection: the MCP gateway's shared background loop, FastMCP's handling of
-sync tools, weft kernel block execution (two kernels in two threads run
-concurrently), and weft session installs against concurrent session reads.
+Note what else is NOT serialized, established by measurement: weft kernel
+block execution (two kernels in two threads run concurrently) and weft session
+installs against concurrent session reads.
 
 ## Key implementation references
 

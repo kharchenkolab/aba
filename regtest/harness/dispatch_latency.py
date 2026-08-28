@@ -39,7 +39,7 @@ def _rows(db: str) -> list[dict]:
         # worse answer than a partial one, because the screen then reports on
         # nothing at all.
         want = ["run_id", "tool_name", "duration_ms", "queue_wait_ms",
-                "inflight", "bg_backlog", "started_at"]
+                "inflight", "bg_backlog", "gw_lag_ms", "started_at"]
         have = [c for c in want if c in cols]
         rows = [dict(r) for r in con.execute(
             f"SELECT {', '.join(have)} FROM tool_invocations "
@@ -64,17 +64,24 @@ def audit(db: str) -> dict:
     if not rows:
         return {"db": db, "measured": False, "checked": 0, "stalls": [],
                 "note": "no tool invocations carry a queue-wait stamp yet"}
+    # A stall is a wait on EITHER side of the gateway hop: queue_wait_ms is
+    # the executor wait BEFORE the hop; gw_lag_ms is the shared-loop entry lag
+    # AFTER it — the side the 2026-08 sync-body starvation hid on (93 s of
+    # "body time" that was the loop refusing to run the call).
+    def _wait(r):
+        return max(r["queue_wait_ms"] or 0, r["gw_lag_ms"] or 0)
     stalls = [r for r in rows
-              if (r["queue_wait_ms"] or 0) >= STALL_MS
-              and (r["queue_wait_ms"] or 0) >= WAIT_SHARE * max(1, r["duration_ms"] or 0)]
+              if _wait(r) >= STALL_MS
+              and _wait(r) >= WAIT_SHARE * max(1, r["duration_ms"] or 0)]
     return {"db": db, "measured": True, "checked": len(rows),
             "stalls": [{"tool": r["tool_name"], "run": r["run_id"],
-                        "waited_ms": r["queue_wait_ms"],
-                        "body_ms": (r["duration_ms"] or 0) - (r["queue_wait_ms"] or 0),
+                        "waited_ms": _wait(r),
+                        "gw_lag_ms": r["gw_lag_ms"],
+                        "body_ms": (r["duration_ms"] or 0) - _wait(r),
                         "inflight": r["inflight"],
                         "bg_backlog": r["bg_backlog"],
                         "at": r["started_at"]} for r in stalls],
-            "worst_wait_ms": rows[0]["queue_wait_ms"]}
+            "worst_wait_ms": max((_wait(r) for r in rows), default=0)}
 
 
 def checks(db: str) -> list[tuple[str, bool]]:

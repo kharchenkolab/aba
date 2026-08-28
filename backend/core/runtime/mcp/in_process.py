@@ -102,6 +102,14 @@ class InProcessServerHandle:
             self.last_error = None
             try:
                 server: FastMCP = self.server_factory()
+                # Sync tool bodies must never run ON the shared gateway loop —
+                # one long body (a 90 s install) starves every other tool call
+                # in the process (see offload.py for the incident). Applied
+                # here so every factory-built server gets it on every
+                # (re)connect; a failure fails the connect rather than
+                # silently serving a loop-blocking catalog.
+                from .offload import offload_sync_tools
+                offload_sync_tools(server)
                 stack = AsyncExitStack()
                 # create_connected_server_and_client_session is an async
                 # context manager that yields a ready ClientSession;

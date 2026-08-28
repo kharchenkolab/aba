@@ -1,25 +1,24 @@
 """One slow tool must not block every other tool in the process.
 
-Live 2026-08-26: a `Skill` call — a recipe file read, 4 ms and 5 ms in other
-turns — took 349 SECONDS, finishing within seconds of two concurrent
-`ensure_capability` calls (356 s, 363 s). Three threads, three turns, and the
-trivial one waited for the expensive ones. The user's first question in a fresh
-project took ten minutes to appear.
+Live 2026-08-26 → root-caused 2026-08-28: a `Skill` call (4 ms in other turns)
+took 349 s beside two concurrent `ensure_capability` calls; a one-line
+run_python took 93 s beside a 91 s install, unblocking when the installing
+FUNCTION returned. The mechanism: every aba_core tool is a sync `def`, fastmcp
+runs a sync tool INLINE on the loop serving it, and all in-process servers
+share the ONE gateway loop — so one long tool body starved every other tool
+call in the process. The fix is `core.runtime.mcp.offload` (sync bodies →
+worker threads), applied at the in-process connect seam.
 
-The cause is still unidentified. These guards exist because the investigation
-ELIMINATED two prime suspects by measurement, and both are load-bearing enough
-that a future change could reintroduce the problem here without anyone noticing:
-
-  * the gateway's single shared background loop (every tool call is
-    `run_coroutine_threadsafe` onto ONE loop — an obvious serialization point,
-    and it is not one, because the calls yield)
-  * FastMCP's handling of SYNC tools (all 14 bio tools in discovery.py are
-    plain `def`; if FastMCP awaited them inline on its loop, one blocking tool
-    would freeze the server — it offloads them instead)
-
-If either becomes serial, these fail. What they do NOT do is prove the live
-problem is gone: it lives somewhere these do not reach.
+THE PREVIOUS VERSION OF THIS FILE WAS GREEN THROUGH THE LIVE BUG — both named
+failure modes at once. Its fastmcp test timed the trivial call with clocks that
+ran ON the loop under test (a blocked loop freezes the `anyio.sleep` launch gate
+AND the timer with it, so the measured duration stays small), and its gateway
+test's fake handler wrapped the block in `asyncio.to_thread` — yielding where
+the real path did not. The re-cut rules, so it cannot happen again: every clock
+lives on an OS thread the loop cannot touch, and the slow body must PROVE it
+has entered (threading.Event) before the trivial call is issued.
 """
+import asyncio
 import threading
 import time
 
@@ -27,89 +26,147 @@ import pytest
 
 pytestmark = pytest.mark.platform
 
-SLOW_S = 2.0
+SLOW_S = 1.5
+BUDGET_S = 0.5 * SLOW_S
 
 
-def test_the_gateway_does_not_serialize_tool_calls():
-    """A trivial call issued while a slow one is in flight must return first."""
-    from core.runtime.mcp import gateway
-
-    class _H:
-        config = type("C", (), {"name": "t", "default_timeout_s": 60})()
-        state = None
-        tools: list = []
-        last_error = None
-        restart_attempts = 0
-
-        async def call_tool(self, raw, args, timeout_s=None):
-            import asyncio
-            if raw == "slow":
-                await asyncio.to_thread(time.sleep, SLOW_S)
-            return {"status": "ok"}
-
-    saved, saved_started = dict(gateway._handles), gateway._started
-    gateway._handles["t"] = _H()
-    gateway._started = True
-    try:
-        out = {}
-
-        def call(label, tool):
-            t0 = time.time()
-            gateway.call(f"t:{tool}", {})
-            out[label] = time.time() - t0
-
-        slow = threading.Thread(target=call, args=("slow", "slow"))
-        slow.start()
-        time.sleep(0.3)                      # ensure it is genuinely in flight
-        fast = threading.Thread(target=call, args=("fast", "fast"))
-        fast.start()
-        slow.join(); fast.join()
-
-        assert out["slow"] >= SLOW_S * 0.8, "the slow call did not actually run"
-        assert out["fast"] < SLOW_S * 0.5, (
-            f"the trivial call waited {out['fast']:.1f}s for the slow one — "
-            f"tool dispatch is serialized")
-    finally:
-        gateway._handles.clear(); gateway._handles.update(saved)
-        gateway._started = saved_started
-
-
-def test_fastmcp_runs_sync_tools_off_its_event_loop():
-    """Every bio tool is a sync `def`. If FastMCP awaited them inline, one
-    blocking install would freeze every other turn in the process."""
-    anyio = pytest.importorskip("anyio")
+def _mini_server(slow_started: threading.Event,
+                 slow_release: threading.Event,
+                 body_threads: dict):
+    """A FastMCP server with the shapes under test — all sync `def`, like
+    every real aba_core tool."""
     from mcp.server.fastmcp import FastMCP
-
-    mcp = FastMCP("t")
+    mcp = FastMCP("mini")
 
     @mcp.tool()
     def slow() -> str:
-        time.sleep(SLOW_S)          # BLOCKING, like a real install
-        return "slow"
+        body_threads["slow"] = threading.current_thread().name
+        slow_started.set()
+        slow_release.wait(SLOW_S)      # blocking body, interruptible by test
+        return "slow-done"
 
     @mcp.tool()
     def fast() -> str:
-        return "fast"
+        body_threads["fast"] = threading.current_thread().name
+        return "fast-done"
 
-    async def main():
-        from mcp.shared.memory import (
-            create_connected_server_and_client_session as conn)
-        async with conn(mcp._mcp_server) as client:
-            out = {}
+    @mcp.tool()
+    def boom() -> str:
+        raise RuntimeError("intentional")
 
-            async def go(name):
-                s = time.time()
-                await client.call_tool(name, {})
-                out[name] = time.time() - s
+    return mcp
 
-            async with anyio.create_task_group() as tg:
-                tg.start_soon(go, "slow")
-                await anyio.sleep(0.3)
-                tg.start_soon(go, "fast")
-            return out
 
-    out = anyio.run(main)
-    assert out["slow"] >= SLOW_S * 0.8
-    assert out["fast"] < SLOW_S * 0.5, (
-        f"a sync tool blocked the server for {out['fast']:.1f}s — FastMCP is "
-        f"running sync tools on its event loop")
+@pytest.fixture()
+def gateway_mini():
+    """The REAL seam: register the mini server through the gateway's
+    in-process door (offload applied at connect), yield a caller, restore."""
+    from core.runtime.mcp import gateway
+    slow_started, slow_release = threading.Event(), threading.Event()
+    body_threads: dict = {}
+    saved, saved_started = dict(gateway._handles), gateway._started
+    try:
+        out = gateway.register_inprocess_server(
+            "mini", lambda: _mini_server(slow_started, slow_release, body_threads))
+        assert out.get("status") in ("connected", "already_connected"), out
+        yield gateway, slow_started, slow_release, body_threads
+    finally:
+        h = gateway._handles.pop("mini", None)
+        if h is not None:
+            try:
+                gateway._submit(h.shutdown())
+            except Exception:  # noqa: BLE001
+                pass
+        gateway._handles.clear()
+        gateway._handles.update(saved)
+        gateway._started = saved_started
+
+
+def test_a_blocking_sync_tool_does_not_starve_a_sibling(gateway_mini):
+    """THE guard for the incident class, on the production path: gateway →
+    memory transport → fastmcp dispatch → offloaded sync body. Clocks on OS
+    threads; the trivial call issued only after the slow BODY has entered."""
+    gateway, slow_started, slow_release, body_threads = gateway_mini
+    res: dict = {}
+
+    def call(name):
+        t0 = time.time()
+        r = gateway.call(f"mini:{name}", {})
+        res[name] = (round(time.time() - t0, 2), r)
+
+    ta = threading.Thread(target=call, args=("slow",))
+    ta.start()
+    assert slow_started.wait(5), "slow body never entered — measured nothing"
+    tb = threading.Thread(target=call, args=("fast",))
+    tb.start()
+    tb.join(timeout=SLOW_S + 5)
+    assert not tb.is_alive(), "fast call still blocked after slow's full span"
+    fast_s, fast_r = res["fast"]
+    # ARMED both ways: the slow body was mid-flight when fast returned…
+    assert not res.get("slow"), "slow finished before fast measured — vacuous"
+    assert fast_s < BUDGET_S, (
+        f"a trivial tool waited {fast_s}s behind a blocking sync body — "
+        f"the gateway loop is serialized again (offload broken?)")
+    slow_release.set()
+    ta.join(timeout=10)
+    assert res["slow"][0] >= 0.0 and "slow-done" in str(res["slow"][1])
+    assert "fast-done" in str(fast_r)
+
+
+def test_sync_bodies_run_off_the_gateway_loop(gateway_mini):
+    """The forbidden ACTION, asserted directly: no sync tool body may execute
+    on the gateway loop thread (that is the exact mechanism of the freeze —
+    checking output timings alone let a permissive fake bless it before)."""
+    gateway, slow_started, slow_release, body_threads = gateway_mini
+    slow_release.set()                     # don't linger
+    gateway.call("mini:fast", {})
+    gateway.call("mini:slow", {})
+    loop_thread = gateway._thread.name
+    for name, tname in body_threads.items():
+        assert tname != loop_thread, (
+            f"tool body {name!r} ran ON the gateway loop thread {tname!r}")
+
+
+def test_offload_preserves_the_calling_contract():
+    """The wrap must change WHERE bodies run, never WHAT the tools accept:
+    schema (params/required/types) byte-identical before and after."""
+    from core.runtime.mcp.offload import offload_sync_tools
+    s1 = _mini_server(threading.Event(), threading.Event(), {})
+    s2 = _mini_server(threading.Event(), threading.Event(), {})
+    before = {n: t.parameters for n, t in s1._tool_manager._tools.items()}
+    n = offload_sync_tools(s2)
+    assert n >= 3, f"offload wrapped {n} tools — the mini server has 3 sync"
+    after = {n_: t.parameters for n_, t in s2._tool_manager._tools.items()}
+    assert before == after
+    # and an async tool passes through untouched
+    from mcp.server.fastmcp import FastMCP
+    s3 = FastMCP("a")
+
+    @s3.tool()
+    async def already_async() -> str:
+        return "ok"
+
+    fn_before = s3._tool_manager._tools["already_async"].fn
+    offload_sync_tools(s3)
+    assert s3._tool_manager._tools["already_async"].fn is fn_before
+
+
+def test_errors_still_surface_through_the_wrap(gateway_mini):
+    """A raising sync body must produce the same error envelope, not vanish
+    into the worker thread."""
+    gateway, _st, _rel, _bt = gateway_mini
+    r = gateway.call("mini:boom", {})
+    text = str(r)
+    assert "intentional" in text or "error" in text.lower(), r
+
+
+def test_offload_fails_loud_on_unknown_internals():
+    """A fastmcp bump that moves the internals must fail the connect, never
+    silently serve a loop-blocking catalog (ARMED: the no-op is the bug)."""
+    from core.runtime.mcp.offload import offload_sync_tools
+
+    class _NotAServer:
+        pass
+
+    with pytest.raises(AttributeError):
+        offload_sync_tools(_NotAServer())

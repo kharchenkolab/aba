@@ -422,6 +422,12 @@ def init_db():
             ("queue_wait_ms", "ALTER TABLE tool_invocations ADD COLUMN queue_wait_ms INTEGER"),
             ("inflight",      "ALTER TABLE tool_invocations ADD COLUMN inflight INTEGER"),
             ("bg_backlog",    "ALTER TABLE tool_invocations ADD COLUMN bg_backlog INTEGER"),
+            # gw_lag_ms: the gateway loop-entry lag — how long the dispatched
+            # call waited for the SHARED MCP loop to first run it. The 2026-08
+            # starvation (a sync install body inline on that loop froze every
+            # sibling tool) hid inside body time because queue_wait_ms stops
+            # before the gateway hop; this is the other side of that hop.
+            ("gw_lag_ms",     "ALTER TABLE tool_invocations ADD COLUMN gw_lag_ms INTEGER"),
         ):
             try:
                 c.execute(_ddl)

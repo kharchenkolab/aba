@@ -431,3 +431,21 @@ generalized "everything seemed frozen" report. Fix direction: run sync tool bodi
 (anyio.to_thread at the wrapper/registration seam) so the loop only orchestrates; add a
 gateway-wait stamp to tool telemetry; ship a red-proven overlap guard on the GATEWAY path (the
 existing concurrency guards measure other layers — that is how this survived them).
+
+## 2026-08-28 the starvation FIX: sync tool bodies off-loop (offload.py) — verified live
+`core/runtime/mcp/offload.py`, applied at the in-process connect seam: every sync tool's body now
+runs on a worker thread (anyio.to_thread, 64-slot limiter, abandon_on_cancel so Stop stays prompt);
+the gateway loop only orchestrates. Contract untouched by construction (fastmcp freezes schemas at
+registration; dispatch reads only fn/is_async — pinned by a schema-identity guard). The defeated
+guard file is RE-CUT with honest instruments: clocks on OS threads the loop cannot touch, the slow
+body proves entry (Event) before the trivial call is issued, bodies asserted OFF-loop by thread
+identity, error passthrough, fail-loud on moved fastmcp internals — red-proven (offload disabled →
+both load-bearing guards fail). New telemetry: `gw_lag_ms` (gateway loop-entry lag,
+`gateway.last_dispatch_lag_ms`) closes the blind spot — the 93 s stall hid in body time because
+queue_wait_ms stops before the gateway hop; the dispatch-latency screen now stalls on either side.
+LIVE EVALUATION (isolated bench, real agent turns): thread A ran ~260 s of long tool bodies —
+a 26 s install plus 38/79/73 s run_python blocks — while EIGHT sibling trivial turns all completed
+in 3–11 s (bodies 0.6–6 s); pre-fix the same shape stalled 21–96 s, unblocking only at A's
+body end. Max recorded gw_lag_ms across the run: 0. The wider class (long ANALYSIS bodies, not
+just installs) is closed by the same change. agent-loop.md corrected (the "not serialized,
+established by measurement" claim was defeated by loop-riding clocks + a yielding fake).
