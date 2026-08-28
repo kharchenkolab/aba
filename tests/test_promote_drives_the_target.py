@@ -42,13 +42,35 @@ def _code_only(body: str) -> str:
     return "".join(out)
 
 
+def _deploy_src() -> str:
+    if not DEPLOY.exists():
+        pytest.skip("aba-vbc checkout not present")
+    return DEPLOY.read_text()
+
+
 def _promote_body() -> str:
+    """The body of the one deployment sequence. `promote` stopped being its own
+    function: it and `stage` were the same nine steps written twice, in
+    different orders, and every incident this file records was a divergence
+    between them. They are now shorthands over `do_apply`, which is what these
+    properties are about."""
     if not DEPLOY.exists():
         pytest.skip("aba-vbc checkout not present")
     src = DEPLOY.read_text()
-    m = re.search(r"^do_promote\(\) \{(.*?)^\}", src, re.S | re.M)
-    assert m, "could not locate do_promote() in deploy.sh"
-    return _code_only(m.group(1))
+    # The sequence AND the two helpers it delegates to. `_drive` names the one
+    # place that knows how to send a deployment real prompts; `_apply_rollback`
+    # the one place that puts a deployment back. Reading only do_apply() would
+    # score the drive as absent the moment it was given a name — a guard keyed
+    # to an inline call expires the first time the code is tidied.
+    out = []
+    for fn in ("do_apply", "_drive", "_apply_rollback"):
+        m = re.search(rf"^{fn}\(\) \{{(.*?)^\}}", src, re.S | re.M)
+        assert m, f"could not locate {fn}() in deploy.sh"
+        out.append(_code_only(m.group(1)))
+    # do_apply first, so offset comparisons below are within the sequence and the
+    # helpers' bodies sort after it (a publish_card inside _apply_rollback must
+    # not read as "published early").
+    return "\n".join(out)
 
 
 def test_promote_drives_the_target():
@@ -62,7 +84,7 @@ def test_promote_drives_the_target():
 def test_the_drive_happens_before_the_card_is_published():
     """THE ordering property. publish_card is what exposes users."""
     body = _promote_body()
-    drive = body.index("verify.sh")
+    drive = body.index("_drive ")
     cards = [m.start() for m in re.finditer(r"publish_card", body)]
     assert cards, "promote no longer publishes a card at all"
     # The property is NOTHING EXPOSES USERS BEFORE THE DRIVE — not merely "a
@@ -82,15 +104,26 @@ def test_the_drive_happens_before_the_card_is_published():
 def test_a_failed_drive_rolls_back_and_restores_the_old_card():
     """A failed drive must leave users on what they had. Rolling back the
     release but NOT republishing the card would leave the new card pointing at
-    an older release — a mismatch outliving the failed promote."""
-    body = _promote_body()
-    drive = body.index("verify.sh")
-    tail = body[drive:]
-    assert "rollback" in tail, "a failed drive does not roll back"
+    an older release — a mismatch outliving the failed apply.
+
+    Two halves, because the restore now has a name: the failure path must CALL
+    the rollback, and the rollback must restore all three things (bytes, config,
+    card). Asserting only over a slice of the failure branch scored the restore
+    as missing as soon as it moved into a function."""
+    src = _deploy_src()
+    seq = re.search(r"^do_apply\(\) \{(.*?)^\}", src, re.S | re.M).group(1)
+    tail = seq[seq.index("_drive "):]
     fail_block = tail[:tail.index("die ")] if "die " in tail else tail
-    assert "stage_site_artifacts" in fail_block, (
+    assert "_apply_rollback" in fail_block, (
+        "a failed drive does not roll back")
+
+    rb = re.search(r"^_apply_rollback\(\) \{(.*?)^\}", src, re.S | re.M)
+    assert rb, "no _apply_rollback() to restore the deployment"
+    rb = _code_only(rb.group(1))
+    assert "rollback" in rb, "the rollback does not move the release back"
+    assert "stage_site_artifacts" in rb, (
         "rollback does not restore the previous release's site config")
-    assert "publish_card" in fail_block, (
+    assert "publish_card" in rb, (
         "rollback does not republish the OLD card")
 
 
@@ -98,7 +131,7 @@ def test_a_failed_rollback_is_reported_not_swallowed():
     """The worst case — drive failed AND rollback failed — must be loud, because
     the target is then live on an unverified release."""
     body = _promote_body()
-    tail = body[body.index("verify.sh"):]
+    tail = body[body.index("_drive "):]
     assert re.search(r"ROLLBACK FAILED|rollback FAILED", tail), (
         "a failed rollback is not surfaced; the operator would be told the "
         "promote aborted while the target is still on the new release")
@@ -108,7 +141,7 @@ def test_the_skip_switch_announces_itself():
     """An escape hatch is fine; a silent one is not — the whole defect was a
     promote that looked verified and wasn't."""
     body = _promote_body()
-    m = re.search(r"PROMOTE_NO_DRIVE", body)
+    m = re.search(r"APPLY_NO_DRIVE", body)
     assert m, "no documented way to skip the drive (an operator will need one)"
     after = body[m.start():]
     assert re.search(r"NOT DRIVEN|not driven", after), (

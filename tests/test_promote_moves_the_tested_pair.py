@@ -35,7 +35,7 @@ def test_promote_runs_the_pack_gate_before_moving_bytes():
     `check_pack_parity` all broke, hiding whether promote still checked
     anything at all."""
     s = _deploy()
-    body = s[s.index("do_promote() {"):]
+    body = s[s.index("do_apply() {"):]
     body = body[:body.index("\n}\n")]
     gates = [g for g in ("check_pack_pins", "check_pack_parity") if g in body]
     assert gates, "promote runs NO pack gate at all"
@@ -51,7 +51,7 @@ def test_both_refusal_tiers_survive_in_promote():
          rc=1  a judgement call an operator may override with --yes.
     """
     s = _deploy()
-    body = s[s.index("do_promote() {"):]
+    body = s[s.index("do_apply() {"):]
     body = body[:body.index("\n}\n")]
     blk = body[body.index("_pp=$?"):body.index("local vstamp")]
     assert '"$_pp" = 2' in blk and "die " in blk, (
@@ -63,7 +63,7 @@ def test_the_unoverridable_tier_is_not_gated_on_yes():
     """`--yes` skips CONFIRMATIONS. It must not skip a pre-flight that says the
     next step cannot run — it did once, and walked into the broken state."""
     s = _deploy()
-    body = s[s.index("do_promote() {"):]
+    body = s[s.index("do_apply() {"):]
     blk = body[body.index("_pp=$?"):body.index("local vstamp")]
     hard = blk[blk.index('"$_pp" = 2'):]
     hard = hard[:hard.index("\n")]
