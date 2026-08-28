@@ -45,25 +45,54 @@ interface Props {
   }
 }
 
+/** "peter.kharchenko" -> "Peter"; "pkharchenko" -> "Pkharchenko". First
+ * name only, because the button is narrow. Never a hardcoded name. */
+export function displayName(user: string): string {
+  const first = user.split(/[._\-\s]+/).filter(Boolean)[0] || user
+  return first ? first.charAt(0).toUpperCase() + first.slice(1) : 'Account'
+}
+
+/** "peter.kharchenko" -> "PK"; "pkharchenko" -> "P". Initials of the parts, so
+ * a single-token username yields ONE letter rather than a doubled one. */
+export function initialsFor(user: string): string {
+  const parts = user.split(/[._\-\s]+/).filter(Boolean)
+  if (!parts.length) return '—'
+  return parts.slice(0, 2).map(p => p.charAt(0).toUpperCase()).join('')
+}
+
 export default function Rail({ view, onNavigate, collapsed = false, projectTitle, sectionCounts, activeSection = 'threads', onProjectSection }: Props) {
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [pendingCount, setPendingCount] = useState(0)
+  // WHO is using this deployment. The name and initials used to be the string
+  // literals "Peter" and "PP", so every user of a shared install saw the
+  // deployer's name as their own account (found 2026-08-28). /api/health now
+  // reports the user the server is running as. Falls back to a neutral label
+  // rather than someone else's name if the call fails.
+  const [account, setAccount] = useState<{ name: string; initials: string }>(
+    { name: 'Account', initials: '—' })
 
   useEffect(() => {
     let cancelled = false
-    async function tick() {
-      try {
-        const r = await fetch('/api/context-suggestions?status=pending')
-        if (r.ok) {
-          const ns = await r.json()
-          if (!cancelled) setPendingCount(ns.length)
-        }
-      } catch { /* ignore */ }
-    }
-    tick()
-    const interval = setInterval(tick, settingsOpen ? 1500 : 6000)
-    return () => { cancelled = true; clearInterval(interval) }
-  }, [settingsOpen])
+    fetch('/api/health')
+      .then(r => (r.ok ? r.json() : null))
+      .then(h => {
+        const u = String(h?.user || '').trim()
+        if (!u || cancelled) return
+        setAccount({ name: displayName(u), initials: initialsFor(u) })
+      })
+      .catch(() => { /* keep the neutral fallback */ })
+    return () => { cancelled = true }
+  }, [])
+
+  // NOTE (2026-08-28): the account button also carried a badge counting
+  // /api/context-suggestions?status=pending. It is HIDDEN, not removed: the
+  // count could only ever grow, because no surface in this app can view,
+  // accept or dismiss a suggestion — `context-suggestions` appears in exactly
+  // one other frontend file, a smoke test. The backend has the whole lifecycle
+  // (POST /api/context-suggestions/{id}/action, reject-all, and a
+  // pending->rejected transition in core/graph/audit.py), so this is a missing
+  // review surface, not a missing feature. A badge that only increases and
+  // leads to an unrelated screen teaches people to ignore badges. Restore it
+  // together with somewhere to act on them. See misc/context_suggestions_todo.md.
 
   type SectionDef = { key: ProjectSection; label: string; icon: ProjectSection; count: number; visible: boolean }
   const c = (k: keyof NonNullable<typeof sectionCounts>) => sectionCounts?.[k] ?? 0
@@ -179,9 +208,8 @@ export default function Rail({ view, onNavigate, collapsed = false, projectTitle
         onClick={() => setSettingsOpen(true)}
         title="Account & settings"
       >
-        <div className="rail__avatar">PP</div>
-        <span>Peter</span>
-        {pendingCount > 0 && <span className="rail__badge">{pendingCount}</span>}
+        <div className="rail__avatar">{account.initials}</div>
+        <span>{account.name}</span>
       </button>
       {settingsOpen && <Settings onClose={() => setSettingsOpen(false)} />}
       <FirstRunGate settingsOpen={settingsOpen} onOpenSettings={() => setSettingsOpen(true)} />

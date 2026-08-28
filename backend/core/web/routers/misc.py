@@ -103,7 +103,26 @@ def health():
     from core.runtime import selfcheck
     return {"ok": True, "degraded": selfcheck.degraded(),
             "worst": selfcheck.worst_severity(), "warnings": selfcheck.warnings(),
-            **_running_build()}
+            **_running_build(), **_running_as()}
+
+
+def _running_as() -> dict:
+    """WHO the server is answering as: ``{user, group}``.
+
+    The UI's account button displayed a HARDCODED name and initials, so every
+    user of a shared deployment saw the deployer's name as their own — found
+    2026-08-28. Nothing exposed the identity, so there was nothing for the
+    button to read. A session runs AS the user (the OOD job is theirs), so the
+    process owner is the honest answer; ABA_GROUP is the enrolled group the
+    launcher resolved. Both are already visible to the user in their own shell —
+    this exposes no privilege."""
+    import getpass
+    import os
+    try:
+        user = getpass.getuser()
+    except Exception:  # noqa: BLE001 — an unnamed process must not 500 /health
+        user = ""
+    return {"user": user, "group": os.environ.get("ABA_GROUP", "")}
 
 
 def _running_build() -> dict:
