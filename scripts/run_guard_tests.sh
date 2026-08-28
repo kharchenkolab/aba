@@ -130,6 +130,7 @@ FILES=(
   # the probe's own gates, and the placement oracle. Pure — no live server.
   tests/test_regtest_cost_ceilings.py
   tests/test_regtest_job_placement.py
+  tests/test_placement_rate_gate.py
   tests/test_regtest_coverage_matrix.py
   tests/test_install_probe_gate.py
   # agent-facing surfaces hardened alongside them
