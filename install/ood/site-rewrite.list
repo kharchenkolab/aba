@@ -1,0 +1,29 @@
+# Card files whose DEFAULT SHARE ROOT literal a site deploy script must rewrite.
+#
+# The card ships working defaults (`/cluster/aba`, cluster "dev-cluster") rather
+# than __TOKEN__ placeholders, so a bare deployment renders clean — see
+# install/ood/README.md and test_shipped_app_files_carry_no_template_tokens.
+# A deployment that roots ABA anywhere else has to rewrite that literal, and
+# only in the files below: everywhere else the value arrives through the
+# environment.
+#
+# Paths are relative to install/ood/aba/. Read by the site deploy script; kept
+# exact by test_the_site_rewrite_list_is_complete_and_exact, which fails if a
+# new file starts depending on the literal and nobody adds it here.
+#
+# WHY THESE THREE
+#   form.yml.erb, submit.yml.erb   render in the DASHBOARD, before any of this
+#                                  app's shell has run, so nothing has exported
+#                                  ABA_SITE_CONFIG yet and the literal is the
+#                                  only thing that resolves site.yaml.
+#   template/before.sh.erb         runs FIRST on the node and is where
+#                                  ABA_SHARE is defined. Its `${ABA_SHARE:-…}`
+#                                  reads like an overridable fallback, but on an
+#                                  ordinary OOD launch nothing sets ABA_SHARE
+#                                  beforehand (submit.yml.erb does not export
+#                                  it), so the literal IS the value. Every other
+#                                  template/ script runs after this one and
+#                                  takes the root from the environment.
+form.yml.erb
+submit.yml.erb
+template/before.sh.erb

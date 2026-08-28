@@ -28,6 +28,32 @@ _TOKEN = re.compile(r"__[A-Z][A-Z0-9_]{2,}__")
 # session's proxy prefix — the mentions in that script ARE the injector.
 _SELF_CONTAINED = {"__OOD_PREFIX__"}
 
+# The share root the card ships with, and the declared list of files whose copy
+# of it a site deploy script must rewrite.
+DEFAULT_SHARE = "/cluster/aba"
+REWRITE_LIST = OOD / "site-rewrite.list"
+
+
+def _rewrite_list() -> "list[str]":
+    return [ln.strip() for ln in REWRITE_LIST.read_text().splitlines()
+            if ln.strip() and not ln.lstrip().startswith("#")]
+
+
+def _mentions_of_default_share() -> "list[tuple[str, int, str]]":
+    """(relpath, lineno, line) for every non-comment mention of DEFAULT_SHARE."""
+    out = []
+    for f in sorted(APP.rglob("*")):
+        if not f.is_file():
+            continue
+        try:
+            text = f.read_text()
+        except UnicodeDecodeError:
+            continue
+        for i, line in enumerate(text.splitlines(), 1):
+            if DEFAULT_SHARE in line and not line.lstrip().startswith("#"):
+                out.append((str(f.relative_to(APP)), i, line.strip()))
+    return out
+
 
 def test_shipped_app_files_carry_no_template_tokens():
     """No __TOKEN__ placeholders in any shipped app file: injectors live in
@@ -154,10 +180,17 @@ def test_node_side_scripts_take_the_share_root_from_the_environment():
     before.sh.erb has exported ABA_SHARE / ABA_SITE_CONFIG. They are therefore
     NOT on the deployer's rewrite list — which is only safe while every mention
     of the default is overridable. A bare `/cluster/aba` in one of them would be
-    an unrewritten hardcode pointing at a path the site does not have."""
+    an unrewritten hardcode pointing at a path the site does not have.
+
+    before.sh.erb is EXCLUDED, and the exclusion is the point. It is where
+    ABA_SHARE is defined, so its `${ABA_SHARE:-…}` is not an override of an
+    earlier value — on an ordinary launch nothing set one, and the literal is
+    the value. Scanning it here scored it "safe" on the `:-` alone and so
+    reported on the one node-side file that genuinely must be rewritten. It is
+    covered by test_the_site_rewrite_list_is_complete_and_exact instead."""
     offenders = []
     for f in sorted((APP / "template").rglob("*")):
-        if not f.is_file():
+        if not f.is_file() or f.name == "before.sh.erb":
             continue
         for i, line in enumerate(f.read_text(errors="ignore").splitlines(), 1):
             if "/cluster/aba" not in line or line.lstrip().startswith("#"):
@@ -168,6 +201,71 @@ def test_node_side_scripts_take_the_share_root_from_the_environment():
         "node-side script hardcodes the default share root with no ${VAR:-…} "
         "override, and the deployer does not rewrite these files:\n"
         + "\n".join(offenders))
+
+
+def test_the_site_rewrite_list_is_complete_and_exact():
+    """install/ood/site-rewrite.list names every card file whose default share
+    root a deploy script must rewrite, and the deploy script reads that list
+    instead of carrying its own copy.
+
+    WHAT THIS GUARDS. The list used to live only as three paths inside a
+    `sed -i` in a site-private shell script, and the failure it protects against
+    is the one its own comment describes: "Miss one and the card reads a
+    site.yaml that isn't there" — then degrades to the shipped portable ladder
+    instead of erroring, so the card launches and is quietly wrong.
+
+    Two of the three were pinned by the test above this one. The third,
+    template/before.sh.erb, was not, and could not have been: the node-side scan
+    treats a `${VAR:-default}` as safe, which is right for a script that READS
+    ABA_SHARE and wrong for the one that DEFINES it.
+
+    The property is a partition with no heuristic in it. Every non-comment
+    mention of the default share root is either (a) on the list, or (b) in a
+    template/ script that runs after before.sh.erb has exported the value, in
+    which case it must be written as an env-overridable `${VAR:-…}`."""
+    listed = _rewrite_list()
+    assert listed, "site-rewrite.list is empty — the deploy script would rewrite nothing"
+    for rel in listed:
+        assert (APP / rel).is_file(), f"site-rewrite.list names {rel}, which does not exist"
+
+    # (b) only holds because before.sh.erb is itself rewritten.
+    assert "template/before.sh.erb" in listed, (
+        "template/before.sh.erb is not on the rewrite list, so ABA_SHARE is "
+        "defined from the shipped default and every later template/ script "
+        "inherits the wrong root — the exemption the node-side test relies on "
+        "no longer holds")
+
+    mentions = _mentions_of_default_share()
+    assert mentions, (
+        f"no file mentions {DEFAULT_SHARE} any more — the shipped default "
+        "changed and this contract needs rewriting, not deleting")
+
+    offenders, unoverridable = [], []
+    for rel, lineno, line in mentions:
+        if rel in listed:
+            continue
+        if rel.startswith("template/"):
+            # Runs after before.sh.erb; must take the value from the env.
+            if ":-" not in line.split(DEFAULT_SHARE)[0][-40:]:
+                unoverridable.append(f"{rel}:{lineno}: {line}")
+            continue
+        offenders.append(f"{rel}:{lineno}: {line}")
+    assert not offenders, (
+        f"these files use {DEFAULT_SHARE} but are not on "
+        "install/ood/site-rewrite.list, and do not run after before.sh.erb has "
+        "exported ABA_SHARE — a site deploy would leave them pointing at a path "
+        "the site does not have:\n" + "\n".join(offenders))
+    assert not unoverridable, (
+        "these run after before.sh.erb but hardcode the default with no "
+        "${VAR:-…} override:\n" + "\n".join(unoverridable))
+
+    # …and nothing stale: a listed file that no longer mentions the default is a
+    # rewrite the deploy script performs against nothing.
+    mentioned = {rel for rel, _, _ in mentions}
+    stale = [rel for rel in listed if rel not in mentioned]
+    assert not stale, (
+        f"site-rewrite.list names files that no longer mention {DEFAULT_SHARE}: "
+        f"{stale} — drop them, or the deploy script rewrites nothing there")
 
 
 def test_session_tmpdir_prefers_node_local_and_cleans_fallback():

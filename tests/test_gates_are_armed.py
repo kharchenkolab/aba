@@ -81,6 +81,21 @@ def test_a_universal_pass_message_names_its_subject_count():
         "the PASS line must carry the subject count it is quantifying over")
 
 
+def _install_branch(path) -> "list[str]":
+    """The `case` branch handling a BARE `--install` in a deploy shell script,
+    whatever else that branch is also spelled as (`--verify-installs|--install)`).
+    Returns the stripped source lines, so callers assert on what it DOES."""
+    out = []
+    for line in path.read_text().splitlines():
+        s = line.strip()
+        if not s.endswith(";;") and ")" not in s:
+            continue
+        head = s.split(")")[0]
+        if "--install" in head.split("|") or head == "--install":
+            out.append(s)
+    return out
+
+
 def test_the_install_gate_default_scope_can_install():
     """The arming check only bites if the DEFAULT scope is capable of
     installing. `--install` defaulting to pack-provided-only satisfied every
@@ -92,15 +107,21 @@ def test_the_install_gate_default_scope_can_install():
     `DO_INSTALL=pack` and forwarded `--install=pack`, taking verify.sh's
     `--install=*` branch and bypassing the fixed default entirely. The gate
     ran pack-provided-only for one more release with a green guard on it.
-    A guard that reads a file the shipped path does not use is decoration."""
+    A guard that reads a file the shipped path does not use is decoration.
+
+    MATCH THE BRANCH, NOT ITS FIRST SPELLING. This asserted on a line STARTING
+    with `--install)`. When the flag was given its real name and the branch
+    became `--verify-installs|--install)`, both assertions here stopped finding
+    anything and the file went red — unnoticed, because it only runs when
+    aba-vbc happens to sit beside this checkout. A guard keyed to one spelling
+    of a name is a guard that expires when the name improves."""
     vbc = REPO.parent / "aba-vbc"
     if not (vbc / "verify.sh").exists():
         pytest.skip("aba-vbc checkout not alongside this one")
-    assert "--install) INSTALL=mixed" in (vbc / "verify.sh").read_text()
+    assert _install_branch(vbc / "verify.sh") and "INSTALL=mixed" in _install_branch(vbc / "verify.sh")[0], (
+        "verify.sh's bare --install no longer defaults to the mixed corpus")
 
-    dsh = (vbc / "deploy.sh").read_text()
-    bare = [l for l in dsh.splitlines()
-            if l.strip().startswith("--install)")]
+    bare = _install_branch(vbc / "deploy.sh")
     assert bare, "deploy.sh no longer parses a bare --install"
     assert "pack" not in bare[0], (
         f"deploy.sh pins its own install scope and overrides verify.sh's "
@@ -115,10 +136,9 @@ def test_the_install_scope_has_exactly_one_owner():
         pytest.skip("aba-vbc checkout not alongside this one")
     owners = []
     for name in ("verify.sh", "deploy.sh"):
-        for line in (vbc / name).read_text().splitlines():
-            t = line.strip()
-            if t.startswith("--install)") and "=" in t and "default" not in t:
-                owners.append(f"{name}: {t}")
+        for line in _install_branch(vbc / name):
+            if "=" in line and "default" not in line:
+                owners.append(f"{name}: {line}")
     assert len(owners) == 1, (
         f"the bare --install default is decided in {len(owners)} places: "
         f"{owners}")
