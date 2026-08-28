@@ -182,9 +182,20 @@ def propose(caps: dict, *, dest: str = "",
 
     ver = sched.get("version") or ""
     if sched_type == "slurm":
+        # SAY THE GPUs OUT LOUD. `totals['gpus']` was computed and then never
+        # mentioned: the accelerator text lives in the `elif has_gpu` branch
+        # below, which a Slurm cluster can never reach. So on a GPU-equipped
+        # cluster the most salient line the agent reads about the machine did
+        # not mention that it has any — the fact was available only by reading
+        # the partition table. Measured consequence (2026-08-28, n=10,
+        # regtest/placement `cluster_gpu_unhinted_training`): the agent set
+        # est_gpu on 6 of 10 identical training requests, and a job that does
+        # not ask lands on a CPU partition and trains slowly.
+        _gpus = (totals or {}).get("gpus") or 0
         headline = (f"This is a Slurm cluster{f' (v{ver})' if ver else ''} — "
                     f"{totals['nodes']} nodes in {totals['partitions']} "
-                    f"partition{'s' if totals['partitions'] != 1 else ''}")
+                    f"partition{'s' if totals['partitions'] != 1 else ''}"
+                    + (f", {_gpus} GPUs" if _gpus else ""))
     elif has_gpu:
         gpu_bits = ", ".join(f"{g.get('count', 1)}× {g.get('model', 'GPU')}"
                              for g in gpus) or "GPUs"

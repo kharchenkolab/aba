@@ -798,7 +798,8 @@ def wf_gpu_recognised(pid, tid, site):
         f"PyTorch on synthetic data — a few dense layers, 200k rows x 128 "
         f"features, 3 epochs. Write the final loss, the training time, and the "
         f"compute device it actually ran on to train_result.csv. It should "
-        f"finish in well under a minute; tell me when it's queued.")
+        f"finish in well under a minute. When it's done, tell me the device "
+        f"name it reported — I want to see it, not just have it in the file.")
     _wait_jobs_settled(pid, timeout_s=1800)
     jobs = api("GET", "/api/jobs")
     jobs = jobs if isinstance(jobs, list) else jobs.get("jobs", [])
@@ -849,9 +850,14 @@ def wf_gpu_recognised(pid, tid, site):
         # satisfied by prose saying the opposite. Two conditions now, and the
         # first is the ask itself — this assertion can no longer be green while
         # the one above it is red, which is the contradiction that exposed it.
-        ("the job actually RAN on a GPU (asked, and a device reports back)",
-         bool(asked_gpu) and any(
-             _gpu_device_seen(str(r)) for r in tool_results(pid, tid))),
+        # Scan the JOB'S OWN OUTPUT (log_tail), not just tool results and never
+        # the agent's prose. The agent reporting "it ran on a B200" is a claim;
+        # log_tail is what the process on the node actually printed. Tool
+        # results stay in the net because a sync lane surfaces output there.
+        ("the job actually RAN on a GPU (asked, and the JOB reported a device)",
+         bool(asked_gpu) and (
+             any(_gpu_device_seen(str(j.get("log_tail") or "")) for j in mine)
+             or any(_gpu_device_seen(str(r)) for r in tool_results(pid, tid)))),
     ]
 
 
@@ -902,10 +908,16 @@ def wf_cpu_on_gpu_cluster_says_so(pid, tid, site):
     # and an agent asked for a matrix multiply will reasonably reach for numpy —
     # in which case the note is CORRECTLY silent and the run proves nothing. The
     # library is the precondition; the volunteered explanation is the subject.
+    # A CPU BASELINE is a real thing to want, and it is the only phrasing that
+    # keeps the agent off the accelerator: "run it on the CPU" alone was
+    # overridden — the agent requested a GPU anyway, the note was correctly
+    # silent, and the lane could not observe its subject at all. Give the
+    # refusal a REASON rather than an instruction.
     cap = drive(pid, tid,
-        f"As a BACKGROUND job on '{site}': using PyTorch (import torch), "
-        f"multiply two 2000x2000 tensors and print how long it took. Run it on "
-        f"the CPU — no accelerator needed for this one.")
+        f"I need a CPU-only baseline number before I try any accelerator. As a "
+        f"BACKGROUND job on '{site}', using PyTorch (import torch), multiply two "
+        f"2000x2000 tensors on the CPU and print how long it took. Do not request "
+        f"a GPU for this one — the whole point is the CPU timing.")
     _wait_jobs_settled(pid, timeout_s=900)
     jobs = api("GET", "/api/jobs")
     jobs = jobs if isinstance(jobs, list) else jobs.get("jobs", [])
