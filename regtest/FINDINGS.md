@@ -449,3 +449,30 @@ in 3–11 s (bodies 0.6–6 s); pre-fix the same shape stalled 21–96 s, unbloc
 body end. Max recorded gw_lag_ms across the run: 0. The wider class (long ANALYSIS bodies, not
 just installs) is closed by the same change. agent-loop.md corrected (the "not serialized,
 established by measurement" claim was defeated by loop-riding clocks + a yielding fake).
+## GPU recognition rate — baseline, and one hypothesis that failed (2026-08-28)
+
+`regtest/placement/study.py --only cluster_gpu_unhinted_training --repeat 10`,
+model claude-opus-5. The request describes training work on a cluster with idle
+GPUs and never mentions accelerators.
+
+| variant | est_gpu | background |
+|---|---|---|
+| as shipped | **6/10** | 7/10 |
+| `+ ", N GPUs"` in the Slurm headline | 5/10 | 5/10 |
+
+**Baseline: the agent asks for a GPU on 6 of 10 identical requests.** A job that
+does not ask lands on a CPU partition and trains slowly; before 2026-08-28 it
+also said nothing about it (see the accelerator note, now fixed and covered by
+`wf_cpu_on_gpu_cluster_says_so`).
+
+**The failed hypothesis, recorded so it is not re-tried blind.** On a Slurm
+cluster the summary headline said "N nodes in M partitions" and never mentioned
+GPUs — `totals['gpus']` was computed and dropped, because the accelerator text
+sits in an `elif has_gpu` branch a Slurm cluster cannot reach. Making the
+headline say ", 32 GPUs" did **not** raise the rate. Reverted.
+
+`background=7/10` is a second finding in the same data and has had no attention:
+three in ten of these requests did not become background jobs at all.
+
+Method note: n=10 per side is enough to see a large effect and not enough to
+resolve a small one. Nothing here should be read as "the change made it worse".
