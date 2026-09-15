@@ -60,3 +60,6 @@ install/mac/tray/icon-sources/AppIcon.iconset/
 
 # Agent worktrees created by the harness — scratch, never tracked.
 .claude/worktrees/
+
+# launch-contract scratch: aba_launch.sh writes nss/ into its working dir
+/nss/
