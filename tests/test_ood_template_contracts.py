@@ -216,30 +216,39 @@ def test_a_user_with_no_enrolled_group_CANNOT_launch():
     allocation later and phrased as a missing environment variable. An admin hit
     exactly this on 2026-08-28.
 
-    Two halves, and the property only holds with both: the fallback option's
-    VALUE is empty, and the field is `required`. An HTML5 select marked required
-    whose selected option has an empty value is invalid, so the browser blocks
-    submission. Either half alone lets the launch through."""
+    The first fix leaned on `required:` — a <select> whose chosen option has an
+    empty value is invalid, so a browser blocks it. But whether OnDemand passes
+    `required` through to a select is not visible from here, and a tester found
+    Launch sitting there enabled. The refusal is therefore SERVER-side:
+    submit.yml.erb raises on an empty lab, before OnDemand stages or submits
+    anything. This is the text-level half, which runs everywhere;
+    tests/test_ood_card_render.py EXECUTES both templates and is the proof."""
     form = (APP / "form.yml.erb").read_text()
+    assert re.search(r'lab_opts\s*=\s*\[\[msg,\s*""\]\]', form), (
+        "the no-enrolled-lab option no longer carries an EMPTY value, so "
+        "submit.yml.erb cannot tell the form's refusal from a chosen lab")
 
-    # the empty-list fallback exists and yields an EMPTY value
-    assert "lab_opts.empty?" in form, (
-        "the form no longer handles the case where no group is enrolled")
-    fallback = form[form.index("lab_opts.empty?"):]
-    fallback = fallback[:fallback.index("end")]
-    assert '""]]' in fallback.replace(" ", "") or '", \"\"]' in fallback or ', ""]]' in fallback, (
-        "the no-enrolled-groups option does not carry an EMPTY value, so "
-        "`required` cannot block it and the launch proceeds to a job that "
-        "preflight will refuse:\n" + fallback)
+    submit = "\n".join(ln for ln in (APP / "submit.yml.erb").read_text().splitlines()
+                       if not ln.lstrip().startswith("#"))
+    assert re.search(r"\braise\b", submit) and "aba_lab" in submit, (
+        "submit.yml.erb no longer refuses an empty lab — the no-enrolled-lab "
+        "option submits, and the refusal is deferred into a Slurm job")
 
-    # …and the field is required, which is what turns the empty value into a refusal
-    block = form[form.index("  aba_lab:"):]
-    block = block[:block.index("  has_gpu:")]
-    code = "\n".join(ln for ln in block.splitlines()
-                     if not ln.lstrip().startswith("#"))
-    assert "required: true" in code, (
-        "aba_lab is not `required`, so the empty no-enrolled-groups value "
-        "submits happily and the refusal is deferred into a Slurm job")
+
+def test_formjs_greys_out_Launch_on_the_SAME_label_the_form_renders():
+    """form.js recognises the refusal by the option label's prefix, because an
+    empty value alone is legitimate (a deployment without labs renders one). The
+    prefix is therefore a contract between two files in two languages; drift
+    leaves Launch live on a refused form with nothing failing. OnDemand loads
+    form.js by FILENAME, like the icon, so the name is part of it."""
+    js = APP / "form.js"
+    assert js.is_file(), "no form.js in the OOD app root — OnDemand loads it by that name"
+    in_js = re.search(r"var REFUSAL = '([^']+)'", js.read_text())
+    in_form = re.search(r"refusal\s*=\s*'([^']+)'", (APP / "form.yml.erb").read_text())
+    assert in_js and in_form, "a refusal literal is gone from form.js or form.yml.erb — pattern drift"
+    assert in_js.group(1) == in_form.group(1), (
+        f"form.js keys on {in_js.group(1)!r} but the form renders {in_form.group(1)!r}: "
+        "Launch stays live on the refused form")
 
 
 def test_the_site_rewrite_list_is_complete_and_exact():

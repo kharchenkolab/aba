@@ -6,6 +6,19 @@
   require 'yaml'
   site = (YAML.safe_load(File.read(ENV['ABA_SITE_CONFIG'] || '/cluster/aba/site.yaml')) rescue nil) || {}
   fcfg = site['form'] || {}
+  # NO LAB, NO LAUNCH — where the site runs sessions in labs. The form offers
+  # only enrolled labs, and when there are none its single option carries an
+  # EMPTY value, so an empty lab here is the form's own refusal arriving. Raise
+  # it HERE: OnDemand renders this file before it stages or submits anything,
+  # and shows what is raised on the form. Past this point the refusal costs a
+  # Slurm allocation and reads as "ABA_RUNTIME_DIR is unset" (2026-08-28).
+  # An absent value is refused the same way.
+  if ((site['scopes'] || {})['group'] || {})['enabled'] &&
+     (defined?(aba_lab) ? aba_lab.to_s.strip : '').empty?
+    contact = (site['ui_text'] || {})['enroll_contact'] || 'your ABA admin'
+    raise "ABA cannot launch without an enrolled lab, and none of your groups " \
+          "is enrolled yet. The Lab field says which to ask #{contact} to enrol."
+  end
   # >>> instance-ladder fallback (byte-identical in form.yml.erb, which renders
   #     the SAME ladder as the menu — a guard asserts the match)
   def_instances = [{'id' => 'light', 'label' => 'Light', 'cores' => 4,  'mem' => '16G'},

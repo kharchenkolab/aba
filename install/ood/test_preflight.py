@@ -101,13 +101,13 @@ def test_subscription_signin_full_level_capped_to_paste_on_ood(tmp_path, monkeyp
 import yaml as _yaml  # noqa: E402
 
 
-def _run_pf(tmp_path, monkeypatch, site_yaml):
+def _run_pf(tmp_path, monkeypatch, site_yaml, group="lab1"):
     """Run preflight; return (exit_code, status_dict, staged_dir). Catches the
     SystemExit(10) the blocked path raises."""
     (tmp_path / "site.yaml").write_text(site_yaml)
     staged = tmp_path / "staged"; staged.mkdir(exist_ok=True)
     monkeypatch.setenv("ABA_SITE_CONFIG", str(tmp_path / "site.yaml"))
-    monkeypatch.setenv("ABA_PF_GROUP", "lab1")
+    monkeypatch.setenv("ABA_PF_GROUP", group)
     monkeypatch.setenv("ABA_PF_USER", "alice")
     monkeypatch.setenv("ABA_PF_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("ABA_PF_STAGED", str(staged))
@@ -169,6 +169,42 @@ def test_auto_create_still_provisions(tmp_path, monkeypatch):
     code, status, staged = _run_pf(tmp_path, monkeypatch, _gate_site(g, auto=True))
     assert code == 0 and status["scopes"]["group"]["state"] == "skeleton_just_created"
     assert (g / "lab1" / "aba" / ".aba-workspace").exists()
+    assert (staged / "aba-env.sh").exists()
+
+
+@pytest.mark.parametrize("auto", [False, True], ids=["gated", "auto-create"])
+@pytest.mark.parametrize("group", ["", "   "], ids=["empty", "blank"])
+def test_no_lab_where_labs_are_required_blocks_and_SAYS_so(tmp_path, monkeypatch, group, auto):
+    """An empty group used to skip the enrollment gate entirely (`enabled and
+    group` is false) and carry on with '' in every {group} path: the state dir
+    became <groups>//aba/users/<user> — created as though it were a lab — and
+    the session died later as "ABA_RUNTIME_DIR is unset". The card refuses this
+    before submitting; this is the node-side backstop for a submission that got
+    past it. auto_create_skeleton must not change the answer: there is no lab
+    to create a workspace for."""
+    g = tmp_path / "groups"
+    code, status, staged = _run_pf(tmp_path, monkeypatch, _gate_site(g, auto=auto), group=group)
+    assert code == 10 and status["ready"] is False
+    assert status["scopes"]["group"]["state"] == "no_group"
+    assert "no lab" in (status["blocked_on"] or "").lower()
+    assert not (staged / "aba-env.sh").exists()
+    assert not g.exists() or not any(g.rglob("*")), (
+        f"preflight created {sorted(str(p.relative_to(g)) for p in g.rglob('*'))} "
+        "for a lab nobody named")
+
+
+def test_no_lab_is_fine_where_the_deployment_uses_no_labs(tmp_path, monkeypatch):
+    """The other side: with group scope off, an empty group is the ordinary
+    launch, and the backstop above must not fire."""
+    site = f"""
+scopes:
+  group: {{enabled: false}}
+  user:  {{state_dir: "{tmp_path}/state/{{user}}"}}
+credentials: {{order: [], on_missing: demo_mode}}
+"""
+    code, status, staged = _run_pf(tmp_path, monkeypatch, site, group="")
+    assert code == 0 and status["ready"] is True
+    assert status["scopes"]["group"]["state"] == "disabled"
     assert (staged / "aba-env.sh").exists()
 
 

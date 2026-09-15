@@ -26,7 +26,7 @@ from `aba-env.sh` + the publish-tree catalog, fail-safe.
 ## Card-only changes must not need a SIF rebuild
 
 Anything the user sees on the card / form / connect page (`manifest.yml`,
-`form.yml.erb`, `info.md.erb`, `view.html.erb`, `icon.svg`) must be
+`form.yml.erb`, `form.js`, `info.md.erb`, `view.html.erb`, `icon.svg`) must be
 resolvable at render or deploy time — never baked into the image. If a
 change to these files requires rebuilding the SIF, the change is designed
 wrong.
@@ -53,6 +53,35 @@ on the site deployer's share-root rewrite list. The `template/` scripts are
 different — they run on the node after `before.sh.erb` exports the real value,
 and take it from the environment. `tests/test_ood_template_contracts.py` pins
 both halves.
+
+## Where the site uses labs, the card refuses a launch without one
+
+When `site.yaml` enables `scopes.group`, every session runs in an enrolled lab.
+The form lists only the user's enrolled labs. When there are none, its single
+Lab option has an EMPTY value and a label naming the lab to enrol: a group
+whose own folder exists under the `root_path` template (`/groups/<lab>`),
+primary group first. An account carries dozens of permission groups, so
+"your groups" is mostly noise; the lab folder is what enrolment builds on.
+
+The launch is refused in three places, and only the first is load-bearing:
+
+- `submit.yml.erb` raises on an empty lab. OnDemand renders it before staging
+  or submitting anything and shows the message on the form — no job exists.
+- `form.js` greys out Launch while that option is selected. It keys on the
+  label prefix, not the empty value, because a deployment without labs
+  renders an empty value too and must launch from it.
+- `aba_preflight.py` blocks an empty group on the node (`state: no_group`), for
+  a submission that got past both, rather than carrying `''` into every
+  `{group}` path.
+
+`required:` on the field is a hint only — whether OnDemand passes it through
+to a `<select>` is not visible from here.
+
+`render_card.rb` renders `form.yml.erb` / `submit.yml.erb` the way OnDemand
+does (ERB, then YAML) and prints JSON. `tests/test_ood_card_render.py` drives
+it against a faked account shaped like a real one; it needs `ruby`
+(`ABA_RUBY`), plus `node` and the frontend's happy-dom for `form.js`, and
+skips without them.
 
 ## The card icon is found by filename
 

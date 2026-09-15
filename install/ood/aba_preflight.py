@@ -225,7 +225,17 @@ def main():
     #                             (so a launch doesn't burn a Slurm slot to fail)
     #   exists, non-empty, no marker → FOREIGN → block (never clobber a same-named dir)
     group_state, group_detail, bundle_present, group_root = "disabled", "group scope disabled", False, None
-    if gcfg.get("enabled") and group:
+    if gcfg.get("enabled") and not group:
+        # NO LAB ARRIVED where the site runs every session in one. The card refuses
+        # this before submitting (submit.yml.erb), so reaching here means a
+        # submission that got past it. Say so — carrying on would put an empty
+        # {group} into every path below and die later as "ABA_RUNTIME_DIR is unset".
+        blocked = True
+        blocked_reason = ("No lab was selected, and this deployment runs every session "
+                          "in an enrolled lab. Choose one on the launch form; if none is "
+                          "offered, ask an admin to enroll yours.")
+        group_state, group_detail = "no_group", blocked_reason
+    elif gcfg.get("enabled") and group:
         site_name = (site.get("site") or {}).get("name")
         group_root = Path(ex(gcfg.get("root_path") or "/groups/{group}/aba"))
         bundle_dir = group_root / gcfg.get("bundle_subdir", "bundle")

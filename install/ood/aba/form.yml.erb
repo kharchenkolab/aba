@@ -61,23 +61,44 @@
 
   user_groups = (Process.groups + [Process.gid]).uniq.map { |gid|
     (Etc.getgrgid(gid).name rescue nil) }.compact.sort     # the user's own groups (primary + supplementary)
+  # Does this deployment run sessions in labs at all? Where it does, a launch
+  # NEEDS an enrolled lab; where it does not, the Lab field has nothing to offer
+  # and an empty value is exactly what preflight expects.
+  gscope   = gcfg['enabled'] ? true : false
   # ENROLLED = the group's on-disk folder (strip suffix) carries an ABA marker.
-  enrolled = gcfg['enabled'] ? user_groups.select { |g|
+  enrolled = gscope ? user_groups.select { |g|
     markers.any? { |m| (File.exist?(File.join(grp_root.call(g), m)) rescue false) } } : []
   lab_opts = enrolled.map { |g| ["#{g}  ✓", g] }            # VALUE stays the unix group name
-  # NO ENROLLED GROUP. The value is deliberately EMPTY so the `required:` on the
-  # field below makes the browser refuse to submit: we already know here that a
-  # launch cannot succeed, and letting it through spends a Slurm allocation to
-  # reach a preflight refusal the form could have prevented. Reported by an admin
-  # on 2026-08-28, whose launch ran a job on a compute node and died with
-  # "ABA_RUNTIME_DIR is unset".
+  # NO ENROLLED LAB. The one option carries an EMPTY value and a label starting
+  # with `refusal`, and a launch from it is refused before anything runs:
+  # submit.yml.erb raises on an empty lab (the guarantee — OnDemand shows the
+  # message on this form and submits nothing) and form.js greys out Launch on
+  # this label (the visible half). Letting it through spent a Slurm allocation
+  # to die as "ABA_RUNTIME_DIR is unset" (an admin, 2026-08-28).
   #
-  # NAME THE GROUPS. The admin needs to know WHICH group to enrol, and the person
-  # in front of the form usually does not know their own unix groups.
-  if lab_opts.empty?
+  # NAME THE LAB, not the user's groups. A real account carries dozens of
+  # permission groups (VPN, licences, share ACLs) and the lab rarely sorts
+  # first: this once listed the first six alphabetically and cut the lab off.
+  # A lab is a group whose OWN folder exists — the directory root_path puts
+  # under the group, which enrolment creates the ABA workspace inside. Primary
+  # group first; any beyond three are counted, never dropped silently.
+  refusal = '— not enrolled'                                # == REFUSAL in form.js
+  if lab_opts.empty? && !gscope
+    lab_opts = [["— none (this deployment does not use labs)", ""]]
+  elsif lab_opts.empty?
     contact = ui['enroll_contact'] || 'your ABA admin'
-    mine = (user_groups - [me]).first(6).join(', ')
-    msg = mine.empty? ? "— none of your groups are enrolled in ABA — ask #{contact}" : "— not enrolled: ask #{contact} to enrol one of #{mine}"
+    segs    = root_tmpl.split('/')
+    at      = segs.index { |s| s.include?('{group_dir}') || s.include?('{group}') }
+    lab_dir = ->(g) { segs[0..at].join('/').gsub('{group_dir}', gdir.call(g)).gsub('{group}', g) }
+    primary = (Etc.getgrgid(Process.gid).name rescue nil)
+    labs    = at ? (user_groups - [me]).select { |g| (File.directory?(lab_dir.call(g)) rescue false) } : []
+    labs    = labs.partition { |g| g == primary }.flatten
+    more    = labs.length > 3 ? " (+#{labs.length - 3} more)" : ''
+    msg = case labs.length
+          when 0 then "#{refusal}: none of your groups has a lab folder — ask #{contact}"
+          when 1 then "#{refusal}: ask #{contact} to enrol #{labs[0]}"
+          else        "#{refusal}: ask #{contact} to enrol one of #{labs.first(3).join(', ')}#{more}"
+          end
     lab_opts = [[msg, ""]]
   end
   # Show the "reset to the group credential" checkbox ONLY when a personal override exists
@@ -121,10 +142,12 @@ attributes:
   aba_lab:
     widget: "select"
     label: "Lab"
-    # required: with no enrolled group the only option carries an EMPTY value, so
-    # the browser blocks Launch instead of starting a job that preflight will
-    # refuse. Harmless when groups exist — every real option has a value.
+<%- if gscope -%>
+    # A hint to the browser, never the refusal itself: whether OnDemand passes
+    # `required` through to a <select> is not visible from here. Only where labs
+    # are required — elsewhere the empty value is legitimate.
     required: true
+<%- end -%>
     help: "<%= ui['form_intro'] || 'Your enrolled ABA groups (✓). Group not listed? Ask your admin to enroll it.' %>"
     options:
 <%- lab_opts.each do |label, val| -%>
