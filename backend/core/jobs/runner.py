@@ -449,33 +449,68 @@ def _accelerator_note(params: dict, result_obj: dict) -> str | None:
     no way to learn why the answer took so long. A wrong answer that announces
     itself is recoverable; a slow one that doesn't is not.
 
-    Deliberately narrow, because a note that cries wolf gets ignored:
-      * only when the payload ACTUALLY used torch and found no CUDA (measured by
-        the job wrapper, not guessed from the code text);
-      * only when the job did not ask for a GPU — if it asked and did not get
-        one, that is a placement failure and sbatch already refuses it loudly;
-      * only when the site really has GPU nodes. On a CPU-only cluster, running
-        on CPU is not a finding.
+    THE SILENCE THAT REPLACED IT. The first version fired only when
+    `_gpu_partition_for` named a partition — which is None both for a CPU-only
+    site and for a site ABA could not ask. On 2026-08-28 this cluster went
+    configless and the probe stopped completing, so the site reported no
+    partitions; the estimate then had no reason to ask for a GPU, the job ran on
+    CPU, and this note stayed quiet because it could not find a GPU partition
+    either. The outage disabled its own alarm. Hence three cases, not one.
+
+    Still deliberately narrow, because a note that cries wolf gets ignored: it
+    speaks only when the payload ACTUALLY used torch and found no CUDA —
+    measured by the job wrapper, not guessed from the code text — and never for
+    a local run.
     """
     if str(result_obj.get("accelerator") or "") != "torch:cuda=0":
-        return None
-    if ((params.get("estimate") or {}).get("gpu")):
         return None
     site = params.get("site")
     if not site or site == "local":
         return None
+    asked = bool((params.get("estimate") or {}).get("gpu"))
     try:
-        from core.jobs.weft_submitter import _gpu_partition_for
-        part = _gpu_partition_for(str(site))
+        from core.jobs.weft_submitter import (GPU_HAS, GPU_UNKNOWN,
+                                              gpu_capability)
+        part, verdict, why = gpu_capability(str(site))
     except Exception:  # noqa: BLE001 — a note is never worth failing a job over
         return None
-    if not part:
-        return None
-    return (f"NOTE: this job used PyTorch on CPU. Site '{site}' has GPU nodes "
-            f"(partition '{part}'), but the job did not request an accelerator, "
-            f"so it was placed on a CPU partition. To use a GPU, re-submit with "
-            f"est_gpu=true.")
 
+    if asked:
+        # ASKED AND DID NOT GET — the half of this that was never built. The
+        # original docstring dismissed it as "sbatch already refuses it loudly",
+        # which is true only when PLACEMENT fails. A job that was placed on a
+        # GPU partition and still saw no CUDA device — a MIG slice that never
+        # attached, a driver the image cannot talk to, a gres the node did not
+        # actually hand over — succeeds, silently, on CPU. That is the exact
+        # shape this function exists for, and it was excluded by assumption.
+        where = f" (placed on {part})" if verdict == GPU_HAS and part else ""
+        return (f"NOTE: this job ASKED for a GPU and PyTorch found no CUDA "
+                f"device{where}. The work ran on CPU. This is not a placement "
+                f"refusal — the job was submitted and ran — so the accelerator "
+                f"was not delivered inside the job: check the driver and the "
+                f"gres the node actually granted.")
+
+    if verdict == GPU_HAS:
+        return (f"NOTE: this job used PyTorch on CPU. Site '{site}' has GPU nodes "
+                f"(partition '{part}'), but the job did not request an accelerator, "
+                f"so it was placed on a CPU partition. To use a GPU, re-submit with "
+                f"est_gpu=true.")
+
+    if verdict == GPU_UNKNOWN:
+        # THE POINT OF THE THREE-WAY ANSWER. Nothing here is known to be wrong
+        # — the site may genuinely have no GPU. What is known is that ABA could
+        # not tell, and therefore that the estimate could not have known to ask.
+        # Saying so is the difference between a slow answer nobody can explain
+        # and one that names the thing to go and check.
+        return (f"NOTE: this job used PyTorch on CPU, and ABA could not determine "
+                f"whether site '{site}' has GPU nodes — {why}. The estimate had no "
+                f"capability to reason from, so it could not have asked for an "
+                f"accelerator. If this site does have GPUs, its capability probe "
+                f"is what needs fixing, not the job.")
+
+    # GPU_NONE: running on CPU where there are demonstrably no GPUs is not a
+    # finding, and saying so every time is how a note gets ignored.
+    return None
 
 async def _finalize_job(job: dict, result_obj: dict, lookup_pid: str | None,
                         effective_pid: str) -> None:

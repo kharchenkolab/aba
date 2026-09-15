@@ -143,6 +143,100 @@ def describe(monkeypatch):
     return _mk
 
 
+@pytest.fixture
+def verdict(monkeypatch):
+    """Same patched site description, but asking the THREE-WAY question."""
+    from core.jobs import weft_submitter
+
+    def _mk(desc):
+        class _A:
+            def sync_call(self, verb, *a, **k):
+                assert verb == "sites_describe"
+                return desc
+        monkeypatch.setattr(weft_submitter, "_adapter", lambda: _A())
+        return weft_submitter.gpu_capability
+    return _mk
+
+
+# ── "could not ask" is not "has not got" ────────────────────────────────────
+#
+# WIDE, over the degenerate shapes a site description really takes. Every one
+# of these used to produce the identical answer — None — as a CPU-only cluster,
+# which is how a failed probe came to look exactly like a site with no GPUs.
+
+def test_an_unreachable_site_is_unknown_not_absent(monkeypatch):
+    from core.jobs import weft_submitter
+    from core.jobs.weft_submitter import GPU_UNKNOWN
+
+    class _A:
+        def sync_call(self, *a, **k):
+            raise RuntimeError("host down")
+    monkeypatch.setattr(weft_submitter, "_adapter", lambda: _A())
+    part, v, why = weft_submitter.gpu_capability("cluster")
+    assert (part, v) == (None, GPU_UNKNOWN) and "could not be described" in why
+
+
+def test_a_site_with_no_capabilities_at_all_is_unknown(verdict):
+    """The shape an unprobed site takes."""
+    from core.jobs.weft_submitter import GPU_UNKNOWN
+    for desc in ({}, {"capabilities": {}}, {"capabilities": None}):
+        part, v, why = verdict(desc)("cluster")
+        assert (part, v) == (None, GPU_UNKNOWN), desc
+        assert "not been probed" in why or "probe failed" in why
+
+
+def test_an_empty_partition_list_is_unknown(verdict):
+    """THE LIVE SHAPE, 2026-08-28. The cluster went configless, `sinfo` failed
+    inside --containall, and weft — correctly — refused to record an empty
+    partition list as fact. A scheduler with zero partitions does not exist, so
+    an empty list is a probe that did not finish, never a negative answer."""
+    from core.jobs.weft_submitter import GPU_UNKNOWN
+    part, v, why = verdict({"capabilities": {"scheduler": {"partitions": []}}})("cluster")
+    assert (part, v) == (None, GPU_UNKNOWN)
+    assert "did not complete" in why
+
+
+def test_a_real_cpu_only_cluster_is_none_not_unknown(verdict):
+    """THE OTHER SIDE. If everything answered UNKNOWN the distinction would be
+    useless in the opposite direction — a site that genuinely has no GPU must
+    say so definitively, or the note above starts crying wolf everywhere."""
+    from core.jobs.weft_submitter import GPU_NONE
+    part, v, why = verdict({"capabilities": {"scheduler": {"partitions": [
+        {"name": "c", "nodes": 18, "gres": []}]}}, "config": {}})("cluster")
+    assert (part, v) == (None, GPU_NONE) and "no GPU partition" in why
+
+
+def test_gpus_excluded_by_policy_are_none_with_their_own_reason(verdict):
+    """The site HAS GPUs; this deployment is not allowed on them. A real
+    negative, and a different one — the operator can act on it."""
+    from core.jobs.weft_submitter import GPU_NONE
+    part, v, why = verdict({"capabilities": {"scheduler": {"partitions": [
+        {"name": "c", "nodes": 18, "gres": []},
+        {"name": "g", "nodes": 8, "gres": [{"type": "gpu", "count": 4}]}]}},
+        "config": {"policy": {"partitions_allowed": ["c"]}}})("cluster")
+    assert (part, v) == (None, GPU_NONE)
+    assert "partitions_allowed" in why, "name the policy, or it looks like absence"
+
+
+def test_a_site_with_gpus_is_has_and_names_the_partition(verdict):
+    from core.jobs.weft_submitter import GPU_HAS
+    part, v, why = verdict(CAPS)("cluster")
+    assert (part, v) == ("g", GPU_HAS) and "g" in why
+
+
+def test_the_three_verdicts_are_mutually_distinguishable(verdict, monkeypatch):
+    """ARMED against the collapse itself: three inputs, three different
+    verdicts. A refactor that folds any pair back together fails here even if
+    every individual test above is rewritten to match it."""
+    seen = set()
+    for desc in (CAPS,
+                 {"capabilities": {"scheduler": {"partitions": [
+                     {"name": "c", "nodes": 1, "gres": []}]}}, "config": {}},
+                 {"capabilities": {}}):
+        seen.add(verdict(desc)("cluster")[1])
+    assert len(seen) == 3, f"verdicts collapsed: {sorted(seen)}"
+
+
 def test_gpu_ask_lands_on_a_partition_that_has_gpus(describe):
     assert describe(CAPS)("cluster") == "g"
 
@@ -197,9 +291,16 @@ def test_every_gpu_resource_ask_also_sets_a_partition():
     left every one of them green while the live bug returned — the classic
     "verified the output, not the forbidden action". Asking for a GPU without
     naming a partition is the defect, wherever it is written, so assert it over
-    the file: each `resources["gpus"] = …` must be accompanied by a partition
-    assignment in the same block. A third submit lane added later is covered
-    without anyone remembering this test exists."""
+    the file: each `resources["gpus"] = …` must be followed by placement. A
+    third submit lane added later is covered without anyone remembering this
+    test exists.
+
+    PLACEMENT NOW HAS ONE OWNER (`_place_gpu`), because the interesting case —
+    asked for a GPU, could not decide where — was an `if` with no `else` in two
+    copies, and said nothing. So a lane satisfies this either by assigning the
+    partition inline or by calling that owner; and the owner is held to the same
+    property, below, so routing through it cannot be a way to escape the rule.
+    """
     import re
     from pathlib import Path
     src = (Path(__file__).resolve().parents[1] / "backend" / "core" / "jobs"
@@ -209,13 +310,48 @@ def test_every_gpu_resource_ask_also_sets_a_partition():
                   "test is reading the wrong file and proves nothing")
     for i in asks:
         window = "\n".join(src[i:i + 6])
-        assert 'resources["partition"]' in window, (
+        assert 'resources["partition"]' in window or "_place_gpu(" in window, (
             f"{'weft_submitter.py'}:{i + 1} asks Slurm for a GPU but never names a "
-            f"partition. weft then defaults to partitions_allowed[0], which on a "
-            f"mixed cluster is the CPU partition, and the job is refused with "
-            f"'Requested node configuration is not available'.\n"
+            f"partition, and does not hand the job to _place_gpu. weft then "
+            f"defaults to partitions_allowed[0], which on a mixed cluster is the "
+            f"CPU partition, and the job is refused with 'Requested node "
+            f"configuration is not available'.\n"
             + window)
 
+
+def test_the_placement_owner_actually_sets_the_partition():
+    """ARMED. The test above accepts `_place_gpu(...)` as satisfying the
+    property. That is only true while _place_gpu sets the partition — otherwise
+    the guard above has been turned into a way of writing the defect that reads
+    as compliance."""
+    import re
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "backend" / "core" / "jobs"
+           / "weft_submitter.py").read_text()
+    body = re.search(r"^def _place_gpu\(.*?(?=^def |\Z)", src, re.S | re.M)
+    assert body, "no _place_gpu() — the guard above is accepting a call to nothing"
+    assert 'resources["partition"] =' in body.group(0), (
+        "_place_gpu no longer assigns a partition, so every submit lane that "
+        "delegates to it asks for a GPU and names nowhere to get one")
+
+
+def test_a_gpu_ask_that_cannot_be_placed_is_not_silent():
+    """The half the two inline copies never had. `if _p: resources[...] = _p`
+    has no else: a site that could not be asked, and a site with no GPU, both
+    fell through to the same nothing — no partition, no message, and a Slurm
+    refusal that blames the request rather than the unanswered question."""
+    import re
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "backend" / "core" / "jobs"
+           / "weft_submitter.py").read_text()
+    body = re.search(r"^def _place_gpu\(.*?(?=^def |\Z)", src, re.S | re.M).group(0)
+    tail = body.split('resources["partition"] =', 1)[1]
+    assert "print(" in tail, (
+        "_place_gpu returns quietly when it cannot choose a partition — the "
+        "case worth reporting is the only one it says nothing about")
+    assert "verdict" in tail, (
+        "the message must name WHICH of 'no GPU here' and 'could not ask' it "
+        "was; that distinction is the entire point of gpu_capability")
 
 def test_gpu_device_detector_rejects_a_cpu_run_that_mentions_cuda():
     """The false green this replaces: substring-matching "cuda" certified a job

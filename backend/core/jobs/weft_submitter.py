@@ -212,13 +212,39 @@ def _site_platform_for(site: str) -> Optional[str]:
         return None
 
 
-def _gpu_partition_for(site: str) -> Optional[str]:
-    """A partition on `site` that actually HAS GPUs, or None if we can't tell.
+# The three answers a capability question has — and two of them used to be one.
+#
+# `_gpu_partition_for` returned None for "this site has no GPU partition" AND
+# for "ABA could not ask", and every caller read None as the negative answer.
+# That conflation is not cosmetic. On 2026-08-28 this cluster went configless:
+# no /etc/slurm/slurm.conf, config served over DNS SRV, and inside
+# `--containall` there is no resolver — so `sinfo` failed, weft refused (
+# correctly) to record an empty partition list as fact, and the site came back
+# with no scheduler capabilities. Every consumer then behaved exactly as it
+# would on a CPU-only cluster: the estimate did not ask for a GPU, the job ran
+# on CPU, and `_accelerator_note` — the one instrument built to say "you got a
+# CPU" — stayed silent, because it too reads None as "no GPU here". The
+# failure disabled its own alarm.
+#
+# So the lookup answers three ways and says why.
+GPU_HAS, GPU_NONE, GPU_UNKNOWN = "has", "none", "unknown"
 
-    THE BUG THIS CLOSES. Asking for a GPU never influenced WHERE the job went.
-    weft's `allowed_partition()` returns `partitions_allowed[0]` when the site
-    configures no partition, and it never looks at `resources["gpus"]` — so a
-    GPU job on a site allowing [c, g] was submitted as
+
+def gpu_capability(site: str) -> tuple[Optional[str], str, str]:
+    """-> (partition, verdict, why). verdict is GPU_HAS / GPU_NONE / GPU_UNKNOWN.
+
+    GPU_HAS      `partition` names the GPU partition with the most capacity,
+                 restricted to the site's own `partitions_allowed` when it
+                 declares one — never widening what the user permitted.
+    GPU_NONE     the site ANSWERED, and nothing it offers has a GPU gres.
+    GPU_UNKNOWN  we could not ask, or the answer carried no scheduler facts.
+                 `why` names which, in words a job record can carry.
+
+    THE BUG THE PARTITION CHOICE CLOSES. Asking for a GPU never influenced
+    WHERE the job went. weft's `allowed_partition()` returns
+    `partitions_allowed[0]` when the site configures no partition, and it never
+    looks at `resources["gpus"]` — so a GPU job on a site allowing [c, g] was
+    submitted as
 
         #SBATCH --gres=gpu:1
         #SBATCH --partition=c
@@ -229,30 +255,75 @@ def _gpu_partition_for(site: str) -> Optional[str]:
     the partition in site.yaml is not the answer either: that would send EVERY
     job to one partition. Placement is ABA's decision to make, because ABA is
     what knows the ask; weft's job is to honour and validate it.
-
-    Chooses the GPU partition with the most capacity, restricted to the site's
-    own `partitions_allowed` when it declares one — never widening what the
-    user permitted. Returns None when the site advertises no GPU partition, so
-    the caller leaves placement exactly as it was.
     """
     try:
         desc = _adapter().sync_call("sites_describe", site) or {}
-    except Exception:  # noqa: BLE001 — placement is best-effort, never fatal
-        return None
+    except Exception as e:  # noqa: BLE001 — placement is best-effort, never fatal
+        return None, GPU_UNKNOWN, f"site '{site}' could not be described ({type(e).__name__})"
     caps = desc.get("capabilities") or {}
-    parts = ((caps.get("scheduler") or {}).get("partitions")) or []
+    if not caps:
+        return None, GPU_UNKNOWN, (f"site '{site}' reports no capabilities at all — "
+                                   f"it has not been probed, or the probe failed")
+    sched = caps.get("scheduler") or {}
+    parts = sched.get("partitions") or []
+    if not parts:
+        # weft refuses to record an empty partition list as fact, so an empty
+        # list here is a probe that did not complete — not a scheduler with no
+        # partitions, which cannot exist.
+        return None, GPU_UNKNOWN, (f"site '{site}' lists no scheduler partitions — "
+                                   f"the partition probe did not complete")
     allowed = (((desc.get("config") or {}).get("policy") or {})
                .get("partitions_allowed")) or None
-    best, best_n = None, 0
+    best, best_n, saw_gpu_anywhere = None, 0, False
     for pt in parts:
         name = pt.get("name")
-        if not name or (allowed and name not in allowed):
+        if not name:
             continue
         n = sum(g.get("count", 0) for g in (pt.get("gres") or [])
                 if g.get("type") == "gpu") * (pt.get("nodes") or 1)
+        if n > 0:
+            saw_gpu_anywhere = True
+        if allowed and name not in allowed:
+            continue
         if n > best_n:
             best, best_n = name, n
-    return best
+    if best:
+        return best, GPU_HAS, f"partition '{best}' on site '{site}'"
+    if saw_gpu_anywhere:
+        # The site HAS GPUs; this deployment's policy does not permit the
+        # partitions they are on. A real negative, and a different one.
+        return None, GPU_NONE, (f"site '{site}' has GPU partitions, but none of them "
+                                f"is in partitions_allowed ({', '.join(allowed or [])})")
+    return None, GPU_NONE, f"site '{site}' advertises no GPU partition"
+
+
+def _gpu_partition_for(site: str) -> Optional[str]:
+    """Just the partition, for callers that only place a job. Callers that
+    REPORT to a human must use `gpu_capability` — the verdict is the point."""
+    return gpu_capability(site)[0]
+
+
+def _place_gpu(site: str, resources: dict) -> None:
+    """Choose the partition for a job that asked for a GPU — and SAY SO when it
+    cannot be chosen.
+
+    Both submit lanes used to do this inline as `if _p: resources[...] = _p`,
+    so the interesting case — asked for a GPU, could not decide where — was a
+    branch that did nothing and printed nothing. The job then went to the
+    scheduler's default partition carrying `--gres=gpu:1`, and Slurm answered
+    "Requested node configuration is not available", which reads as a bad
+    request rather than as an unanswered question about the site. The behaviour
+    is unchanged (submitting anyway is deliberate — placement is best-effort
+    and must never be fatal); what changes is that the server log now names
+    which of the two it was, and why."""
+    part, verdict, why = gpu_capability(site)
+    if part:
+        resources["partition"] = part
+        return
+    print(f"[jobs] GPU requested on site '{site}' but no GPU partition could be "
+          f"chosen [{verdict}] — {why}. Submitting without a partition; the "
+          f"scheduler will use its default, which will not have the GPU.",
+          flush=True)
 
 
 def _relock_platform(code: str, env_name: Optional[str], site: str) -> Optional[str]:
@@ -636,9 +707,7 @@ class WeftSubmitter:
             resources["mem_gb"] = int(est["mem_gb"])
         if est.get("gpu"):
             resources["gpus"] = 1
-            _p = _gpu_partition_for(self.site)
-            if _p:
-                resources["partition"] = _p
+            _place_gpu(self.site, resources)
         if self.site != "local":
             wt = _sized_walltime(kind, est, timeout_s)
             if wt:
@@ -819,9 +888,7 @@ class WeftSubmitter:
         site = site or self.site
         if est.get("gpu"):
             resources["gpus"] = 1
-            _p = _gpu_partition_for(site)
-            if _p:
-                resources["partition"] = _p
+            _place_gpu(site, resources)
         if self._site_kind(site) == "slurm":
             wt = _sized_walltime(kind, est, timeout_s)
             if wt:
