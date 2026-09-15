@@ -267,6 +267,7 @@ FILES=(
   tests/test_oauth_per_provider_gating.py
   tests/test_oauth_refresh_store.py
   tests/test_ood_template_contracts.py
+  tests/test_ood_card_render.py
   tests/test_enroll_group.py
   tests/test_gpu_env_routing.py
   tests/test_open_viewer.py
