@@ -181,7 +181,22 @@ if [ -d "$WEFT_SRC/src/weft" ]; then
   mkdir -p "$STAGE/weft/src"
   cp -a "$WEFT_SRC/src/weft" "$STAGE/weft/src/weft"
   [ -f "$WEFT_SRC/pyproject.toml" ] && cp "$WEFT_SRC/pyproject.toml" "$STAGE/weft/pyproject.toml"
-  echo "   weft source staged (pip-installed into the venv below)"
+  # WHICH substrate is in this image. The staged copy drops .git, and weft's
+  # package version is the static 0.1.0, so a finished image could not be asked
+  # which weft it carries — the release's `weft=<sha>` provenance was read from
+  # the BUILD TREE at deploy time and was therefore unfalsifiable: rebuild the
+  # tree between build and deploy and the record silently describes something
+  # else. Pinning WEFT_REF is only worth something if the answer is checkable
+  # against the bytes that will run.
+  ( cd "$WEFT_SRC" && git rev-parse HEAD 2>/dev/null ) > "$STAGE/WEFT_SHA" || true
+  if [ -s "$STAGE/WEFT_SHA" ]; then
+    echo "   weft source staged @ $(cut -c1-12 < "$STAGE/WEFT_SHA") (baked to /opt/aba/WEFT_SHA)"
+  else
+    # A source tree with no .git (an rsync'd ABA_WEFT_SRC) genuinely cannot say.
+    # Record that, rather than leaving a file whose absence is ambiguous.
+    echo "unknown (source tree has no git history)" > "$STAGE/WEFT_SHA"
+    echo "   weft source staged; SHA unknown (no .git at $WEFT_SRC)"
+  fi
 else echo "NOTE: no weft checkout at $WEFT_SRC (set ABA_WEFT_SRC) — the substrate won't load in the image"; fi
 if ls "$REPO_ROOT"/install/core/envs/*.yaml >/dev/null 2>&1; then
   mkdir -p "$STAGE/installation/envs"; cp "$REPO_ROOT"/install/core/envs/*.yaml "$STAGE/installation/envs/"
@@ -320,6 +335,7 @@ DEF="$STAGE/aba-$PROFILE.def"
   # (aba-venv / aba-tools are copied in %setup above — see the symlink note there.)
   # weft substrate: pixi binaries + the base env packs (weft is baked INTO the venv
   # above, so no separate copy). resolve_pixi() finds /opt/aba/tools/pixi/bin.
+  [ -f "$STAGE/WEFT_SHA" ] && echo "    $STAGE/WEFT_SHA /opt/aba/WEFT_SHA"
   [ -d "$STAGE/pixi/bin" ] && echo "    $STAGE/pixi/bin /opt/aba/tools/pixi/bin"
   [ -d "$STAGE/installation/envs" ] && echo "    $STAGE/installation/envs /opt/aba/installation/envs"
   echo ""
