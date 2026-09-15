@@ -91,6 +91,7 @@ fallbacks:
   malformed_group_bundle: warn_and_skip
 
 ui_text:
-  form_intro: "Your enrolled ABA groups (✓). Group not listed? Ask your admin to enroll it."
+  form_intro: "Your enrolled ABA groups (✓). Group not listed? Ask your admin to enroll it."   # Lab help where enrolled labs are offered
+  # form_not_enrolled: "None of your groups is enrolled in ABA yet, so a session cannot start."  # Lab help where none is (the card sets it in red)
   enroll_contact: "your ABA admin"     # shown to users whose group isn't enrolled (form + preflight)
   no_group_key_help: "Paste your Anthropic API key, or save one to your lab's ABA folder."

@@ -72,14 +72,18 @@ def _account(groups: "list[str]", primary: str) -> dict:
 class Card:
     """A site config + a groups tree under tmp, rendered as user `alice`."""
 
-    def __init__(self, tmp: Path, *, labs_enabled: bool = True):
+    def __init__(self, tmp: Path, *, labs_enabled: bool = True,
+                 ui: "dict | None" = None, form: "dict | None" = None):
         self.tmp, self.groups = tmp, tmp / "groups"
-        self.groups.mkdir()
-        (tmp / "site.yaml").write_text(
-            "scopes:\n"
-            f"  group: {{enabled: {str(labs_enabled).lower()}, "
-            f"root_path: \"{self.groups}/{{group_dir}}/aba\", strip_suffix: \".grp\"}}\n"
-            f"ui_text: {{enroll_contact: \"{CONTACT}\"}}\n")
+        self.groups.mkdir(parents=True)
+        site = {"scopes": {"group": {"enabled": labs_enabled,
+                                     "root_path": f"{self.groups}/{{group_dir}}/aba",
+                                     "strip_suffix": ".grp"}},
+                "ui_text": {"enroll_contact": CONTACT, **(ui or {})}}
+        if form:
+            site["form"] = form
+        # JSON is YAML — no quoting of the fixture's own to get wrong.
+        (tmp / "site.yaml").write_text(json.dumps(site))
         (tmp / "fake_account.rb").write_text(_FAKE_ACCOUNT)
 
     def lab_folder(self, *groups: str, enrolled: bool = False) -> "Card":
@@ -91,8 +95,8 @@ class Card:
                 (d / "aba" / ".aba-workspace").touch()
         return self
 
-    def form(self, account: dict) -> dict:
-        """The rendered Lab field."""
+    def rendered(self, account: dict) -> dict:
+        """The whole rendered form — asserting it rendered AND parsed as YAML."""
         env = {**os.environ, "ABA_SITE_CONFIG": str(self.tmp / "site.yaml"),
                "USER": "alice", "HOME": str(self.tmp / "home"),
                "ABA_FAKE_ACCOUNT": json.dumps(account)}
@@ -100,7 +104,11 @@ class Card:
                             "form", str(APP / "form.yml.erb")],
                            capture_output=True, text=True, env=env, timeout=60)
         assert r.returncode == 0, f"form.yml.erb did not render (rc={r.returncode}):\n{r.stderr}"
-        return json.loads(r.stdout)["attributes"]["aba_lab"]
+        return json.loads(r.stdout)
+
+    def form(self, account: dict) -> dict:
+        """The rendered Lab field."""
+        return self.rendered(account)["attributes"]["aba_lab"]
 
     def submit(self, values: dict) -> subprocess.CompletedProcess:
         env = {**os.environ, "ABA_SITE_CONFIG": str(self.tmp / "site.yaml")}
@@ -166,6 +174,61 @@ def test_a_deployment_without_labs_neither_refuses_nor_requires(tmp_path):
     (label, value), = lab["options"]
     assert value == "" and not label.startswith(REFUSAL), label
     assert "required" not in lab
+
+
+_ENROLLED_TEXT = "Your enrolled ABA groups (✓)"
+
+
+@needs_ruby
+@pytest.mark.parametrize("case", ["enrolled", "not-enrolled", "no-labs"])
+def test_the_Lab_help_says_what_the_form_can_do_and_is_RED_only_when_it_cannot(tmp_path, case):
+    """The help under Lab was one site string for every case, so a user with no
+    enrolled lab read "Your enrolled ABA groups (✓)" beneath a field holding
+    none. It follows the case now, and only the case that cannot launch is red."""
+    card = Card(tmp_path, labs_enabled=(case != "no-labs"))
+    card.lab_folder("zeta.grp", enrolled=(case == "enrolled"))
+    help_ = card.form(_account(PERMISSION_GROUPS + ["zeta.grp"], primary="zeta.grp"))["help"]
+    red = "text-danger" in help_
+    if case == "not-enrolled":
+        assert red and "cannot start" in help_, help_
+    else:
+        assert not red, f"{case}: a form that can launch is shown in red: {help_}"
+    assert (_ENROLLED_TEXT in help_) == (case == "enrolled"), (
+        f"{case}: the enrolled wording belongs exactly where enrolled labs are offered: {help_}")
+
+
+@needs_ruby
+def test_a_site_words_both_cases_and_the_card_keeps_the_red(tmp_path):
+    ui = {"form_intro": "Pick your lab.", "form_not_enrolled": "No lab yet — email the desk."}
+    acct = _account(PERMISSION_GROUPS + ["zeta.grp"], primary="zeta.grp")
+    offered = Card(tmp_path / "a", ui=ui).lab_folder("zeta.grp", enrolled=True).form(acct)
+    assert offered["help"] == "Pick your lab."
+    refused = Card(tmp_path / "b", ui=ui).lab_folder("zeta.grp").form(acct)
+    assert "No lab yet — email the desk." in refused["help"], refused["help"]
+    assert "text-danger" in refused["help"], refused["help"]
+
+
+@needs_ruby
+@pytest.mark.parametrize("enrolled", [True, False], ids=["enrolled", "not-enrolled"])
+def test_a_quote_in_the_sites_wording_cannot_break_the_form(tmp_path, enrolled):
+    """Every site string used to be spliced into a YAML "…" scalar, so one `"`
+    in the wording ended it early: the template rendered, the YAML did not
+    parse, and OnDemand showed an error page where the form should be.
+    Degenerate input, ordinary wording — `Click "Request access"`."""
+    ui = {"enroll_contact": 'the "lab" desk', "form_intro": 'Click "Request access".',
+          "form_not_enrolled": 'Use "Request access".'}
+    form = {"instances": [{"id": "s", "label": 'Small "S"', "cores": 2, "mem": "8G"}],
+            "walltimes": [{"label": '"Short" 1h', "seconds": 3600}]}
+    card = Card(tmp_path, ui=ui, form=form).lab_folder("zeta.grp", enrolled=enrolled)
+    attrs = card.rendered(_account(PERMISSION_GROUPS + ["zeta.grp"], primary="zeta.grp"))["attributes"]
+    assert attrs["aba_instance"]["options"] == [['Small "S" — 2 cores, 8G RAM', "s"]]
+    assert attrs["aba_walltime"]["options"] == [['"Short" 1h', "3600"]]
+    lab = attrs["aba_lab"]
+    if enrolled:
+        assert lab["help"] == 'Click "Request access".'
+    else:
+        assert 'Use "Request access".' in lab["help"]
+        assert 'the "lab" desk' in lab["options"][0][0], lab["options"]
 
 
 # ── submit.yml.erb: the refusal that holds whatever the browser does ─────────
