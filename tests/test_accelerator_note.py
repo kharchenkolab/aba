@@ -86,6 +86,18 @@ def test_speaks_when_the_job_asked_for_a_gpu_and_torch_found_none(gpu_site):
         "as a duplicate of one")
 
 
+def test_the_asked_note_names_a_lever_for_each_candidate_cause(gpu_site):
+    """A diagnosis with nowhere to go is where this note used to stop. There are
+    exactly two places the accelerator can have been lost — the node handed over
+    no device, or the environment's torch cannot use one — and the second is
+    invisible from the job's own output, so it gets the tool that answers it."""
+    note = _accelerator_note({"site": "cluster", "estimate": {"gpu": True}}, CPU_JOB)
+    assert "nvidia-smi" in note, "no way to check whether the node granted a device"
+    assert "inspect_environment" in note, (
+        "no way to check whether the env's torch is a CPU build — the candidate "
+        "an agent cannot see and will otherwise guess at")
+
+
 def test_the_asked_note_names_where_it_was_placed(gpu_site):
     note = _accelerator_note({"site": "cluster", "estimate": {"gpu": True}}, CPU_JOB)
     assert "placed on g" in note

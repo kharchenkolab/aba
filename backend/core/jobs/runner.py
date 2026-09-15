@@ -484,11 +484,19 @@ def _accelerator_note(params: dict, result_obj: dict) -> str | None:
         # actually hand over — succeeds, silently, on CPU. That is the exact
         # shape this function exists for, and it was excluded by assumption.
         where = f" (placed on {part})" if verdict == GPU_HAS and part else ""
+        # NAME THE TWO CANDIDATES AND THE CHECK FOR EACH. "The accelerator was
+        # not delivered" is a true sentence that leaves the reader with nowhere
+        # to go, and there are only two places it can have gone wrong: the node
+        # handed over no device, or the environment's torch cannot use one. The
+        # second is invisible from the job's own output and is the one an agent
+        # will otherwise guess at, so it gets the tool that answers it.
         return (f"NOTE: this job ASKED for a GPU and PyTorch found no CUDA "
                 f"device{where}. The work ran on CPU. This is not a placement "
-                f"refusal — the job was submitted and ran — so the accelerator "
-                f"was not delivered inside the job: check the driver and the "
-                f"gres the node actually granted.")
+                f"refusal — the job was submitted and ran — so either the node "
+                f"granted no device (check nvidia-smi from inside the job), or "
+                f"this environment's torch is a CPU build. `inspect_environment` "
+                f"reports which interpreter is actually in play; a GPU job "
+                f"should be riding the deployment's CUDA pack, not the base one.")
 
     if verdict == GPU_HAS:
         return (f"NOTE: this job used PyTorch on CPU. Site '{site}' has GPU nodes "

@@ -182,3 +182,51 @@ def register_compute_sites_tools(mcp: FastMCP) -> None:
         per-file outcomes, including a machine that already swept them."""
         from core.compute.retention import secure_run_keeps
         return secure_run_keeps(run_id)
+
+    @mcp.tool()
+    def inspect_environment(aba_ctx_id: str = "", language: str = "python",
+                            site: str = "local") -> dict:
+        """Ground truth about the environment your code actually runs in —
+        one call instead of guessing. Reports where the environment lives
+        (strategy, location, whether it is read-only), how many packages it
+        holds, and a LIVE probe of the interpreter that will run: its path
+        and version, whether pip and setuptools are present and at what
+        versions, and whether uv is available. Read-only; it never changes
+        anything. Use it BEFORE trying to install or repair something —
+        "package missing", "wrong version", "install fails" are usually a
+        question about which interpreter is in play, and this answers that
+        without a shell. `language` is python or r; `site` is the machine
+        (default local — pass a compute site name to inspect the copy
+        realized there)."""
+        from core.runtime.tool_ctx import peek_ctx
+        from core.compute import project_env
+        from core.compute.adapter import get_compute
+        ctx = peek_ctx(aba_ctx_id)
+        pid = ctx.get("project_id")
+        if not pid:
+            return {"error": "no project in context"}
+        try:
+            rt = project_env.runtime(str(pid), language)
+        except Exception as e:  # noqa: BLE001
+            return {"error": "env_unresolved", "detail": str(e),
+                    "next": f"run a small {language} snippet first — the session "
+                            f"environment is created on first use"}
+        env_id = (rt or {}).get("env_id")
+        if not env_id:
+            return {"error": "no_env_id", "source": (rt or {}).get("source"),
+                    "next": f"run a small {language} snippet first — the session "
+                            f"environment is created on first use"}
+        try:
+            out = get_compute().sync_call("env_inspect", env_id, site)
+        except Exception as e:  # noqa: BLE001
+            # An older substrate has no env_inspect. Say which door is missing
+            # rather than reporting the environment as broken.
+            return {"error": "inspect_unavailable", "detail": f"{type(e).__name__}: {e}",
+                    "env_id": env_id, "site": site,
+                    "next": "the compute substrate on this deployment does not "
+                            "offer env_inspect; report the versions you can see "
+                            "from inside the code instead"}
+        if isinstance(out, dict):
+            out = {**out, "env_id": env_id, "site": site,
+                   "source": (rt or {}).get("source")}
+        return out
