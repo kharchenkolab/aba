@@ -69,52 +69,57 @@
   enrolled = gscope ? user_groups.select { |g|
     markers.any? { |m| (File.exist?(File.join(grp_root.call(g), m)) rescue false) } } : []
   lab_opts = enrolled.map { |g| ["#{g}  ✓", g] }            # VALUE stays the unix group name
+  # The user's LABS: groups whose OWN folder exists — the directory root_path
+  # puts under the group, which enrolment creates the ABA workspace inside. A
+  # real account carries dozens of permission groups (VPN, licences, share
+  # ACLs) and the lab rarely sorts first, so "your groups" is mostly noise: the
+  # refusal once listed the first six alphabetically and cut the lab off.
+  # Primary group first; any beyond three are counted, never dropped silently.
+  contact = ui['enroll_contact'] || 'your ABA admin'
+  segs    = root_tmpl.split('/')
+  at      = segs.index { |s| s.include?('{group_dir}') || s.include?('{group}') }
+  lab_dir = ->(g) { segs[0..at].join('/').gsub('{group_dir}', gdir.call(g)).gsub('{group}', g) }
+  primary = (Etc.getgrgid(Process.gid).name rescue nil)
+  labs    = (gscope && at) ? (user_groups - [me]).select { |g| (File.directory?(lab_dir.call(g)) rescue false) } : []
+  labs    = labs.partition { |g| g == primary }.flatten
+  names   = ->(gs) { gs.first(3).join(', ') + (gs.length > 3 ? " (+#{gs.length - 3} more)" : '') }
   # NO ENROLLED LAB. The one option carries an EMPTY value and a label starting
   # with `refusal`, and a launch from it is refused before anything runs:
   # submit.yml.erb raises on an empty lab (the guarantee — OnDemand shows the
   # message on this form and submits nothing) and form.js greys out Launch on
   # this label (the visible half). Letting it through spent a Slurm allocation
   # to die as "ABA_RUNTIME_DIR is unset" (an admin, 2026-08-28).
-  #
-  # NAME THE LAB, not the user's groups. A real account carries dozens of
-  # permission groups (VPN, licences, share ACLs) and the lab rarely sorts
-  # first: this once listed the first six alphabetically and cut the lab off.
-  # A lab is a group whose OWN folder exists — the directory root_path puts
-  # under the group, which enrolment creates the ABA workspace inside. Primary
-  # group first; any beyond three are counted, never dropped silently.
   refusal = '— not enrolled'                                # == REFUSAL in form.js
   if lab_opts.empty? && !gscope
     lab_opts = [["— none (this deployment does not use labs)", ""]]
   elsif lab_opts.empty?
-    contact = ui['enroll_contact'] || 'your ABA admin'
-    segs    = root_tmpl.split('/')
-    at      = segs.index { |s| s.include?('{group_dir}') || s.include?('{group}') }
-    lab_dir = ->(g) { segs[0..at].join('/').gsub('{group_dir}', gdir.call(g)).gsub('{group}', g) }
-    primary = (Etc.getgrgid(Process.gid).name rescue nil)
-    labs    = at ? (user_groups - [me]).select { |g| (File.directory?(lab_dir.call(g)) rescue false) } : []
-    labs    = labs.partition { |g| g == primary }.flatten
-    more    = labs.length > 3 ? " (+#{labs.length - 3} more)" : ''
     msg = case labs.length
           when 0 then "#{refusal}: none of your groups has a lab folder — ask #{contact}"
           when 1 then "#{refusal}: ask #{contact} to enrol #{labs[0]}"
-          else        "#{refusal}: ask #{contact} to enrol one of #{labs.first(3).join(', ')}#{more}"
+          else        "#{refusal}: ask #{contact} to enrol one of #{names.(labs)}"
           end
     lab_opts = [[msg, ""]]
   end
-  # The Lab help follows the case the form is in. The enrolled wording ("Your
-  # enrolled ABA groups (✓)") describes options that are not there when none is
-  # enrolled, so that case gets its own text, in red: this form cannot launch.
-  # OnDemand renders help as Markdown, which passes inline HTML through; the
-  # class is Bootstrap's, so the red is the dashboard's own.
+  # HELP ONLY WHERE IT SAYS SOMETHING TRUE FOR THIS USER. One string used to
+  # serve every case, so it hedged to everyone ("Group not listed? Ask your
+  # admin…"), including users whose every lab IS listed. Now: where none is
+  # enrolled, why the form cannot launch — in red; where some are, the user's
+  # OTHER labs by name if any are not; otherwise nothing, since the options
+  # speak for themselves. OnDemand renders help as Markdown, which passes
+  # inline HTML through; the class is Bootstrap's.
+  pending  = labs - enrolled
   lab_help =
     if !gscope
-      'This deployment does not run sessions in labs.'
+      nil                                                   # the one option already says so
     elsif enrolled.empty?
       "<strong class='text-danger'>" +
         (ui['form_not_enrolled'] || 'None of your groups is enrolled in ABA yet, so a session cannot start.').to_s +
         '</strong>'
     else
-      (ui['form_intro'] || 'Your enrolled ABA groups (✓). Group not listed? Ask your admin to enroll it.').to_s
+      one = pending.length == 1
+      [ui['form_intro'],
+       (pending.empty? ? nil : "#{names.(pending)} #{one ? 'is' : 'are'} not enrolled yet — ask #{contact} to enrol #{one ? 'it' : 'them'}.")
+      ].compact.map(&:to_s).reject(&:empty?).join(' ')
     end
   # Show the "reset to the group credential" checkbox ONLY when a personal override exists
   # (for some enrolled group). Fail-safe: any probe error → hidden (never breaks the form).
@@ -167,7 +172,9 @@ attributes:
     # are required — elsewhere the empty value is legitimate.
     required: true
 <%- end -%>
+<%- unless lab_help.to_s.empty? -%>
     help: <%= lab_help.to_json %>
+<%- end -%>
     options:
 <%- lab_opts.each do |label, val| -%>
       - <%= [label, val].to_json %>

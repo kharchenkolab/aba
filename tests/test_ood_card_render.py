@@ -176,25 +176,36 @@ def test_a_deployment_without_labs_neither_refuses_nor_requires(tmp_path):
     assert "required" not in lab
 
 
-_ENROLLED_TEXT = "Your enrolled ABA groups (✓)"
+@needs_ruby
+@pytest.mark.parametrize("case", ["enrolled", "not-enrolled", "no-labs"])
+def test_the_Lab_help_speaks_only_when_it_says_something_true(tmp_path, case):
+    """One help string used to serve every case, so it hedged to everyone —
+    "Group not listed? Ask your admin to enroll it." — including users whose
+    every lab IS listed, and "Your enrolled ABA groups (✓)" beneath a field
+    holding none. Now the case that cannot launch says why, in red, and the
+    cases whose options speak for themselves carry no help at all."""
+    card = Card(tmp_path, labs_enabled=(case != "no-labs"))
+    card.lab_folder("zeta.grp", enrolled=(case == "enrolled"))
+    help_ = card.form(_account(PERMISSION_GROUPS + ["zeta.grp"], primary="zeta.grp")).get("help")
+    if case == "not-enrolled":
+        assert help_ and "text-danger" in help_ and "cannot start" in help_, help_
+    else:
+        assert help_ is None, f"{case}: help with nothing to say: {help_!r}"
 
 
 @needs_ruby
-@pytest.mark.parametrize("case", ["enrolled", "not-enrolled", "no-labs"])
-def test_the_Lab_help_says_what_the_form_can_do_and_is_RED_only_when_it_cannot(tmp_path, case):
-    """The help under Lab was one site string for every case, so a user with no
-    enrolled lab read "Your enrolled ABA groups (✓)" beneath a field holding
-    none. It follows the case now, and only the case that cannot launch is red."""
-    card = Card(tmp_path, labs_enabled=(case != "no-labs"))
-    card.lab_folder("zeta.grp", enrolled=(case == "enrolled"))
-    help_ = card.form(_account(PERMISSION_GROUPS + ["zeta.grp"], primary="zeta.grp"))["help"]
-    red = "text-danger" in help_
-    if case == "not-enrolled":
-        assert red and "cannot start" in help_, help_
-    else:
-        assert not red, f"{case}: a form that can launch is shown in red: {help_}"
-    assert (_ENROLLED_TEXT in help_) == (case == "enrolled"), (
-        f"{case}: the enrolled wording belongs exactly where enrolled labs are offered: {help_}")
+@pytest.mark.parametrize("others, expect", [
+    (["beta.grp"], f"beta.grp is not enrolled yet — ask {CONTACT} to enrol it."),
+    (["alpha.grp", "beta.grp", "gamma.grp", "omega.grp"],
+     f"alpha.grp, beta.grp, gamma.grp (+1 more) are not enrolled yet — ask {CONTACT} to enrol them."),
+], ids=["one-other-lab", "four-other-labs"])
+def test_an_enrolled_user_hears_about_their_OTHER_labs_by_name(tmp_path, others, expect):
+    """What the old hedge reached for, said only where it is true: a user in two
+    labs is offered the enrolled one and told, by name, which of theirs is not."""
+    card = Card(tmp_path).lab_folder("zeta.grp", enrolled=True).lab_folder(*others)
+    lab = card.form(_account(PERMISSION_GROUPS + others + ["zeta.grp"], primary="zeta.grp"))
+    assert lab["options"] == [["zeta.grp  ✓", "zeta.grp"]]
+    assert lab.get("help") == expect, lab.get("help")
 
 
 @needs_ruby

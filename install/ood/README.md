@@ -77,10 +77,12 @@ The launch is refused in three places, and only the first is load-bearing:
 `required:` on the field is a hint only — whether OnDemand passes it through
 to a `<select>` is not visible from here.
 
-The help under the field follows the same case: `ui_text.form_intro` where
-enrolled labs are offered; where none is, `ui_text.form_not_enrolled` (a
-default is built in), set in red with Bootstrap's `text-danger`; neutral text
-where the deployment does not use labs. Every site string reaches the form
+The help under the field appears only where it says something true for this
+user. Where none of their labs is enrolled: why the form cannot launch, in red
+(Bootstrap's `text-danger`; `ui_text.form_not_enrolled` rewords it). Where
+some are: the site's optional `ui_text.form_intro`, then the user's OTHER labs
+by name if any are not enrolled. Otherwise nothing — a generic "group not
+listed?" shown to every user is noise. Every site string reaches the form
 through `to_json`, so a quote in a site's wording cannot break the YAML.
 
 `render_card.rb` renders `form.yml.erb` / `submit.yml.erb` the way OnDemand
